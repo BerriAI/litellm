@@ -21,8 +21,15 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_event_type,
     anthropic_sse_event_types,
     anthropic_sse_started_blocks,
+    anthropic_sse_started_message,
     anthropic_sse_stopped_block_index,
     anthropic_sse_unfinished_blocks,
+)
+from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_error_data as anthropic_sse_error_data,  # noqa: PLC0414  # public re-export
+)
+from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_error_event_of as anthropic_sse_error_event_of,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_reads_alike as anthropic_sse_reads_alike,  # noqa: PLC0414  # public re-export
@@ -89,6 +96,21 @@ def _unchanged_tool_use_ids(source_content: Sequence[object], delivered_content:
         for tool_use_id, tool_input in _tool_use_inputs(delivered_content).items()
         if tool_use_id in source_inputs and source_inputs[tool_use_id] == tool_input
     )
+
+
+_MESSAGE_FIELDS_THE_REWRITE_DECIDES: Final = frozenset({"id", "model", "content"})
+
+
+def _upstream_message_start_fields(source_chunks: Sequence[object]) -> Mapping[str, object]:
+    message: Final = anthropic_sse_started_message(source_chunks)
+    return MappingProxyType(
+        {key: value for key, value in message.items() if key not in _MESSAGE_FIELDS_THE_REWRITE_DECIDES}
+    )
+
+
+def _tool_use_starts(source_chunks: Sequence[object]) -> Mapping[str, Mapping[str, object]]:
+    blocks: Final = anthropic_sse_started_blocks(source_chunks).values()
+    return MappingProxyType({block_id: block for block in blocks if isinstance(block_id := block.get("id"), str)})
 
 
 def _rewritten_message_delta_fields(
@@ -172,6 +194,9 @@ def anthropic_sse_chunks_from_response(
     nothing the OpenAI round trip made up, with a verdict kept only for a tool call delivered with
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
+    ``message_start`` keeps the fields the source stream sent in it, but for the content and the id and model
+    the caller assembled, and each tool call's ``content_block_start`` keeps the source's too, such as
+    ``service_tier``, cache usage and a tool call's ``caller``, which the round trip drops.
     A source stream that ended in an upstream ``error`` event ends with that event again, never
     with a ``message_delta`` or ``message_stop`` the upstream did not send, with its cut-off text
     block left open unless another block follows it, and with no finished text block when it read
@@ -215,6 +240,8 @@ def _rebuilt_sse_chunks(
     rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
         response=_without_empty_text(anthropic_response),
         message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
+        message_start_fields=_upstream_message_start_fields(source_chunks),
+        tool_use_starts=_tool_use_starts(source_chunks),
     ).chunks
     if not error_events:
         return tuple(rewritten_chunks)

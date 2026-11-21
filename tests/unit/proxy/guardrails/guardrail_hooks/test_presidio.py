@@ -2780,6 +2780,18 @@ _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
         _block_stop_sse(0),
         *_MESSAGE_END_SSE,
     ),
+    "tool-input-delta-also-carrying-text": (
+        *_PHONE_IN_A_TOOL_INPUT[:2],
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps({"number": _PHONE}), "text": "ok"},
+            },
+        ),
+        *_PHONE_IN_A_TOOL_INPUT[3:],
+    ),
 }
 
 
@@ -2850,9 +2862,25 @@ async def test_apply_to_output_streaming_anthropic_sse_refuses_a_stream_a_client
             f"event: error\ndata: Overloaded while calling {_PHONE}\n\n".encode(),
             b"event: error\ndata: Overloaded while calling <PHONE_NUMBER>\n\n",
         ),
+        (
+            f'event: error\ndata: {{"type":"error",\ndata: "error":{{"type":"api_error","message":"Call {_PHONE}"}}}}\n\n'.encode(),
+            b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Call <PHONE_NUMBER>"}}\n\n',
+        ),
+        (
+            f"event: error\ndata: Overloaded while\ndata: calling {_PHONE}\n\n".encode(),
+            b"event: error\ndata: Overloaded while\ndata: calling <PHONE_NUMBER>\n\n",
+        ),
         (b"event: error\n\n", b"event: error\n\n"),
     ],
-    ids=["no-pii-sent-as-is", "pii-in-message", "pii-in-a-list", "pii-in-plain-text", "no-data"],
+    ids=[
+        "no-pii-sent-as-is",
+        "pii-in-message",
+        "pii-in-a-list",
+        "pii-in-plain-text",
+        "pii-in-json-split-over-data-lines",
+        "pii-in-plain-text-split-over-data-lines",
+        "no-data",
+    ],
 )
 async def test_apply_to_output_streaming_anthropic_sse_ends_with_the_upstream_error_masked(
     upstream_error: bytes, sent_error: bytes
@@ -2866,6 +2894,32 @@ async def test_apply_to_output_streaming_anthropic_sse_ends_with_the_upstream_er
     assert joined.endswith(sent_error)
     assert joined.count(b"event: error") == 1
     assert b"Sure, one moment." in joined
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_cut_by_an_error_without_pii_is_forwarded_as_sent():
+    upstream: Final = (
+        _anthropic_sse(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "model": "claude",
+                    "content": [],
+                    "service_tier": "priority",
+                    "usage": {"input_tokens": 12, "cache_read_input_tokens": 40, "output_tokens": 3},
+                },
+            },
+        ),
+        *_text_block_sse(0, "Sure, ", "one moment."),
+        b'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+    )
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+    assert collected == list(upstream)
 
 
 def _anthropic_sse_chunks_led_by_a_non_object_data_line(*, line_in_its_own_chunk: bool) -> tuple[bytes, ...]:

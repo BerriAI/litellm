@@ -161,6 +161,57 @@ def test_rewritten_stream_keeps_the_upstream_message_delta_fields(stop_reason: s
     assert not set(delta_fields) & set(payloads["message_start"]["message"])
 
 
+def test_rewritten_stream_keeps_the_upstream_message_start_and_tool_use_fields():
+    message: Final = {
+        "id": "msg_upstream_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-upstream",
+        "content": [],
+        "stop_reason": None,
+        "stop_sequence": None,
+        "service_tier": "priority",
+        "container": {"id": "container_1", "expires_at": "2026-11-21T00:00:00Z"},
+        "usage": {"input_tokens": 3, "cache_read_input_tokens": 40, "output_tokens": 1},
+    }
+    tool_use: Final = {
+        "type": "tool_use",
+        "id": "toolu_1",
+        "name": "call",
+        "input": {},
+        "caller": {"type": "code_execution_20250825", "tool_id": "srvtoolu_1"},
+    }
+    upstream: Final = (
+        _frame("message_start", {"type": "message_start", "message": message}),
+        _frame("content_block_start", {"type": "content_block_start", "index": 0, "content_block": tool_use}),
+        _frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"number": "555-0100"}'},
+            },
+        ),
+        _frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _frame("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {}}),
+        _frame("message_stop", {"type": "message_stop"}),
+    )
+    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True)
+    assert assembled is not None
+    choice: Final = assembled.choices[0]
+    assert isinstance(choice, Choices) and choice.message.tool_calls
+    choice.message.tool_calls[0].function.arguments = '{"number": "<PHONE>"}'
+
+    payloads: Final = dict(_decode(anthropic_sse_chunks_from_response(assembled, upstream)))
+
+    assert payloads["message_start"]["message"] == message
+    assert payloads["content_block_start"]["content_block"] == tool_use
+    assert payloads["content_block_delta"]["delta"] == {
+        "type": "input_json_delta",
+        "partial_json": '{"number": "<PHONE>"}',
+    }
+
+
 SSN: Final = "123-45-6789"
 
 

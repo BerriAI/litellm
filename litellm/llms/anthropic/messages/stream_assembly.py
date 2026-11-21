@@ -580,6 +580,11 @@ def _anthropic_message_start(events: Sequence[Mapping[str, object]]) -> Mapping[
     )
 
 
+def anthropic_sse_started_message(all_chunks: Sequence[object]) -> Mapping[str, object]:
+    message: Final = _anthropic_message_start(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+    return MappingProxyType({}) if message is None else message
+
+
 def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str, object]:
     """The ``stop_details`` and ``safeguard_results`` of the stream's ``message_delta``.
 
@@ -680,6 +685,25 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     Anthropic may send anything as the data.
     """
     return tuple(_plain_error_event(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def _client_data(event: str) -> str:
+    client_frame: Final = _client_frame(event)
+    return "" if client_frame is None else client_frame[1]
+
+
+def anthropic_sse_error_data(all_chunks: Sequence[object]) -> tuple[str, ...]:
+    return tuple(_client_data(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def _error_data_lines(data: str) -> tuple[str, ...]:
+    if _json_mapping(data) is not None:
+        return (data.replace("\n", " ").translate(_JSON_ESCAPED_LINE_BREAKS),)
+    return tuple(data.split("\n")) if data else ()
+
+
+def anthropic_sse_error_event_of(data: str) -> str:
+    return "\n".join(("event: error", *(f"data: {line}" for line in _error_data_lines(data))))
 
 
 def anthropic_sse_stopped_block_index(event: str) -> object:
@@ -858,6 +882,25 @@ def _opens_with_an_empty_message(events: Sequence[Mapping[str, object]]) -> bool
     return message is not None and not message.get("content")
 
 
+_DELTA_FIELDS_ASSEMBLY_READS_FIRST: Final = MappingProxyType(
+    {
+        "input_json_delta": frozenset({"text"}),
+        "citations_delta": frozenset({"text", "partial_json"}),
+        "thinking_delta": frozenset({"text", "partial_json", "citation"}),
+        "signature_delta": frozenset({"text", "partial_json", "citation"}),
+        "compaction_delta": frozenset({"text", "partial_json", "citation", "thinking", "signature"}),
+    }
+)
+
+
+def _assembly_reads_the_field_the_delta_type_names(event: Mapping[str, object]) -> bool:
+    delta: Final = as_str_mapping(event.get("delta")) if event.get("type") == "content_block_delta" else None
+    delta_type: Final = delta.get("type") if delta is not None else None
+    if delta is None or not isinstance(delta_type, str):
+        return True
+    return delta.keys().isdisjoint(_DELTA_FIELDS_ASSEMBLY_READS_FIRST.get(delta_type, frozenset()))
+
+
 def _the_widest_reader_dispatches_no_other_json(sse_stream: str, client_frames: tuple[tuple[str, str], ...]) -> bool:
     dispatched: Final = frozenset(client_frames)
     other_frames: Final = (
@@ -878,6 +921,8 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     it changes what that SDK reads. No client dispatches a frame the stream never ended, so a stream with
     one reads differently too. A client reading lines with httpx also breaks them at a form feed or U+2028,
     so a stream reads differently when that reveals a JSON frame the others skip, as data behind a comment.
+    The SDKs read a block delta's field by its delta type, so a delta also carrying a field assembly reads
+    first, as text on an ``input_json_delta``, reads differently.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
@@ -889,7 +934,11 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     if not all(_names_its_own_type(name, data) for name, data in named_data):
         return False
     events: Final = tuple(event for event in _client_events(named_data) if event.get("type") != "ping")
-    return _opens_with_an_empty_message(events) and reduce(_after_block_event, events, (0, False)) is not None
+    return (
+        _opens_with_an_empty_message(events)
+        and reduce(_after_block_event, events, (0, False)) is not None
+        and all(_assembly_reads_the_field_the_delta_type_names(event) for event in events)
+    )
 
 
 def _is_error_payload(payload: str) -> bool:

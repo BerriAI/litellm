@@ -53,7 +53,8 @@ from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     anthropic_sse_chunks_of_events,
-    anthropic_sse_error_events,
+    anthropic_sse_error_data,
+    anthropic_sse_error_event_of,
     anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     has_unreadable_json_event,
@@ -179,15 +180,14 @@ async def _masked_json_strings(value: JsonValue, mask: Callable[[str], Awaitable
             return value
 
 
-async def _masked_error_event(event: str, mask: Callable[[str], Awaitable[str]]) -> str:
-    """The upstream ``error`` event with every string value in its data masked."""
-    event_line, data_prefix, payload = event.partition("\ndata: ")
+async def _masked_error_data(data: str, mask: Callable[[str], Awaitable[str]]) -> str:
+    """The data of an upstream ``error`` event, all its ``data:`` lines, with every string value in it masked."""
     try:
-        error: Final = _JSON_VALUE.validate_json(payload)
+        error: Final = _JSON_VALUE.validate_json(data)
     except ValidationError:
-        return f"{event_line}{data_prefix}{await mask(payload)}"
+        return await mask(data)
     masked_error: Final = await _masked_json_strings(error, mask)
-    return event if masked_error == error else f"{event_line}{data_prefix}{json.dumps(masked_error)}"
+    return data if masked_error == error else json.dumps(masked_error)
 
 
 async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
@@ -1615,15 +1615,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     ) -> tuple[object, ...]:
         """The frames the client gets: only what Presidio read and masked, or a refusal.
 
-        The upstream's own frames go out only when no upstream error cut the stream, every client reads
-        them as assembly does, and masking changed nothing. A stream a client could read another way is
-        refused, since its PII could sit where assembly never looked.
+        The upstream's own frames go out only when every client reads them as assembly does and masking
+        changed nothing, an upstream error included. A stream a client could read another way is refused,
+        since its PII could sit where assembly never looked.
         """
         rest_chunks: Final = [chunk async for chunk in rest]
         chunks: Final = (first_chunk, *rest_chunks)
-        error_events: Final = anthropic_sse_error_events(chunks)
+        error_data: Final = anthropic_sse_error_data(chunks)
         masked: Final = self._pii_text_processor(request_data, "mask")
-        masked_error_events: Final = tuple([await _masked_error_event(event, masked) for event in error_events])
+        masked_error_data: Final = tuple([await _masked_error_data(data, masked) for data in error_data])
+        masked_error_events: Final = tuple(anthropic_sse_error_event_of(data) for data in masked_error_data)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True, through_upstream_error=True)
         if assembled is None and masked_error_events:
             return anthropic_sse_chunks_of_events(masked_error_events)
@@ -1631,7 +1632,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             raise self._unreadable_stream_refusal()
         unmasked: Final = assembled.model_dump_json()
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
-        if not error_events and assembled.model_dump_json() == unmasked:
+        if masked_error_data == error_data and assembled.model_dump_json() == unmasked:
             return chunks
         return anthropic_sse_chunks_from_response(assembled, chunks, error_events=masked_error_events)
 

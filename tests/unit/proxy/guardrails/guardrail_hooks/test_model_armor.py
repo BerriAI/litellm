@@ -4020,15 +4020,26 @@ async def test_streaming_hook_scans_anthropic_sse_text_split_over_data_lines():
         b'data: "delta":{"type":"text_delta","text":"my card is 4111-1111-1111-1111"}}\n\n'
     )
     chunks: Final = (*_ANTHROPIC_SSE_CHUNKS[:2], split_delta, *_ANTHROPIC_SSE_CHUNKS[3:])
-    guardrail: Final = _surface_guardrail()
-    post: Final = _armor_post_mock(_MODEL_ARMOR_BLOCK)
 
-    with patch.object(guardrail.async_handler, "post", post):
-        delivered: Final = await _drain_surface_hook(guardrail, chunks)
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        blocks: Final = "my card is 4111-1111-1111-1111" in scanned
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if blocks else _clean_armor_response())
 
-    post.assert_called_once()
-    assert "my card is 4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
-    assert b"4111" not in b"".join(item for item in delivered if isinstance(item, bytes))
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    assert b"Streaming response blocked by Model Armor" in sent
+    assert b"4111" not in sent
 
 
 @pytest.mark.asyncio

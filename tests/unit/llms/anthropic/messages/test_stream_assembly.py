@@ -6,6 +6,7 @@ import pytest
 from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_message_delta_fields,
     anthropic_sse_error_events,
+    anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     collapse_pure_text_chunks,
     has_unreadable_json_event,
@@ -401,3 +402,76 @@ def test_collapsing_a_text_run_rejects_a_delta_whose_text_is_not_a_string():
 
     with pytest.raises(TypeError, match="sequence item 1: expected str instance, int found"):
         collapse_pure_text_chunks(chunks)
+
+
+def _one_block_stream(block: dict[str, object], delta: dict[str, object]) -> tuple[bytes, ...]:
+    return (
+        ANTHROPIC_STREAM[0],
+        _frame("content_block_start", {"type": "content_block_start", "index": 0, "content_block": block}),
+        _frame("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta}),
+        _frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _frame("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _frame("message_stop", {"type": "message_stop"}),
+    )
+
+
+_TEXT_BLOCK: Final = {"type": "text", "text": ""}
+_TOOL_USE_BLOCK: Final = {"type": "tool_use", "id": "toolu_1", "name": "call", "input": {}}
+_THINKING_BLOCK: Final = {"type": "thinking", "thinking": "", "signature": ""}
+_COMPACTION_BLOCK: Final = {"type": "compaction", "content": ""}
+_DELTAS_WITH_THE_FIELD_THEIR_TYPE_NAMES: Final = (
+    (_TEXT_BLOCK, {"type": "text_delta", "text": "hi"}),
+    (_TOOL_USE_BLOCK, {"type": "input_json_delta", "partial_json": "{}"}),
+    (_TEXT_BLOCK, {"type": "citations_delta", "citation": {"type": "char_location", "cited_text": "hi"}}),
+    (_THINKING_BLOCK, {"type": "thinking_delta", "thinking": "hm"}),
+    (_THINKING_BLOCK, {"type": "signature_delta", "signature": "sig"}),
+    (_COMPACTION_BLOCK, {"type": "compaction_delta", "content": "summary"}),
+)
+
+
+@pytest.mark.parametrize(("block", "delta"), _DELTAS_WITH_THE_FIELD_THEIR_TYPE_NAMES)
+def test_block_delta_carrying_the_field_its_type_names_reads_alike(
+    block: dict[str, object], delta: dict[str, object]
+):
+    assert anthropic_sse_reads_alike(_one_block_stream(block, delta))
+
+
+@pytest.mark.parametrize(
+    ("block", "delta"),
+    [
+        (_TEXT_BLOCK, {"type": "text_delta", "text": "hi", "partial_json": "{}"}),
+        (_THINKING_BLOCK, {"type": "signature_delta", "signature": "sig", "thinking": "hm"}),
+        (_THINKING_BLOCK, {"type": "thinking_delta", "thinking": "hm", "signature": "sig"}),
+        (_COMPACTION_BLOCK, {"type": "unknown_delta", "text": "hi"}),
+    ],
+    ids=["text-read-first", "thinking-read-beside-signature", "signature-read-beside-thinking", "unknown-type"],
+)
+def test_block_delta_whose_other_fields_assembly_reads_after_or_beside_its_own_reads_alike(
+    block: dict[str, object], delta: dict[str, object]
+):
+    assert anthropic_sse_reads_alike(_one_block_stream(block, delta))
+
+
+@pytest.mark.parametrize(
+    ("block", "delta"),
+    [
+        (_TOOL_USE_BLOCK, {"type": "input_json_delta", "partial_json": "{}", "text": "hi"}),
+        (_TEXT_BLOCK, {"type": "citations_delta", "citation": {}, "text": "hi"}),
+        (_TEXT_BLOCK, {"type": "citations_delta", "citation": {}, "partial_json": "{}"}),
+        (_THINKING_BLOCK, {"type": "thinking_delta", "thinking": "hm", "text": "hi"}),
+        (_THINKING_BLOCK, {"type": "thinking_delta", "thinking": "hm", "partial_json": "{}"}),
+        (_THINKING_BLOCK, {"type": "thinking_delta", "thinking": "hm", "citation": {}}),
+        (_THINKING_BLOCK, {"type": "signature_delta", "signature": "sig", "text": "hi"}),
+        (_THINKING_BLOCK, {"type": "signature_delta", "signature": "sig", "partial_json": "{}"}),
+        (_THINKING_BLOCK, {"type": "signature_delta", "signature": "sig", "citation": {}}),
+        (_COMPACTION_BLOCK, {"type": "compaction_delta", "content": "summary", "text": "hi"}),
+        (_COMPACTION_BLOCK, {"type": "compaction_delta", "content": "summary", "partial_json": "{}"}),
+        (_COMPACTION_BLOCK, {"type": "compaction_delta", "content": "summary", "citation": {}}),
+        (_COMPACTION_BLOCK, {"type": "compaction_delta", "content": "summary", "thinking": "hm"}),
+        (_COMPACTION_BLOCK, {"type": "compaction_delta", "content": "summary", "signature": "sig"}),
+    ],
+)
+def test_block_delta_carrying_a_field_assembly_reads_before_its_own_reads_differently(
+    block: dict[str, object], delta: dict[str, object]
+):
+    assert not anthropic_sse_reads_alike(_one_block_stream(block, delta))

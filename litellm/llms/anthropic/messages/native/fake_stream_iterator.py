@@ -10,6 +10,7 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 
 import json
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, cast
 
 from pydantic import TypeAdapter
@@ -20,6 +21,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 
 _CITATIONS: Final = TypeAdapter(tuple[object, ...])
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _citations_of(block: Mapping[str, object]) -> tuple[object, ...]:
@@ -48,9 +50,13 @@ class FakeAnthropicMessagesStreamIterator:
         self,
         response: AnthropicMessagesResponse,
         message_delta_fields: Mapping[str, object] | None = None,
+        message_start_fields: Mapping[str, object] = _NO_FIELDS,
+        tool_use_starts: Mapping[str, Mapping[str, object]] = MappingProxyType({}),
     ):
         self.response = response
         self.message_delta_fields = message_delta_fields
+        self.message_start_fields = message_start_fields
+        self.tool_use_starts = tool_use_starts
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
@@ -112,10 +118,14 @@ class FakeAnthropicMessagesStreamIterator:
 
         elif block_type in ("tool_use", "server_tool_use"):
             empty_input: Final[Mapping[str, object]] = {}
+            block_id: Final = block_dict.get("id")
+            upstream_start: Final = (
+                self.tool_use_starts.get(block_id, _NO_FIELDS) if isinstance(block_id, str) else _NO_FIELDS
+            )
             tool_use_start: Final = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {**block_dict, "input": empty_input},
+                "content_block": {**upstream_start, **block_dict, "input": empty_input},
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(tool_use_start)}\n\n".encode())
             tool_use_delta: Final = {
@@ -162,6 +172,7 @@ class FakeAnthropicMessagesStreamIterator:
                     "input_tokens": usage.get("input_tokens", 0) if usage else 0,
                     "output_tokens": 0,
                 },
+                **self.message_start_fields,
             },
         }
         chunks.append(f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode())
