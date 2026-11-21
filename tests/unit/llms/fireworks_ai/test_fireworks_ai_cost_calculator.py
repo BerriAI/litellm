@@ -376,6 +376,17 @@ def test_an_unknown_fireworks_model_with_a_fractional_size_falls_back_to_its_own
     assert fractional_cost[0] > 0
 
 
+@pytest.mark.parametrize("size", ["8x1p5b", "16x1p5b", "4x2p5b"])
+def test_an_unknown_fireworks_moe_model_with_a_fractional_expert_size_falls_back_to_the_moe_bucket(size: str):
+    usage: Final = _usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10)
+
+    fractional_cost: Final = cost_per_token(model=f"accounts/acme/models/not-in-the-map-{size}", usage=usage)
+    whole_cost: Final = cost_per_token(model="accounts/acme/models/not-in-the-map-8x7b", usage=usage)
+
+    assert fractional_cost == whole_cost
+    assert fractional_cost[0] > 0
+
+
 _TIERED_INPUT_PATTERN: Final = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
 
 
