@@ -21412,5 +21412,62 @@
       "member": "客户成员",
       "members": "客户成员"
     }
+  },
+  "whatIf": {
+    "canaries": {
+      "title": "控制探针",
+      "description": "对您配置的每个限额、护栏和访问规则，在每条路由上发送真实请求，并显示哪些没有生效。",
+      "probing": "探测中...",
+      "run": "运行探针",
+      "guardrailProbe": "护栏探测",
+      "held": "{{total}} 项控制中有 {{held}} 项生效",
+      "notEnforced": "{{count}} 项未生效",
+      "allEnforced": "全部生效",
+      "key": "密钥",
+      "configured": "已配置的控制",
+      "probe": "探测",
+      "cellHeld": "已拦截 · {{status}}",
+      "cellLeaked": "已泄漏 · {{status}}"
+    },
+    "cacheMiss": {
+      "title": "缓存未命中解释器",
+      "description": "每一轮为什么读取或没有读取提示缓存，以及应由谁修复：客户端、网关还是提供商。",
+      "client": "客户端更改了提示",
+      "gateway": "网关移动了会话",
+      "provider": "提供商丢弃了缓存",
+      "rebilled": "重复计费 · {{count}} 轮",
+      "session": "{{alias}} · 会话 {{session}}",
+      "turn": "轮次",
+      "model": "模型",
+      "promptTokens": "提示令牌数",
+      "readFromCache": "从缓存读取",
+      "verdict": "判定",
+      "why": "原因",
+      "miss": "未命中 · {{verdict}}"
+    },
+    "planLab": {
+      "title": "套餐实验室",
+      "description": "起草一个套餐，用过去 30 天的真实请求回放，在任何客户使用之前看出会在哪些客户身上亏损。",
+      "replay": "回放过去 30 天",
+      "draftPlan": "套餐草案",
+      "price": "每位客户每月价格 ($)",
+      "included": "包含的模型花费 ($)",
+      "overBudget": "当客户超出时",
+      "allow": "继续服务",
+      "block": "拦截",
+      "fallback": "回退到",
+      "revenue": "收入",
+      "modelCost": "模型成本",
+      "margin": "利润",
+      "losing": "亏损的客户",
+      "losingValue": "{{total}} 位中有 {{count}} 位",
+      "summary": "已回放 {{requests}} 个请求 · 已拦截 {{blocked}} 个 · 已改道 {{rerouted}} 个",
+      "customer": "客户",
+      "requests": "请求数",
+      "costToday": "当前成本",
+      "costUnderPlan": "套餐下成本",
+      "blocked": "已拦截",
+      "rerouted": "已改道"
+    }
   }
 }

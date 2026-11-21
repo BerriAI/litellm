@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import React, { useEffect, useState } from "react";
 import { SearchX } from "lucide-react";
 
@@ -31,14 +32,15 @@ interface CacheMissResponse {
   wasted_usd_per_day: number;
 }
 
-const CAUSES: Record<string, string> = {
-  client: "Client changed the prompt",
-  gateway: "Gateway moved the session",
-  provider: "Provider dropped the cache",
-};
+const CAUSES = {
+  client: "whatIf.cacheMiss.client",
+  gateway: "whatIf.cacheMiss.gateway",
+  provider: "whatIf.cacheMiss.provider",
+} as const;
 const usd = (value: number) => `$${value.toFixed(value < 0.01 ? 4 : 2)}`;
 
 export default function CacheMissPage() {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [data, setData] = useState<CacheMissResponse | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -55,23 +57,22 @@ export default function CacheMissPage() {
       <PageHeader>
         <PageHeaderTitle>
           <SearchX />
-          Cache-Miss Explainer
+          {t("whatIf.cacheMiss.title")}
         </PageHeaderTitle>
-        <PageHeaderDescription>
-          Why each turn did or did not read the prompt cache, and who has to fix it: the client, the gateway or the
-          provider.
-        </PageHeaderDescription>
+        <PageHeaderDescription>{t("whatIf.cacheMiss.description")}</PageHeaderDescription>
       </PageHeader>
       <div className="grid grid-cols-3 gap-4">
         {Object.entries(CAUSES).map(([cause, label]) => (
           <Card key={cause}>
             <CardHeader>
-              <CardTitle className="text-sm text-muted-foreground">{label}</CardTitle>
+              <CardTitle className="text-sm text-muted-foreground">{t(label)}</CardTitle>
             </CardHeader>
             <CardContent className="text-2xl font-semibold">
               {data ? usd(data.wasted_usd_by_cause[cause] ?? 0) : "-"}
               <span className="ml-2 text-sm font-normal text-muted-foreground">
-                re-billed · {data?.turns.filter((turn) => turn.verdict === cause).length ?? 0} turns
+                {t("whatIf.cacheMiss.rebilled", {
+                  count: data?.turns.filter((turn) => turn.verdict === cause).length ?? 0,
+                })}
               </span>
             </CardContent>
           </Card>
@@ -81,19 +82,22 @@ export default function CacheMissPage() {
         <Card key={session}>
           <CardHeader>
             <CardTitle>
-              {data?.turns.find((turn) => turn.session_id === session)?.key_alias} · session {session}
+              {t("whatIf.cacheMiss.session", {
+                alias: data?.turns.find((turn) => turn.session_id === session)?.key_alias,
+                session,
+              })}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Turn</TableHead>
-                  <TableHead>Model</TableHead>
-                  <TableHead>Prompt tokens</TableHead>
-                  <TableHead>Read from cache</TableHead>
-                  <TableHead>Verdict</TableHead>
-                  <TableHead>Why</TableHead>
+                  <TableHead>{t("whatIf.cacheMiss.turn")}</TableHead>
+                  <TableHead>{t("whatIf.cacheMiss.model")}</TableHead>
+                  <TableHead>{t("whatIf.cacheMiss.promptTokens")}</TableHead>
+                  <TableHead>{t("whatIf.cacheMiss.readFromCache")}</TableHead>
+                  <TableHead>{t("whatIf.cacheMiss.verdict")}</TableHead>
+                  <TableHead>{t("whatIf.cacheMiss.why")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -113,7 +117,7 @@ export default function CacheMissPage() {
                           {turn.verdict === "hit" || turn.verdict === "first" ? (
                             <Badge variant="secondary">{turn.verdict}</Badge>
                           ) : (
-                            <Badge variant="destructive">miss · {turn.verdict}</Badge>
+                            <Badge variant="destructive">{t("whatIf.cacheMiss.miss", { verdict: turn.verdict })}</Badge>
                           )}
                         </TableCell>
                         <TableCell className="whitespace-normal">{turn.reason}</TableCell>

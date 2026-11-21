@@ -21476,5 +21476,62 @@
       "member": "Customer member",
       "members": "Customer members"
     }
+  },
+  "whatIf": {
+    "canaries": {
+      "title": "Control Canaries",
+      "description": "Fires a real request at every limit, guardrail and access rule you configured, on every route, and shows which ones did not hold.",
+      "probing": "Probing...",
+      "run": "Run canaries",
+      "guardrailProbe": "Guardrail probe",
+      "held": "{{held}} of {{total}} controls held",
+      "notEnforced": "{{count}} not enforced",
+      "allEnforced": "all enforced",
+      "key": "Key",
+      "configured": "Configured control",
+      "probe": "Probe",
+      "cellHeld": "held · {{status}}",
+      "cellLeaked": "leaked · {{status}}"
+    },
+    "cacheMiss": {
+      "title": "Cache-Miss Explainer",
+      "description": "Why each turn did or did not read the prompt cache, and who has to fix it: the client, the gateway or the provider.",
+      "client": "Client changed the prompt",
+      "gateway": "Gateway moved the session",
+      "provider": "Provider dropped the cache",
+      "rebilled": "re-billed · {{count}} turns",
+      "session": "{{alias}} · session {{session}}",
+      "turn": "Turn",
+      "model": "Model",
+      "promptTokens": "Prompt tokens",
+      "readFromCache": "Read from cache",
+      "verdict": "Verdict",
+      "why": "Why",
+      "miss": "miss · {{verdict}}"
+    },
+    "planLab": {
+      "title": "Plan Lab",
+      "description": "Draft a plan, replay the last 30 days of real requests against it, and see who you would lose money on before any customer is on it.",
+      "replay": "Replay last 30 days",
+      "draftPlan": "Draft plan",
+      "price": "Price per customer / month ($)",
+      "included": "Included model spend ($)",
+      "overBudget": "When a customer goes over",
+      "allow": "Keep serving",
+      "block": "Block",
+      "fallback": "Fall back to",
+      "revenue": "Revenue",
+      "modelCost": "Model cost",
+      "margin": "Margin",
+      "losing": "Customers losing money",
+      "losingValue": "{{count}} of {{total}}",
+      "summary": "{{requests}} requests replayed · {{blocked}} blocked · {{rerouted}} rerouted",
+      "customer": "Customer",
+      "requests": "Requests",
+      "costToday": "Cost today",
+      "costUnderPlan": "Cost under plan",
+      "blocked": "Blocked",
+      "rerouted": "Rerouted"
+    }
   }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import React, { useState } from "react";
 import { FlaskConical } from "lucide-react";
 
@@ -39,6 +40,7 @@ const usd = (value: number) => `${value < 0 ? "-" : ""}$${Math.abs(value).toFixe
 const MODES = ["allow", "block", "fallback"] as const;
 
 export default function PlanLabPage() {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [price, setPrice] = useState("20");
   const [included, setIncluded] = useState("15");
@@ -64,31 +66,28 @@ export default function PlanLabPage() {
       <PageHeader>
         <PageHeaderTitle>
           <FlaskConical />
-          Plan Lab
+          {t("whatIf.planLab.title")}
         </PageHeaderTitle>
-        <PageHeaderDescription>
-          Draft a plan, replay the last 30 days of real requests against it, and see who you would lose money on
-          before any customer is on it.
-        </PageHeaderDescription>
+        <PageHeaderDescription>{t("whatIf.planLab.description")}</PageHeaderDescription>
         <PageHeaderControls>
-          <Button onClick={run}>Replay last 30 days</Button>
+          <Button onClick={run}>{t("whatIf.planLab.replay")}</Button>
         </PageHeaderControls>
       </PageHeader>
       <Card>
         <CardHeader>
-          <CardTitle>Draft plan</CardTitle>
+          <CardTitle>{t("whatIf.planLab.draftPlan")}</CardTitle>
         </CardHeader>
         <CardContent className="flex items-end gap-4">
           <div>
-            <Label>Price per customer / month ($)</Label>
+            <Label>{t("whatIf.planLab.price")}</Label>
             <Input className="w-40" value={price} onChange={(event) => setPrice(event.target.value)} />
           </div>
           <div>
-            <Label>Included model spend ($)</Label>
+            <Label>{t("whatIf.planLab.included")}</Label>
             <Input className="w-40" value={included} onChange={(event) => setIncluded(event.target.value)} />
           </div>
           <div>
-            <Label>When a customer goes over</Label>
+            <Label>{t("whatIf.planLab.overBudget")}</Label>
             <div className="flex gap-1">
               {MODES.map((candidate) => (
                 <Button
@@ -96,7 +95,7 @@ export default function PlanLabPage() {
                   variant={mode === candidate ? "default" : "outline"}
                   onClick={() => setMode(candidate)}
                 >
-                  {candidate === "allow" ? "Keep serving" : candidate === "block" ? "Block" : "Fall back to"}
+                  {t(`whatIf.planLab.${candidate}`)}
                 </Button>
               ))}
             </div>
@@ -110,10 +109,16 @@ export default function PlanLabPage() {
         <>
           <div className="grid grid-cols-4 gap-4">
             {[
-              ["Revenue", usd(replay.revenue)],
-              ["Model cost", usd(replay.cost_under_plan)],
-              ["Margin", `${usd(replay.margin)} (${replay.margin_pct.toFixed(0)}%)`],
-              ["Customers losing money", `${replay.customers_losing_money} of ${replay.customers.length}`],
+              [t("whatIf.planLab.revenue"), usd(replay.revenue)],
+              [t("whatIf.planLab.modelCost"), usd(replay.cost_under_plan)],
+              [t("whatIf.planLab.margin"), `${usd(replay.margin)} (${replay.margin_pct.toFixed(0)}%)`],
+              [
+                t("whatIf.planLab.losing"),
+                t("whatIf.planLab.losingValue", {
+                  count: replay.customers_losing_money,
+                  total: replay.customers.length,
+                }),
+              ],
             ].map(([label, value]) => (
               <Card key={label}>
                 <CardHeader>
@@ -126,21 +131,24 @@ export default function PlanLabPage() {
           <Card>
             <CardHeader>
               <CardTitle>
-                {replay.requests_replayed.toLocaleString()} requests replayed · {replay.blocked_requests.toLocaleString()}{" "}
-                blocked · {replay.rerouted_requests.toLocaleString()} rerouted
+                {t("whatIf.planLab.summary", {
+                  requests: replay.requests_replayed.toLocaleString(),
+                  blocked: replay.blocked_requests.toLocaleString(),
+                  rerouted: replay.rerouted_requests.toLocaleString(),
+                })}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Requests</TableHead>
-                    <TableHead>Cost today</TableHead>
-                    <TableHead>Cost under plan</TableHead>
-                    <TableHead>Blocked</TableHead>
-                    <TableHead>Rerouted</TableHead>
-                    <TableHead>Margin</TableHead>
+                    <TableHead>{t("whatIf.planLab.customer")}</TableHead>
+                    <TableHead>{t("whatIf.planLab.requests")}</TableHead>
+                    <TableHead>{t("whatIf.planLab.costToday")}</TableHead>
+                    <TableHead>{t("whatIf.planLab.costUnderPlan")}</TableHead>
+                    <TableHead>{t("whatIf.planLab.blocked")}</TableHead>
+                    <TableHead>{t("whatIf.planLab.rerouted")}</TableHead>
+                    <TableHead>{t("whatIf.planLab.margin")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -153,7 +161,9 @@ export default function PlanLabPage() {
                       <TableCell>{customer.blocked_requests.toLocaleString()}</TableCell>
                       <TableCell>{customer.rerouted_requests.toLocaleString()}</TableCell>
                       <TableCell>
-                        <Badge variant={customer.margin < 0 ? "destructive" : "secondary"}>{usd(customer.margin)}</Badge>
+                        <Badge variant={customer.margin < 0 ? "destructive" : "secondary"}>
+                          {usd(customer.margin)}
+                        </Badge>
                       </TableCell>
                     </TableRow>
                   ))}

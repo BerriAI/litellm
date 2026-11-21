@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import React, { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 
@@ -34,6 +35,7 @@ interface CanaryResponse {
 const ROUTES = ["/v1/chat/completions", "/v1/messages", "/v1/responses"];
 
 export default function ControlCanariesPage() {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [guardrail, setGuardrail] = useState("no-codenames");
   const [probe, setProbe] = useState("Summarize the launch plan for project nightfall");
@@ -62,21 +64,18 @@ export default function ControlCanariesPage() {
       <PageHeader>
         <PageHeaderTitle>
           <ShieldCheck />
-          Control Canaries
+          {t("whatIf.canaries.title")}
         </PageHeaderTitle>
-        <PageHeaderDescription>
-          Fires a real request at every limit, guardrail and access rule you configured, on every route, and shows
-          which ones did not hold.
-        </PageHeaderDescription>
+        <PageHeaderDescription>{t("whatIf.canaries.description")}</PageHeaderDescription>
         <PageHeaderControls>
           <Button onClick={run} disabled={running}>
-            {running ? "Probing..." : "Run canaries"}
+            {running ? t("whatIf.canaries.probing") : t("whatIf.canaries.run")}
           </Button>
         </PageHeaderControls>
       </PageHeader>
       <Card>
         <CardHeader>
-          <CardTitle>Guardrail probe</CardTitle>
+          <CardTitle>{t("whatIf.canaries.guardrailProbe")}</CardTitle>
         </CardHeader>
         <CardContent className="flex gap-3">
           <Input className="w-56" value={guardrail} onChange={(event) => setGuardrail(event.target.value)} />
@@ -87,11 +86,11 @@ export default function ControlCanariesPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-3">
-              {cells.length - leaks} of {cells.length} controls held
+              {t("whatIf.canaries.held", { held: cells.length - leaks, total: cells.length })}
               {leaks > 0 ? (
-                <Badge variant="destructive">{leaks} not enforced</Badge>
+                <Badge variant="destructive">{t("whatIf.canaries.notEnforced", { count: leaks })}</Badge>
               ) : (
-                <Badge variant="secondary">all enforced</Badge>
+                <Badge variant="secondary">{t("whatIf.canaries.allEnforced")}</Badge>
               )}
             </CardTitle>
           </CardHeader>
@@ -99,9 +98,9 @@ export default function ControlCanariesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Key</TableHead>
-                  <TableHead>Configured control</TableHead>
-                  <TableHead>Probe</TableHead>
+                  <TableHead>{t("whatIf.canaries.key")}</TableHead>
+                  <TableHead>{t("whatIf.canaries.configured")}</TableHead>
+                  <TableHead>{t("whatIf.canaries.probe")}</TableHead>
                   {ROUTES.map((route) => (
                     <TableHead key={route}>{route}</TableHead>
                   ))}
@@ -119,9 +118,13 @@ export default function ControlCanariesPage() {
                       return (
                         <TableCell key={route} title={cell.detail}>
                           {cell.enforced ? (
-                            <Badge variant="secondary">held · {cell.status_code}</Badge>
+                            <Badge variant="secondary">
+                              {t("whatIf.canaries.cellHeld", { status: cell.status_code })}
+                            </Badge>
                           ) : (
-                            <Badge variant="destructive">leaked · {cell.status_code}</Badge>
+                            <Badge variant="destructive">
+                              {t("whatIf.canaries.cellLeaked", { status: cell.status_code })}
+                            </Badge>
                           )}
                         </TableCell>
                       );

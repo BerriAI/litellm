@@ -2,14 +2,14 @@
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby, pairwise
 from typing import Final, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
@@ -27,9 +27,29 @@ def _require_admin(user: UserAPIKeyAuth) -> None:
         raise HTTPException(status_code=403, detail="Only proxy admin roles can use what-if endpoints")
 
 
+_DICT: Final = TypeAdapter(dict[str, object])
+_LIST: Final = TypeAdapter(list[object])
+
+
 def _as_dict(value: object) -> Mapping[str, object]:
-    parsed: Final = json.loads(value) if isinstance(value, str) else value
-    return parsed if isinstance(parsed, dict) else {}
+    try:
+        return _DICT.validate_json(value) if isinstance(value, str) else _DICT.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+def _as_list(value: object) -> Sequence[object]:
+    try:
+        return _LIST.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def _prices(model: str) -> Mapping[str, object]:
+    try:
+        return _as_dict(dict(litellm.get_model_info(model)))
+    except Exception:  # noqa: BLE001  # an unmapped model has no price, which the caller treats as zero
+        return {}
 
 
 def _body(route: str, model: str, prompt: str) -> Mapping[str, object]:
@@ -113,12 +133,16 @@ async def run_control_canaries(
     )
     all_models: Final = tuple(llm_router.get_model_names()) if llm_router else ()
     admin_headers: Final = {"Authorization": request.headers.get("authorization", "")}
-    jobs: Final = []  # mutable-ok  # heterogeneous canaries collected per key before one gather
-    async with httpx.AsyncClient(base_url=str(request.base_url).rstrip("/"), timeout=60) as client:
+    jobs: Final[
+        list[Awaitable[CanaryResult]]
+    ] = []  # mutable-ok  # heterogeneous canaries collected per key before one gather
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=request.app), base_url="http://litellm-proxy", timeout=60
+    ) as client:
         for row in keys:
             alias = str(row.key_alias)
             allowed = [m for m in row.models if m in all_models]
-            guardrails = _as_dict(row.metadata).get("guardrails") or []
+            guardrails = _as_list(_as_dict(row.metadata).get("guardrails"))
             if not allowed:
                 continue
             base = {"models": row.models, "team_id": row.team_id}
@@ -158,7 +182,7 @@ async def run_control_canaries(
                         repeat=2,
                     )
                 )
-            for name in guardrails if isinstance(guardrails, list) else []:
+            for name in guardrails:
                 prompt = body.guardrail_probes.get(str(name))
                 if prompt:
                     jobs.append(
@@ -211,7 +235,7 @@ def _cache_read(usage: Mapping[str, object]) -> int:
 
 def _prompt_text(row: Mapping[str, object]) -> str:
     request: Final = _as_dict(row.get("proxy_server_request"))
-    messages: Final = request.get("messages") or request.get("input") or []
+    messages: Final = request.get("messages") or request.get("input") or ()
     system: Final = request.get("system") or ""
     return json.dumps([system, messages], ensure_ascii=False)
 
@@ -233,15 +257,10 @@ def _explain(previous: Mapping[str, object], row: Mapping[str, object]) -> Cache
         _as_dict(_as_dict(previous.get("metadata")).get("spend_logs_metadata")).get("prefix_block_hashes")
     )
     block_size: Final = int(str(hashes.get("block_size") or 0))
-    ids: Final = hashes.get("hash_ids") or []
-    previous_ids: Final = previous_hashes.get("hash_ids") or []
-    shared: Final = (
-        next(
-            (i for i, (a, b) in enumerate(zip(previous_ids, ids)) if a != b),
-            min(len(previous_ids), len(ids)),
-        )
-        if isinstance(ids, list) and isinstance(previous_ids, list)
-        else 0
+    ids: Final = _as_list(hashes.get("hash_ids"))
+    previous_ids: Final = _as_list(previous_hashes.get("hash_ids"))
+    shared: Final = next(
+        (i for i, (a, b) in enumerate(zip(previous_ids, ids)) if a != b), min(len(previous_ids), len(ids))
     )
     prompt_tokens: Final = int(str(row.get("prompt_tokens") or 0))
     cache_read: Final = _cache_read(_as_dict(metadata.get("usage_object")))
@@ -249,9 +268,9 @@ def _explain(previous: Mapping[str, object], row: Mapping[str, object]) -> Cache
     previous_tokens: Final = int(str(previous.get("prompt_tokens") or 0))
     missed: Final = max(min(previous_tokens, prompt_tokens) - max(cache_read, 0), 0) if previous else 0
     model: Final = str(row.get("model") or "")
-    prices: Final = litellm.model_cost.get(model) or litellm.model_cost.get(model.split("/", 1)[-1]) or {}
-    input_price: Final = float(prices.get("input_cost_per_token") or 0)
-    wasted: Final = missed * (input_price - float(prices.get("cache_read_input_token_cost") or input_price))
+    prices: Final = _prices(model)
+    input_price: Final = float(str(prices.get("input_cost_per_token") or 0))
+    wasted: Final = missed * (input_price - float(str(prices.get("cache_read_input_token_cost") or input_price)))
     start: Final = (
         row["startTime"] if isinstance(row["startTime"], datetime) else datetime.fromisoformat(str(row["startTime"]))
     )
@@ -369,16 +388,16 @@ class PlanReplay(BaseModel):
 
 
 def _replay_customer(customer: str, rows: Sequence[Mapping[str, object]], plan: DraftPlan) -> PlanCustomer:
-    fallback: Final = litellm.model_cost.get(plan.fallback_model or "") or {}
+    fallback: Final = _prices(plan.fallback_model or "")
     cost, blocked, rerouted = 0.0, 0, 0
     for row in rows:
         spend = float(str(row["spend"]))
         if cost + spend <= plan.included_spend or plan.over_budget == "allow":
             cost += spend
         elif plan.over_budget == "fallback" and fallback:
-            cost += int(str(row["prompt_tokens"])) * float(fallback.get("input_cost_per_token") or 0) + int(
+            cost += int(str(row["prompt_tokens"])) * float(str(fallback.get("input_cost_per_token") or 0)) + int(
                 str(row["completion_tokens"])
-            ) * float(fallback.get("output_cost_per_token") or 0)
+            ) * float(str(fallback.get("output_cost_per_token") or 0))
             rerouted += 1
         else:
             blocked += 1

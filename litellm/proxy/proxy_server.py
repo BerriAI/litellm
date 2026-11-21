@@ -854,7 +854,6 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
 from litellm.proxy.management_endpoints.password_endpoints import (
     router as password_management_router,
 )
-from litellm.proxy.management_endpoints.what_if_endpoints import router as what_if_router
 from litellm.proxy.management_endpoints.prompt_caching_requests import (
     router as prompt_caching_requests_router,
 )
@@ -890,6 +889,7 @@ from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
+from litellm.proxy.management_endpoints.what_if_endpoints import router as what_if_router
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
