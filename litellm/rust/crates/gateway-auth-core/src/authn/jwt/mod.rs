@@ -12,7 +12,7 @@ use litellm_config::{JwtAuthSettings, RolePermissions};
 
 pub use mapping::{
     KeyMappingRow, KeyMappingWrite, KeyOrigin, MappedClaim, MappedJwt, MappedKey,
-    NO_MAPPING_SENTINEL, PROXY_ADMIN_SENTINEL, mapping_cache_key,
+    NO_MAPPING_SENTINEL, PROXY_ADMIN_SENTINEL,
 };
 pub(crate) use operator::custom_validate;
 pub(crate) use userinfo::decode;

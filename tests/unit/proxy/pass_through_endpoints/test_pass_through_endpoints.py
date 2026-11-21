@@ -42,6 +42,7 @@ from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
@@ -86,6 +87,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -3819,8 +3821,8 @@ async def test_pass_through_rpm_limit_is_sequential_and_scoped_per_key(tmp_path,
     keys = tuple(f"sk-test-{uuid.uuid4().hex}" for _ in range(2))
     for key in keys:
         user_api_key_cache.set_cache(
-            key=hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(
                 token=hash_token(key),
                 rpm_limit=1,
                 metadata={"allowed_passthrough_routes": ["/rpm-rerank"]},
@@ -6845,7 +6847,9 @@ async def _relay_through_pass_through(
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, {})
             stack.enter_context(
-                patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+                patch(
+                    "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
+                )
             )
             response: Final = await pass_through_request(
                 request=request,
@@ -8835,7 +8839,7 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
     limiter: Final = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 23, 59, 30)
     )
-    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-legacy-socket"), max_parallel_requests=2)
     logged_rows: Final[list[asyncio.Task[None]]] = []
@@ -10910,7 +10914,7 @@ async def _run_passthrough(
     with (
         pytest.MonkeyPatch.context() as litellm_patch,
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         ),
         respx.mock(assert_all_called=False) as upstream_mock,
     ):
@@ -11183,7 +11187,7 @@ async def _run_websocket_connect_failure(
     with (
         pytest.MonkeyPatch.context() as litellm_patch,
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside websocket_passthrough_request; there is no injection seam
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         ),
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",

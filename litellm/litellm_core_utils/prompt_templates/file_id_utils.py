@@ -4,10 +4,11 @@ import re
 from collections.abc import Mapping
 from os import PathLike
 from pathlib import Path
-from typing import Final, cast  # noqa: TID251  # Existing casts retained unchanged in this pure move
+from typing import Final, Protocol, cast  # noqa: TID251  # Existing casts retained unchanged in this pure move
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.batch_utils import InMemoryFile
+from litellm.litellm_core_utils.core_helpers import json_contains, require_attributes
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionFileObject,
@@ -17,6 +18,19 @@ from litellm.types.utils import (
     FileTypes,
     SpecialEnums,
 )
+
+
+class _LooksUpWithDefault(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+class _LooksUp(Protocol):
+    def get(self, key: object, /) -> object: ...
+
+
+def _mapped_provider_file_id(model_file_id_mapping: object, file_id: str, model_id: object) -> object:
+    file_id_by_model: Final = require_attributes(model_file_id_mapping, _LooksUpWithDefault, "get").get(file_id, {})
+    return require_attributes(file_id_by_model, _LooksUp, "get").get(model_id)
 
 
 def get_format_from_file_id(file_id: str | None) -> str | None:
@@ -119,8 +133,8 @@ def update_messages_with_model_file_ids(
 
 def update_responses_input_with_model_file_ids(
     input: object,
-    model_id: str | None = None,
-    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
+    model_id: object = None,
+    model_file_id_mapping: object = None,
 ) -> object:
     """
     Updates responses API input with provider-specific file IDs.
@@ -165,9 +179,11 @@ def update_responses_input_with_model_file_ids(
                         provider_file_id = file_id  # Default to original
 
                         # Check if we have a mapping for this file ID
-                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
+                        if model_file_id_mapping and model_id and json_contains(model_file_id_mapping, file_id):
                             # Use the model-specific file ID from mapping
-                            provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
+                            provider_file_id = (
+                                _mapped_provider_file_id(model_file_id_mapping, file_id, model_id) or file_id
+                            )
                             updated_content_item = content_item.copy()
                             updated_content_item["file_id"] = provider_file_id
                             updated_content.append(updated_content_item)
@@ -256,8 +272,8 @@ def _decode_vector_store_ids_in_tools(
 
 def update_responses_tools_with_model_file_ids(
     tools: list[dict[str, object]] | None,
-    model_id: str | None = None,
-    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
+    model_id: object = None,
+    model_file_id_mapping: object = None,
 ) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
@@ -299,9 +315,11 @@ def update_responses_tools_with_model_file_ids(
                     for file_id in container_file_ids:
                         if isinstance(file_id, str):
                             # Check if we have a mapping for this file ID
-                            if file_id in model_file_id_mapping:
+                            if json_contains(model_file_id_mapping, file_id):
                                 # Map to provider-specific file ID
-                                provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
+                                provider_file_id = (
+                                    _mapped_provider_file_id(model_file_id_mapping, file_id, model_id) or file_id
+                                )
                                 updated_file_ids.append(provider_file_id)
                             else:
                                 updated_file_ids.append(file_id)
