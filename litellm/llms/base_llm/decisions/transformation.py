@@ -390,6 +390,10 @@ def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRe
     )
 
 
+def _lacks_confidence(answer: DecisionsIRAnswer) -> bool:
+    return isinstance(answer, (DecisionsIRChoiceAnswer, DecisionsIRScoreAnswer)) and answer.confidence is None
+
+
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
     return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(payload), request)
 
@@ -480,6 +484,7 @@ class BaseDecisionsConfig(ABC):
     max_total_image_bytes: int | None = None
     image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
+    confidence_optional: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
@@ -622,12 +627,19 @@ class BaseDecisionsConfig(ABC):
     ) -> DecisionsIRResponse:
         payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
         try:
-            return self.parse_response(payload, request)
+            response: Final = self.parse_response(payload, request)
         except ValidationError as error:
             raise BaseLLMException(
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
             ) from error
+        if not self.confidence_optional and any(_lacks_confidence(answer) for answer in response.answers):
+            raise BaseLLMException(
+                status_code=500,
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                "a choice or score answer has no confidence",
+            )
+        return response
 
     def get_error_class(
         self,

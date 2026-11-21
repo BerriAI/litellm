@@ -32,6 +32,7 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsUsage,
     NoulAnswer,
+    OpenAIChoiceAnswer,
     OpenAIDecisionResponse,
     ScoreAnswer,
 )
@@ -558,6 +559,118 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
     assert sent["safety_identifier"] == "end-user-1"
     assert systemone_route.calls.last.request.headers["authorization"] == "Bearer proxy-key"
     assert response.answers["sentiment"].confidence == 0.8
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_calls_pass_on_answers_the_proxy_returns_without_confidence(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={
+            **_OPENAI_RESPONSE,
+            "answers": [
+                {
+                    "type": "choice",
+                    "name": "sentiment",
+                    "choice": "positive",
+                    "probabilities": [{"value": "positive", "probability": 0.8}, {"value": "negative", "probability": 0.2}],
+                }
+            ],
+        }
+    )
+    respx_mock.post("https://proxy.example/v1/systemone").respond(
+        json={
+            **_RESPONSE,
+            "answers": {
+                "sentiment": {"type": "choice", "choice": "positive", "probabilities": {"positive": 0.8, "negative": 0.2}}
+            },
+        }
+    )
+
+    decision: Final = await litellm.adecisions(
+        model="litellm_proxy/parallel_ai/decider",
+        input="The package arrived broken.",
+        questions=[
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "instructions": "What is the tone?",
+                "choices": [{"value": "positive"}, {"value": "negative"}],
+            }
+        ],
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+    systemone: Final = await litellm.asystemone(
+        model="litellm_proxy/parallel_ai/decider",
+        state="The package arrived broken.",
+        questions={"sentiment": {"type": "choice", "criteria": {"positive": None, "negative": None}}},
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    answer: Final = decision.answers[0]
+    assert isinstance(answer, OpenAIChoiceAnswer)
+    assert answer.choice == "positive"
+    assert answer.confidence is None
+    assert systemone.answers["sentiment"].confidence is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("question", "answer"),
+    [
+        (
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "instructions": "What is the tone?",
+                "choices": [{"value": "positive"}, {"value": "negative"}],
+            },
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "choice": "positive",
+                "probabilities": [{"value": "positive", "probability": 0.8}, {"value": "negative", "probability": 0.2}],
+            },
+        ),
+        (
+            {
+                "type": "score",
+                "name": "severity",
+                "instructions": "How severe is the damage?",
+                "levels": [{"label": "minor"}, {"label": "major"}],
+            },
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 1,
+                "probabilities": [
+                    {"value": 0, "label": "minor", "probability": 0.3},
+                    {"value": 1, "label": "major", "probability": 0.7},
+                ],
+            },
+        ),
+    ],
+    ids=("choice", "score"),
+)
+async def test_a_provider_answer_without_confidence_is_still_a_server_error(
+    question: Mapping[str, object],
+    answer: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/decisions").respond(json={**_OPENAI_RESPONSE, "answers": [answer]})
+
+    with pytest.raises(litellm.InternalServerError, match="returned an unexpected response") as raised:
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            input="The package arrived broken.",
+            questions=[question],
+            api_key="caller-key",
+            api_base="https://api.openai.com/v1",
+        )
+
+    assert raised.value.status_code == 500
 
 
 @pytest.mark.asyncio
