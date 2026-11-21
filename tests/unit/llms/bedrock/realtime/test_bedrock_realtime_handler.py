@@ -1572,6 +1572,7 @@ class TestBedrockRealtimeAwsAuth:
             aws_session_name="realtime-session",
             aws_external_id="realtime-external-id",
             aws_session_tags=[{"Key": "team", "Value": "realtime"}],
+            litellm_metadata={"user_api_key_alias": "realtime-caller"},
         )
 
         assert handler.get_credentials_kwargs == {
@@ -1586,6 +1587,7 @@ class TestBedrockRealtimeAwsAuth:
             "aws_sts_endpoint": None,
             "aws_external_id": "realtime-external-id",
             "aws_session_tags": ({"Key": "team", "Value": "realtime"},),
+            "litellm_params": {"litellm_metadata": {"user_api_key_alias": "realtime-caller"}},
         }
         resolver = stub_aws_sdk_client["config_kwargs"]["aws_credentials_identity_resolver"]
         assert isinstance(resolver, FakeStaticCredentialsResolver)

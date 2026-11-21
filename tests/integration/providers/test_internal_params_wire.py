@@ -250,8 +250,6 @@ def _at(value: object, *path: str) -> object:
 
 def _custom_key(body: Mapping[str, object], provider: str) -> object:
     match provider:
-        case "anthropic":
-            return _at(body, "extra_body", "custom_provider_key")
         case "converse":
             return _at(body, "additionalModelRequestFields", "extra_body", "custom_provider_key")
     return _at(body, "custom_provider_key")
@@ -441,6 +439,7 @@ OWNED_NAMES_NOT_SEEDED: Final = MappingProxyType(
         "data_residency": "picks a regional endpoint",
         "litellm_logging_obj": "must be the call's own logging object",
         "stream_response": "holds a response object, not request input",
+        "parent_otel_span": "holds the request's tracing span, not request input",
         "_context_compaction_state": "holds compaction state, not request input",
         "_router_weights": "holds router weight state, not request input",
         "attempted_targets": "holds the router's fallback bookkeeping, not request input",

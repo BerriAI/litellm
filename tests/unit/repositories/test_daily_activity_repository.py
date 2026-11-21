@@ -123,6 +123,8 @@ def _export_row(api_key: str | None) -> dict[str, object]:
         "failed_requests": 0,
         "cache_read_input_tokens": 3,
         "cache_creation_input_tokens": 1,
+        "key_metadata": {},
+        "user_metadata": {},
     }
 
 
@@ -708,6 +710,168 @@ async def test_daily_rows_exclusion_without_entity_filter_keeps_null_entity_rows
     }
     assert database.litellm_dailyteamspend.count_calls == [expected_where]
     assert database.litellm_dailyteamspend.find_many_calls == [expected_where]
+
+
+@pytest.mark.asyncio
+async def test_export_redacts_credential_named_values_inside_metadata_objects() -> None:
+    database: Final = _FakeDatabase(
+        (
+            (
+                {
+                    **_export_row("key-1"),
+                    "key_metadata": {
+                        "cost_center": "cc-1",
+                        "cost_center_api_key": "sk-cost-1234567890",
+                        "api_key": "sk-live-1234567890",
+                        "webhook": {"url": "https://hooks.example", "auth_token": "t0k3n", "clientSecret": "cs"},
+                        "owners": [{"name": "ops", "password": "pw"}],
+                        "scim_roles": ["admin"],
+                        "langfuse": {"apiKey": "lf", "logging": [{"callback_vars": {"langfuse_secret_key": "s"}}]},
+                        "OpenAIAPIKey": "sk-acronym",
+                        "apikey": "sk-unseparated",
+                        "APIKEY": "sk-upper",
+                        "passwd": "pw-short",
+                    },
+                    "user_metadata": {
+                        "department": "research",
+                        "github_token": "ghp_secret",
+                        "logging": [{"callback_name": "langfuse"}],
+                        "profile": {"scim_enterprise": {"employeeNumber": "E-1"}, "team": "ops"},
+                    },
+                },
+                {**_export_row("key-2"), "key_metadata": {}, "user_metadata": {}},
+            ),
+        )
+    )
+    repository, _ = _repository(database)
+
+    rows: Final = [row async for row in repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS)]
+
+    assert rows[0].key_metadata == {
+        "cost_center": "cc-1",
+        "cost_center_api_key": "REDACTED",
+        "api_key": "REDACTED",
+        "webhook": {"url": "https://hooks.example", "auth_token": "REDACTED", "clientSecret": "REDACTED"},
+        "owners": [{"name": "ops", "password": "REDACTED"}],
+        "langfuse": {"apiKey": "REDACTED"},
+        "OpenAIAPIKey": "REDACTED",
+        "apikey": "REDACTED",
+        "APIKEY": "REDACTED",
+        "passwd": "REDACTED",
+    }
+    assert rows[0].user_metadata == {
+        "department": "research",
+        "github_token": "REDACTED",
+        "profile": {"team": "ops"},
+    }
+    assert (rows[1].key_metadata, rows[1].user_metadata) == ({}, {})
+
+
+async def _exported_key_metadata(key_metadata: Mapping[str, object]) -> Mapping[str, object]:
+    database: Final = _FakeDatabase((({**_export_row("key-1"), "key_metadata": key_metadata, "user_metadata": {}},),))
+    repository, _ = _repository(database)
+    rows: Final = [row async for row in repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS)]
+    return rows[0].key_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [
+        "apiKeys",
+        "secrets",
+        "tokens",
+        "passphrase",
+        "bearer",
+        "jwt",
+        "slackWebhookUrl",
+        "connectionString",
+        "database_url",
+        "sentry_dsn",
+    ],
+)
+async def test_export_redacts_credential_named_values_the_masker_names_miss(key: str) -> None:
+    assert await _exported_key_metadata({key: "opaque-value", "team": "ops"}) == {key: "REDACTED", "team": "ops"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sk-proj-1234567890abcdef",
+        "rotate sk-abc123456789 next week",
+        "sk_live_abcdef1234567890",
+        "Bearer abc.def.ghi",
+        "basic dXNlcjpwYXNz",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
+        "postgres://admin:pw@db.internal:5432/app",
+        "redis://:pw@cache.internal:6379/1",
+        "Postgresql://admin:hunter2secret@db.internal/app",
+        "HTTPS://user:pw@internal.example.com",
+        "curl -H 'Authorization: Bearer abcdefghijklmnop1234' https://api.example.com",
+        "authorization=Basic dXNlcjpwYXNz",
+        '{"Authorization": "Bearer opaque-token-value"}',
+        "{'authorization': 'Basic dXNlcjpwYXNz'}",
+        "Bearer opaque-token-value ",
+        "id_AKIAIOSFODNN7EXAMPLE",
+        "stripe_sk_live_abcdef1234567890",
+        "my_sk-abc123def456ghi",
+        "my_ghp_abcdefghijklmnopqrstuvwxyz0123",
+        "x_eyJhbGciOiJIUzI1NiJ9abc",
+        "HTTPS://hooks.slack.com/services/T000/B000/XXXX",
+        "http://hooks.slack.com/services/T000/B000/XXXX",
+        "https://canary.discord.com/api/webhooks/1/abc",
+        "https://discord.com/api/v10/webhooks/1/abc",
+        "x_authorization: Bearer opaque-token-value",
+        '{"h": "{\\"Authorization\\": \\"Bearer opaque-token-value\\"}"}',
+        "postgres://app:" + "p" * 300 + "@db.internal/app",
+        "postgres://" + "u" * 300 + ":pw@db.internal/app",
+        "https://hooks.slack.com/services/T000/B000/XXXX",
+        "https://discord.com/api/webhooks/1/abc",
+        "AKIAIOSFODNN7EXAMPLE",
+        "ghp_abcdefghijklmnopqrstuvwxyz0123",
+        "xoxb-1234567890-abcdef",
+    ],
+)
+async def test_export_redacts_credential_shaped_values_under_any_key_and_in_lists(value: str) -> None:
+    exported: Final = await _exported_key_metadata({"note": value, "owners": [value, "ops"]})
+
+    assert exported == {"note": "REDACTED", "owners": ["REDACTED", "ops"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(5)
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("sk-" * 50_000, "sk-" * 50_000),
+        ("eyJ-" * 30_000, "REDACTED"),
+        ("a." * 60_000, "a." * 60_000),
+        ("x://:" * 24_000, "x://:" * 24_000),
+        ("a://:" + "p" * 200_000, "a://:" + "p" * 200_000),
+    ],
+    ids=["sk-run", "jwt-run", "url-scheme-run", "url-userinfo-run", "url-password-run"],
+)
+async def test_export_scans_long_adversarial_metadata_in_linear_time(value: str, expected: str) -> None:
+    assert await _exported_key_metadata({"note": value}) == {"note": expected}
+
+
+@pytest.mark.asyncio
+async def test_export_keeps_ordinary_metadata_that_only_resembles_credentials() -> None:
+    metadata: Final = {
+        "team": "sk-team",
+        "tags": ["skunkworks", "task-runner-2024", "basic plan", "bearer of news"],
+        "max_tokens": 4096,
+        "token_budget": None,
+        "docs": "https://user@docs.example.com/guide",
+        "dashboard": "https://grafana.example.com:3000/d/abc",
+        "webhook": {"url": "https://hooks.example", "enabled": True},
+        "cost_center": "cc-1234567890",
+        "review": "risk-assessment-2024",
+        "quota": "disk-quota-1234567890",
+    }
+
+    assert await _exported_key_metadata(metadata) == metadata
 
 
 @pytest.mark.asyncio

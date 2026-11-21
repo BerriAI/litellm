@@ -2487,6 +2487,7 @@ def client(original_function):
                         result.chunks
                         if isinstance(result, CustomStreamWrapper)
                         and result.custom_llm_provider == LlmProviders.BEDROCK.value
+                        and any(chunk.choices for chunk in result.chunks)
                         else chunks
                     )
                     return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
@@ -2815,10 +2816,14 @@ def client(original_function):
                         and result.custom_llm_provider == LlmProviders.BEDROCK.value
                         else None
                     )
-                    if bedrock_stream is not None:
-                        async for _ in bedrock_stream:
-                            pass
-                    assembly_chunks: Final = bedrock_stream.chunks if bedrock_stream is not None else list(result)
+                    streamed_chunks: Final = (
+                        [chunk async for chunk in bedrock_stream] if bedrock_stream is not None else list(result)
+                    )
+                    assembly_chunks: Final = (
+                        bedrock_stream.chunks
+                        if bedrock_stream is not None and any(chunk.choices for chunk in bedrock_stream.chunks)
+                        else streamed_chunks
+                    )
                     return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
                 else:
                     if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
@@ -3359,6 +3364,15 @@ def _return_huggingface_tokenizer(
             return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
         case _HuggingFaceTokenizerLoadFailure():
             return outcome
+
+
+def huggingface_tokenizer_may_download(
+    model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+) -> bool:
+    kind: Final = huggingface_tokenizer_kind(model)
+    if kind is None or kind in _BUNDLED_TOKENIZER_LOAD_LOCKS:
+        return False
+    return (kind, _huggingface_tokenizer_backend()) not in outcomes.by_tokenizer
 
 
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
@@ -4749,7 +4763,7 @@ def register_model(
 
 
 def _should_drop_param(k, additional_drop_params) -> bool:
-    if additional_drop_params is not None and isinstance(additional_drop_params, list) and k in additional_drop_params:
+    if isinstance(additional_drop_params, (list, tuple)) and k in additional_drop_params:
         return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
 
     return False
@@ -7643,6 +7657,9 @@ def get_model_info_helper(
                 ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
+                cache_read_input_image_token_cost_priority=_model_info.get(
+                    "cache_read_input_image_token_cost_priority", None
+                ),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
@@ -7754,6 +7771,7 @@ def get_model_info_helper(
                 ),
                 input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
+                input_cost_per_image_token_priority=_model_info.get("input_cost_per_image_token_priority", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
                 input_cost_per_image_token_batches=_model_info.get("input_cost_per_image_token_batches", None),
@@ -10634,6 +10652,7 @@ class ProviderConfigManager:
             LlmProviders.EU_JEV,
             LlmProviders.PARALLEL_AI,
             LlmProviders.VERCEL_AI_GATEWAY,
+            LlmProviders.LITELLM_PROXY,
         ):
             configs: Final = {
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
@@ -10643,6 +10662,7 @@ class ProviderConfigManager:
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
                 LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
                 LlmProviders.VERCEL_AI_GATEWAY: litellm.VercelAIGatewayDecisionsConfig,
+                LlmProviders.LITELLM_PROXY: litellm.LiteLLMProxyDecisionsConfig,
             }
             return configs[provider]()
         return None

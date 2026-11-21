@@ -1,12 +1,37 @@
+//! Server-sent events, named as the WHATWG spec names them
+//! (<https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream>).
+//!
+//! | Name | What it is |
+//! |---|---|
+//! | chunk | The bytes one read of the body returned. It can end anywhere, inside a line included. The spec has no word for it |
+//! | line | Bytes up to a `\n`, a `\r\n` or a `\r` |
+//! | field | A line split at its first colon into a name and a value. A line that starts with a colon is a comment |
+//! | block | The lines up to and including the blank line that closes them, kept as bytes in [`SseBlock`] |
+//! | event | What a block dispatches, read into [`SseEvent`]. A block of comments dispatches none |
+//!
+//! The spec's grammar has one word for the last two, `event = *( comment / field ) end-of-line`,
+//! and its examples say block for the lines ("The following stream contains four blocks"). This
+//! module keeps event for what is dispatched and block for the bytes, so that `block.event`
+//! reads as what it is.
+//!
+//! A stream is read one of two ways. [`SseCodec`] yields each event and drops every other byte,
+//! for a reader that consumes the stream. [`blocks`] keeps every byte and puts each event beside
+//! the block that dispatched it, for a relay that forwards the stream and still has to see its
+//! events go by.
+
 use std::str;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use futures_util::{Stream, StreamExt, future, stream};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::SseError;
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
+/// What one block dispatches: its `data` lines joined by `\n`, and the last `event`, `id` and
+/// `retry` field it holds. Nothing carries over from an earlier block, so `id` is the block's own
+/// and not the spec's last event ID.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SseEvent {
     pub event: Option<String>,
@@ -66,55 +91,72 @@ fn event_in(block: &[u8]) -> Result<Option<SseEvent>, SseError> {
         .dispatch())
 }
 
-/// One event together with the exact wire bytes that carried it, for relays that forward a
-/// provider's bytes untouched but still need to see each event go by.
+/// One stretch of a relayed stream and the event it carries. `event` is `None` for bytes that
+/// carry none: a comment, a block that is not UTF-8, or the tail a stream ended or failed inside
+/// of.
+///
+/// The tail is the one stretch the spec would not call a block, since no blank line closes it. It
+/// is handed out all the same so that a relay drops no byte, and it carries no event because the
+/// spec dispatches none for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SseBlock {
     pub bytes: Bytes,
-    pub event: SseEvent,
+    pub event: Option<SseEvent>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SseBlockCodec {
+#[derive(Default)]
+struct Unread {
+    bytes: BytesMut,
     past_bom: bool,
 }
 
-impl Decoder for SseBlockCodec {
-    type Item = SseBlock;
-    type Error = SseError;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<SseBlock>, SseError> {
-        self.decode_block(src, false)
-    }
-
-    fn decode_eof(&mut self, pending: &mut BytesMut) -> Result<Option<SseBlock>, SseError> {
-        self.decode_block(pending, true)
+impl Unread {
+    /// The next block the bytes read so far close. Once the stream is `cut`, by its end or by a
+    /// failed chunk, what is left is the tail.
+    fn next_block(&mut self, cut: bool) -> Option<SseBlock> {
+        let unread = self.bytes.len();
+        let bom = if !self.past_bom && self.bytes.starts_with(BOM) {
+            BOM.len()
+        } else {
+            0
+        };
+        let closed = block_end(&self.bytes[bom..])
+            .map(|end| bom + end)
+            .filter(|end| cut || *end < unread || !self.bytes.ends_with(b"\r"));
+        let end = closed.or_else(|| (cut && unread > 0).then_some(unread))?;
+        let bytes = self.bytes.split_to(end).freeze();
+        self.past_bom = true;
+        let event = closed.and_then(|_| event_in(&bytes[bom..]).ok().flatten());
+        Some(SseBlock { bytes, event })
     }
 }
 
-impl SseBlockCodec {
-    fn decode_block(
-        &mut self,
-        src: &mut BytesMut,
-        eof: bool,
-    ) -> Result<Option<SseBlock>, SseError> {
-        if !skip_bom(&mut self.past_bom, src) {
-            return Ok(None);
-        }
-        while let Some(end) = block_end(src) {
-            if !eof && end == src.len() && src.ends_with(b"\r") {
-                return Ok(None);
-            }
-            let block = src.split_to(end);
-            if let Some(event) = event_in(&block)? {
-                return Ok(Some(SseBlock {
-                    bytes: block.freeze(),
-                    event,
-                }));
-            }
-        }
-        Ok(None)
-    }
+/// `chunks` regrouped at the blank lines that close each block, with no byte added or dropped,
+/// for relays that forward a provider's stream untouched but still need to see each event go by.
+/// A failed chunk passes through after every byte read before it, so the block it cut comes
+/// first as a tail.
+pub fn blocks<S, E>(chunks: S) -> impl Stream<Item = Result<SseBlock, E>> + Send
+where
+    S: Stream<Item = Result<Bytes, E>> + Send,
+    E: Send,
+{
+    chunks
+        .map(Some)
+        .chain(stream::once(future::ready(None)))
+        .scan(Unread::default(), |unread, chunk| {
+            let (cut, failed) = match chunk {
+                Some(Ok(bytes)) => {
+                    unread.bytes.extend_from_slice(&bytes);
+                    (false, None)
+                }
+                Some(Err(error)) => (true, Some(Err(error))),
+                None => (true, None),
+            };
+            let closed = std::iter::from_fn(|| unread.next_block(cut)).map(Ok);
+            let read: Vec<Result<SseBlock, E>> = closed.chain(failed).collect();
+            future::ready(Some(stream::iter(read)))
+        })
+        .flatten()
 }
 
 fn skip_bom(past_bom: &mut bool, src: &mut BytesMut) -> bool {
@@ -240,82 +282,101 @@ impl Encoder<SseEvent> for SseCodec {
 
 #[cfg(test)]
 mod tests {
-    use futures_util::{StreamExt, TryStreamExt, stream};
+    use futures_util::{StreamExt, stream};
     use rstest::rstest;
 
     use super::*;
-    use crate::frames;
 
     fn pieces(wire: &[u8], size: usize) -> Vec<Bytes> {
         wire.chunks(size).map(Bytes::copy_from_slice).collect()
     }
 
-    async fn blocks(wire: &[u8], size: usize) -> Result<Vec<SseBlock>, SseError> {
-        frames(
-            stream::iter(pieces(wire, size).into_iter().map(Ok::<_, std::io::Error>)),
-            SseBlockCodec::default(),
-        )
-        .try_collect()
-        .await
+    async fn read(chunks: Vec<Result<Bytes, &'static str>>) -> Vec<Result<SseBlock, &'static str>> {
+        blocks(stream::iter(chunks)).collect().await
+    }
+
+    /// Each block of `wire` as its bytes and the data of the event it carries.
+    async fn split(wire: &[u8], size: usize) -> Vec<(Bytes, Option<String>)> {
+        read(pieces(wire, size).into_iter().map(Ok).collect())
+            .await
+            .into_iter()
+            .map(|block| {
+                let block = block.unwrap();
+                (block.bytes, block.event.map(|event| event.data))
+            })
+            .collect()
     }
 
     #[rstest]
     #[case::lf(
         b": keepalive\n\nevent: delta\ndata: a\ndata: b\n\n",
-        b"event: delta\ndata: a\ndata: b\n\n"
+        vec![(&b": keepalive\n\n"[..], None), (&b"event: delta\ndata: a\ndata: b\n\n"[..], Some("a\nb"))]
     )]
     #[case::crlf(
-        b": keepalive\r\n\r\nevent: delta\r\ndata: a\r\ndata: b\r\n\r\n",
-        b"event: delta\r\ndata: a\r\ndata: b\r\n\r\n"
+        b"data: a\r\n\r\ndata: b\r\n\r\n",
+        vec![(&b"data: a\r\n\r\n"[..], Some("a")), (&b"data: b\r\n\r\n"[..], Some("b"))]
     )]
     #[case::cr(
-        b": keepalive\r\revent: delta\rdata: a\rdata: b\r\r",
-        b"event: delta\rdata: a\rdata: b\r\r"
+        b"data: a\r\rdata: b\r\r",
+        vec![(&b"data: a\r\r"[..], Some("a")), (&b"data: b\r\r"[..], Some("b"))]
     )]
-    #[case::bom(b"\xEF\xBB\xBFdata: \xe2\x82\xac\n\n", b"data: \xe2\x82\xac\n\n")]
-    #[case::empty_data(b"event: ignored\n\ndata:\n\n", b"data:\n\n")]
-    #[case::extensions(
-        b"id: 1\nretry: 10\nvendor: x\ndata: a\n\n",
-        b"id: 1\nretry: 10\nvendor: x\ndata: a\n\n"
+    #[case::bom(
+        b"\xEF\xBB\xBFdata: \xe2\x82\xac\n\n",
+        vec![(&b"\xEF\xBB\xBFdata: \xe2\x82\xac\n\n"[..], Some("\u{20ac}"))]
     )]
+    #[case::a_bom_before_a_blank_line(
+        b"\xEF\xBB\xBF\ndata: a\n\n",
+        vec![(&b"\xEF\xBB\xBF\n"[..], None), (&b"data: a\n\n"[..], Some("a"))]
+    )]
+    #[case::a_bom_past_the_start(
+        b"data: a\n\n\xEF\xBB\xBFdata: b\n\n",
+        vec![(&b"data: a\n\n"[..], Some("a")), (&b"\xEF\xBB\xBFdata: b\n\n"[..], None)]
+    )]
+    #[case::not_utf8(
+        b"data: \xff\n\ndata: b\n\n",
+        vec![(&b"data: \xff\n\n"[..], None), (&b"data: b\n\n"[..], Some("b"))]
+    )]
+    #[case::a_cut_tail(
+        b"data: a\n\ndata: partial\n",
+        vec![(&b"data: a\n\n"[..], Some("a")), (&b"data: partial\n"[..], None)]
+    )]
+    #[case::nothing(b"", vec![])]
     #[tokio::test]
-    async fn blocks_carry_the_wire_bytes_and_the_event_they_dispatch(
+    async fn blocks_keep_every_byte_and_carry_the_event_each_dispatches(
         #[case] wire: &[u8],
-        #[case] expected: &[u8],
+        #[case] expected: Vec<(&[u8], Option<&str>)>,
         #[values(1, 3, 4096)] size: usize,
     ) {
-        let blocks = blocks(wire, size).await.unwrap();
-        let expected_events = decode_all(expected).unwrap();
-        assert_eq!(expected_events.len(), 1);
-        assert_eq!(
-            blocks,
-            vec![SseBlock {
-                bytes: Bytes::copy_from_slice(expected),
-                event: expected_events[0].clone(),
-            }]
-        );
-        assert_eq!(expected_events, decode_all(wire).unwrap());
+        let expected: Vec<(Bytes, Option<String>)> = expected
+            .into_iter()
+            .map(|(bytes, data)| (Bytes::copy_from_slice(bytes), data.map(str::to_owned)))
+            .collect();
+
+        assert_eq!(split(wire, size).await, expected);
     }
 
-    #[rstest]
-    #[case::empty(b"", vec![])]
-    #[case::unterminated(b"data: partial\n", vec![])]
-    #[case::partial_tail(b"data: complete\n\ndata: partial\n", vec![&b"data: complete\n\n"[..]])]
-    #[case::multiple(b"data: first\n\ndata: second\n\n", vec![&b"data: first\n\n"[..], &b"data: second\n\n"[..]])]
-    #[case::trailing_comment(b"data: first\n\n: bye\n\n", vec![&b"data: first\n\n"[..]])]
     #[tokio::test]
-    async fn blocks_dispatch_complete_events_and_drop_a_cut_tail(
-        #[case] wire: &[u8],
-        #[case] expected: Vec<&[u8]>,
-    ) {
-        let mut blocks = Box::pin(frames(
-            stream::iter(pieces(wire, 1).into_iter().map(Ok::<_, std::io::Error>)),
-            SseBlockCodec::default(),
-        ));
-        for expected in expected {
-            assert_eq!(blocks.next().await.unwrap().unwrap().bytes, expected);
-        }
-        assert!(blocks.next().await.is_none());
+    async fn a_failed_chunk_comes_after_the_bytes_read_before_it() {
+        let read = read(vec![
+            Ok(Bytes::from_static(b"data: a\n\ndata: par")),
+            Err("reset"),
+            Ok(Bytes::from_static(b"tial\n\n")),
+        ])
+        .await;
+
+        let read: Vec<Result<(Bytes, Option<String>), &str>> = read
+            .into_iter()
+            .map(|block| block.map(|block| (block.bytes, block.event.map(|event| event.data))))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                Ok((Bytes::from_static(b"data: a\n\n"), Some("a".to_owned()))),
+                Ok((Bytes::from_static(b"data: par"), None)),
+                Err("reset"),
+                Ok((Bytes::from_static(b"tial\n\n"), None)),
+            ]
+        );
     }
 
     #[rstest]
@@ -362,54 +423,5 @@ mod tests {
             decode_all(b"data: \xff\n\n"),
             Err(SseError::InvalidUtf8(_))
         ));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn block_framing_preserves_transport_errors() {
-        let input = stream::iter([
-            Ok(Bytes::from_static(b"data: first\n\n")),
-            Err(std::io::Error::new(
-                std::io::ErrorKind::ConnectionReset,
-                "reset",
-            )),
-        ]);
-        let mut blocks = Box::pin(frames(input, SseBlockCodec::default()));
-        assert_eq!(
-            blocks.next().await.unwrap().unwrap().bytes,
-            Bytes::from_static(b"data: first\n\n")
-        );
-        let Some(Err(SseError::Body(error))) = blocks.next().await else {
-            panic!("expected body error");
-        };
-        let cause = error
-            .get_ref()
-            .unwrap()
-            .downcast_ref::<std::io::Error>()
-            .unwrap();
-        assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionReset);
-        assert!(blocks.next().await.is_none());
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn invalid_utf8_stops_block_framing_after_prior_events() {
-        let mut blocks = Box::pin(frames(
-            stream::iter(
-                pieces(b"data: first\n\ndata: \xff\n\n", 1)
-                    .into_iter()
-                    .map(Ok::<_, std::io::Error>),
-            ),
-            SseBlockCodec::default(),
-        ));
-        assert_eq!(
-            blocks.next().await.unwrap().unwrap().bytes,
-            Bytes::from_static(b"data: first\n\n")
-        );
-        assert!(matches!(
-            blocks.next().await,
-            Some(Err(SseError::InvalidUtf8(_)))
-        ));
-        assert!(blocks.next().await.is_none());
     }
 }

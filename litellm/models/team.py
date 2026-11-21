@@ -48,6 +48,7 @@ class BudgetLimitEntry(LiteLLMPydanticObjectBase):
     budget_duration: str
     max_budget: float
     reset_at: datetime | None = None
+    window_start: datetime | None = Field(default=None, description="Server-managed start of the current spend window.")
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):

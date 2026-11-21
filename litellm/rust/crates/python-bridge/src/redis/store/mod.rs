@@ -1,3 +1,4 @@
+pub(crate) mod active_teams;
 pub(crate) mod auth_cache;
 pub(crate) mod deployment_health;
 mod policy;
@@ -20,7 +21,7 @@ use std::{
 
 use litellm_python_compat::number::{SecondsError, seconds};
 use litellm_redis_client::CallTag;
-use litellm_redis_store::{Error, FromValue, IntoValue, Number, Pending, Remote};
+use litellm_redis_store::{Clock, Error, FromValue, IntoValue, Number, Pending, Remote};
 use pyo3::{
     IntoPyObjectExt,
     exceptions::{PyOverflowError, PyRuntimeError, PyTypeError, PyValueError},
@@ -114,6 +115,16 @@ fn duration(value: f64) -> PyResult<Duration> {
 
 fn ttl(value: Option<f64>) -> PyResult<Option<Duration>> {
     value.map(duration).transpose()
+}
+
+/// A store's clock from Python: a callable returning epoch seconds, which tests use to move time.
+fn python_clock(clock: Py<PyAny>) -> Clock {
+    Arc::new(move || {
+        Python::attach(|py| clock.call0(py)?.extract::<f64>(py))
+            .ok()
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .unwrap_or_default()
+    })
 }
 
 fn remote(client: &NativeRedisClient) -> Remote {

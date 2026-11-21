@@ -229,6 +229,7 @@ async def test_autonomous_agent_toolset_and_access_group_revocations_bind_on_the
     client.writer_db.litellm_mcpservertable.find_many = AsyncMock(return_value=[_server_row("linear", ("grp",))])
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "mcp_state_cache", DualCache())
     permission: Final = LiteLLM_ObjectPermissionTable(
         object_permission_id="agent-permissions", mcp_toolsets=["ts"], mcp_access_groups=["grp"]
     )

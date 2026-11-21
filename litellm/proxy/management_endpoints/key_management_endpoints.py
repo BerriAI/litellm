@@ -41,7 +41,11 @@ from litellm.constants import (
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.litellm_core_utils.core_helpers import as_object_list
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import (
+    duration_in_seconds,
+    duration_in_seconds_from,
+    normalize_budget_window_start,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
 from litellm.models.project import LiteLLM_ProjectTable
@@ -64,6 +68,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
@@ -91,8 +96,13 @@ from litellm.proxy.common_utils.customer_usage import (
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    get_budget_window_reset_fields,
+    keeps_budget_reset,
+)
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
+from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
@@ -191,6 +201,11 @@ from litellm.redis.stores.spend_counters import (
     key_window_counter,
 )
 from litellm.repositories.base_repository import BaseRepository, record_to_dict
+from litellm.repositories.budget_limits_repository import (
+    BudgetLimitsTransaction,
+    lock_budget_limits,
+    rebase_budget_limits_update,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigParam, ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -316,7 +331,7 @@ class _KeyRowDumpable(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _KeyUpdateTx(Protocol):
+class _KeyUpdateTx(BudgetLimitsTransaction, Protocol):
     @property
     def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
 
@@ -511,7 +526,7 @@ def _generate_budget_windows(
         MappingProxyType(
             {
                 **window.model_dump(),
-                "reset_at": get_budget_reset_time(budget_duration=window.budget_duration).isoformat(),
+                **get_budget_window_reset_fields(window.budget_duration),
             }
         )
         for window in budget_limits
@@ -3020,8 +3035,14 @@ async def _update_key_row_assigning_project(
             table=tx.litellm_verificationtoken,
             hashed_token=hashed_token,
             existing_key_row=existing_key_row,
-            data=with_settings_updated_at(
-                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+            data=await rebase_budget_limits_update(
+                tx,
+                "LiteLLM_VerificationToken",
+                hashed_token,
+                existing_key_row.budget_limits,
+                with_settings_updated_at(
+                    prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+                ),
             ),
         )
     updated_data: Final[Mapping[str, object]] = (
@@ -3064,8 +3085,14 @@ async def _update_key_row_with_soft_budget(
             changed_by=changed_by,
         )
         include_object_permission: Final[prisma.types.LiteLLM_VerificationTokenInclude] = {"object_permission": True}
-        update_payload: Final = with_settings_updated_at(
-            prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+        update_payload: Final = await rebase_budget_limits_update(
+            tx,
+            "LiteLLM_VerificationToken",
+            hashed_token,
+            existing_key_row.budget_limits,
+            with_settings_updated_at(
+                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+            ),
         )
         updated_row: Final = (
             await _write_guarded_project_assignment(
@@ -3088,11 +3115,41 @@ async def _update_key_row_with_soft_budget(
     return result
 
 
+async def _write_key_update(
+    prisma_client: PrismaClient,
+    hashed_token: str,
+    data: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
+    include: Mapping[str, object] | None = None,
+) -> "prisma_models.LiteLLM_VerificationToken | None":
+    if "budget_limits" not in data and "budget_duration" not in data:
+        return await VerificationTokenRepository(prisma_client).table.update(
+            where={"token": hashed_token}, data=data, include=include
+        )
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final = cast("_KeyUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+        rebased: Final = await rebase_budget_limits_update(
+            tx, "LiteLLM_VerificationToken", hashed_token, existing_key_row.budget_limits, data
+        )
+        return await tx.litellm_verificationtoken.update(where={"token": hashed_token}, data=rebased, include=include)
+
+
 async def _update_key_row(
     prisma_client: PrismaClient,
     key: str,
     update_values: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
 ) -> _KeyUpdateResult | None:
+    if "budget_limits" in update_values or "budget_duration" in update_values:
+        hashed_token: Final = hash_token_if_needed(key)
+        updated: Final = await _write_key_update(
+            prisma_client,
+            hashed_token,
+            with_settings_updated_at(prisma_client.jsonify_object({**update_values, "token": hashed_token})),
+            existing_key_row,
+            include={"object_permission": True},
+        )
+        return {"token": hashed_token, "data": updated.model_dump() if updated is not None else {}}
     key_update_data: Final = MappingProxyType({**update_values, "token": key})
     response: Final = await prisma_client.update_data(token=key, data=key_update_data)
     if response is None:
@@ -3178,7 +3235,7 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
             non_default_values["budget_duration"] = budget_duration
-            if not keeps_due_budget_reset(
+            if not keeps_budget_reset(
                 budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
             ):
                 non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
@@ -3572,10 +3629,11 @@ async def _process_single_key_update(
         upsert=object_permission_upsert,
         prisma_client=prisma_client,
     )
-    _data: Final = {**update_values, "token": key_request.key}
-    response: Final[Mapping[str, object] | None] = cast(  # cast-ok: every update_data branch returns a str-keyed dict
-        "Mapping[str, object] | None",
-        await prisma_client.update_data(token=key_request.key, data=_data),
+    response: Final[Mapping[str, object] | None] = await _update_key_row(
+        prisma_client,
+        cast("str", key_request.key),  # cast-ok: bulk requests contain the key resolved for this row
+        update_values,
+        existing_key_row,
     )
 
     # Permission row first: a key-object miss between the two evictions would re-cache stale grants
@@ -4379,6 +4437,7 @@ async def update_key_fn(
                 prisma_client=prisma_client,
                 key=key,
                 update_values=update_values,
+                existing_key_row=existing_key_row,
             )
         )
 
@@ -5230,7 +5289,7 @@ async def info_key_fn(
         if (
             await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
-                key=key,
+                key=hashed_key,
                 key_info=key_info,
             )
             is not True
@@ -5449,8 +5508,7 @@ async def generate_key_helper_fn(
         initialized_windows: Final = []
         for window in budget_limits:
             w = dict(window) if not isinstance(window, dict) else {**window}
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
+            initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
         budget_limits_json = json.dumps(initialized_windows)
 
     aliases_json: Final = json.dumps(aliases)
@@ -6025,7 +6083,7 @@ async def delete_key_aliases(
     )
 
 
-async def rotate_master_key(
+async def reencrypt_credentials_for_aes_migration(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -6041,13 +6099,14 @@ async def rotate_master_key(
         - ModelTable
             - [{"model_name": "str", "litellm_params": {}}]
         - ConfigTable
-    3. Encrypt the values with the new master key
+    3. Encrypt the values with LITELLM_SALT_KEY when set, otherwise the new master key
     4. Update the values in the DB
     """
     import prisma
 
     from litellm.proxy.proxy_server import proxy_config
 
+    encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR, new_master_key)
     try:
         models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
             "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
@@ -6067,7 +6126,7 @@ async def rotate_master_key(
                         model_params=Deployment(**model),
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
-                        new_encryption_key=new_master_key,
+                        new_encryption_key=encryption_key,
                         should_create_model_in_db=False,
                     )
                 )
@@ -6100,7 +6159,7 @@ async def rotate_master_key(
             )
             encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
                 environment_variables=decrypted_env_vars,
-                new_encryption_key=new_master_key,
+                new_encryption_key=encryption_key,
             )
 
             if encrypted_env_vars:
@@ -6113,7 +6172,7 @@ async def rotate_master_key(
         from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 
         await GuardrailRegistry.rotate_guardrail_params_master_key(
-            prisma_client=prisma_client, new_master_key=new_master_key
+            prisma_client=prisma_client, new_master_key=encryption_key
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate guardrail params: %s", str(e))
@@ -6123,7 +6182,7 @@ async def rotate_master_key(
         await rotate_mcp_server_credentials_master_key(
             prisma_client=prisma_client,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP server credentials: %s", str(e))
@@ -6132,7 +6191,7 @@ async def rotate_master_key(
     try:
         await rotate_mcp_user_credentials_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user credentials: %s", str(e))
@@ -6141,7 +6200,7 @@ async def rotate_master_key(
     try:
         await rotate_mcp_user_env_vars_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user env vars: %s", str(e))
@@ -6150,13 +6209,13 @@ async def rotate_master_key(
     try:
         await rotate_sso_identity_assertions_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
 
     try:
-        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
+        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=encryption_key)
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate search tool credentials: %s", str(e))
 
@@ -6174,7 +6233,7 @@ async def rotate_master_key(
                 encrypted_cred = update_db_credential(
                     db_credential=cred,
                     updated_patch=decrypted_cred,
-                    new_encryption_key=new_master_key,
+                    new_encryption_key=encryption_key,
                 )
                 _cred_data = dict[str, object](_as_object_dict(encrypted_cred.model_dump(exclude_none=True)))
                 if "credential_values" in _cred_data:
@@ -6193,6 +6252,17 @@ async def rotate_master_key(
                 # Continue with next credential instead of failing entire rotation
                 continue
         verbose_proxy_logger.debug("Successfully re-encrypted %s credentials with new master key", len(credentials))
+
+
+async def rotate_master_key(prisma_client: PrismaClient, current_master_key: str, new_master_key: str) -> None:
+    if SALT_KEY_ENV_VAR in os.environ or current_master_key == new_master_key:
+        return
+    async with prisma_client.writer_db.tx(timeout=timedelta(minutes=2)) as tx:
+        result: Final = await reencrypt_stored_values(
+            tx, from_key=current_master_key, to_key=new_master_key, require_unchanged=True, upgrade_legacy_mcp=True
+        )
+        if result is None:
+            raise RuntimeError("Stored secrets changed during master key rotation. Retry with writes paused.")
 
 
 _rotate_master_key: Final = rotate_master_key
@@ -6516,11 +6586,11 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
-    updated_token: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
-        VerificationTokenRepository(prisma_client)
-    ).update(
-        where={"token": hashed_api_key},
+    updated_token: Final = await _write_key_update(
+        prisma_client=prisma_client,
+        hashed_token=hashed_api_key,
         data=with_settings_updated_at(jsonified_update_data),
+        existing_key_row=key_in_db,
     )
     updated_token_dict: Final[dict[str, object]] = dict(updated_token) if updated_token is not None else {}
     updated_token_dict["key"] = new_token
@@ -6734,14 +6804,13 @@ async def regenerate_key_fn(
         _is_master_key_valid: Final = is_master_key(api_key=key, _master_key=master_key)
 
         if master_key is not None and data and _is_master_key_valid:
-            if data.new_master_key is None:
+            if not data.new_master_key or not data.new_master_key.strip():
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={"error": "New master key is required."},
                 )
             await rotate_master_key(
                 prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
                 current_master_key=master_key,
                 new_master_key=data.new_master_key,
             )
@@ -6940,44 +7009,30 @@ def _window_with_reset_at(
 ) -> Mapping[str, object]:
     """A resubmitted window keeps its running period, so editing one window never restarts the others."""
     duration: Final = str(window["budget_duration"])
-    now: Final = datetime.now(timezone.utc)
-    open_reset_at: Final = next(
-        (w.reset_at for w in stored_windows if w.budget_duration == duration and _is_open_reset_at(w.reset_at, now)),
+    stored: Final = next(
+        (w for w in stored_windows if w.budget_duration == duration and w.reset_at is not None),
         None,
     )
-    reset_at: Final = open_reset_at if open_reset_at is not None else get_budget_reset_time(budget_duration=duration)
-    return {**window, "reset_at": reset_at.isoformat()}
+    fields: Final = {key: value for key, value in window.items() if key not in ("window_start", "reset_at")}
+    if stored is None or stored.reset_at is None:
+        return {**fields, **get_budget_window_reset_fields(duration)}
+    return {
+        **fields,
+        "reset_at": stored.reset_at.isoformat(),
+        **({"window_start": stored.window_start.isoformat()} if stored.window_start is not None else {}),
+    }
 
 
-def _is_open_reset_at(reset_at: datetime | None, now: datetime) -> bool:
-    if reset_at is None:
-        return False
-    return (reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)) > now
-
-
-def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
-    """Restart one budget window from now, by advancing its `reset_at`.
-
-    `window_start` is derived elsewhere as `reset_at - budget_duration`
-    (`get_budget_window_start`), so `reset_at` must be set to `now +
-    budget_duration` -- a window floating from THIS moment -- to make
-    `window_start` land at `now` and exclude the historical spend that
-    triggered the block. Reusing `get_budget_reset_time`/
-    `ResetBudgetJob._reset_expired_window`'s calendar-standardized boundary
-    (e.g. "next midnight") would not do that: for a "1d" window `next
-    midnight - 1d` is simply the START of the calendar day already in
-    progress, which still covers that spend. That reuse is only safe for the
-    scheduled job, which runs right as `reset_at` naturally elapses, so the
-    elapsed boundary it computes is already close to "now". A manual reset
-    can happen at any point mid-window, so it needs the floating form
-    instead. A window with no `budget_duration` is returned unchanged.
-    """
-    duration = window.get("budget_duration")
+def _advance_one_key_budget_window(window: Mapping[str, object], now: datetime) -> Mapping[str, object]:
+    """Persist the manual reset's start so calendar arithmetic cannot restore cleared spend."""
+    duration: Final = window.get("budget_duration")
     if not isinstance(duration, str) or not duration:
         return window
-    new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+    start: Final = normalize_budget_window_start(now.astimezone(timezone.utc))
+    new_reset_at: Final = start + timedelta(seconds=duration_in_seconds_from(start, duration))
     return {
         **window,
+        "window_start": start.isoformat(),
         "reset_at": new_reset_at.isoformat(),
     }
 
@@ -6985,7 +7040,6 @@ def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str,
 async def _reset_key_budget_windows(
     prisma_client: PrismaClient,
     hashed_api_key: str,
-    budget_limits: Sequence[object] | str | None,
 ) -> None:
     """Force-expire every one of a key's own `budget_limits` windows (extra
     time-windowed caps layered on top of the lifetime max_budget, e.g. a daily
@@ -7004,19 +7058,17 @@ async def _reset_key_budget_windows(
     """
     from litellm.proxy.proxy_server import set_spend_counter_with_floor_and_broadcast
 
-    windows: Final = budget_limit_windows(budget_limits)
-    if not windows:
-        return
-
-    reset_windows: Final = tuple(_advance_one_key_budget_window(w) for w in windows)
-
-    # prisma-client-py's typed update() takes plain dict literals for `where`/`data`; there is no
-    # frozen-mapping equivalent to pass instead.
-    reset_payload: Final = {"budget_limits": json.dumps(reset_windows, default=str)}
-    await VerificationTokenRepository(prisma_client).table.update(
-        where={"token": hashed_api_key},
-        data=reset_payload,
-    )
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final = cast("_KeyUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+        windows: Final = await lock_budget_limits(tx, "LiteLLM_VerificationToken", hashed_api_key)
+        if not windows:
+            return
+        now: Final = datetime.now(timezone.utc)
+        reset_windows: Final = tuple(_advance_one_key_budget_window(w, now) for w in windows)
+        await tx.litellm_verificationtoken.update(
+            where={"token": hashed_api_key},
+            data={"budget_limits": json.dumps(reset_windows, default=str)},
+        )
 
     for window in reset_windows:
         duration = window.get("budget_duration")
@@ -7103,7 +7155,6 @@ async def reset_key_spend_fn(
         await _reset_key_budget_windows(
             prisma_client=prisma_client,
             hashed_api_key=hashed_api_key,
-            budget_limits=_key_in_db.budget_limits,
         )
 
         # Evicting the cached key object LAST (after every DB write above has
@@ -8471,7 +8522,7 @@ async def _can_user_query_key_info(
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
         or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
-        or key_info.user_id == user_api_key_dict.user_id
+        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
             existing_key_row=key_info,

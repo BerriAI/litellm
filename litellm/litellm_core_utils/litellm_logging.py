@@ -127,6 +127,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
+    claude_subscription_usage,
     decoded_json_object,
     finite_cost,
     get_parent_otel_span_from_kwargs,
@@ -394,7 +395,13 @@ else:
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
-    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY, "is_silent_experiment")
+    (
+        "used_client_oauth_token",
+        "claude_subscription_usage",
+        "usage_object",
+        KUBERNETES_POD_ROUTING_KEY,
+        "is_silent_experiment",
+    )
 )
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
@@ -677,7 +684,12 @@ def resolve_vertex_location_for_cost(
 def _resolve_mantle_region_for_cost(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object] | None,
+    model: str | None = None,
 ) -> str | None:
+    if custom_llm_provider == "bedrock" and model is not None and model.removeprefix("bedrock/").startswith("mantle/"):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        return BaseAWSLLM().get_aws_region_name(dict(litellm_params or MappingProxyType({})), model=model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_region
@@ -1075,6 +1087,11 @@ class Logging(LiteLLMLoggingBaseClass):
     @property
     def _model_call_details_view(self) -> Mapping[str, object]:
         return self.model_call_details
+
+    @property
+    def _litellm_params_view(self) -> Mapping[str, object]:
+        params: Final[object] = self.litellm_params
+        return params if is_str_keyed_dict(params) else {}
 
     def __init__(
         self,
@@ -1532,7 +1549,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         candidates: Final = (
             (self.model_call_details or {}).get("model") if hasattr(self, "model_call_details") else None,
-            self.litellm_params.get("model") if hasattr(self, "litellm_params") else None,
+            self._litellm_params_view.get("model") if hasattr(self, "litellm_params") else None,
             self.model,
         )
         return next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
@@ -1552,6 +1569,8 @@ class Logging(LiteLLMLoggingBaseClass):
         user: str | None = None,
         **additional_params,
     ):
+        logged_provider: Final = _text(self.model_call_details.get("custom_llm_provider"))
+        params_provider: Final = _text(self._litellm_params_view.get("custom_llm_provider"))
         self.optional_params = optional_params
         if model is not None:
             self.model = model
@@ -1560,6 +1579,8 @@ class Logging(LiteLLMLoggingBaseClass):
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
         }
+        if params_provider is not None and _text(self._litellm_params_view.get("custom_llm_provider")) is None:
+            self.litellm_params["custom_llm_provider"] = params_provider
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
         self.model_call_details.update(
@@ -1579,6 +1600,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 **additional_params,
             }
         )
+        self._copy_logged_provider_to_litellm_params(logged_provider)
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
@@ -1589,6 +1611,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def _copy_logged_provider_to_litellm_params(self, previous_provider: str | None = None) -> None:
+        provider: Final = _text(self.model_call_details.get("custom_llm_provider")) or previous_provider
+        if provider is None:
+            return
+        self.model_call_details["custom_llm_provider"] = provider
+        logged_params: Final[object] = self.model_call_details.get("litellm_params")
+        if not is_str_keyed_dict(logged_params):
+            return
+        self.litellm_params["custom_llm_provider"] = provider
+        if logged_params is not self.litellm_params:
+            self.model_call_details["litellm_params"] = {**logged_params, "custom_llm_provider": provider}
 
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
         self.model_call_details["agentic_loop_params"] = params
@@ -2157,7 +2191,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     model=model,
                     messages=messages,
                     end_user=self._model_call_details_view.get("user", "default"),
-                    litellm_call_id=self.litellm_params["litellm_call_id"],
+                    litellm_call_id=self._litellm_params_view["litellm_call_id"],
                     print_verbose=print_verbose,
                 )
             elif callback == "sentry" and add_breadcrumb:
@@ -2579,6 +2613,16 @@ class Logging(LiteLLMLoggingBaseClass):
         if resolved_cache_hit is True:
             return 0.0
 
+        subscription_usage: Final = claude_subscription_usage(self.model_call_details, result)
+        if subscription_usage is not None and not subscription_usage["is_overage"]:
+            self.cost_breakdown = None
+            subscription_additional_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+            return (
+                subscription_additional_cost
+                if isinstance(subscription_additional_cost, (int, float)) and subscription_additional_cost > 0
+                else 0.0
+            )
+
         if isinstance(result, (OpenAIStream, OpenAIAsyncStream)):
             return None
 
@@ -2666,7 +2710,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "pricing_provider": self.get_router_pricing_provider(),
                 "litellm_logging_obj": self,
                 "data_residency": (
-                    self.litellm_params.get("data_residency")
+                    self._litellm_params_view.get("data_residency")
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
                 ),
@@ -2679,6 +2723,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "region_name": _resolve_mantle_region_for_cost(
                     custom_llm_provider=cost_custom_llm_provider,
                     litellm_params=self.model_call_details.get("litellm_params"),
+                    model=model_value,
                 ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
@@ -2831,6 +2876,7 @@ class Logging(LiteLLMLoggingBaseClass):
             region_name=_resolve_mantle_region_for_cost(
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=self.model_call_details.get("litellm_params"),
+                model=model,
             ),
             litellm_logging_obj=self,
         )
@@ -2870,6 +2916,7 @@ class Logging(LiteLLMLoggingBaseClass):
             region_name=_resolve_mantle_region_for_cost(
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=self.model_call_details.get("litellm_params"),
+                model=self.model,
             ),
             litellm_logging_obj=self,
         )
@@ -3985,6 +4032,7 @@ class Logging(LiteLLMLoggingBaseClass):
         publish_logging_payload: bool,
     ) -> tuple[datetime.datetime, datetime.datetime, object, StandardLoggingPayload | None]:
         try:
+            self._copy_logged_provider_to_litellm_params()
             if start_time is None:
                 start_time = self.start_time
             if end_time is None:
@@ -5392,6 +5440,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # on some exceptions, model_call_details is not always initialized, this ensures that we still log those exceptions
         if not hasattr(self, "model_call_details"):
             self.model_call_details = {}
+        self._copy_logged_provider_to_litellm_params()
 
         previous_exception: Final[object] = (
             self._failure_exception_ref()
@@ -5523,12 +5572,13 @@ class Logging(LiteLLMLoggingBaseClass):
         ## get original model group ##
 
         model_group: Final = metadata.get("model_group") or None
+        callback_kwargs: Final = {**self._model_call_details_view, "exception": exception}
         for callback in litellm._async_failure_callback:
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.log_model_group_rate_limit_error(
                     exception=exception,
                     original_model_group=model_group,
-                    kwargs=self.model_call_details,
+                    kwargs=callback_kwargs,
                 )
 
     def _is_pass_through_call(self) -> bool:
@@ -8909,7 +8959,7 @@ def get_standard_logging_object_payload(
         )
         # clean up litellm metadata
         selected_provider: Final = kwargs.get("custom_llm_provider")
-        clean_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        base_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
@@ -8923,6 +8973,11 @@ def get_standard_logging_object_payload(
             custom_llm_provider=selected_provider if isinstance(selected_provider, str) else None,
             is_silent_experiment=logging_obj.is_silent_experiment is True,
         )
+        subscription_details: Final = {**logging_obj.model_call_details, **_METADATA_MAPPING.validate_python(kwargs)}
+        clean_metadata: Final[StandardLoggingMetadata] = {
+            **base_metadata,
+            "claude_subscription_usage": claude_subscription_usage(subscription_details, init_response_obj),
+        }
         _request_body: Final = proxy_server_request.get("body", {})
         end_user_id: Final = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
             "user", None
