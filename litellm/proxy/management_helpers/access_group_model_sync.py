@@ -7,13 +7,18 @@ the arrays alone strands every group on a name nothing serves any more.
 
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_caches
 from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
+
+if TYPE_CHECKING:
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
 
 class _TouchedGroupRow(LiteLLMBaseModel):
@@ -58,14 +63,19 @@ class RawTransactions(Protocol):
     def tx(self) -> AbstractAsyncContextManager[RawExecutor]: ...
 
 
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> "PrismaWrapper | RoutingPrismaWrapper": ...
+
+
 def raw_transactions(prisma_client: object) -> RawTransactions:
-    db: Final = AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
-    return writer_wrapper(db)  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
+    db: Final = require_attributes(AccessGroupRepository(prisma_client).prisma_client, _PrismaClientView, "db").db
+    return writer_wrapper(db)
 
 
 def raw_executor(prisma_client: object) -> RawExecutor:
-    db: Final = AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
-    return writer_wrapper(db)  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
+    db: Final = require_attributes(AccessGroupRepository(prisma_client).prisma_client, _PrismaClientView, "db").db
+    return writer_wrapper(db)  # pyright: ignore[reportReturnType]  # untyped Prisma client behind the pin
 
 
 def _config_sourced_sibling(llm_router: Router, deployment_id: str, model_id: str) -> bool:

@@ -1,9 +1,11 @@
 import dataclasses
+import datetime
 import functools
 import json
 import os
 import stat
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
@@ -34,6 +36,7 @@ from litellm.proxy.client.cli.commands.auth import (
     get_stored_api_key,
     login,
     logout,
+    models_summary,
     print_token,
     whoami,
 )
@@ -2679,3 +2682,23 @@ def test_login_without_a_context_object_fails_before_any_request():
     assert type(result.exception) is TypeError
     assert result.output == ""
     assert len(responses.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "models, builtin",
+    [
+        (datetime.date(2024, 1, 1), len),
+        (["gpt-a", datetime.date(2024, 1, 1)], ", ".join),
+        ((datetime.date(2024, 1, 1), "gpt-a", "gpt-b", "gpt-c"), ", ".join),
+    ],
+)
+def test_models_summary_raises_the_builtin_error_for_models_it_cannot_list(
+    models: object, builtin: Callable[[object], object]
+) -> None:
+    with pytest.raises(TypeError) as builtin_error:
+        builtin(models)
+
+    with pytest.raises(TypeError) as summary_error:
+        models_summary(models)
+
+    assert str(summary_error.value) == str(builtin_error.value)

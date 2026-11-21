@@ -1,10 +1,12 @@
 import asyncio
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Final, cast
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -13,12 +15,13 @@ from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1.apps import get_app_store, router
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.proxy.management_helpers.test_apps import (
     AppDatabase,
     profile,
     seed_resources,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
 
 
@@ -286,7 +289,6 @@ def model_client(
     from litellm import Router
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import project_cache_key
     from litellm.proxy.utils import PrismaClient
 
     http, store = client()
@@ -296,9 +298,9 @@ def model_client(
     key: Final = UserAPIKeyAuth(
         token="token-a", team_id="chat", team_models=team_models, models=key_models, project_id="project"
     )
-    cache.set_cache("team_id:chat", team, model_type=LiteLLM_TeamTableCachedObj)
-    cache.set_cache(project_cache_key("project"), project, model_type=LiteLLM_ProjectTableCachedObj)
-    cache.set_cache("token-a", key, model_type=UserAPIKeyAuth)
+    cache.set_cache(AuthObject.team("chat"), team, model_type=LiteLLM_TeamTableCachedObj)
+    cache.set_cache(AuthObject.project("project"), project, model_type=LiteLLM_ProjectTableCachedObj)
+    cache.set_cache(AuthObject.virtual_key("token-a"), key, model_type=UserAPIKeyAuth)
     asyncio.run(store.keys.update(where={"token": "token-a"}, data={"key_id": "key-id"}))
     asyncio.run(store.projects.update(where={"project_id": "project"}, data={"team_id": "chat"}))
     router_models: Final = [
@@ -533,3 +535,31 @@ def test_unauthenticated_app_read_does_not_open_the_store(path: str) -> None:
     response: Final = TestClient(app).get(path)
 
     assert (response.status_code, opened) == (401, []), response.text
+
+
+def test_app_changes_finish_the_transaction_before_reporting_success() -> None:
+    events: Final[list[str]] = []  # mutable-ok: records transaction and response ordering
+    store: Final = AppStore(AppDatabase(), NOW)
+
+    async def transactional_store() -> AsyncIterator[AppStore]:
+        yield store
+        events.append("committed and cache invalidated")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    app.dependency_overrides[get_app_store] = transactional_store
+
+    async def observe(scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_response(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                events.append("response")
+            await send(message)
+
+        await app(scope, receive, send_response)
+
+    response: Final = TestClient(observe).put("/management/v1/apps/definition", json={"resource_type": "team"})
+    assert response.status_code == 200, response.text
+    assert events == ["committed and cache invalidated", "response"]

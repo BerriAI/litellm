@@ -32,7 +32,7 @@ from litellm.proxy.spend_tracking.customer_cost_margin import (
 )
 from litellm.proxy.spend_tracking.native_budgets import reservation_inputs
 from litellm.proxy.spend_tracking.rust_spend_log_inputs import SpendLogCall, spend_log_success_input
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import BilledFailedAttempt, PrismaClient
 from litellm.rust_bridge._native import DatabaseEndpoint, NativeDatabase, NativeSpendCounters, RustSpendLogWriter
 from litellm.types.integrations.custom_logger_v2 import Outcome
 from tests.unit.proxy.db.test_rust_spend_log_writer import FakePrismaClient
@@ -229,6 +229,70 @@ async def test_a_stored_failure_body_shows_the_failure_stamps_and_released_reser
     assert stored["user_api_key_budget_reservation"]["finalized"] is True
 
 
+_FAILED_ATTEMPT_USAGE: Final = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+
+
+def _recovered_stream_failure() -> Mapping[str, object]:
+    return {"combined_usage_object": _FAILED_ATTEMPT_USAGE, "response_cost": 0.125}
+
+
+def _guardrail_only_failure(cost_in_spend: bool) -> Mapping[str, object]:
+    entry: Final = {"guardrail_name": "priced", "guardrail_cost": 0.3, "guardrail_cost_in_spend": cost_in_spend}
+    return {"litellm_metadata": {"standard_logging_guardrail_information": [entry]}}
+
+
+def _retry_only_failure() -> Mapping[str, object]:
+    return {
+        "combined_usage_object": _FAILED_ATTEMPT_USAGE,
+        "response_cost": 0.0,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(
+                attempted_retries=0, deployment_id=None, usage=_FAILED_ATTEMPT_USAGE, response_cost=0.25
+            ),
+        ),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_error_logs", [False, True])
+@pytest.mark.parametrize(
+    ("failure", "charges"),
+    [
+        pytest.param(_recovered_stream_failure(), (0.125,), id="recovered-stream"),
+        pytest.param(_retry_only_failure(), (0.0, 0.25), id="retry-only"),
+        pytest.param(_guardrail_only_failure(cost_in_spend=True), (0.3,), id="guardrail-only"),
+        pytest.param(_guardrail_only_failure(cost_in_spend=False), (0.0,), id="report-only-guardrail"),
+        pytest.param({"combined_usage_object": _FAILED_ATTEMPT_USAGE, "response_cost": 0.0}, (0.0,), id="no-cost"),
+    ],
+)
+async def test_an_unfinalized_failure_keeps_its_ledger_charge_and_logs_only_while_error_logs_are_on(
+    proxy: Proxy,
+    monkeypatch: pytest.MonkeyPatch,
+    disable_error_logs: bool,
+    failure: Mapping[str, object],
+    charges: tuple[float, ...],
+) -> None:
+    monkeypatch.setattr(
+        ps, "general_settings", {"use_spend_logs_ledger": True, "disable_error_logs": disable_error_logs}
+    )
+
+    await bill_failure_in_rust(
+        _auth(),
+        ValueError("the stream broke"),
+        {"model": "gpt-4o", "metadata": {}, "litellm_call_id": "call-1", **failure},
+    )
+
+    expected: Final = () if disable_error_logs and not any(charge > 0 for charge in charges) else charges
+    rows: Final = [_SETTINGS.validate_json(row) for row in proxy.writer.dequeue(100)]
+    assert [_SETTINGS.validate_python(row["accounting_payload"])["spend"] for row in rows] == pytest.approx(
+        list(expected)
+    )
+    assert len({row["request_id"] for row in rows}) == len(rows)
+    assert all(row["accounting_log_disabled"] is disable_error_logs for row in rows)
+    assert all(("status" in row) is not disable_error_logs for row in rows)
+    assert all(("metadata" in row) is not disable_error_logs for row in rows)
+
+
 @pytest.mark.parametrize(
     ("request_fields", "expected"),
     [
@@ -348,6 +412,38 @@ async def _settled_row(proxy: Proxy, metadata: Mapping[str, object]) -> Mapping[
     rows: Final = await proxy.rows()
     assert len(rows) == 1
     return rows[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("customer_id", ["customer-1", None])
+async def test_a_grouped_completion_charges_its_app_and_group_with_or_without_a_customer(
+    proxy: Proxy, customer_id: str | None
+) -> None:
+    from litellm.accounting.delivery_projection import entity_transactions
+    from litellm.accounting.projection import project
+
+    row: Final = await _settled_row(
+        proxy,
+        {
+            **_KEYED,
+            "user_api_key_app_id": "app-1",
+            "user_api_key_app_group_id": "group-1",
+            **({"user_api_key_customer_org_id": customer_id} if customer_id else {}),
+        },
+    )
+    accounting: Final = _SETTINGS.validate_python(row["accounting_payload"])
+    totals: Final = entity_transactions(project(accounting))
+    cost: Final = row["spend"]
+
+    assert isinstance(cost, float) and cost > 0
+    assert _metadata(row)["user_api_key_app_group_id"] == "group-1"
+    assert totals["app_group_list_transactions"] == {"group-1": cost}
+    assert totals["app_list_transactions"] == {"app-1": cost}
+    assert totals["app_group_customer_org_list_transactions"] == (
+        {f"group-1:{customer_id}": cost} if customer_id else {}
+    )
+    assert totals["app_customer_org_list_transactions"] == ({f"app-1:{customer_id}": cost} if customer_id else {})
+    assert totals["customer_org_list_transactions"] == ({customer_id: cost} if customer_id else {})
 
 
 @pytest.mark.asyncio

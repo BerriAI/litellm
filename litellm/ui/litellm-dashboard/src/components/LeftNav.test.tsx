@@ -218,6 +218,20 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
   });
 
+  it.each(["/ui/app-groups/", "/app-groups"])("opens app groups in Customer Management at %s", (pathname) => {
+    localStorage.setItem("litellm_plugin_mode", "customer-portal");
+    navState.pathname = pathname;
+    renderWithProviders(
+      <PluginModeProvider>
+        <Sidebar {...defaultProps} />
+      </PluginModeProvider>,
+    );
+    expect(screen.getByRole("link", { name: "App groups" })).toHaveAttribute("href", "/ui/app-groups");
+    expect(screen.getByRole("link", { name: "App groups" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Applications" })).not.toHaveAttribute("data-active", "true");
+    expect(getBreadcrumb(pathname)).toEqual({ section: "Customer Management", title: "App groups" });
+  });
+
   it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
@@ -402,7 +416,8 @@ describe("Sidebar (leftnav)", () => {
         </PluginModeProvider>,
       );
       expect(screen.queryByRole("link", { name: "Customer organizations" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("link", { name: "Apps" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Applications" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "App groups" })).not.toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
     });
 

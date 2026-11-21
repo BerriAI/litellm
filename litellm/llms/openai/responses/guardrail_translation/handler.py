@@ -54,6 +54,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     tool_call_dict_from_output_item,
 )
 from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -955,6 +956,7 @@ def _input_item_provenance(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
             responses_api_request=request_params,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         for item in raw_input
     )
@@ -963,6 +965,7 @@ def _input_item_provenance(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
             responses_api_request=request_params,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -976,6 +979,7 @@ def _input_item_provenance(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
                 responses_api_request=request_params,
                 replay_tool_search=True,
+                member_name=qualified_member_name,
             )
         )
         for start, end in units
@@ -1294,6 +1298,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             input=input_data,
             responses_api_request=data,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
@@ -1339,7 +1344,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             () if is_server_tool_search_tool(tool) else form.chat_tools
             for tool, form in zip(
                 scanned_tools,
-                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools),
+                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools, qualified_member_name),
                 strict=True,
             )
         )
@@ -1374,7 +1379,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         self._apply_guardrailed_tools_to_data(
-            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools"), scan_only=scan_only
+            data,
+            original_tools,
+            flattened_tool_groups,
+            guardrailed_inputs.get("tools"),
+            scan_only=scan_only,
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
         written_back: Final = self._written_back_request_fields(
             data,
@@ -1530,13 +1540,15 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
         *,
         scan_only: bool,
+        guardrail_name: str | None,
     ) -> None:
         if guardrailed_tools is None:
             return
         merge: Final = append_returned_tools if scan_only else merge_guardrailed_tools
-        data["tools"] = list(  # rebind-ok: in-place request rewrite
-            merge(original_tools, flattened_tool_groups, guardrailed_tools)
-        )
+        merged: Final = merge(original_tools, flattened_tool_groups, guardrailed_tools)
+        if merged is None:
+            raise unappliable_request_rewrite(guardrail_name)
+        data["tools"] = list(merged)  # rebind-ok: in-place request rewrite
 
     def _extract_input_text_and_images(
         self,

@@ -48,13 +48,13 @@ async def get_app_store() -> AsyncIterator[AppStore]:
     await store.invalidate_cache()
 
 
-Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]
+Store: TypeAlias = Annotated[AppStore, Depends(get_app_store, scope="function")]
 Actor: TypeAlias = Annotated[str, Depends(customer_actor)]
 
 
 async def get_app_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    store: Annotated[AppStore, Depends(get_app_store)],
+    store: Store,
 ) -> AppAccess:
     if auth.user_role == LitellmUserRoles.PROXY_ADMIN:
         return ALL_APPS
@@ -113,7 +113,9 @@ async def list_app_resource_models(resource_type: AppResourceType, resource_id: 
     "",
     response_model=App,
     status_code=201,
-    description="Configure budget policy for an existing resource of the gateway app type. Proxy admins only.",
+    description="Configure budget policy for an existing resource of the gateway app type. Newly configured apps "
+    "inherit the overall app catalog default when budget and budget_id are omitted. Explicit null disables the cap. "
+    "Existing app bindings keep their settings. Proxy admins only.",
 )
 async def create_app(data: AppCreate, store: Store, actor: Actor) -> App:
     return await store.with_budget_usage(resolve(await store.create(data, actor)))

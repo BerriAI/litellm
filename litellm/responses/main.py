@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
+    as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     require_attributes,
@@ -1435,11 +1436,12 @@ def _resolve_model_provider_for_responses(
 def _apply_managed_file_id_mapping(
     input: str | ResponseInputParam,
     tools: Iterable[ToolParam] | None,
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     local_vars: dict[str, object],
 ) -> tuple[str | ResponseInputParam, Iterable[ToolParam] | None]:
     model_file_id_mapping: Final = kwargs.get("model_file_id_mapping")
-    model_info_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    model_info_id: Final = model_info.get("id") if isinstance(model_info, dict) else None
 
     input = cast(
         str | ResponseInputParam,
