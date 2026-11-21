@@ -1328,16 +1328,30 @@ async def test_a_mantle_call_without_usable_aws_credentials_answers_401(call: Ca
     assert type(excinfo.value.__context__) is BedrockMantleAuthError
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("mantle_without_usable_credentials")
-async def test_a_mantle_credential_source_outage_stays_a_retryable_500(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://127.0.0.1:9/credentials")
+def test_a_mantle_credential_source_outage_stays_a_retryable_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
 
-    with pytest.raises(litellm.APIConnectionError) as excinfo:
-        await litellm.acompletion(
-            model="bedrock_mantle/openai.gpt-6-sol",
-            messages=[{"role": "user", "content": "hi"}],
-            aws_region_name="us-east-1",
+    from botocore.exceptions import CredentialRetrievalError
+
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    signer: Final = BaseAWSLLM()
+    signer.get_credentials = MagicMock(  # pyright: ignore[reportAttributeAccessIssue]  # the signer is the injected seam
+        side_effect=CredentialRetrievalError(provider="container-role", error_msg="connection refused")
+    )
+
+    with pytest.raises(ValueError) as signing:
+        BedrockMantleChatConfig(aws_signer=signer).sign_request(
+            headers={},
+            optional_params={"aws_region_name": "us-east-1"},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+            api_key=None,
         )
+    with pytest.raises(litellm.APIConnectionError) as mapped:
+        exception_type(model="openai.gpt-6-sol", original_exception=signing.value, custom_llm_provider="bedrock_mantle")
 
-    assert excinfo.value.status_code == 500
+    assert mapped.value.status_code == 500
