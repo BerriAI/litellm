@@ -15,7 +15,7 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
-from litellm import aembedding, completion, embedding, aresponses, responses
+from litellm import aembedding, completion, embedding, aresponses, responses, text_completion
 from litellm.caching.caching import Cache
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
@@ -474,8 +474,15 @@ async def test_a_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypat
     assert logged_cache_hits[1:] == [True], logged_cache_hits
 
 
-def test_a_sync_responses_call_on_a_chat_only_provider_logs_once_with_and_without_a_cache_hit(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "send",
+    [
+        pytest.param(lambda: responses(model="chat-only/model", input="describe this"), id="responses"),
+        pytest.param(lambda: text_completion(model="chat-only/model", prompt="describe this"), id="text_completion"),
+    ],
+)
+def test_a_sync_bridged_call_on_a_chat_only_provider_logs_once_with_and_without_a_cache_hit(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[], object]
 ) -> None:
     from litellm import CustomLLM
     from litellm.integrations.custom_logger import CustomLogger
@@ -532,11 +539,11 @@ def test_a_sync_responses_call_on_a_chat_only_provider_logs_once_with_and_withou
         litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=[CallTypes.completion.value])
     )
 
-    responses(model="chat-only/model", input="describe this")
+    send()
     logging_executor.run_queued_jobs_at_once()
     assert logged_cache_hits == [None], logged_cache_hits
 
-    responses(model="chat-only/model", input="describe this")
+    send()
     logging_executor.run_queued_jobs_at_once()
     assert logged_cache_hits == [None, True], logged_cache_hits
 
