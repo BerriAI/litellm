@@ -45,6 +45,8 @@ struct ScriptedHost {
     pinned: Option<&'static str>,
     /// A pick of this name is answered this way, as a pre-routing hook reroutes it.
     pre_routes: Option<(&'static str, PreRouted)>,
+    strategy_unavailable: Option<&'static str>,
+    strategy_calls: Mutex<Vec<(String, String, Option<String>, Vec<String>)>>,
 }
 
 impl ScriptedHost {
@@ -243,14 +245,27 @@ impl RouterHost for ScriptedHost {
 
     async fn select(
         &self,
-        _stage: &SelectStage,
-        _ctx: &RoutingContext<'_>,
+        stage: &SelectStage,
+        ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
     ) -> Result<Vec<Arc<Deployment>>, Error> {
-        match self.pick_failures.lock().pop_front() {
-            Some(failure) => Err(failure.into()),
-            None => Ok(candidates),
+        if let Some(failure) = self.pick_failures.lock().pop_front() {
+            return Err(failure.into());
         }
+        if let SelectStage::Strategy(strategy) = stage {
+            let (scope, group) = ctx.scope.wire();
+            self.strategy_calls.lock().push((
+                strategy.to_string(),
+                scope.to_owned(),
+                group.map(str::to_owned),
+                candidates.iter().map(|deployment| deployment.id.clone()).collect(),
+            ));
+            return Ok(candidates
+                .into_iter()
+                .filter(|deployment| self.strategy_unavailable != Some(deployment.id.as_str()))
+                .collect());
+        }
+        Ok(candidates)
     }
 
     async fn callback_filters(
@@ -435,6 +450,51 @@ fn over_every_tpm_limit() -> AttemptError {
         "RateLimitError".into(),
     ];
     failed
+}
+
+#[tokio::test]
+async fn a_priority_group_uses_the_configured_strategy_within_its_lowest_available_tier() {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "m-a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a"}},
+            {"model_name": "m-b", "litellm_params": {"model": "openai/b"}, "model_info": {"id": "b"}},
+            {"model_name": "m-c", "litellm_params": {"model": "openai/c"}, "model_info": {"id": "c"}}
+        ],
+        "routing_strategy": "usage-based-routing-v2",
+        "routing_groups": [{
+            "group_name": "m-group",
+            "models": ["m-a", "m-b", "m-c"],
+            "routing_strategy": "priority",
+            "model_priorities": {"m-a": 1, "m-b": 1, "m-c": 2}
+        }]
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost {
+        strategy_unavailable: Some("a"),
+        ..ScriptedHost::default()
+    });
+    let hosted = router(config, json!({}), host.clone());
+    let picked = hosted
+        .select(
+            &Op::from("acompletion"),
+            &RouterRequest {
+                model: "m-group".to_owned(),
+                ..RouterRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(picked.id, "b");
+    assert_eq!(
+        host.strategy_calls.lock().as_slice(),
+        &[(
+            "usage-based-routing-v2".to_owned(),
+            "default".to_owned(),
+            None,
+            vec!["a".to_owned(), "b".to_owned()],
+        )],
+    );
 }
 
 #[rstest]
