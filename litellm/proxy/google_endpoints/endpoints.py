@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final
@@ -31,7 +32,7 @@ from litellm.types.llms.vertex_ai import GenerateContentResponseBody, TokenCount
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-class _GoogleGenerateContentRequest(BaseModel):
+class _GoogleGenerateContentRequestSchema(BaseModel):
     model_config = ConfigDict(frozen=True)
     contents: tuple[Mapping[str, object], ...]
     system_instruction: Mapping[str, object] | None = Field(default=None, alias="systemInstruction")
@@ -208,25 +209,41 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
     )
 
 
-@router.post(
-    "/v1/models/{model_name:path}:generateContent",
+_GOOGLE_GENERATE_REQUEST_BODY: Final = {
+    "requestBody": inline_request_body(
+        _GoogleGenerateContentRequestSchema, {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
+    )
+}
+_google_generate_route: Final = partial(
+    router.post,
     dependencies=[Depends(user_api_key_auth)],
     description="Generate content using the Google GenAI request and response format.",
-    openapi_extra={
-        "requestBody": inline_request_body(
-            _GoogleGenerateContentRequest, {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
-        )
-    },
+    openapi_extra=_GOOGLE_GENERATE_REQUEST_BODY,
     responses={200: {"model": GenerateContentResponseBody}},
 )
-@router.post(
-    "/v1beta/models/{model_name:path}:generateContent",
+_google_stream_route: Final = partial(
+    router.post,
     dependencies=[Depends(user_api_key_auth)],
+    description="Stream Google GenAI response chunks as server-sent events.",
+    openapi_extra=_GOOGLE_GENERATE_REQUEST_BODY,
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}},
 )
-@router.post(
-    "/models/{model_name:path}:generateContent",
+_google_count_route: Final = partial(
+    router.post,
     dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountDetailsResponse,
+    openapi_extra={
+        "requestBody": inline_request_body(
+            _GoogleCountTokensRequest, {"contents": [{"role": "user", "parts": [{"text": "Count this"}]}]}
+        )
+    },
 )
+
+
+@_google_generate_route("/v1/models/{model_name:path}:generateContent")
+@_google_generate_route("/v1beta/models/{model_name:path}:generateContent")
+@_google_generate_route("/models/{model_name:path}:generateContent")
 async def google_generate_content(
     request: Request,
     model_name: str,
@@ -280,30 +297,9 @@ async def google_generate_content(
         )
 
 
-@router.post(
-    "/v1/models/{model_name:path}:streamGenerateContent",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=StreamingResponse,
-    description="Stream Google GenAI response chunks as server-sent events.",
-    openapi_extra={
-        "requestBody": inline_request_body(
-            _GoogleGenerateContentRequest, {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
-        )
-    },
-    responses={
-        200: {
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
-        }
-    },
-)
-@router.post(
-    "/v1beta/models/{model_name:path}:streamGenerateContent",
-    dependencies=[Depends(user_api_key_auth)],
-)
-@router.post(
-    "/models/{model_name:path}:streamGenerateContent",
-    dependencies=[Depends(user_api_key_auth)],
-)
+@_google_stream_route("/v1/models/{model_name:path}:streamGenerateContent")
+@_google_stream_route("/v1beta/models/{model_name:path}:streamGenerateContent")
+@_google_stream_route("/models/{model_name:path}:streamGenerateContent")
 async def google_stream_generate_content(
     request: Request,
     model_name: str,
@@ -361,26 +357,9 @@ async def google_stream_generate_content(
         )
 
 
-@router.post(
-    "/v1/models/{model_name:path}:countTokens",
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=TokenCountDetailsResponse,
-    openapi_extra={
-        "requestBody": inline_request_body(
-            _GoogleCountTokensRequest, {"contents": [{"role": "user", "parts": [{"text": "Count this"}]}]}
-        )
-    },
-)
-@router.post(
-    "/v1beta/models/{model_name:path}:countTokens",
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=TokenCountDetailsResponse,
-)
-@router.post(
-    "/models/{model_name:path}:countTokens",
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=TokenCountDetailsResponse,
-)
+@_google_count_route("/v1/models/{model_name:path}:countTokens")
+@_google_count_route("/v1beta/models/{model_name:path}:countTokens")
+@_google_count_route("/models/{model_name:path}:countTokens")
 async def google_count_tokens(request: Request, model_name: str, fastapi_response: Response):
     """
     ```json

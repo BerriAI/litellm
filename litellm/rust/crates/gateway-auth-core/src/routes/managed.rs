@@ -114,6 +114,7 @@ mod tests {
     #[case::path_model_with_newline("/engines/a\nb/chat/completions", Some(Method::POST), true)]
     #[case::empty_path_model("/engines//completions", Some(Method::POST), false)]
     #[case::google_model_with_colon("/models/a:b:generateContent", Some(Method::POST), false)]
+    #[case::google_v1_model_with_colon("/v1/models/a:b:generateContent", Some(Method::POST), false)]
     #[case::google_second_verb("/models/a:generateContent:countTokens", Some(Method::POST), false)]
     #[case::mcp_any_method("/mcp/tools/call", Some(Method::DELETE), true)]
     #[case::mcp_token_endpoint("/token", Some(Method::POST), false)]

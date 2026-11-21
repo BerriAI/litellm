@@ -16,6 +16,12 @@ pub enum RouteGroup {
 
 pub(crate) const METRICS: &str = "/metrics";
 pub(crate) const USER_AUTH: &str = "/user/auth";
+pub(crate) const MODEL_DISCOVERY_ROUTES: &[&str] = &["/models", "/v1/models"];
+pub(crate) const GOOGLE_MODEL_ACTIONS: &[&str] = &[
+    ":generateContent",
+    ":streamGenerateContent",
+    ":countTokens",
+];
 
 pub(crate) fn is_lens_route(route: &str) -> bool {
     route == "/lens" || route.starts_with("/lens/")

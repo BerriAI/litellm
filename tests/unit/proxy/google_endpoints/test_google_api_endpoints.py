@@ -18,7 +18,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.types.utils import TokenCountResponse
 
-_GOOGLE_V1_PREFIXES: Final = ("/v1", "/v1beta", "")
+_GOOGLE_PREFIXES: Final = ("/v1", "/v1beta", "")
 _GOOGLE_V1_MODELS: Final = ("routed-google-model", "provider/routed-google-model")
 _GOOGLE_V1_CONTENTS: Final = [{"role": "user", "parts": [{"text": "Hello"}]}]
 _GOOGLE_V1_REPLY: Final = {
@@ -58,7 +58,7 @@ def native_google_proxy(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) 
         router.retire()
 
 
-@pytest.mark.parametrize("prefix", _GOOGLE_V1_PREFIXES)
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
 @pytest.mark.parametrize("model", _GOOGLE_V1_MODELS)
 def test_google_generate_content_aliases_return_the_provider_content(
     native_google_proxy: TestClient, respx_mock: respx.MockRouter, prefix: str, model: str
@@ -77,7 +77,7 @@ def test_google_generate_content_aliases_return_the_provider_content(
     assert _JSON_OBJECT.validate_json(upstream.calls.last.request.content)["contents"] == _GOOGLE_V1_CONTENTS
 
 
-@pytest.mark.parametrize("prefix", _GOOGLE_V1_PREFIXES)
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
 @pytest.mark.parametrize("model", _GOOGLE_V1_MODELS)
 def test_google_stream_aliases_return_provider_events_without_an_openai_terminator(
     native_google_proxy: TestClient, respx_mock: respx.MockRouter, prefix: str, model: str
@@ -100,7 +100,7 @@ def test_google_stream_aliases_return_provider_events_without_an_openai_terminat
     assert _JSON_OBJECT.validate_json(upstream.calls.last.request.content)["contents"] == _GOOGLE_V1_CONTENTS
 
 
-@pytest.mark.parametrize("prefix", _GOOGLE_V1_PREFIXES)
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
 @pytest.mark.parametrize("model", _GOOGLE_V1_MODELS)
 def test_google_count_aliases_return_the_provider_token_count(
     native_google_proxy: TestClient, respx_mock: respx.MockRouter, prefix: str, model: str
@@ -120,13 +120,30 @@ def test_google_count_aliases_return_the_provider_token_count(
     assert _JSON_OBJECT.validate_json(upstream.calls.last.request.content)["contents"] == _GOOGLE_V1_CONTENTS
 
 
-@pytest.mark.parametrize("operation", ("generateContent", "streamGenerateContent"))
-def test_google_v1_openapi_accepts_requests_with_tools(operation: str) -> None:
+def test_google_v1_aliases_preserve_openai_model_listing(native_google_proxy: TestClient) -> None:
+    response: Final = native_google_proxy.get("/v1/models")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["object"] == "list"
+    assert "routed-google-model" in {model["id"] for model in response.json()["data"]}
+
+
+def test_google_v1_aliases_preserve_openai_model_retrieval(native_google_proxy: TestClient) -> None:
+    response: Final = native_google_proxy.get("/v1/models/routed-google-model")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == "routed-google-model"
+    assert response.json()["object"] == "model"
+
+
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
+@pytest.mark.parametrize("operation", ("generateContent", "streamGenerateContent", "countTokens"))
+def test_google_openapi_accepts_requests_with_tools(prefix: str, operation: str) -> None:
     with _build_test_client() as client:
         response: Final = client.get("/openapi.json")
 
     assert response.status_code == 200, response.text
-    schema: Final = response.json()["paths"][f"/v1/models/{{model_name}}:{operation}"]["post"]["requestBody"][
+    schema: Final = response.json()["paths"][f"{prefix}/models/{{model_name}}:{operation}"]["post"]["requestBody"][
         "content"
     ]["application/json"]["schema"]
     validate(
@@ -140,12 +157,13 @@ def test_google_v1_openapi_accepts_requests_with_tools(operation: str) -> None:
     )
 
 
-def test_google_v1_openapi_describes_streaming_responses_as_sse() -> None:
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
+def test_google_openapi_describes_streaming_responses_as_sse(prefix: str) -> None:
     with _build_test_client() as client:
         response: Final = client.get("/openapi.json")
 
     assert response.status_code == 200, response.text
-    content: Final = response.json()["paths"]["/v1/models/{model_name}:streamGenerateContent"]["post"]["responses"][
+    content: Final = response.json()["paths"][f"{prefix}/models/{{model_name}}:streamGenerateContent"]["post"]["responses"][
         "200"
     ]["content"]
     assert content == {"text/event-stream": {"schema": {"type": "string"}}}

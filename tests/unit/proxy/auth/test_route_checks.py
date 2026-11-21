@@ -1104,6 +1104,46 @@ def test_virtual_key_allowed_routes_with_mixed_member_names_and_explicit_routes(
     assert result2 is True
 
 
+@pytest.mark.parametrize("prefix", ("/v1", ""))
+@pytest.mark.parametrize(
+    "model_action",
+    (
+        "model:generateContent",
+        "provider/model:streamGenerateContent",
+        "model:countTokens",
+        "model:revision:generateContent",
+        "model:generateContent\n",
+    ),
+)
+def test_model_discovery_grant_does_not_allow_google_actions(prefix: str, model_action: str) -> None:
+    token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[f"{prefix}/models"])
+
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=f"{prefix}/models/{model_action}", valid_token=token
+        )
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.parametrize("prefix", ("/v1", ""))
+@pytest.mark.parametrize("model_path", ("", "/model", "/ft:model"))
+def test_model_discovery_grant_still_allows_listing_and_retrieval(prefix: str, model_path: str) -> None:
+    token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[f"{prefix}/models"])
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=f"{prefix}/models{model_path}", valid_token=token
+    )
+
+
+@pytest.mark.parametrize("operation", ("generateContent", "streamGenerateContent", "countTokens"))
+def test_explicit_google_action_grant_still_allows_the_action(operation: str) -> None:
+    route: Final = f"/v1/models/model:{operation}"
+    token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[route])
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token)
+
+
 def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
     """Test that virtual key works when allowed_routes contains only explicit routes (no member names)"""
 
