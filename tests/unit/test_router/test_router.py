@@ -15488,6 +15488,12 @@ async def _shared_deployments_cooled_after(
             litellm.NotFoundError,
             id="vertex_location_on_not_found",
         ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", "vertex_credentials": "configured", "vertex_location": "us-central1"},
+            {"vertex_credentials": "caller-credentials-for-another-project"},
+            litellm.NotFoundError,
+            id="vertex_credentials_picking_another_project",
+        ),
     ],
 )
 async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deployment_routable(

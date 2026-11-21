@@ -82,13 +82,14 @@ class _CallerField:
 _ANY_FAILURE: Final = _AnyFailure()
 _NOT_FOUND: Final = _OnlyStatuses(frozenset({404}))
 _AUTH_REJECTED: Final = _OnlyStatuses(frozenset({401, 403}))
+_AUTH_REJECTED_OR_NOT_FOUND: Final = _OnlyStatuses(frozenset({401, 403, 404}))
 _AWS_FIELDS: Final = (
     *(_CallerField(name, _ANY_FAILURE) for name in sorted(AWS_CREDENTIAL_KWARGS_KEYS - {"aws_region_name"})),
     _CallerField("aws_region_name", _NOT_FOUND),
 )
 _VERTEX_FIELDS: Final = (
-    _CallerField("vertex_credentials", _AUTH_REJECTED, ("vertex_ai_credentials",)),
-    _CallerField("vertex_ai_credentials", _AUTH_REJECTED, ("vertex_credentials",)),
+    _CallerField("vertex_credentials", _AUTH_REJECTED_OR_NOT_FOUND, ("vertex_ai_credentials",)),
+    _CallerField("vertex_ai_credentials", _AUTH_REJECTED_OR_NOT_FOUND, ("vertex_credentials",)),
     _CallerField("vertex_project", _NOT_FOUND, ("vertex_ai_project",)),
     _CallerField("vertex_ai_project", _NOT_FOUND, ("vertex_project",)),
     _CallerField("vertex_location", _NOT_FOUND, ("vertex_ai_location",)),
