@@ -10,6 +10,7 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 
 import asyncio
 import base64
+import itertools
 import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -869,12 +870,15 @@ async def test_concurrent_refusals_preserve_each_missing_permission(
     rows: Final = credentials_prisma.db.litellm_mcpusercredentials
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
     original: Final = rows.rows[("alice", "srv-1")]
-    barrier: Final = asyncio.Barrier(len(scopes))
+    arrivals: Final = itertools.count(1)
+    all_waiting: Final = asyncio.Event()
     update: Final = rows.update_many
 
     async def simultaneous_update(data: Mapping[str, object], where: Mapping[str, str]) -> int:
         if where["credential_b64"] == original.credential_b64:
-            await barrier.wait()
+            if next(arrivals) == len(scopes):
+                all_waiting.set()
+            await all_waiting.wait()
         return await update(data=data, where=where)
 
     rows.update_many = simultaneous_update
