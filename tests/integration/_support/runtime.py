@@ -47,3 +47,23 @@ def configure_readiness() -> None:
     app.add_api_route("/health/integration-readiness", worker_readiness, include_in_schema=False)
     app.add_api_route("/health/integration-deployment-ids", worker_deployment_ids, include_in_schema=False)
     app.add_api_route("/health/integration-general-setting", worker_general_setting, include_in_schema=False)
+
+
+async def worker_redis_recovery(sentinel: str) -> JSONResponse:
+    import litellm
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    assert user_api_key_cache.shared is not None
+    assert litellm.cache is not None
+    value: Final = await user_api_key_cache.async_get_cache(key=sentinel + ":input")
+    if value != sentinel:
+        return JSONResponse(content={"native": False})
+    await user_api_key_cache.async_set_cache(key=sentinel + ":native", value=value, ttl=30)
+    await litellm.cache.async_add_cache(result=value, cache_key=sentinel + ":response", ttl=30)
+    return JSONResponse(content={"native": True})
+
+
+def configure_redis_recovery() -> None:
+    from litellm.proxy.proxy_server import app
+
+    app.add_api_route("/health/integration-redis-recovery", worker_redis_recovery, include_in_schema=False)
