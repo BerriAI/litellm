@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
@@ -3915,11 +3916,12 @@ def _native_messages_sse(input_tokens: int, output_tokens: int) -> tuple[bytes, 
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("frames_read", [None, 3], ids=["refused_at_end", "refused_mid_stream"])
-async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_upstream_usage(monkeypatch, frames_read):
+async def _spend_rows_of_native_messages_stream_ending_in(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, frames_read: int | None
+) -> list[tuple[str, int, int, float]]:
+    """Streams a native /v1/messages answer through a post-call hook that raises ``error`` after reading
+    ``frames_read`` frames, or all of them when None, then runs the stream's teardown and the route's failure log."""
     from litellm.caching.caching import DualCache
-    from litellm.exceptions import GuardrailRaisedException
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
@@ -3930,14 +3932,14 @@ async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_u
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
-    class RefusingGuard(CustomLogger):
+    class RaisingHook(CustomLogger):
         async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
             read = 0
             async for _ in response:
                 read += 1
                 if read == frames_read:
                     break
-            raise GuardrailRaisedException(guardrail_name="pii-output", message="Blocked entity detected")
+            raise error
             yield
 
     class SpendRows(CustomLogger):
@@ -3955,7 +3957,7 @@ async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_u
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
             self.rows.append(self._row("failure", kwargs))
 
-    monkeypatch.setattr(litellm, "callbacks", [RefusingGuard()])
+    monkeypatch.setattr(litellm, "callbacks", [RaisingHook()])
     spend_rows: Final = SpendRows()
     logging_obj: Final = Logging(
         model="claude-sonnet-4-5",
@@ -3990,8 +3992,12 @@ async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_u
             end_time=datetime.now(),
         )
 
+    fired_dispatches: Final[list[asyncio.Event]] = []
+
     async def run_parked(parked) -> None:
+        fired_dispatches.append(asyncio.Event())
         await parked
+        fired_dispatches[-1].set()
 
     async def upstream():
         for frame in frames:
@@ -4005,15 +4011,43 @@ async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_u
         request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
     )
 
-    with pytest.raises(GuardrailRaisedException) as refusal:
+    with pytest.raises(type(error)) as raised:
         _ = [chunk async for chunk in guarded]
     if frames_read is not None:
         await success_logging(frames[:frames_read])
     for _ in range(10):
         await asyncio.sleep(0)
-    await logging_obj.async_failure_handler(refusal.value, "", started, datetime.now())
+    for dispatched in fired_dispatches:
+        await asyncio.wait_for(dispatched.wait(), timeout=10)
+    await logging_obj.async_failure_handler(raised.value, "", started, datetime.now())
+    return spend_rows.rows
 
-    assert [row[:2] for row in spend_rows.rows] == [("failure", 30)]
-    _, _, completion_tokens, response_cost = spend_rows.rows[0]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frames_read", [None, 3], ids=["refused_at_end", "refused_mid_stream"])
+@pytest.mark.parametrize(
+    "refusal_error",
+    [
+        GuardrailRaisedException(guardrail_name="pii-output", message="Blocked entity detected"),
+        BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output"),
+    ],
+    ids=["guardrail_raised", "presidio_blocked_entity"],
+)
+async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_upstream_usage(
+    monkeypatch, frames_read, refusal_error
+):
+    rows: Final = await _spend_rows_of_native_messages_stream_ending_in(monkeypatch, refusal_error, frames_read)
+
+    assert [row[:2] for row in rows] == [("failure", 30)]
+    _, _, completion_tokens, response_cost = rows[0]
     assert completion_tokens == 20 if frames_read is None else completion_tokens >= 1
     assert response_cost > 0
+
+
+@pytest.mark.asyncio
+async def test_native_messages_stream_ending_in_a_callback_crash_still_logs_its_success(monkeypatch):
+    rows: Final = await _spend_rows_of_native_messages_stream_ending_in(
+        monkeypatch, RuntimeError("callback crashed"), None
+    )
+
+    assert ("success", 30, 20) in [row[:3] for row in rows]

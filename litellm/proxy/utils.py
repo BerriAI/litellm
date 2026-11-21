@@ -149,6 +149,7 @@ from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
+    BlockedPiiEntityError,
     GuardrailRaisedException,
     MissingMessageRoleError,
     RejectedRequestError,
@@ -1850,7 +1851,7 @@ GUARDRAIL_ENDPOINT_FAILURE: Final = object()
 """Stored under ``GUARDRAIL_ENDPOINT_FAILURE_KEY`` by ``/apply_guardrail`` when a request it had set up fails, so the
 spend logs keep that failure although the route is not an LLM API route. A sentinel for the same reason as above."""
 
-_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException, BlockedPiiEntityError)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
@@ -5751,7 +5752,7 @@ class ProxyLogging:
     ) -> bool:
         """Drop the success log of a native /v1/messages stream that ends in an error ``post_call_failure_hook`` logs
         as a failure, parked or still to come at teardown, and bill the bytes it read on the failure row instead.
-        Returns False when another parked dispatch shape still has to be discarded or flushed by the caller."""
+        Returns False when the error is not one, so the caller still flushes the parked success."""
         from litellm.litellm_core_utils.asyncify import asyncify
         from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
             AnthropicPassthroughLoggingHandler,
@@ -5764,10 +5765,8 @@ class ProxyLogging:
         match parked_args:
             case (parked,) if asyncio.iscoroutine(parked):
                 parked.close()
-            case None:
-                pass
             case _:
-                return False
+                pass
         logging_obj.refuse_stream_success()
         logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
         logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
