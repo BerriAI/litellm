@@ -344,5 +344,9 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "autarcho": {
+    "base_url": "https://api.autarcho.com/v1",
+    "api_key_env": "AUTARCHO_API_KEY"
   }
 }
