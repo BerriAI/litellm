@@ -61172,7 +61172,7 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
-    "scaleway/qwen/qwen3.6-35b-a3b": {
+    "scaleway/thinkingmachines/inkling-2-mini": {
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "scaleway",
         "max_input_tokens": 256000,
@@ -61207,7 +61207,7 @@
         "output_cost_per_token": 8e-07,
         "supports_function_calling": true,
         "deprecation_source": "https://www.scaleway.com/en/docs/generative-apis/reference-content/supported-models/",
-        "successor_model": "scaleway/qwen/qwen3.6-35b-a3b",
+        "successor_model": "scaleway/thinkingmachines/inkling-2-mini",
         "deprecation_date": "2026-10-01"
     },
     "scaleway/openai/gpt-oss-120b": {
@@ -69954,7 +69954,7 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "novita/qwen/qwen3.6-35b-a3b": {
+    "novita/thinkingmachines/inkling-2-mini": {
         "input_cost_per_token": 2.48e-07,
         "litellm_provider": "novita",
         "max_input_tokens": 262144,
@@ -83530,13 +83530,13 @@
         "supports_reasoning": true,
         "source": "https://api.openinfer.ai/v1/models"
     },
-    "mallard/qwen/qwen3.6-35b-a3b": {
-        "max_tokens": 235929,
+    "mallard/thinkingmachines/inkling-2-mini": {
+        "max_tokens": 262144,
         "max_input_tokens": 262144,
-        "max_output_tokens": 235929,
-        "input_cost_per_token": 3.9681e-08,
-        "cache_read_input_token_cost": 1.3227e-08,
-        "output_cost_per_token": 2.90994e-07,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 4.0104e-08,
+        "cache_read_input_token_cost": 1.3368e-08,
+        "output_cost_per_token": 2.6736e-07,
         "litellm_provider": "mallard",
         "mode": "chat",
         "supports_function_calling": true,

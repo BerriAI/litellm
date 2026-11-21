@@ -3661,7 +3661,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "mallard/qwen/qwen3.6-35b-a3b"
+    "default_model_placeholder": "mallard/thinkingmachines/inkling-2-mini"
   },
   {
     "provider": "REKA",
