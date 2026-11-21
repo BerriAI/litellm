@@ -462,10 +462,10 @@ def _rewrite_original_tool(
     source_schema: Final = as_str_mapping(original_fields.get("input_schema")) or {}
     prior: Final = _restore_relocated_tool_fields(prior_function, relocated)
     returned: Final = _restore_relocated_tool_fields(returned_function, relocated)
-    unstructured_parameters: Final = (
+    ambiguous_parameters: Final = "parameters" in relocated or (
         "parameters" in returned_function and as_str_mapping(returned_function["parameters"]) is None
     )
-    if relocated and (relocated.intersection(source_schema) or unstructured_parameters):
+    if relocated and (relocated.intersection(source_schema) or ambiguous_parameters):
         return cast(  # cast-ok: ambiguous content uses the guardrail version with original transport metadata
             AllAnthropicToolsValues,
             {

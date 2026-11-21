@@ -2415,6 +2415,70 @@ async def test_relocated_tool_field_edits_return_to_the_original_location(
     ]
 
 
+class SchemaRedactionGuardrail(CustomGuardrail):
+    def __init__(self, schema: Mapping[str, object] | None):
+        super().__init__(guardrail_name="schema-redaction")
+        self.schema: Final = schema
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {
+            **inputs,
+            "tools": [
+                {
+                    **tool,
+                    "function": {
+                        **{key: value for key, value in tool["function"].items() if key != "parameters"},
+                        **({"parameters": self.schema} if self.schema is not None else {}),
+                    },
+                }
+                for tool in inputs.get("tools", [])
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("unchanged", "redacted", "empty", "omitted"))
+async def test_reserved_tool_parameters_cannot_hide_guardrail_schema_redactions(mode: str) -> None:
+    schema: Final = {"type": "object", "properties": {"path": {"type": "string", "description": "private"}}}
+    metadata: Final = {"strict": True, "cache_control": {"type": "ephemeral"}}
+    tool: Final = {"name": "Read", "input_schema": schema, "parameters": {}, **metadata}
+    returned: Final = (
+        None
+        if mode == "omitted"
+        else {}
+        if mode == "empty"
+        else {
+            **schema,
+            "parameters": {},
+            **(
+                {"properties": {"path": {"type": "string", "description": "[MASKED]"}}}
+                if mode == "redacted"
+                else {}
+            ),
+        }
+    )
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=SchemaRedactionGuardrail(returned)
+    )
+    assert result["tools"] == [
+        tool
+        if mode == "unchanged"
+        else {
+            "name": "Read",
+            **({"input_schema": returned} if returned is not None else {}),
+            "type": "custom",
+            **metadata,
+        }
+    ]
+
+
 class ToolFieldSplitGuardrail(CustomGuardrail):
     def __init__(self, explicit: bool, omit_schema: bool):
         super().__init__(guardrail_name="field-split")
