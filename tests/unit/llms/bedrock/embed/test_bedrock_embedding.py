@@ -2250,6 +2250,46 @@ def test_bedrock_nova_embedding_estimates_audio_and_meters_the_text_beside_it(
     )
 
 
+@pytest.mark.parametrize(
+    ("metered_per_input", "expected_text_tokens"),
+    [(("403", "0"), 403), (("403", None), 403), ((None, "0"), 768)],
+    ids=["metered", "image-header-missing", "text-header-missing"],
+)
+@pytest.mark.parametrize("image_first", [False, True], ids=["text-first", "image-first"])
+def test_bedrock_nova_embedding_bills_the_text_sent_beside_an_image(
+    respx_mock: respx.MockRouter,
+    metered_per_input: tuple[str | None, str | None],
+    expected_text_tokens: int,
+    image_first: bool,
+) -> None:
+    inputs: Final = tuple(
+        zip(("long text", "data:image/png;base64,AAAA"), ("TEXT", "IMAGE"), metered_per_input, strict=True)
+    )
+    ordered: Final = inputs[::-1] if image_first else inputs
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={} if metered is None else {"x-amzn-bedrock-input-token-count": metered},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for _, embedding_type, metered in ordered
+        ]
+    )
+
+    response: Final = litellm.embedding(
+        model=f"bedrock/{_NOVA_MODEL_ID}",
+        input=[value for value, _, _ in ordered],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    pricing: Final = litellm.model_cost[_NOVA_MODEL_ID]
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        expected_text_tokens * pricing["input_cost_per_token"] + pricing["input_cost_per_image"]
+    )
+
+
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
 @pytest.mark.parametrize(
     ("metered_per_input", "expected_tokens"),
