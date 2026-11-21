@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
+from opentelemetry.trace import get_current_span
 
 from litellm.integrations.lens.lens_trace_adapter import (
     AgentCall,
     ToolExchange,
+    agent_trace_of,
     agent_call,
     agent_name,
     tool_exchanges,
@@ -322,3 +325,33 @@ def test_the_title_call_opencode_makes_is_named_but_its_task_is_its_own_prompt()
     made_by = agent_call(_recorded_payload("opencode_title"))
 
     assert (made_by.agent, made_by.task) == ("opencode", "Generate a title for this conversation:")
+
+
+AGENT_TRACE_ID: Final = "0af7651916cd43dd8448eb211c80319c"
+AGENT_SPAN_ID: Final = "b7ad6b7169203331"
+
+
+def _call_with_headers(headers: dict[str, str]) -> dict[str, object]:
+    return {"litellm_params": {"proxy_server_request": {"headers": headers}}}
+
+
+def test_a_call_whose_request_names_the_agents_span_is_placed_under_it() -> None:
+    placed: Final = agent_trace_of(_call_with_headers({"traceparent": f"00-{AGENT_TRACE_ID}-{AGENT_SPAN_ID}-01"}))
+
+    assert placed is not None
+    parent: Final = get_current_span(placed).get_span_context()
+    assert (format(parent.trace_id, "032x"), format(parent.span_id, "016x")) == (AGENT_TRACE_ID, AGENT_SPAN_ID)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param(_call_with_headers({}), id="no-traceparent"),
+        pytest.param(_call_with_headers({"traceparent": "not-a-trace"}), id="unreadable-traceparent"),
+        pytest.param(_call_with_headers({"traceparent": f"00-{'0' * 32}-{AGENT_SPAN_ID}-01"}), id="all-zero-trace-id"),
+        pytest.param({}, id="sdk-call-with-no-proxy-request"),
+        pytest.param({"litellm_params": {"proxy_server_request": None}}, id="proxy-request-not-recorded"),
+    ),
+)
+def test_a_call_that_names_no_agent_span_keeps_the_gateways_own_trace(kwargs: dict[str, object]) -> None:
+    assert agent_trace_of(kwargs) is None

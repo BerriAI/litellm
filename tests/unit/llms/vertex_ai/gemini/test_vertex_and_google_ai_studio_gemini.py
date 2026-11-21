@@ -2675,6 +2675,73 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     ]
 
 
+_GEMINI_CUT_STREAM_PARTS: Final[Mapping[str, dict[str, object]]] = {
+    "text": {"text": "One, two,"},
+    "thought": {"text": "Thinking about the request", "thought": True},
+    "tool_call": {"functionCall": {"name": "get_weather", "args": {"location": "Lima, Peru"}}},
+}
+_GEMINI_STREAM_USAGE: Final = {"promptTokenCount": 8, "candidatesTokenCount": 4, "totalTokenCount": 12}
+
+
+def _gemini_stream_chunk(part: Mapping[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    candidate: Final = {"content": {"role": "model", "parts": [part]}, "index": 0}
+    if finish_reason is None:
+        return {"candidates": [candidate]}
+    return {"candidates": [{**candidate, "finishReason": finish_reason}], "usageMetadata": _GEMINI_STREAM_USAGE}
+
+
+def _gemini_stream_finish_reasons(respx_mock: respx.MockRouter, *events: dict[str, object]) -> list[str]:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(*events)
+    )
+    response: Final = litellm.completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Count to three"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    return [chunk.choices[0].finish_reason for chunk in response if chunk.choices and chunk.choices[0].finish_reason]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("part", _GEMINI_CUT_STREAM_PARTS.values(), ids=_GEMINI_CUT_STREAM_PARTS.keys())
+def test_gemini_stream_cut_before_any_finish_reason_raises(
+    respx_mock: respx.MockRouter, part: Mapping[str, object]
+) -> None:
+    with pytest.raises(
+        litellm.exceptions.MidStreamFallbackError, match="Stream ended before a finish_reason was received"
+    ):
+        _gemini_stream_finish_reasons(respx_mock, _gemini_stream_chunk(part))
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_stream_that_ends_on_an_unspecified_finish_reason_still_completes(respx_mock: respx.MockRouter) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk({"text": "One, two,"}, finish_reason="FINISH_REASON_UNSPECIFIED")
+    )
+
+    assert finish_reasons == ["stop"]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("first_part", "expected"),
+    [(_GEMINI_CUT_STREAM_PARTS["text"], "stop"), (_GEMINI_CUT_STREAM_PARTS["tool_call"], "tool_calls")],
+    ids=["text", "tool_call"],
+)
+def test_gemini_stream_that_names_its_finish_after_earlier_chunks_completes(
+    respx_mock: respx.MockRouter, first_part: Mapping[str, object], expected: str
+) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk(first_part), _gemini_stream_chunk({"text": ""}, finish_reason="STOP")
+    )
+
+    assert finish_reasons == [expected]
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_system_message_with_no_user_message(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(
@@ -12390,3 +12457,185 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+_MALFORMED_USAGE: Final = {"promptTokenCount": 9098, "candidatesTokenCount": 381, "totalTokenCount": 9479}
+_MESSAGE_OUTPUTS: Final = ("content", "tool_calls", "function_call", "images", "audio")
+_EMPTY_MALFORMED: Final = {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"}
+_WEATHER_FUNCTION: Final = {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+
+async def _ask_gemini_4_carbon(
+    candidates: Sequence[Mapping[str, object]], usage: Mapping[str, int] = _MALFORMED_USAGE, **extra: object
+) -> ModelResponse:
+    body: Final = {"candidates": list(candidates), "usageMetadata": dict(usage)}
+    return cast(
+        ModelResponse,
+        await litellm.acompletion(
+            model="gemini/gemini-4-carbon",
+            messages=[{"role": "user", "content": "What is the weather in Oslo?"}],
+            api_key="test-api-key",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body))),
+            **extra,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "candidates",
+    (
+        (_EMPTY_MALFORMED,),
+        ({"finishReason": "MALFORMED_RESPONSE", "index": 0},),
+        ({"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "MALFORMED_FUNCTION_CALL"},),
+        (
+            {
+                "content": {"role": "model", "parts": [{"text": "Call get_weather for Oslo.", "thought": True}]},
+                "finishReason": "MALFORMED_FUNCTION_CALL",
+            },
+        ),
+        (
+            {**_EMPTY_MALFORMED, "index": 0},
+            {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_RESPONSE", "index": 1},
+        ),
+    ),
+    ids=("function-call-no-parts", "response-no-content", "empty-text-part", "thoughts-only", "every-candidate"),
+)
+async def test_gemini_malformed_finish_with_no_output_raises_a_retriable_500(
+    candidates: Sequence[Mapping[str, object]],
+) -> None:
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await _ask_gemini_4_carbon(candidates)
+
+    assert raised.value.status_code == 500
+    assert f"{candidates[0]['finishReason']} and returned no output" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_gemini_malformed_finish_stays_a_retriable_500_whatever_token_count_google_bills() -> None:
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await _ask_gemini_4_carbon(
+            (_EMPTY_MALFORMED,), usage={"promptTokenCount": 429, "candidatesTokenCount": 403, "totalTokenCount": 832}
+        )
+
+    assert raised.value.status_code == 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("candidates", "extra", "expected"),
+    (
+        (
+            ({"content": {"parts": [{"text": "Oslo is 4C."}]}, "finishReason": "MALFORMED_FUNCTION_CALL"},),
+            {},
+            (("stop", "content"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Oslo"}}}]},
+                    "finishReason": "MALFORMED_FUNCTION_CALL",
+                },
+            ),
+            {},
+            (("tool_calls", "tool_calls"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Oslo"}}}]},
+                    "finishReason": "MALFORMED_FUNCTION_CALL",
+                },
+            ),
+            {"functions": [_WEATHER_FUNCTION]},
+            (("function_call", "function_call"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]},
+                    "finishReason": "MALFORMED_RESPONSE",
+                },
+            ),
+            {},
+            (("stop", "images"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": "UklGRgAAAAA="}}]},
+                    "finishReason": "MALFORMED_RESPONSE",
+                },
+            ),
+            {},
+            (("stop", "audio"),),
+        ),
+        (({"content": {"role": "model", "parts": []}, "finishReason": "STOP"},), {}, (("stop", None),)),
+        (({"content": {"parts": [{"text": "Oslo is 4C."}]}},), {}, (("stop", "content"),)),
+        (
+            (
+                {**_EMPTY_MALFORMED, "index": 0},
+                {"content": {"parts": [{"text": "Oslo is 4C."}]}, "finishReason": "STOP", "index": 1},
+            ),
+            {},
+            (("stop", None), ("stop", "content")),
+        ),
+    ),
+    ids=(
+        "malformed-with-text",
+        "malformed-with-tool-call",
+        "malformed-with-legacy-function-call",
+        "malformed-with-image",
+        "malformed-with-audio",
+        "empty-stop",
+        "no-finish-reason",
+        "one-good-candidate",
+    ),
+)
+async def test_gemini_reply_with_any_output_keeps_its_200_shape(
+    candidates: Sequence[Mapping[str, object]],
+    extra: Mapping[str, object],
+    expected: tuple[tuple[str, str | None], ...],
+) -> None:
+    response: Final = await _ask_gemini_4_carbon(candidates, **extra)
+
+    assert (
+        tuple(
+            (
+                choice.finish_reason,
+                next((name for name in _MESSAGE_OUTPUTS if getattr(choice.message, name, None)), None),
+            )
+            for choice in response.choices
+        )
+        == expected
+    )
+    assert response.usage.completion_tokens == 381
+
+
+class _FailureCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: Final[list[Mapping[str, object]]] = []
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, Mapping[str, object]], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures.append(kwargs["standard_logging_object"])
+
+
+@pytest.mark.asyncio
+async def test_gemini_malformed_finish_with_no_output_bills_the_tokens_on_the_failure_log(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture: Final = _FailureCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+
+    with pytest.raises(litellm.InternalServerError):
+        await _ask_gemini_4_carbon((_EMPTY_MALFORMED,))
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert len(capture.failures) == 1
+    assert capture.failures[0]["completion_tokens"] == 381
+    assert capture.failures[0]["prompt_tokens"] == 9098
+    assert cast(float, capture.failures[0]["response_cost"]) > 0

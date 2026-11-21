@@ -17,6 +17,7 @@ import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.caching.caching import Cache
+from litellm.exceptions import MidStreamFallbackError
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -3231,6 +3232,224 @@ async def test_async_cache_preserves_presence_of_provider_optional_fields(explic
     assert ("refusal" in original_message) is explicit_nulls
     assert ("refusal" in cached_message) is explicit_nulls
     assert original_choices[0].get("logprobs") == cached_choices[0].get("logprobs")
+
+
+_WEATHER_TOOL_CALL: Final = {
+    "id": "toolu_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": "{}"},
+}
+
+
+def _tool_call_and_text_response(tool_call_finish_reason: str) -> ModelResponse:
+    return ModelResponse.model_validate(
+        {
+            "id": f"chatcmpl-{uuid.uuid4()}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "claude-sonnet-4-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": tool_call_finish_reason,
+                    "message": {"role": "assistant", "content": None, "tool_calls": [_WEATHER_TOOL_CALL]},
+                },
+                {"index": 1, "finish_reason": "stop", "message": {"role": "assistant", "content": "sunny"}},
+            ],
+        }
+    )
+
+
+_STORED_FINISH_REASONS: Final = ("stop", "tool_calls", "length")
+
+
+@pytest.mark.parametrize("tool_call_finish_reason", _STORED_FINISH_REASONS)
+def test_sync_cache_hit_returns_the_stored_finish_reasons(
+    monkeypatch: pytest.MonkeyPatch, tool_call_finish_reason: str
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    handler: Final = LLMCachingHandler(original_function=completion, request_kwargs={}, start_time=_FIXED_START)
+    kwargs: Final = {"model": "claude-sonnet-4-5", "messages": _unique_messages(), "caching": True}
+
+    handler.sync_set_cache(result=_tool_call_and_text_response(tool_call_finish_reason), kwargs=kwargs)
+    lookup: Final = handler.sync_get_cache(
+        model="claude-sonnet-4-5",
+        original_function=completion,
+        logging_obj=_completion_logging_obj(CallTypes.completion.value),
+        start_time=_FIXED_START,
+        call_type=CallTypes.completion.value,
+        kwargs=kwargs,
+    )
+
+    cached_response: Final = lookup.cached_result
+    assert isinstance(cached_response, ModelResponse)
+    assert [choice.finish_reason for choice in cached_response.choices] == [tool_call_finish_reason, "stop"]
+
+
+@pytest.mark.parametrize("tool_call_finish_reason", _STORED_FINISH_REASONS)
+@pytest.mark.asyncio
+async def test_async_cache_hit_returns_the_stored_finish_reasons(
+    monkeypatch: pytest.MonkeyPatch, tool_call_finish_reason: str
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.acompletion, request_kwargs={}, start_time=_FIXED_START
+    )
+    kwargs: Final = {"model": "claude-sonnet-4-5", "messages": _unique_messages(), "caching": True}
+
+    await handler.async_set_cache(
+        result=_tool_call_and_text_response(tool_call_finish_reason),
+        original_function=litellm.acompletion,
+        kwargs=kwargs,
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    lookup: Final = await handler.async_get_cache(
+        model="claude-sonnet-4-5",
+        original_function=litellm.acompletion,
+        logging_obj=_completion_logging_obj(CallTypes.acompletion.value),
+        start_time=_FIXED_START,
+        call_type=CallTypes.acompletion.value,
+        kwargs=kwargs,
+    )
+
+    cached_response: Final = lookup.cached_result
+    assert isinstance(cached_response, ModelResponse)
+    assert [choice.finish_reason for choice in cached_response.choices] == [tool_call_finish_reason, "stop"]
+
+
+def _cached_tool_call_choice(stored_finish_reason: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "index": 0,
+        "message": {"role": "assistant", "content": None, "tool_calls": [_WEATHER_TOOL_CALL]},
+    } | dict(stored_finish_reason)
+
+
+_STORED_AND_LEGACY_FINISH_REASONS: Final = pytest.mark.parametrize(
+    ("stored_finish_reason", "replayed_finish_reason"),
+    [
+        ({"finish_reason": "stop"}, "stop"),
+        ({"finish_reason": "tool_calls"}, "tool_calls"),
+        ({"finish_reason": "length"}, "length"),
+        ({"finish_reason": None}, "tool_calls"),
+        ({}, "tool_calls"),
+        ({"finish_reason": None, "finish_details": "stop"}, "tool_calls"),
+        ({"finish_details": "stop"}, "tool_calls"),
+        ({"finish_reason": None, "finish_details": "length"}, "length"),
+    ],
+    ids=[
+        "stored-stop",
+        "stored-tool-calls",
+        "stored-length",
+        "stored-null",
+        "missing",
+        "null-with-finish-details-stop",
+        "missing-with-finish-details-stop",
+        "null-with-finish-details-length",
+    ],
+)
+
+
+def _cached_tool_call_completion(stored_finish_reason: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "id": "chatcmpl-stored-finish-reason",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "claude-sonnet-4-5",
+        "choices": [_cached_tool_call_choice(stored_finish_reason)],
+    }
+
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [
+        (completion, CallTypes.completion.value),
+        (litellm.acompletion, CallTypes.acompletion.value),
+        (responses, CallTypes.responses.value),
+        (aresponses, CallTypes.aresponses.value),
+    ],
+)
+@_STORED_AND_LEGACY_FINISH_REASONS
+@pytest.mark.asyncio
+async def test_cached_stream_replay_keeps_a_stored_finish_reason_and_derives_a_missing_one(
+    original_function: Callable[..., object],
+    call_type: str,
+    stored_finish_reason: Mapping[str, object],
+    replayed_finish_reason: str,
+) -> None:
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+
+    replay: Final = handler._convert_cached_result_to_model_response(
+        cached_result=_cached_tool_call_completion(stored_finish_reason),
+        call_type=call_type,
+        kwargs={"model": "claude-sonnet-4-5", "stream": True, "messages": _unique_messages()},
+        logging_obj=_completion_logging_obj(call_type),
+        model="claude-sonnet-4-5",
+        args=(),
+    )
+
+    assert isinstance(replay, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in replay] if call_type.startswith("a") else list(replay)
+    finish_reasons: Final = [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason]
+    assert finish_reasons == [replayed_finish_reason]
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+    assert isinstance(rebuilt, ModelResponse)
+    assert rebuilt.choices[0].finish_reason == replayed_finish_reason
+
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [(completion, CallTypes.completion.value), (responses, CallTypes.responses.value)],
+)
+@_STORED_AND_LEGACY_FINISH_REASONS
+def test_cached_chat_completion_keeps_a_stored_finish_reason_and_derives_a_missing_one(
+    original_function: Callable[..., object],
+    call_type: str,
+    stored_finish_reason: Mapping[str, object],
+    replayed_finish_reason: str,
+) -> None:
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+
+    result: Final = handler._convert_cached_result_to_model_response(
+        cached_result=_cached_tool_call_completion(stored_finish_reason),
+        call_type=call_type,
+        kwargs={"model": "claude-sonnet-4-5", "stream": False, "messages": _unique_messages()},
+        logging_obj=_completion_logging_obj(call_type),
+        model="claude-sonnet-4-5",
+        args=(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].finish_reason == replayed_finish_reason
+
+
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [(completion, CallTypes.completion.value), (litellm.acompletion, CallTypes.acompletion.value)],
+)
+@pytest.mark.asyncio
+async def test_cached_stream_rejects_a_response_without_choices(
+    original_function: Callable[..., object], call_type: str
+) -> None:
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+    replay: Final = handler._convert_cached_result_to_model_response(
+        cached_result={"id": "chatcmpl-missing-choices", "model": "claude-sonnet-4-5"},
+        call_type=call_type,
+        kwargs={"model": "claude-sonnet-4-5", "stream": True, "messages": _unique_messages()},
+        logging_obj=_completion_logging_obj(call_type),
+        model="claude-sonnet-4-5",
+        args=(),
+    )
+
+    assert isinstance(replay, CustomStreamWrapper)
+    if call_type == CallTypes.acompletion.value:
+        with pytest.raises(MidStreamFallbackError, match="no 'choices'") as async_error:
+            await anext(replay)
+        assert isinstance(async_error.value.original_exception, litellm.APIError)
+    else:
+        with pytest.raises(MidStreamFallbackError, match="no 'choices'") as sync_error:
+            next(replay)
+        assert isinstance(sync_error.value.original_exception, litellm.APIError)
 
 
 def test_sync_set_cache_skips_response_without_output():

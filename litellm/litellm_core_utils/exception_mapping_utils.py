@@ -18,7 +18,13 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    callable_of,
+    json_contains,
+    subscript,
+)
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
@@ -232,8 +238,10 @@ def _get_response_headers(original_exception: Exception) -> httpx.Headers | None
     return _response_headers
 
 
-def _accepted_init_kwargs(exception_class: type[Exception], candidates: Mapping[str, object]) -> Mapping[str, object]:
-    accepted: Final = inspect.signature(exception_class).parameters
+def _accepted_init_kwargs(exception_class: object, candidates: Mapping[str, object]) -> Mapping[str, object]:
+    accepted: Final = inspect.signature(
+        exception_class  # pyright: ignore[reportArgumentType]  # signature raises its own TypeError
+    ).parameters
     return MappingProxyType({name: value for name, value in candidates.items() if name in accepted})
 
 
@@ -256,15 +264,19 @@ def extract_and_raise_litellm_exception(
     if match is None:
         return
     exception_name: Final = match.group(0).removeprefix("litellm.")
-    raised_exception_obj: Final = getattr(litellm, exception_name, None)
+    raised_exception_obj: Final[object] = getattr(litellm, exception_name, None)
     if not raised_exception_obj:
         return
-    raise raised_exception_obj(
+    init_kwargs: Final = _accepted_init_kwargs(
+        raised_exception_obj, MappingProxyType({"response": response, "body": body})
+    )
+    raised: Final = callable_of(raised_exception_obj)(
         message=error_str,
         llm_provider=custom_llm_provider,
         model=model,
-        **_accepted_init_kwargs(raised_exception_obj, MappingProxyType({"response": response, "body": body})),
+        **init_kwargs,
     )
+    raise raised  # pyright: ignore[reportGeneralTypeIssues]  # raise rejects a non-exception itself
 
 
 class _ProviderHTTPException(Protocol):
@@ -337,7 +349,9 @@ def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | 
         decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(message)))
     except ValueError:
         return None
-    relayed: Final = None if decoded is None else as_str_mapping(decoded.get("error"))
+    if decoded is None or decoded.get("type") == "error":
+        return None
+    relayed: Final = as_str_mapping(decoded.get("error"))
     return relayed if relayed is not None and isinstance(relayed.get("message"), str) else None
 
 

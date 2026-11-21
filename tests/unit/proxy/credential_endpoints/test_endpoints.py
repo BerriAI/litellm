@@ -1820,9 +1820,10 @@ def test_update_credential_purges_connections_when_github_host_changes(monkeypat
             return cached_values.get(key)
 
         redis_cache: Final = MagicMock()
+        redis_cache.store_settings = None
         redis_cache.async_set_cache = AsyncMock(side_effect=set_cache)
         redis_cache.async_get_cache = AsyncMock(side_effect=get_cache)
-        monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=redis_cache)[0])
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", _auth_cache_on(redis_cache))
 
         response = _patch_credential(
             "copilot",
@@ -2059,6 +2060,12 @@ _COPILOT_MODELS_URL: Final = f"{DEFAULT_GITHUB_COPILOT_API_BASE}/models"
 _GITHUB_USER_URL = "https://api.github.com/user"
 _COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
 _DEFAULT_PLAN: Final = {"endpoints": {"api": DEFAULT_GITHUB_COPILOT_API_BASE}}
+
+
+def _auth_cache_on(redis: object) -> UserApiKeyCache:
+    cache: Final = shared_cache()[0]
+    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis stand-in
+    return cache
 
 
 def _as_user(user_id="user-a"):
@@ -2907,11 +2914,12 @@ def test_delete_user_connection_fails_closed_when_the_tombstone_write_fails(monk
     from litellm.proxy import proxy_server
 
     failing_redis = SimpleNamespace(
+        store_settings=None,
         async_set_cache=AsyncMock(side_effect=ConnectionError("redis down")),
         async_get_cache=AsyncMock(return_value=None),
         async_delete_cache=AsyncMock(return_value=None),
     )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=failing_redis)[0])
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", _auth_cache_on(failing_redis))
 
     response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
     assert response.status_code == 503, response.text
@@ -2929,11 +2937,12 @@ def test_delete_user_connection_fails_when_the_tombstone_write_silently_noops(mo
 
     store: dict = {}
     silent_redis = SimpleNamespace(
+        store_settings=None,
         async_set_cache=AsyncMock(return_value=None),  # reports success, writes nothing
         async_get_cache=AsyncMock(side_effect=lambda key: store.get(key)),
         async_delete_cache=AsyncMock(return_value=None),
     )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=silent_redis)[0])
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", _auth_cache_on(silent_redis))
 
     response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
     assert response.status_code == 503, response.text
@@ -2950,11 +2959,12 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
     from litellm.proxy import proxy_server
 
     stale_redis = SimpleNamespace(
+        store_settings=None,
         async_set_cache=AsyncMock(return_value=None),
         async_get_cache=AsyncMock(return_value="stale-value"),
         async_delete_cache=AsyncMock(return_value=None),
     )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=stale_redis)[0])
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", _auth_cache_on(stale_redis))
 
     with _github_http(
         {

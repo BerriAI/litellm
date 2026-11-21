@@ -7,17 +7,20 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.harness.errors import StateIncompatible
+from litellm.litellm_core_utils.core_helpers import int_of, subscript
 
 StopReason = Literal["done", "max_turns", "timeout", "cancelled", "runtime_error"]
 PermissionMode = Literal["read-only", "ask", "edit", "full"]
 FileChangeKind = Literal["created", "modified", "deleted"]
 
 STATE_VERSION = 1
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class Harness(Enum):
@@ -201,8 +204,9 @@ class State:
     def loads(cls, data: bytes) -> State:
         try:
             raw = json.loads(data.decode("utf-8"))
-            harness = Harness(raw["harness"])
-            version = int(raw["version"])
+            decoded: Final = _DECODED_JSON.validate_python(raw)
+            harness = Harness(subscript(decoded, "harness"))
+            version = int_of(subscript(decoded, "version"))
         except (ValueError, KeyError, TypeError, UnicodeDecodeError) as e:
             raise StateIncompatible(f"Unreadable harness state: {e}") from e
         if version != STATE_VERSION:
