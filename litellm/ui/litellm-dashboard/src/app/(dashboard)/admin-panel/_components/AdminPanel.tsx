@@ -435,7 +435,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     <Page>
       <PageContent>
         <PageHeader>
-            <PageHeaderTitle>{t("shell.nav.items.adminSettings")}</PageHeaderTitle>
+          <PageHeaderTitle>{t("shell.nav.items.adminSettings")}</PageHeaderTitle>
           <PageHeaderDescription>{t("adminPanel.page.subtitle")}</PageHeaderDescription>
         </PageHeader>
         <Tabs defaultValue={tabItems[0].key} className="gap-6">

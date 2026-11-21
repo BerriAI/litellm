@@ -353,9 +353,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           {/* Navigation - only show when not embedded */}
           {!isChat && !isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
-          <HubPage
-            className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}
-          >
+          <HubPage className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}>
             <HubContent>
               {/* Embedded Explainer - only shown when embedded in dashboard */}
               {!isChat && isEmbedded && (
