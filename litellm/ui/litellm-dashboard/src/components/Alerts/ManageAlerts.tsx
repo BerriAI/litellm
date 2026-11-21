@@ -1,4 +1,4 @@
-import { Settings } from "lucide-react";
+import { Bell, Settings } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -62,7 +62,10 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
   const messageKey = data ? statusMessage(data) : undefined;
   return (
     <PageHeader>
-      <PageHeaderTitle>{t("alerts.unified.title")}</PageHeaderTitle>
+      <PageHeaderTitle>
+        <Bell />
+        {t("alerts.unified.title")}
+      </PageHeaderTitle>
       <PageHeaderDescription>{t("alerts.unified.inboxDescription")}</PageHeaderDescription>
       <PageHeaderControls>
         <Dialog>

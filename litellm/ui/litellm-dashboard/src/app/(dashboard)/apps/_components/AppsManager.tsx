@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { AppWindow } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Page, PageContent } from "@/components/shared/Page";
@@ -51,7 +52,10 @@ function ManagedApps() {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>{t("apps.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <AppWindow />
+          {t("apps.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("apps.settingsHint")}</PageHeaderDescription>
       </PageHeader>
       <PageContent>
@@ -78,7 +82,10 @@ function GrantedApps({ apps }: { apps: readonly App[] }) {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>{t("apps.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <AppWindow />
+          {t("apps.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("apps.grantedHint")}</PageHeaderDescription>
       </PageHeader>
       <PageContent>

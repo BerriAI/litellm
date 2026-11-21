@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { Building2, Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -96,7 +96,10 @@ function CustomerOrganizations() {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>{t("customerPortal.list.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <Building2 />
+          {t("customerPortal.list.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("customerPortal.list.description")}</PageHeaderDescription>
         <PageHeaderControls className="flex-wrap">
           <CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />

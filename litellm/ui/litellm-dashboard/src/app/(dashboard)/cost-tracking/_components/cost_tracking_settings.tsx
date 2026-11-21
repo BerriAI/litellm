@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
-import { ChevronDown } from "lucide-react";
+import { BarChart3, ChevronDown } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -201,7 +201,10 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
     <Page>
       <PageHeader>
         <div className="flex items-center gap-2">
-          <PageHeaderTitle>{t("costTracking.settings.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <BarChart3 />
+            {t("costTracking.settings.title")}
+          </PageHeaderTitle>
           <DocsMenu items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))} />
         </div>
         <PageHeaderDescription>{t("costTracking.settings.description")}</PageHeaderDescription>

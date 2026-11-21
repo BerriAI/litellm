@@ -1,5 +1,7 @@
 "use client";
 
+import { Settings } from "lucide-react";
+
 import { useTranslation } from "react-i18next";
 import { parseAsStringLiteral, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -31,7 +33,10 @@ export default function CustomerSettings() {
     <Page>
       <PageTabs value={tab} onValueChange={changeTab}>
         <PageHeader>
-          <PageHeaderTitle>{t("customerPortal.budgetGroups.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Settings />
+            {t("customerPortal.budgetGroups.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("customerPortal.budgetGroups.settingsHint")}</PageHeaderDescription>
           <PageHeaderControls className="flex-wrap">
             <PageTabsList aria-label={t("customerPortal.budgetGroups.title")} className="min-w-0 flex-1">

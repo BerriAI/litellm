@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Activity } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import DeletedKeysPage from "@/components/DeletedKeysPage/DeletedKeysPage";
@@ -41,7 +42,10 @@ export default function LogsPage() {
     <Page className="h-full">
       <PageTabs value={activeTab} onValueChange={(value: LogsTab) => setActiveTab(value)}>
         <PageHeader>
-          <PageHeaderTitle>{t("shell.nav.items.logs")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Activity />
+            {t("shell.nav.items.logs")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("logs.page.description")}</PageHeaderDescription>
           <PageHeaderControls>
             <PageTabsList>

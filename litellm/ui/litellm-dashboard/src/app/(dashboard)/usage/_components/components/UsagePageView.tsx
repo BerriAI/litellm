@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { Download, Link2, Search, X } from "lucide-react";
+import { BarChart3, Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -461,7 +461,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   return (
     <Page ref={pageRef} className="relative">
       <PageHeader>
-        <PageHeaderTitle>{t("usage.viewSelect.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <BarChart3 />
+          {t("usage.viewSelect.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("usage.viewSelect.description")}</PageHeaderDescription>
         <PageHeaderControls className="flex-wrap justify-between">
           <UsageViewSelect

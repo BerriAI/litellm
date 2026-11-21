@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ShieldCheck } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
@@ -102,7 +103,10 @@ export default function InternalAccess() {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>{t("apps.internalAccess.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <ShieldCheck />
+          {t("apps.internalAccess.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("apps.internalAccess.hint")}</PageHeaderDescription>
         <PageHeaderControls>
           <Tabs

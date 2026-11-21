@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Page, PageContent } from "@/components/shared/Page";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
-import { ArrowLeft, ChevronDown, RefreshCw } from "lucide-react";
+import { ArrowLeft, ChevronDown, RefreshCw, Workflow } from "lucide-react";
 import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
 import type { ParseKeys, TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -523,7 +523,10 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>{t("workflows.header.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <Workflow />
+          {t("workflows.header.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("workflows.header.subtitle")}</PageHeaderDescription>
       </PageHeader>
       <PageContent>
