@@ -56,6 +56,8 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     ["databricks", "databricks-openjev-qwen35-4b", "json"],
     ["databricks", "ai_decide", "object"],
     ["databricks", "ai_decide", "json"],
+    ["nadir", "bucket", "object"],
+    ["nadir", "bucket", "json"],
   ])("probes saved %s/%s %s configuration with custom tiers and team context", (provider, model, format) => {
     const config = {
       classifier_type: "oss_classifier",

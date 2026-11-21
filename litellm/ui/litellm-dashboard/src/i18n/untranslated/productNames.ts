@@ -10,6 +10,7 @@ export const productNames = {
   laya: "Laya",
   bespokeNimble: "Bespoke Nimble",
   databricks: "Databricks",
+  nadir: "Nadir",
   claudeCode: "Claude Code",
   codex: "Codex",
   cursor: "Cursor",
