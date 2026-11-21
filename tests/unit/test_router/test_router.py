@@ -9973,7 +9973,16 @@ async def test_cyclic_fallback_graph_does_not_amplify_one_request():
 
 
 _FLAT_ATTEMPT_RECORD_KEYS = frozenset(
-    {"model_group", "deployment_id", "model", "base_model", "exception_type", "exception_string", "attempted_retries"}
+    {
+        "model_group",
+        "deployment_id",
+        "model",
+        "base_model",
+        "exception_type",
+        "exception_string",
+        "attempted_retries",
+        "attempted_fallbacks",
+    }
 )
 _BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
 

@@ -503,6 +503,7 @@ def test_log_retry_records_the_failure_on_the_request_metadata(make_core: MakeCo
                 "exception_type": "ValueError",
                 "exception_string": "boom",
                 "attempted_retries": 1,
+                "attempted_fallbacks": None,
             },
         ),
         "request_retry_count": 1,

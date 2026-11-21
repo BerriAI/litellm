@@ -901,6 +901,7 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
             "exception_type": "RateLimitError",
             "exception_string": "litellm.RateLimitError: slow down",
             "attempted_retries": 2,
+            "attempted_fallbacks": None,
         }
     ]
     assert new_kwargs[metadata_key]["request_retry_count"] == 1
