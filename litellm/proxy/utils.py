@@ -171,6 +171,7 @@ from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
+    CLAUDE_CODE_GATEWAY_PREFIX,
     AlertType,
     CallInfo,
     LiteLLM_VerificationTokenView,
@@ -644,7 +645,7 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
 
 def _is_messages_route(user_api_key_dict: UserAPIKeyAuth) -> bool:
     route: Final = user_api_key_dict.request_route
-    call_types: Final = get_call_types_for_route(route) if route else None
+    call_types: Final = get_call_types_for_route(route.removeprefix(CLAUDE_CODE_GATEWAY_PREFIX)) if route else None
     return bool(call_types) and call_types[0] == CallTypes.anthropic_messages
 
 
@@ -5039,8 +5040,9 @@ class ProxyLogging:
         pricing_request: Final[Mapping[str, object]] = (
             {"speed": request_data["speed"]} if "speed" in request_data else {}
         )
+        read_text: Final = b"".join(read).decode("utf-8", errors="replace")
         await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
-            litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=read
+            litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=(read_text,) if read_text else ()
         )
         return True
 

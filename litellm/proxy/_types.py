@@ -217,6 +217,8 @@ from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export aft
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
 
+CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
+
 
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [

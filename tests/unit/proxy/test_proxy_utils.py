@@ -3485,7 +3485,7 @@ async def test_query_raw_within_statement_timeout_leaves_other_database_errors_a
 
 def _native_messages_sse(input_tokens: int, output_tokens: int) -> tuple[bytes, ...]:
     def event(name: str, payload: dict) -> bytes:
-        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+        return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
     message: Final = {"id": "msg_refused", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5"}
     return (
@@ -3499,7 +3499,7 @@ def _native_messages_sse(input_tokens: int, output_tokens: int) -> tuple[bytes, 
         event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
         event(
             "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Call 212-555-0187"}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Call ☎ 212-555-0187"}},
         ),
         event("content_block_stop", {"type": "content_block_stop", "index": 0}),
         event(
@@ -3510,12 +3510,29 @@ def _native_messages_sse(input_tokens: int, output_tokens: int) -> tuple[bytes, 
     )
 
 
+def _reads_cut_inside_each_frame(frames: tuple[bytes, ...]) -> tuple[bytes, ...]:
+    """Re-cuts the frames the way a relayed upstream read can arrive, every read ending inside an event and
+    the one carrying the telephone sign ending inside that multi-byte character."""
+    cuts: Final = tuple(frame.find("☎".encode()) + 1 or len(frame) // 2 for frame in frames)
+    halves: Final = tuple((frame[:cut], frame[cut:]) for frame, cut in zip(frames, cuts))
+    return (
+        halves[0][0],
+        *(tail + head for (_, tail), (head, _) in zip(halves, halves[1:])),
+        halves[-1][1],
+    )
+
+
 async def _spend_rows_of_native_messages_stream_ending_in(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, frames_read: int | None, served_as: str = "python_stream"
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    frames_read: int | None,
+    served_as: str = "python_stream",
+    request_route: str = "/v1/messages",
 ) -> list[tuple[str, int, int, float]]:
     """Streams a native /v1/messages answer through a post-call hook that raises ``error`` after reading
-    ``frames_read`` frames, or all of them when None, then runs the stream's teardown and the route's failure log.
-    ``served_as`` picks the Python handler's stream type or the bare byte stream the Rust bridge hands the proxy."""
+    ``frames_read`` reads, or all of them when None, then runs the stream's teardown and the route's failure log.
+    ``served_as`` picks the Python handler's stream type, the bare byte stream the Rust bridge hands the proxy,
+    or that byte stream with every read cut inside an event."""
     from litellm.caching.caching import DualCache
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -3594,10 +3611,12 @@ async def _spend_rows_of_native_messages_stream_ending_in(
         await parked
         fired_dispatches[-1].set()
 
+    reads: Final = _reads_cut_inside_each_frame(frames) if served_as == "rust_bridge_reads_cut_mid_event" else frames
+
     async def upstream():
-        for frame in frames:
-            yield frame
-        logging_obj._deferred_stream_complete_args = (success_logging(frames),)
+        for read in reads:
+            yield read
+        logging_obj._deferred_stream_complete_args = (success_logging(reads),)
 
     logging_obj._on_deferred_stream_complete = run_parked
     served: Final = (
@@ -3607,14 +3626,14 @@ async def _spend_rows_of_native_messages_stream_ending_in(
     )
     guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
         response=served,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route=request_route),
         request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
     )
 
     with pytest.raises(type(error)) as raised:
         _ = [chunk async for chunk in guarded]
     if frames_read is not None:
-        await success_logging(frames[:frames_read])
+        await success_logging(reads[:frames_read])
     for _ in range(10):
         await asyncio.sleep(0)
     for dispatched in fired_dispatches:
@@ -3624,8 +3643,9 @@ async def _spend_rows_of_native_messages_stream_ending_in(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("served_as", ["python_stream", "rust_bridge_byte_stream"])
-@pytest.mark.parametrize("frames_read", [None, 3], ids=["refused_at_end", "refused_mid_stream"])
+@pytest.mark.parametrize("request_route", ["/v1/messages", "/claude_code_gateway/v1/messages"])
+@pytest.mark.parametrize("served_as", ["python_stream", "rust_bridge_byte_stream", "rust_bridge_reads_cut_mid_event"])
+@pytest.mark.parametrize("frames_read", [None, 4], ids=["refused_at_end", "refused_mid_stream"])
 @pytest.mark.parametrize(
     "refusal_error",
     [
@@ -3635,10 +3655,10 @@ async def _spend_rows_of_native_messages_stream_ending_in(
     ids=["guardrail_raised", "presidio_blocked_entity"],
 )
 async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_upstream_usage(
-    monkeypatch, frames_read, refusal_error, served_as
+    monkeypatch, frames_read, refusal_error, served_as, request_route: str
 ):
     rows: Final = await _spend_rows_of_native_messages_stream_ending_in(
-        monkeypatch, refusal_error, frames_read, served_as
+        monkeypatch, refusal_error, frames_read, served_as, request_route
     )
 
     assert [row[:2] for row in rows] == [("failure", 30)]
