@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from typing import Final, cast
 from unittest.mock import MagicMock
@@ -483,7 +483,7 @@ async def test_sqs_max_message_bytes_from_proxy_callback_params_is_honored(
     ],
 )
 def test_sqs_logger_rejects_an_invalid_max_message_bytes_at_startup(
-    monkeypatch: pytest.MonkeyPatch, callback_params: dict[str, object], constructor_value: int
+    monkeypatch: pytest.MonkeyPatch, callback_params: Mapping[str, object], constructor_value: int
 ) -> None:
     monkeypatch.setattr("litellm.aws_sqs_callback_params", callback_params)
     with pytest.raises(ValueError, match="sqs_max_message_bytes"):

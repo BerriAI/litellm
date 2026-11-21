@@ -17,6 +17,7 @@ from typing import Annotated, ClassVar, Final
 
 import httpx
 from pydantic import BeforeValidator, ConfigDict, PositiveInt, TypeAdapter
+from pydantic_core import PydanticCustomError
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -42,7 +43,7 @@ from .custom_batch_logger import CustomBatchLogger
 
 def _reject_bool(value: object) -> object:
     if isinstance(value, bool):
-        raise ValueError("expected a byte count, got a boolean")
+        raise PydanticCustomError("bool_type", "expected a byte count, got a boolean")
     return value
 
 
@@ -260,7 +261,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         self.sqs_strip_base64_files = (
             litellm.aws_sqs_callback_params.get("sqs_strip_base64_files", False) or sqs_strip_base64_files
         )
-        configured_max_message_bytes: Final = litellm.aws_sqs_callback_params.get("sqs_max_message_bytes")
+        configured_max_message_bytes: Final = _DECODED_JSON.validate_python(
+            litellm.aws_sqs_callback_params.get("sqs_max_message_bytes")
+        )
         self.sqs_max_message_bytes: int = _MAX_MESSAGE_BYTES.validate_python(
             sqs_max_message_bytes if configured_max_message_bytes is None else configured_max_message_bytes
         )
