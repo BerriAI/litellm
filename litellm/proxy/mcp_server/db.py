@@ -2246,7 +2246,7 @@ async def refresh_user_oauth_token(
     raw_scope: Final = body.get("scope")
     scopes: Final = raw_scope.split() if isinstance(raw_scope, str) else cred.get("scopes")
 
-    await store_user_oauth_credential(
+    stored: Final = await store_user_oauth_credential(
         prisma_client=prisma_client,
         user_id=user_id,
         server_id=server_id,
@@ -2259,6 +2259,10 @@ async def refresh_user_oauth_token(
         skip_byok_guard=True,  # Row is already OAuth2; skip the extra find_unique check
         refreshed_from=refresh_token,
     )
+
+    if stored is False:
+        latest: Final = await get_user_oauth_credential(prisma_client, user_id, server_id, use_writer=True)
+        return latest if oauth_grant_state(latest) == "valid" else None
 
     verbose_proxy_logger.info(
         "refresh_user_oauth_token: refreshed token for user=%s server=%s",

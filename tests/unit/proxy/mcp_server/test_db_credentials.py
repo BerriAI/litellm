@@ -11,7 +11,8 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 import base64
 import json
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
+from itertools import count
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -891,7 +892,7 @@ async def test_saving_a_grant_drops_the_refusal_note(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("interleaving", ["none", "refusal", "signin", "delete"])
+@pytest.mark.parametrize("interleaving", ["none", "refusal", "signin", "expired_signin", "delete"])
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
     credentials_prisma: SimpleNamespace,
@@ -900,6 +901,16 @@ async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
     interleaving: str,
     legacy: bool,
 ) -> None:
+    fixed_now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    clock_ticks: Final = count()
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            current_time: Final = fixed_now + timedelta(seconds=next(clock_ticks))
+            return current_time.replace(tzinfo=None) if tz is None else current_time.astimezone(tz)
+
+    monkeypatch.setattr("litellm.proxy.mcp_server.db.datetime", FrozenDateTime)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
     await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
@@ -911,8 +922,15 @@ async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
         rows.update_many = update
         if interleaving == "refusal":
             await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "notifications")
-        elif interleaving == "signin":
-            await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", refresh_token="rt-new")
+        elif interleaving in ("signin", "expired_signin"):
+            await store_user_oauth_credential(
+                credentials_prisma,
+                "alice",
+                "srv-1",
+                "at-new",
+                refresh_token="rt-new",
+                expires_in=-3600 if interleaving == "expired_signin" else None,
+            )
         elif interleaving == "delete":
             rows.rows = {}
         return await update(data=data, where=where)
@@ -920,13 +938,16 @@ async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
     rows.update_many = interleaved_update
     if legacy:
         respx_mock.post("https://idp.example.com/token").respond(200, json={"access_token": "at-2"})
-        await refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), before)
+        refreshed: Final = await refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), before)
+        current: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+        assert refreshed == (None if interleaving in ("expired_signin", "delete") else current)
     else:
         await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-2", refreshed_from="rt-1")
     saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
     expected: Final = {
         "delete": None,
         "signin": ("at-new", "rt-new", None),
+        "expired_signin": ("at-new", "rt-new", None),
         "none": ("at-2", "rt-1", ["gist"]),
         "refusal": ("at-2", "rt-1", ["gist", "notifications"]),
     }
