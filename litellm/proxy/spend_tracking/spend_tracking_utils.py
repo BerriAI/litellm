@@ -226,6 +226,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "user_api_key_user_email",
         "user_api_key_customer_org_id",
         "user_api_key_app_id",
+        "user_api_key_app_group_id",
         "user_api_key_app_alias",
         "user_api_key_customer_org_alias",
         "user_api_key_customer_team_id",
@@ -272,6 +273,7 @@ _CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAd
 
 class _CustomerIdentityMetadata(TypedDict, total=False):
     user_api_key_app_id: ReadOnly[str]
+    user_api_key_app_group_id: ReadOnly[str]
     user_api_key_app_alias: ReadOnly[str]
     user_api_key_customer_org_id: ReadOnly[str]
     user_api_key_customer_org_alias: ReadOnly[str]

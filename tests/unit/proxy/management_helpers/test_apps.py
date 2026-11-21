@@ -59,7 +59,7 @@ class AppTable(Table):
         self.pause_read: tuple[asyncio.Event, asyncio.Event] | None = None
 
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
-        return await super().create({"app_id": str(uuid4()), **data}, include)
+        return await super().create({self.id_field: str(uuid4()), **data}, include)
 
     async def find_unique(
         self,
@@ -116,12 +116,13 @@ class CompositeTable(AppTable):
         )
 
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
-        customer_column: Final = self.id_field.removeprefix("app_id_")
+        parent_column, suffix = self.id_field.split("_customer_", 1)
+        customer_column: Final = "customer_" + suffix
         return await super().create(
             {
                 **data,
                 self.id_field: {
-                    "app_id": data["app_id"],
+                    parent_column: data[parent_column],
                     customer_column: data[customer_column],
                 },
             },
@@ -166,6 +167,8 @@ class AppDatabase(Database):
         self.litellm_customerorganizationtable = AppCustomerTable("customer_org_id", self)
         self.litellm_customermembertable = AppCustomerTable("customer_member_id", self)
         self.litellm_apptable: Final = AppTable("app_id", self)
+        self.litellm_appgrouptable: Final = AppTable("app_group_id", self)
+        self.litellm_appgroupcustomerorgtable: Final = CompositeTable("app_group_id_customer_org_id", self)
         self.litellm_appcustomerorgtable: Final = CompositeTable("app_id_customer_org_id", self)
         self.litellm_appcustomermembertable: Final = CompositeTable("app_id_customer_member_id", self)
         self.litellm_teamtable: Final = AppTable("team_id", self)
@@ -185,6 +188,8 @@ class AppDatabase(Database):
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
             "apps": (self.litellm_apptable, "budget_id"),
+            "app_groups": (self.litellm_appgrouptable, "budget_id"),
+            "app_group_org_budgets": (self.litellm_appgroupcustomerorgtable, "budget_id"),
             "app_default_tiers": (self.litellm_apptable, "default_tier_budget_id"),
             "app_default_members": (
                 self.litellm_apptable,

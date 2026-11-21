@@ -14,6 +14,7 @@ import AppsManager from "./AppsManager";
 import AppSettingsPage from "../settings/page";
 import type { App, AppResource, Budget } from "./appForms";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
+import type { AppGroup } from "./appGroupApi";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "test-session", userRole: "Admin", isLoading: false }),
@@ -53,6 +54,7 @@ beforeEach(() => {
   overallPresets = [overallPreset];
   resources = [resource];
   const routes: Parameters<typeof mockAppRequests>[0] = {
+    "GET /management/v1/app_groups": () => [],
     "GET /management/v1/apps/definition": () => definition,
     "PUT /management/v1/apps/definition": async (request) => {
       definition = await request.json();
@@ -95,6 +97,76 @@ beforeEach(() => {
   requests = network.requests;
 });
 afterEach(() => vi.unstubAllGlobals());
+
+const appGroup: AppGroup = {
+  app_group_id: "group-suite",
+  name: "Product suite",
+  budget_id: "group-custom",
+  budget: { max_budget: 10000 },
+  spend: 0,
+  created_at: "",
+  updated_at: "",
+  created_by: "",
+  updated_by: "",
+};
+
+describe("App groups", () => {
+  it("assigns an app to a group while preserving its own budget preset", async () => {
+    network.routes["GET /management/v1/app_groups"] = () => [appGroup];
+    const user = await openAppSettings({ budget_id: overallPreset.budget_id, budget: overallPreset });
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "App group" }), "Product suite");
+    expect(await saveAppSettings(user)).toMatchObject({
+      app_group_id: "group-suite",
+      budget_id: overallPreset.budget_id,
+    });
+  });
+
+  it("creates a group using an existing app budget preset", async () => {
+    network.routes["POST /management/v1/app_groups"] = () => appGroup;
+    const user = userEvent.setup();
+    render(<AppsManager />);
+    await user.click(await screen.findByRole("button", { name: "Create app group" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Create app group" }));
+    await user.type(await dialog.findByRole("textbox", { name: "Group name" }), "Product suite");
+    await chooseAppOption(user, dialog.getByRole("combobox", { name: "Budget source" }), /^App Standard/);
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(network.writes).toHaveLength(1));
+    expect(await network.writes[0].json()).toEqual({
+      name: "Product suite",
+      description: null,
+      budget_id: overallPreset.budget_id,
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("sets a customer cap across the group using the existing customer budget catalog", async () => {
+    network.routes["GET /management/v1/app_groups"] = () => [appGroup];
+    network.routes["GET /management/v1/app_groups/group-suite/customer_organizations"] = () => [];
+    network.routes["GET /management/v1/customer_organizations"] = () => ({
+      data: [{ customer_org_id: "customer-one", alias: "Customer One" }],
+      meta: { total_pages: 1 },
+    });
+    network.routes["GET /management/v1/app_customer_organization_budget_groups"] = () => ({
+      default_budgets: [{ ...overallPreset, budget_id: "customer-standard", name: "Customer Standard" }],
+      budget_groups_revision: "b".repeat(64),
+    });
+    network.routes["PUT /management/v1/app_groups/group-suite/customer_organizations/customer-one"] = () => ({
+      app_group_id: "group-suite",
+      customer_org_id: "customer-one",
+      budget_id: "customer-standard",
+    });
+    const user = userEvent.setup();
+    render(<AppsManager />, { searchParams: "?app_group=group-suite" });
+    await user.click(await screen.findByRole("button", { name: "Set customer budget" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Customer budget for app group" }));
+    await chooseAppOption(user, await dialog.findByRole("combobox", { name: "Customer organization" }), "Customer One");
+    await chooseAppOption(user, dialog.getByRole("combobox", { name: "Budget source" }), /^Customer Standard/);
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(network.writes).toHaveLength(1));
+    expect(await network.writes[0].json()).toEqual({ budget_id: "customer-standard" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
 
 function configureApp(settings: Partial<App>) {
   resources = [{ ...resource, app_id: app.app_id }];
@@ -511,7 +583,7 @@ describe("Gateway app definition", () => {
     definition = { resource_type: null };
     render(<AppsManager />, { searchParams: "?app=team-chat" });
     expect(await screen.findByRole("combobox")).toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 
   it.each(["?page_size=0", "?page=-3", "?page=0", "?page_size=-5&page=9"])(

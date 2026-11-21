@@ -455,6 +455,8 @@ class _TeamDeletionRow(BaseModel):
 
 _DELETE_BATCH_SIZE: Final = 100
 _BUDGET_REFERENCE_FIELDS: Final = (
+    "app_groups",
+    "app_group_org_budgets",
     "customer_organization_defaults",
     "customer_organizations",
     "customer_member_overrides",

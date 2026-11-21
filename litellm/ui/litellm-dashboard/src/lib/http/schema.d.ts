@@ -9712,6 +9712,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/login/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login Resume
+         * @description Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in
+         */
+        get: operations["login_resume_login_resume_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/app_budget_groups": {
         parameters: {
             query?: never;
@@ -9782,6 +9802,79 @@ export interface paths {
          * @description Save the complete app × customer organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
          */
         patch: operations["configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch"];
+        trace?: never;
+    };
+    "/management/v1/app_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Groups */
+        get: operations["list_app_groups_management_v1_app_groups_get"];
+        put?: never;
+        /**
+         * Create App Group
+         * @description Create a shared app group with an optional custom budget or existing app budget preset. Proxy admins only.
+         */
+        post: operations["create_app_group_management_v1_app_groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Group */
+        get: operations["get_app_group_management_v1_app_groups__app_group_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch App Group */
+        patch: operations["patch_app_group_management_v1_app_groups__app_group_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}/customer_organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Group Organizations */
+        get: operations["list_app_group_organizations_management_v1_app_groups__app_group_id__customer_organizations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put App Group Organization */
+        put: operations["put_app_group_organization_management_v1_app_groups__app_group_id__customer_organizations__customer_org_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/management/v1/apps": {
@@ -28487,6 +28580,8 @@ export interface components {
         App: {
             /** Alias */
             alias: string;
+            /** App Group Id */
+            app_group_id?: string | null;
             /** App Id */
             app_id: string;
             /**
@@ -28537,6 +28632,11 @@ export interface components {
         /** AppCreate */
         AppCreate: {
             /**
+             * App Group Id
+             * @description Parent app group. Omit to preserve membership, or send null to ungroup the app.
+             */
+            app_group_id?: string | null;
+            /**
              * Auto Create Customers
              * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
              */
@@ -28544,7 +28644,7 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /**
              * Budget Id
-             * @description Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
              */
             budget_id?: string | null;
             /**
@@ -28582,6 +28682,109 @@ export interface components {
             max_budget: number;
             /** Reset At */
             reset_at?: string | null;
+        };
+        /** AppGroup */
+        AppGroup: {
+            /** App Group Id */
+            app_group_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @default []
+             */
+            budget_usage: components["schemas"]["CustomerBudgetUsage"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** AppGroupBudgetPut */
+        AppGroupBudgetPut: {
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+        };
+        /** AppGroupCreate */
+        AppGroupCreate: {
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name: string;
+        };
+        /** AppGroupOrganization */
+        AppGroupOrganization: {
+            /** App Group Id */
+            app_group_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @default []
+             */
+            budget_usage: components["schemas"]["CustomerBudgetUsage"][];
+            /** Customer Org Id */
+            customer_org_id: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+        };
+        /** AppGroupPatch */
+        AppGroupPatch: {
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name?: string | null;
         };
         /** AppMember */
         AppMember: {
@@ -28684,6 +28887,11 @@ export interface components {
         /** AppPatch */
         AppPatch: {
             /**
+             * App Group Id
+             * @description Parent app group. Omit to preserve membership, or send null to ungroup the app.
+             */
+            app_group_id?: string | null;
+            /**
              * Auto Create Customers
              * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
              */
@@ -28691,7 +28899,7 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /**
              * Budget Id
-             * @description Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
              */
             budget_id?: string | null;
             /**
@@ -34385,7 +34593,7 @@ export interface components {
              * Key
              * @enum {string}
              */
-            key: "customer_org" | "customer_team" | "customer_member" | "app" | "app_customer_org" | "app_customer_member";
+            key: "customer_org" | "customer_team" | "customer_member" | "app" | "app_customer_org" | "app_customer_member" | "app_group" | "app_group_customer_org";
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -70499,6 +70707,26 @@ export interface operations {
             };
         };
     };
+    login_resume_login_resume_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_app_budget_groups_management_v1_app_budget_groups_get: {
         parameters: {
             query?: never;
@@ -70645,6 +70873,207 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_groups_management_v1_app_groups_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_app_group_management_v1_app_groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_group_management_v1_app_groups__app_group_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_app_group_management_v1_app_groups__app_group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_group_organizations_management_v1_app_groups__app_group_id__customer_organizations_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroupOrganization"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_group_organization_management_v1_app_groups__app_group_id__customer_organizations__customer_org_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupBudgetPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroupOrganization"];
                 };
             };
             /** @description Validation Error */
@@ -71311,6 +71740,8 @@ export interface operations {
                 exclude_customer_member_ids?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71599,6 +72030,8 @@ export interface operations {
                 exclude_customer_org_ids?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71641,6 +72074,8 @@ export interface operations {
                 api_key?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -72036,6 +72471,8 @@ export interface operations {
                 exclude_customer_team_ids?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;

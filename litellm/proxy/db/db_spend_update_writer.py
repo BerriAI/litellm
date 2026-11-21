@@ -373,6 +373,8 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
 
 
 _SpendTableName = Literal[
+    "app_group_list_transactions",
+    "app_group_customer_org_list_transactions",
     "app_list_transactions",
     "app_customer_org_list_transactions",
     "app_customer_member_list_transactions",
@@ -403,6 +405,8 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "app_group_list_transactions",
+    "app_group_customer_org_list_transactions",
     "app_list_transactions",
     "app_customer_org_list_transactions",
     "app_customer_member_list_transactions",
@@ -422,6 +426,16 @@ class _CustomerHierarchyLevel:
 
 
 _CUSTOMER_HIERARCHY_LEVELS: Final = (
+    _CustomerHierarchyLevel(
+        "app_group_list_transactions", "LiteLLM_AppGroupTable", "litellm_appgrouptable", "app_group_id"
+    ),
+    _CustomerHierarchyLevel(
+        "app_group_customer_org_list_transactions",
+        "LiteLLM_AppGroupCustomerOrgTable",
+        "litellm_appgroupcustomerorgtable",
+        "app_group_id",
+        "customer_org_id",
+    ),
     _CustomerHierarchyLevel("app_list_transactions", "LiteLLM_AppTable", "litellm_apptable", "app_id"),
     _CustomerHierarchyLevel(
         "app_customer_org_list_transactions",
@@ -3686,6 +3700,7 @@ class DBSpendUpdateWriter:
             "customer_member_id": member_id,
             "customer_team_id": team_id,
             "customer_org_id": org_id,
+            "app_group_id": customer_hierarchy.app_group_id or "",
         }
         attributed: Final[DailyCustomerMemberSpendTransaction] = (
             {**transaction, "app_id": customer_hierarchy.app_id} if customer_hierarchy.app_id else transaction

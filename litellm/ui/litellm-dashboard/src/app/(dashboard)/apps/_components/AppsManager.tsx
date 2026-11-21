@@ -14,6 +14,7 @@ import { useManagedApps } from "./useManagedApps";
 import { applicationRows, grantedApplicationRows } from "./applications";
 import { readsEveryApp, useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
+import AppGroups from "./AppGroups";
 import AppSettingsForm from "./AppSettingsForm";
 import AppDefinitionSetting from "./AppDefinitionSetting";
 import { useOverallAppBudgetGroups } from "./useAppBudgetGroups";
@@ -55,6 +56,7 @@ function ManagedApps() {
       {resourceType && (
         <ApplicationsList resources={resources} apps={apps} onOpen={(resourceId) => void setSelected(resourceId)} />
       )}
+      <AppGroups apps={apps.data ?? []} onOpenApp={(resourceId) => void setSelected(resourceId)} />
       {resource && (
         <ResourceDefaults
           key={`${resource.resource_type}:${resource.resource_id}:${resource.app_id ?? "new"}`}
