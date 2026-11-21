@@ -2344,13 +2344,14 @@ describe("TeamInfoView - member defaults editor", () => {
     ["", null],
   ])("saves an edited rollover cap of %s from Member Defaults", async (input, expected) => {
     const user = userEvent.setup({ delay: null });
-    await openEditor(user, {
+    const savedBudget = {
       max_budget: 42,
       rollover_max_budget: 84,
       budget_duration: "30d",
       tpm_limit: 11,
       rpm_limit: 22,
-    });
+    };
+    await openEditor(user, savedBudget);
 
     const cap = await screen.findByLabelText("Member Rollover Cap (USD)");
     expect(cap).toHaveValue(84);
