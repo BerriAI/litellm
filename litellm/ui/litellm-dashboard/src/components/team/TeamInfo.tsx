@@ -110,6 +110,8 @@ import { useAccessGroups, type AccessGroupResponse } from "@/app/(dashboard)/hoo
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
+import MCPEventPermissionsEditor from "../mcp_server_management/MCPEventPermissionsEditor";
+import { parseErrorMessage } from "../shared/errorUtils";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
@@ -780,6 +782,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   const onTeamUpdateSubmit = (values: TeamUpdateFormValues) => handleTeamUpdate(mountedUpdateValues(values));
+
+  const saveTeamEventPermissions = async (next: Record<string, string[]>) => {
+    if (!accessToken) return;
+    try {
+      await teamUpdateCall(accessToken, { team_id: teamId, object_permission: { mcp_event_permissions: next } });
+      setTeamData(await teamInfoCall(accessToken, teamId));
+      toast.success(t("teams.teamInfo.toasts.settingsUpdated"));
+    } catch (error) {
+      toast.fromError(parseErrorMessage(error));
+    }
+  };
 
   const fetchTeamInfo = async () => {
     try {
@@ -1593,6 +1606,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             variant="card"
             accessToken={accessToken}
           />
+          {canEditAsProxyAdmin ? (
+            <Card className="p-6">
+              <MCPEventPermissionsEditor
+                key={info.team_id}
+                accessToken={accessToken}
+                serverIds={info.object_permission?.mcp_servers ?? []}
+                value={info.object_permission?.mcp_event_permissions ?? {}}
+                onSave={saveTeamEventPermissions}
+              />
+            </Card>
+          ) : null}
 
           <Card className="block p-6">
             <GuardrailSettingsView

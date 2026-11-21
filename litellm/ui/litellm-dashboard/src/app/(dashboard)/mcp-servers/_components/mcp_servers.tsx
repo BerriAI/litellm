@@ -176,8 +176,11 @@ function DeleteServerDialog({
   );
 }
 
+const canManageLiveGatewayState = (role: string | null, viewOnly: boolean): boolean =>
+  role !== null && isProxyAdminRole(role) && !viewOnly;
+
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
-  const canManageLiveState = isProxyAdminRole(userRole) && !isViewOnly;
+  const canManageLiveState = canManageLiveGatewayState(userRole, isViewOnly);
   const { t } = useTranslation();
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
