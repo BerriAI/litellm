@@ -29,6 +29,8 @@ from typing import Any, Final, TypeVar
 
 T = TypeVar("T")
 
+_ESCAPED_DOT_PLACEHOLDER: Final = "\x00"
+
 
 def get_nested_value(data: Mapping[str, object], key_path: str, default: T | None = None) -> T | None:
     """
@@ -60,7 +62,7 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
 
     # Split the key path into parts, respecting escaped dots (\.)
     # Use a temporary placeholder, split on unescaped dots, then restore
-    placeholder: Final = "\x00"
+    placeholder: Final = _ESCAPED_DOT_PLACEHOLDER
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
 
@@ -86,6 +88,7 @@ def _parse_path_segments(path: str) -> list:
 
     Handles:
     - Dot notation: "a.b.c" → ["a", "b", "c"]
+    - Escaped dots: "a\\.b.c" → ["a.b", "c"]
     - Array wildcards: "a[*].b" → ["a", "[*]", "b"]
     - Array indices: "a[0].b" → ["a", "[0]", "b"]
 
@@ -104,8 +107,8 @@ def _parse_path_segments(path: str) -> list:
     # Match field names OR bracket expressions
     # Pattern: field_name (anything except . or [) | [anything_in_brackets except [ or ]]
     pattern: Final = r"[^\.\[]+|\[[^\]\[]*\]"
-    segments: Final = re.findall(pattern, path)
-    return segments
+    segments: Final = re.findall(pattern, path.replace("\\.", _ESCAPED_DOT_PLACEHOLDER))
+    return [segment.replace(_ESCAPED_DOT_PLACEHOLDER, ".") for segment in segments]
 
 
 def _delete_nested_value_custom(
@@ -195,6 +198,7 @@ def delete_nested_value(
     Supports:
     - "field" - top-level field
     - "parent.child" - nested field
+    - "parent\\.with\\.dots.child" - keys containing dots (escape with backslash)
     - "array[*]" - all array elements (wildcard)
     - "array[0]" - specific array element (index)
     - "array[*].field" - field in all array elements
