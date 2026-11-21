@@ -2993,6 +2993,20 @@ def _masked_nameless_tool_call_objects(calls: list[dict[str, object]]) -> list[C
     ]
 
 
+def _masked_with_unset_fields(calls: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            **call,
+            "function": {
+                "name": None,
+                "arguments": cast("dict[str, str]", _secret_masked(call)["function"])["arguments"],
+                "provider_specific_fields": None,
+            },
+        }
+        for call in calls
+    ]
+
+
 def _without_function(calls: list[dict[str, object]]) -> list[dict[str, object]]:
     return [{"id": call["id"], "type": call["type"]} for call in calls]
 
@@ -3212,6 +3226,28 @@ class TestGuardrailToolCallListsAlongsideClaudeMcpCalls:
 
         [server_call] = response.choices[0].message.provider_specific_fields["server_tool_calls"]
         assert server_call["function"]["arguments"] == _MCP_ARGUMENTS.replace("sk-", "[MASKED]-")
+
+    @pytest.mark.asyncio
+    async def test_input_masks_returned_with_unset_fields_keep_the_mcp_call_name_and_server(self):
+        data: Final = _request_with_client_and_mcp_calls(client_count=0)
+
+        await OpenAIChatCompletionsHandler().process_input_messages(
+            data, ToolCallListRewritingGuardrail(guardrail_name="mask-unset", rewrite=_masked_with_unset_fields)
+        )
+
+        [server_call] = data["messages"][1]["provider_specific_fields"]["server_tool_calls"]
+        assert server_call == _secret_masked(_mcp_server_call())
+
+    @pytest.mark.asyncio
+    async def test_output_masks_returned_with_unset_fields_keep_the_mcp_call_name_and_server(self):
+        response: Final = _response_with_client_and_mcp_calls(client_count=1)
+
+        await OpenAIChatCompletionsHandler().process_output_response(
+            response, ToolCallListRewritingGuardrail(guardrail_name="mask-unset", rewrite=_masked_with_unset_fields)
+        )
+
+        [server_call] = response.choices[0].message.provider_specific_fields["server_tool_calls"]
+        assert server_call == _secret_masked(_mcp_server_call())
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("client_count", [1, 2])
