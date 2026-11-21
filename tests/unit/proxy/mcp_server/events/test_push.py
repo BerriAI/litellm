@@ -31,7 +31,9 @@ def _active(cursor: str = "1", truncated: bool = False) -> StreamFrame:
 
 
 def _event(event_id: str = "evt_1", cursor: str = "2") -> StreamFrame:
-    return StreamFrame("notifications/events/event", occurrence(event_id, cursor).model_dump(by_alias=True, mode="json"))
+    return StreamFrame(
+        "notifications/events/event", occurrence(event_id, cursor).model_dump(by_alias=True, mode="json")
+    )
 
 
 async def _authorized() -> OperationContext:
@@ -96,7 +98,9 @@ async def test_an_overflow_becomes_a_truncated_active_with_the_latest_skipped_cu
 
 @pytest.mark.asyncio
 async def test_an_upstream_terminated_is_forwarded_and_ends_the_stream() -> None:
-    terminated: Final = StreamFrame("notifications/events/terminated", {"error": {"code": -32023, "message": "NotFound"}})
+    terminated: Final = StreamFrame(
+        "notifications/events/terminated", {"error": {"code": -32023, "message": "NotFound"}}
+    )
     sent, _ = await _run((_active(), terminated, _event("evt_late")))
     assert [method for method, _ in sent] == ["notifications/events/active", "notifications/events/terminated"]
 
@@ -124,7 +128,16 @@ async def _relay(heartbeat_ms: int) -> tuple[PushRelay, list[tuple[str, JsonObje
     prepared: Final = await prepare_event(context(), "ci-build.failed", runtime((server(),)))
     assert isinstance(prepared, Ok)
     relay: Final = PushRelay(
-        send, SUBSCRIPTION, prepared.ok, BINDING, SETTINGS, _authorized, heartbeat_ms, False, runtime((server(),)), CALLER
+        send,
+        SUBSCRIPTION,
+        prepared.ok,
+        BINDING,
+        SETTINGS,
+        _authorized,
+        heartbeat_ms,
+        False,
+        runtime((server(),)),
+        CALLER,
     )
     return relay, sent
 

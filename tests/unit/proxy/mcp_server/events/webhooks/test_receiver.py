@@ -46,7 +46,13 @@ def _app(store: MemoryStore, settings: EventsSettings = SETTINGS) -> Starlette:
 
 
 async def _post(
-    app: Starlette, body: bytes, *, key: bytes = KEY, sid: str = "sub_1", upstream_id: str = "up_1", webhook_id: str = "msg_a"
+    app: Starlette,
+    body: bytes,
+    *,
+    key: bytes = KEY,
+    sid: str = "sub_1",
+    upstream_id: str = "up_1",
+    webhook_id: str = "msg_a",
 ) -> httpx.Response:
     headers: Final = dict(signed_headers(key, webhook_id, int(time.time()), body, upstream_id))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw") as client:
@@ -94,7 +100,9 @@ async def test_a_signed_verification_challenge_is_echoed(status: SubscriptionSta
     ),
 )
 @pytest.mark.asyncio
-async def test_rejections(rows: dict[str, SubscriptionRow], body: bytes, kwargs: dict[str, object], status: int) -> None:
+async def test_rejections(
+    rows: dict[str, SubscriptionRow], body: bytes, kwargs: dict[str, object], status: int
+) -> None:
     store: Final = MemoryStore(rows=dict(rows))
     response: Final = await _post(_app(store), body, **kwargs)  # pyright: ignore[reportArgumentType]  # per-case overrides
     assert response.status_code == status

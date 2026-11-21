@@ -74,7 +74,11 @@ async def _call(
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {**params, "_meta": META}},
         )
     text: Final = response.text
-    frames: Final = [json.loads(text)] if text.lstrip().startswith("{") else [json.loads(line[5:]) for line in text.splitlines() if line.startswith("data:")]
+    frames: Final = (
+        [json.loads(text)]
+        if text.lstrip().startswith("{")
+        else [json.loads(line[5:]) for line in text.splitlines() if line.startswith("data:")]
+    )
     return response.status_code, frames
 
 

@@ -3,12 +3,20 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.mcp_server.events.cursors import CursorBinding, OpenedCursor, arguments_digest, open_cursor, seal_cursor
+from litellm.proxy.mcp_server.events.cursors import (
+    CursorBinding,
+    OpenedCursor,
+    arguments_digest,
+    open_cursor,
+    seal_cursor,
+)
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.types.mcp_server.events import EventsErrorCode
 
 NOW: Final = 1_800_000_000
-BINDING: Final = CursorBinding(server_id="srv", event="build.failed", args_hash=arguments_digest({"repo": "a"}), caller="key:1")
+BINDING: Final = CursorBinding(
+    server_id="srv", event="build.failed", args_hash=arguments_digest({"repo": "a"}), caller="key:1"
+)
 
 
 @pytest.fixture(autouse=True)

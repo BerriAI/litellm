@@ -66,6 +66,7 @@ async def terminate(
     settings: EventsSettings,
     runtime: EventsRuntime,
     post: Poster = post_callback,
+    lookup: Callable[[str], MCPServer | None] = registered_server,
 ) -> None:
     if row.status == "terminated":
         return
@@ -77,4 +78,4 @@ async def terminate(
         )
     await store.save(row.model_copy(update={"status": "terminated"}))
     await store.drop_deliveries(row.id)
-    await end_upstream(row, settings, runtime)
+    await end_upstream(row, settings, runtime, lookup)

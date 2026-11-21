@@ -40,7 +40,10 @@ async def test_stream_slots_cap_per_caller_and_per_replica(
         with pytest.raises(MCPError) as rejected:
             async with slots.hold(second_caller, settings):
                 pass
-        assert (rejected.value.error.code, rejected.value.error.data) == (-32025, {"limit": "streams", "max": limit_max})
+        assert (rejected.value.error.code, rejected.value.error.data) == (
+            -32025,
+            {"limit": "streams", "max": limit_max},
+        )
     assert slots.live("a") == 0
     async with slots.hold(second_caller, settings):
         assert slots.live(second_caller) == 1

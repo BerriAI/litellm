@@ -29,7 +29,9 @@ class _Note(BaseModel):
 class EventsUpstream:
     pages: tuple[tuple[str, ...], ...] = (("build.failed",),)
     hang: bool = False
-    seen: list[tuple[str, Mapping[str, str], dict[str, object]]] = field(default_factory=list)  # mutable-ok: records requests
+    seen: list[tuple[str, Mapping[str, str], dict[str, object]]] = field(
+        default_factory=list
+    )  # mutable-ok: records requests
 
     def record(self, ctx: ServerRequestContext[object, object], params: _Params) -> None:
         request = getattr(ctx, "request", None)
@@ -56,10 +58,15 @@ class EventsUpstream:
         meta = {SUBSCRIPTION_ID: ctx.request_id}
         for method, payload in (
             ("notifications/events/active", {"cursor": "a", "truncated": False, "heartbeatMs": 5000}),
-            ("notifications/events/event", {"eventId": "e1", "name": "build.failed", "timestamp": "t", "data": {}, "cursor": "b"}),
+            (
+                "notifications/events/event",
+                {"eventId": "e1", "name": "build.failed", "timestamp": "t", "data": {}, "cursor": "b"},
+            ),
             ("notifications/events/heartbeat", {"cursor": "c"}),
         ):
-            await ctx.session.send_notification(_Note(method=method, params={**payload, "_meta": meta}), related_request_id=ctx.request_id)  # pyright: ignore[reportArgumentType]  # custom notification model
+            await ctx.session.send_notification(
+                _Note(method=method, params={**payload, "_meta": meta}), related_request_id=ctx.request_id
+            )  # pyright: ignore[reportArgumentType]  # custom notification model
         return {"_meta": meta}
 
 

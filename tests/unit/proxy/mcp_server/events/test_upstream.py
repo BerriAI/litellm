@@ -4,7 +4,15 @@ import anyio
 import pytest
 from mcp.shared.exceptions import MCPError
 
-from litellm.proxy.mcp_server.events.upstream import Overflow, StreamFrame, StreamRoute, call, list_all, routing_headers, stream
+from litellm.proxy.mcp_server.events.upstream import (
+    Overflow,
+    StreamFrame,
+    StreamRoute,
+    call,
+    list_all,
+    routing_headers,
+    stream,
+)
 from litellm.types.mcp_server.events import EventType
 
 from .upstream_server import EventsUpstream, events_client
@@ -21,7 +29,11 @@ async def test_a_unary_call_declares_the_extension_and_carries_routing_headers()
     upstream: Final = EventsUpstream()
     async with events_client(upstream) as client:
         result: Final = await call(
-            client, "events/poll", {"name": "build.failed", "arguments": {"repo": "acme/web"}}, routing_headers("build.failed", {"repo": "acme/web"}, REPO), 5.0
+            client,
+            "events/poll",
+            {"name": "build.failed", "arguments": {"repo": "acme/web"}},
+            routing_headers("build.failed", {"repo": "acme/web"}, REPO),
+            5.0,
         )
     assert result["cursor"] == "c1"
     method, headers, params = upstream.seen[-1]

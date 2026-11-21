@@ -40,7 +40,9 @@ def test_only_https_urls_with_a_host_are_callbacks(url: str, https: bool) -> Non
 @pytest.mark.asyncio
 async def test_pinning_connects_to_the_resolved_ip_and_keeps_the_hostname() -> None:
     pinned: Final = await pin("https://hook.example:8443/path?q=1", _resolver("93.184.216.34"))  # pyright: ignore[reportArgumentType]  # test resolver
-    assert pinned == Ok(PinnedUrl(url="https://93.184.216.34:8443/path?q=1", host_header="hook.example:8443", hostname="hook.example"))
+    assert pinned == Ok(
+        PinnedUrl(url="https://93.184.216.34:8443/path?q=1", host_header="hook.example:8443", hostname="hook.example")
+    )
 
 
 @pytest.mark.asyncio
@@ -60,7 +62,9 @@ async def test_any_non_global_resolved_address_blocks_the_callback(addresses: tu
 
 @pytest.mark.asyncio
 async def test_an_allowlisted_host_may_resolve_to_a_private_address() -> None:
-    pinned: Final = await pin("https://internal.example/", _resolver("10.0.0.7"), lambda host, _: host == "internal.example")  # pyright: ignore[reportArgumentType]  # test resolver
+    pinned: Final = await pin(
+        "https://internal.example/", _resolver("10.0.0.7"), lambda host, _: host == "internal.example"
+    )  # pyright: ignore[reportArgumentType]  # test resolver
     assert isinstance(pinned, Ok) and pinned.ok.url == "https://10.0.0.7/"
 
 

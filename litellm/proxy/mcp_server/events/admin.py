@@ -1,10 +1,11 @@
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Annotated, Final
+from typing import Annotated, Final, TypeAlias
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -14,7 +15,7 @@ from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.events.catalog import event_servers, gateway_name
 from litellm.proxy.mcp_server.events.config import events_settings
 from litellm.proxy.mcp_server.events.errors import EventsFailure, forbidden
-from litellm.proxy.mcp_server.events.runtime import DEFAULT_RUNTIME
+from litellm.proxy.mcp_server.events.runtime import DEFAULT_RUNTIME, EventsRuntime
 from litellm.proxy.mcp_server.events.webhooks.delivery import post_callback
 from litellm.proxy.mcp_server.events.webhooks.signing import new_webhook_id, parse_secret, signed_headers
 from litellm.proxy.mcp_server.events.webhooks.store import (
@@ -24,9 +25,11 @@ from litellm.proxy.mcp_server.events.webhooks.store import (
     SubscriptionStatus,
     default_store,
 )
-from litellm.proxy.mcp_server.events.webhooks.termination import terminate
+from litellm.proxy.mcp_server.events.webhooks.termination import registered_server, terminate
+from litellm.proxy.mcp_server.events.webhooks.verification import Poster
 from litellm.proxy.mcp_server.outbound_credentials.result import Error
 from litellm.types.mcp_server.events import CallbackFailure, EventOccurrence, EventType, JsonObject
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 router: Final = APIRouter(prefix="/events", tags=["mcp"])
 _ADMIN_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY})
@@ -54,6 +57,12 @@ class SubscriptionList(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     subscriptions: tuple[SubscriptionView, ...]
+
+
+class TestEventRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: JsonObject = Field(default_factory=lambda: {"test": True})
 
 
 class TestDeliveryResult(BaseModel):
@@ -84,11 +93,24 @@ def _view(row: SubscriptionRow) -> SubscriptionView:
     )
 
 
-def _store() -> EventStore:
-    store: Final = default_store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="MCP event subscriptions need a connected database")
-    return store
+@dataclass(frozen=True, slots=True)
+class AdminServices:
+    store: EventStore | None
+    runtime: EventsRuntime
+    post: Poster
+    lookup: Callable[[str], MCPServer | None]
+
+    def require_store(self) -> EventStore:
+        if self.store is None:
+            raise HTTPException(status_code=503, detail="MCP event subscriptions need a connected database")
+        return self.store
+
+
+def admin_services() -> AdminServices:
+    return AdminServices(store=default_store(), runtime=DEFAULT_RUNTIME, post=post_callback, lookup=registered_server)
+
+
+Services: TypeAlias = Annotated[AdminServices, Depends(admin_services)]
 
 
 def _is_admin(caller: UserAPIKeyAuth) -> bool:
@@ -102,43 +124,53 @@ async def _owned(caller: UserAPIKeyAuth, subscription_id: str, store: EventStore
     return row
 
 
-async def terminate_subscription(row: SubscriptionRow, failure: EventsFailure, store: EventStore) -> None:
-    await terminate(row, failure, store, events_settings(), DEFAULT_RUNTIME)
+async def terminate_subscription(
+    row: SubscriptionRow, failure: EventsFailure, services: AdminServices | None = None
+) -> None:
+    resolved: Final = services or admin_services()
+    await terminate(
+        row, failure, resolved.require_store(), events_settings(), resolved.runtime, resolved.post, resolved.lookup
+    )
 
 
 async def terminate_key_subscriptions(token_hashes: Sequence[str | None]) -> None:
-    store: Final = default_store()
-    if store is None:
+    services: Final = admin_services()
+    if services.store is None:
         return
     for token in (item for item in token_hashes if item):
         try:
-            rows = await store.find(SubscriptionQuery(key_hash=token, limit=1000))
+            rows = await services.store.find(SubscriptionQuery(key_hash=token, limit=1000))
             for row in rows:
-                await terminate_subscription(row, forbidden("Key revoked"), store)
+                await terminate_subscription(row, forbidden("Key revoked"), services)
         except Exception as error:  # noqa: BLE001  # key lifecycle must not fail on event cleanup; deliveries re-authorize anyway
             verbose_logger.warning("Failed to terminate MCP event subscriptions for a revoked key: %s", error)
 
 
 @router.get("/types", response_model=tuple[EventType, ...])
 async def list_event_types(
-    server_id: Annotated[str, Query()], caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+    server_id: Annotated[str, Query()],
+    caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    services: Services,
 ) -> tuple[EventType, ...]:
+    """List the event types one events-enabled MCP server publishes to this caller, with gateway-prefixed names."""
+    runtime: Final = services.runtime
     context: Final = OperationContext(_caller=caller)
-    allowed: Final = await DEFAULT_RUNTIME.allowed_servers(context)
+    allowed: Final = await runtime.allowed_servers(context)
     server: Final = next((item for item in event_servers(allowed) if item.server.server_id == server_id), None)
     if server is None:
         raise HTTPException(status_code=404, detail="No events-enabled MCP server with this id")
-    return await DEFAULT_RUNTIME.descriptors(await DEFAULT_RUNTIME.prepare_target(context, server.server, allowed))
+    return await runtime.descriptors(await runtime.prepare_target(context, server.server, allowed))
 
 
 @router.get("/subscriptions", response_model=SubscriptionList)
 async def list_subscriptions(
     caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    services: Services,
     server_id: str | None = None,
     status: SubscriptionStatus | None = None,
     key_alias: str | None = None,
 ) -> SubscriptionList:
-    store: Final = _store()
+    store: Final = services.require_store()
     key_hash: Final = await _token_for_alias(key_alias) if key_alias is not None and _is_admin(caller) else None
     if key_alias is not None and key_hash is None:
         return SubscriptionList(subscriptions=())
@@ -163,41 +195,46 @@ async def _token_for_alias(alias: str) -> str | None:
 
 @router.delete("/subscriptions/{subscription_id}", response_model=SubscriptionView)
 async def delete_subscription(
-    subscription_id: str, caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+    subscription_id: str, caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)], services: Services
 ) -> SubscriptionView:
     if caller.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
         raise HTTPException(status_code=403, detail="Read-only admins cannot terminate subscriptions")
-    store: Final = _store()
-    row: Final = await _owned(caller, subscription_id, store)
-    await terminate_subscription(row, forbidden("Terminated by an administrator"), store)
+    row: Final = await _owned(caller, subscription_id, services.require_store())
+    await terminate_subscription(row, forbidden("Subscription terminated"), services)
     return _view(row.model_copy(update={"status": "terminated"}))
 
 
 @router.post("/subscriptions/{subscription_id}/test", response_model=TestDeliveryResult)
 async def send_test_event(
-    subscription_id: str, caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+    subscription_id: str,
+    caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    services: Services,
+    request: Annotated[TestEventRequest | None, Body()] = None,
 ) -> TestDeliveryResult:
+    """Send one signed test event to an active webhook subscription's callback URL.
+
+    The event carries `data` from the body, or `{"test": true}` when the body is empty, and is signed with
+    the subscription's secret like a real delivery. The response reports whether the callback answered 2xx.
+    """
     if caller.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
         raise HTTPException(status_code=403, detail="Read-only admins cannot send test events")
-    row: Final = await _owned(caller, subscription_id, _store())
+    row: Final = await _owned(caller, subscription_id, services.require_store())
     secret: Final = parse_secret(row.client_secret)
     if secret is None or row.status != "active":
         raise HTTPException(status_code=409, detail="Subscription is not active")
-    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
-
-    server: Final = global_mcp_server_manager.get_mcp_server_by_id(row.server_id)
+    server: Final = services.lookup(row.server_id)
     body: Final = (
         EventOccurrence(
             event_id=new_webhook_id("test"),
             name=gateway_name(server, row.event_name) if server is not None else row.event_name,
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            data={"test": True},
+            data=(request or TestEventRequest()).data,
             cursor=row.cursor,
         )
         .model_dump_json(by_alias=True, exclude_none=True)
         .encode()
     )
-    response: Final = await post_callback(
+    response: Final = await services.post(
         row.client_url, body, signed_headers(secret, new_webhook_id(), int(time.time()), body, row.id)
     )
     if isinstance(response, Error):

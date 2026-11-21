@@ -44,7 +44,9 @@ class _Client:
         self.failure = failure
         self.posts: list[bytes] = []  # mutable-ok: records verification posts
 
-    async def __call__(self, url: str, body: bytes, headers: Mapping[str, str]) -> Result[CallbackResponse, CallbackFailure]:
+    async def __call__(
+        self, url: str, body: bytes, headers: Mapping[str, str]
+    ) -> Result[CallbackResponse, CallbackFailure]:
         self.posts.append(body)
         if self.failure is not None:
             return Error(self.failure)
@@ -94,7 +96,9 @@ async def test_a_refresh_keeps_the_id_skips_verification_and_reports_delivery_st
     upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
     client: Final = _Client()
     first: Final = await _subscribe(store, upstream, client)
-    store.rows[SID] = store.rows[SID].model_copy(update={"last_delivery_at": datetime(2026, 11, 20, tzinfo=timezone.utc)})
+    store.rows[SID] = store.rows[SID].model_copy(
+        update={"last_delivery_at": datetime(2026, 11, 20, tzinfo=timezone.utc)}
+    )
     second: Final = await _subscribe(store, upstream, client)
     assert isinstance(first, Ok) and isinstance(second, Ok) and first.ok.id == second.ok.id
     assert len(client.posts) == 1
@@ -144,14 +148,18 @@ async def test_invalid_subscriptions_are_rejected_before_any_upstream_work(
     result: Final = await _subscribe(store, upstream, _Client(), **overrides)
     if code is None:
         assert isinstance(result, Ok)
-        other: Final = await _subscribe(store, upstream, _Client(), params=_params(url="https://other.example/h"), **overrides)
+        other: Final = await _subscribe(
+            store, upstream, _Client(), params=_params(url="https://other.example/h"), **overrides
+        )
         assert isinstance(other, Error) and other.error.code is EventsErrorCode.RESOURCE_EXHAUSTED
         return
     assert isinstance(result, Error) and result.error.code is code
     assert upstream.calls == [] and store.rows == {}
 
 
-@pytest.mark.parametrize(("client", "reason"), ((_Client(echo=False), "challenge_failed"), (_Client(failure="timeout"), "timeout")))
+@pytest.mark.parametrize(
+    ("client", "reason"), ((_Client(echo=False), "challenge_failed"), (_Client(failure="timeout"), "timeout"))
+)
 @pytest.mark.asyncio
 async def test_a_client_that_fails_verification_gets_callback_endpoint_error(client: _Client, reason: str) -> None:
     store: Final = MemoryStore()
@@ -173,7 +181,9 @@ async def test_an_upstream_failure_leaves_no_pending_row(failure: Exception) -> 
     if isinstance(failure, MCPError):
         result = await _subscribe(store, upstream, _Client())
         assert isinstance(result, Error)
-        assert result.error.code is (EventsErrorCode.FORBIDDEN if failure.error.code == -32024 else EventsErrorCode.INTERNAL_ERROR)
+        assert result.error.code is (
+            EventsErrorCode.FORBIDDEN if failure.error.code == -32024 else EventsErrorCode.INTERNAL_ERROR
+        )
     else:
         with pytest.raises(TimeoutError):
             await _subscribe(store, upstream, _Client())
@@ -185,11 +195,16 @@ async def test_unsubscribe_deletes_the_row_and_ends_the_upstream_subscription() 
     store: Final = MemoryStore()
     upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
     await _subscribe(store, upstream, _Client())
-    params: Final = UnsubscribeEventsParams(name="ci-build.failed", arguments=ARGS, delivery=UnsubscribeDelivery(url=HOOK))
+    params: Final = UnsubscribeEventsParams(
+        name="ci-build.failed", arguments=ARGS, delivery=UnsubscribeDelivery(url=HOOK)
+    )
     result: Final = await unsubscribe(context(), params, None, SETTINGS, runtime((server(),), upstream=upstream), store)
     assert result == Ok(None) and store.rows == {}
     method, sent, _ = upstream.calls[-1]
     assert method == "events/unsubscribe"
     assert sent["delivery"] == {"url": f"https://gateway.example/mcp/events/webhooks/{SID}"}
     again: Final = await unsubscribe(context(), params, None, SETTINGS, runtime((server(),), upstream=upstream), store)
-    assert isinstance(again, Error) and (again.error.code, again.error.data) == (EventsErrorCode.NOT_FOUND, {"kind": "subscription"})
+    assert isinstance(again, Error) and (again.error.code, again.error.data) == (
+        EventsErrorCode.NOT_FOUND,
+        {"kind": "subscription"},
+    )

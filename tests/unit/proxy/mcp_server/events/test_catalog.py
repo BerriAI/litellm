@@ -38,7 +38,10 @@ def test_only_enabled_modern_servers_publish_events() -> None:
 def test_resolution_picks_the_longest_matching_prefix() -> None:
     servers: Final = event_servers((server("short", "ci"), server("long", "ci-prod")))
     resolved: Final = resolve("ci-prod-build.failed", servers)
-    assert resolved is not None and (resolved.target.server.server_id, resolved.upstream_name) == ("long", "build.failed")
+    assert resolved is not None and (resolved.target.server.server_id, resolved.upstream_name) == (
+        "long",
+        "build.failed",
+    )
     assert resolve("unknown-build.failed", servers) is None
 
 

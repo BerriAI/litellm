@@ -51,7 +51,9 @@ class _Client:
         self.statuses = list(statuses) or [200]
         self.posts: list[tuple[bytes, Mapping[str, str]]] = []  # mutable-ok: records deliveries
 
-    async def __call__(self, url: str, body: bytes, headers: Mapping[str, str]) -> Result[CallbackResponse, CallbackFailure]:
+    async def __call__(
+        self, url: str, body: bytes, headers: Mapping[str, str]
+    ) -> Result[CallbackResponse, CallbackFailure]:
         self.posts.append((body, headers))
         status: Final = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
         return Ok(CallbackResponse(status=status, body=b"")) if isinstance(status, int) else Error(status)
@@ -69,7 +71,12 @@ def _caller(outcome: Reauthorization):  # noqa: ANN202  # test helper
 
 def _delivery(body: object, attempt: int = 0) -> QueuedDelivery:
     return QueuedDelivery(
-        delivery_id="d1", subscription_id="sub_1", body=json.dumps(body), webhook_id="msg_gw", attempt=attempt, next_attempt_at=NOW
+        delivery_id="d1",
+        subscription_id="sub_1",
+        body=json.dumps(body),
+        webhook_id="msg_gw",
+        attempt=attempt,
+        next_attempt_at=NOW,
     )
 
 
@@ -126,7 +133,10 @@ async def test_the_legacy_flag_reuses_the_event_id_as_the_webhook_id() -> None:
 async def test_failures_retry_on_the_backoff_ladder(attempt: int, delay: int) -> None:
     store: Final = _store(attempt=attempt)
     await _worker(store, _Client(503)).run_once()
-    assert (store.queue["d1"].attempt, store.queue["d1"].next_attempt_at) == (attempt + 1, NOW + timedelta(seconds=delay))
+    assert (store.queue["d1"].attempt, store.queue["d1"].next_attempt_at) == (
+        attempt + 1,
+        NOW + timedelta(seconds=delay),
+    )
 
 
 @pytest.mark.asyncio
@@ -134,7 +144,12 @@ async def test_an_event_that_exhausts_its_retries_is_abandoned_and_counted() -> 
     store: Final = _store(attempt=len(RETRY_DELAYS_SECONDS))
     await _worker(store, _Client("timeout")).run_once()
     row: Final = store.rows["sub_1"]
-    assert store.queue == {} and (row.consecutive_failures, row.last_error, row.failed_since, row.status) == (1, "timeout", NOW, "active")
+    assert store.queue == {} and (row.consecutive_failures, row.last_error, row.failed_since, row.status) == (
+        1,
+        "timeout",
+        NOW,
+        "active",
+    )
 
 
 @pytest.mark.asyncio
@@ -157,7 +172,9 @@ async def test_a_revoked_caller_ends_the_subscription_with_a_signed_terminated_e
     store: Final = _store()
     client: Final = _Client(200)
     await _worker(store, client, outcome=Revoked("key")).run_once()
-    assert client.bodies() == [{"type": "terminated", "error": {"code": -32024, "message": "Forbidden", "data": {"reason": "Access revoked"}}}]
+    assert client.bodies() == [
+        {"type": "terminated", "error": {"code": -32024, "message": "Forbidden", "data": {"reason": "Access revoked"}}}
+    ]
     assert store.rows["sub_1"].status == "terminated" and store.queue == {}
 
 
@@ -195,7 +212,9 @@ async def test_events_over_the_caller_budget_become_a_gap() -> None:
 @pytest.mark.asyncio
 async def test_an_upstream_terminated_is_forwarded_and_ends_the_subscription() -> None:
     client: Final = _Client(200)
-    store: Final = _store(body={"type": "terminated", "error": {"code": -32023, "message": "NotFound", "data": {"kind": "event"}}})
+    store: Final = _store(
+        body={"type": "terminated", "error": {"code": -32023, "message": "NotFound", "data": {"kind": "event"}}}
+    )
     await _worker(store, client).run_once()
     assert client.bodies()[0]["type"] == "terminated" and store.rows["sub_1"].status == "terminated"
     assert client.posts[0][1]["webhook-id"].startswith("msg_terminated_")
