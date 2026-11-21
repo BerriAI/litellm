@@ -200,12 +200,15 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   return (
     <Page>
       <PageHeader>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <PageHeaderTitle>
             <BarChart3 />
             {t("costTracking.settings.title")}
           </PageHeaderTitle>
-          <DocsMenu items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))} />
+          <DocsMenu
+            className="ml-auto sm:ml-0"
+            items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))}
+          />
         </div>
         <PageHeaderDescription>{t("costTracking.settings.description")}</PageHeaderDescription>
       </PageHeader>
