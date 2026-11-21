@@ -188,17 +188,17 @@ pub enum Outcome {
 }
 
 #[derive(Clone)]
-pub struct Health {
-    cache: Arc<dyn RouterCache>,
+pub struct Health<C> {
+    cache: C,
     clock: Arc<dyn Clock>,
 }
 
-impl Health {
-    pub fn new(cache: Arc<dyn RouterCache>, clock: Arc<dyn Clock>) -> Self {
+impl<C: RouterCache> Health<C> {
+    pub fn new(cache: C, clock: Arc<dyn Clock>) -> Self {
         Self { cache, clock }
     }
 
-    pub fn cache(&self) -> &Arc<dyn RouterCache> {
+    pub fn cache(&self) -> &C {
         &self.cache
     }
 
@@ -559,8 +559,9 @@ mod tests {
     use crate::{
         cache::{InMemoryRouterCache, UsageCounts},
         config::{RouterConfig, RouterDynamicConfig},
-        registry::{DeploymentSpec, RoutingGroupSpec},
+        registry::DeploymentSpec,
     };
+    use litellm_router_types::RoutingGroupSpec;
 
     #[rstest]
     #[case::rate_limit(FailureKind::RateLimit, Some(429), true)]
@@ -634,11 +635,8 @@ mod tests {
         .unwrap()
     }
 
-    fn health() -> Health {
-        Health::new(
-            Arc::new(InMemoryRouterCache::default()),
-            Arc::new(SystemClock),
-        )
+    fn health() -> Health<InMemoryRouterCache> {
+        Health::new(InMemoryRouterCache::default(), Arc::new(SystemClock))
     }
 
     fn settings(dynamic: RouterDynamicConfig) -> Settings {
@@ -840,7 +838,7 @@ mod tests {
     async fn usage_is_keyed_by_the_model_served(#[case] model: Option<&str>, #[case] keyed: &str) {
         let cache = InMemoryRouterCache::default();
         let clock = Arc::new(SystemClock);
-        let health = Health::new(Arc::new(cache.clone()), clock.clone());
+        let health = Health::new(cache.clone(), clock.clone());
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
 
         health

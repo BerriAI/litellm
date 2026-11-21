@@ -1,6 +1,5 @@
 mod key;
 mod limiter;
-mod pyjson;
 mod settings;
 mod sink;
 mod upload;

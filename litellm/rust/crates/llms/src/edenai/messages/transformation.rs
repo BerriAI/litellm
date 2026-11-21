@@ -3,7 +3,7 @@ use litellm_auth::CredentialPlacement;
 use litellm_host::interceptors::RetriedRequest;
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_env::resolve_non_empty;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -21,7 +21,10 @@ use crate::{
         auth::AuthScheme,
         messages::{
             context::MessagesTransformContext,
-            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{
+                Headers, MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply,
+                ValidatedEnvironment,
+            },
         },
     },
     openai_like::messages::transformation::{complete_messages_url, portable_cache_control},
@@ -31,24 +34,27 @@ const API_KEY_ENV: &str = "EDENAI_API_KEY";
 const API_BASE_ENV: &str = "EDENAI_API_BASE";
 const DEFAULT_BASE: &str = "https://api.edenai.run/v3";
 
-pub struct EdenAIAnthropicMessagesConfig;
-pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropicMessagesConfig;
+pub struct EdenAiMessagesConfig;
+pub const EDENAI_MESSAGES_CONFIG: EdenAiMessagesConfig = EdenAiMessagesConfig;
 
-impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
-    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: false,
-        }
-    }
-
-    fn retry_after_http_error(
+impl MessagesEndpoint for EdenAiMessagesConfig {
+    fn get_complete_url(
         &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        api_base: Option<&str>,
+        _model: &str,
+        _params: &LitellmParams,
+        _stream: bool,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let base = resolve_non_empty(api_base, env, &[API_BASE_ENV])
+            .unwrap_or_else(|| DEFAULT_BASE.into());
+        Ok(complete_messages_url(&base))
+    }
+}
+
+impl MessagesAuth for EdenAiMessagesConfig {
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[API_KEY_ENV, API_BASE_ENV]
     }
 
     fn validate_environment(
@@ -80,18 +86,13 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
             },
         })
     }
+}
 
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        _params: &LitellmParams,
-        _stream: bool,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        let base = resolve_non_empty(api_base, env, &[API_BASE_ENV])
-            .unwrap_or_else(|| DEFAULT_BASE.into());
-        Ok(complete_messages_url(&base))
+impl MessagesDialect for EdenAiMessagesConfig {
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
     }
 
     fn transform_anthropic_messages_request(
@@ -111,10 +112,6 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         })
     }
 
-    fn secret_names(&self) -> &'static [&'static str] {
-        &[API_KEY_ENV, API_BASE_ENV]
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
     }
@@ -126,7 +123,9 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
     fn wire_body(&self, body: Value) -> Value {
         portable_cache_control(body)
     }
+}
 
+impl MessagesReply for EdenAiMessagesConfig {
     fn reported_cost(&self, response: &MessagesResponse) -> Option<serde_json::Number> {
         let cost = match response.extra.get("cost")? {
             Value::Number(cost) => cost.as_f64()?,
@@ -137,6 +136,16 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
             return None;
         }
         serde_json::Number::from_f64(cost)
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 

@@ -37,10 +37,11 @@ from litellm.proxy.auth.resolvers.models import (
 )
 from litellm.proxy.auth.roles import TeamRole, map_role, team_role
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.redis.stores.auth_cache import AuthObject
 
 if TYPE_CHECKING:
-    from litellm.caching.caching import DualCache
     from litellm.integrations.opentelemetry import Span
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -64,7 +65,7 @@ class IdentityStore:
     def __init__(
         self,
         prisma_client: PrismaClient | None,
-        cache: DualCache,
+        cache: UserApiKeyCache,
         *,
         parent_otel_span: Span | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
@@ -109,7 +110,9 @@ class IdentityStore:
         if self._prisma is None:
             raise NoDatabaseConnectionError()
 
-        cached: Final = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        cached: Final = await self._cache.async_get_cache(
+            key=AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth
+        )
         if cached is not None:
             return copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
 

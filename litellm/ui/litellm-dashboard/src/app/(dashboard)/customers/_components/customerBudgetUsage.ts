@@ -1,8 +1,11 @@
 import type { components } from "@/lib/http/schema";
+import { parseAsStringLiteral } from "nuqs";
 import type { CustomerUsageEntity } from "./customerUsageApi";
+import { budgetLimitAmount, budgetPeriod, type BudgetPeriod } from "@/lib/forms/budgetWindows";
 
 export type CustomerBudgetUsage = components["schemas"]["CustomerBudgetUsage"];
-export type CustomerBudgetPeriod = "monthly" | "yearly" | "other";
+export type CustomerBudgetPeriod = BudgetPeriod;
+export const customerBudgetSortParser = parseAsStringLiteral(["budget_asc", "budget_desc"] as const);
 
 export const CUSTOMER_BUDGET_LABELS = {
   monthly: "customerPortal.analytics.monthlySpend",
@@ -10,12 +13,7 @@ export const CUSTOMER_BUDGET_LABELS = {
   other: "customerPortal.analytics.budgetPeriod",
 } as const;
 
-export const customerBudgetPeriod = (duration: string | null): CustomerBudgetPeriod => {
-  const normalized = duration?.trim().toLowerCase() ?? "";
-  if (["1mo", "1month", "1months", "30d", "30days", "monthly"].includes(normalized)) return "monthly";
-  if (["12mo", "12month", "12months"].includes(normalized)) return "yearly";
-  return "other";
-};
+export const customerBudgetPeriod = budgetPeriod;
 
 export const customerBudgetUsage = (entity: CustomerUsageEntity): CustomerBudgetUsage[] =>
   entity.budgetUsage ?? [
@@ -38,6 +36,18 @@ export const customerBudgetUsage = (entity: CustomerUsageEntity): CustomerBudget
       reset_at: limit.reset_at,
     })),
   ];
+
+export const customerBudgetLimit = (entity: CustomerUsageEntity): number | null =>
+  budgetLimitAmount(entity.budgetLimits, entity.budgetLimit);
+
+export const compareCustomerBudgets = (left: CustomerUsageEntity, right: CustomerUsageEntity, descending: boolean) => {
+  const a = customerBudgetLimit(left);
+  const b = customerBudgetLimit(right);
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return (a - b) * (descending ? -1 : 1);
+};
 
 export const customerBudgetStatus = (usage: CustomerBudgetUsage[]) => {
   if (usage.some((budget) => budget.spend !== null && budget.spend >= budget.max_budget))

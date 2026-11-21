@@ -1,3 +1,4 @@
+use litellm_python_compat::truthy::json_truthy;
 use serde_json::Value;
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -15,6 +16,30 @@ where
     Recognized<T>: serde::Deserialize<'de>,
 {
     <Recognized<T> as serde::Deserialize<'de>>::deserialize(deserializer).map(Some)
+}
+
+/// `deserialize_with` for an optional typed field whose explicit `null` Python forwards: `null`
+/// becomes `Some(Unrecognized(Null))`, and any other value must decode as `T`.
+pub fn null_or_known<'de, D, T>(deserializer: D) -> Result<Option<Recognized<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(Some(Recognized::Unrecognized(Value::Null)));
+    }
+    serde_json::from_value(value)
+        .map(|known| Some(Recognized::Known(known)))
+        .map_err(serde::de::Error::custom)
+}
+
+/// `deserialize_with` for an optional raw field whose explicit `null` Python forwards.
+pub fn present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Value as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
 /// `deserialize_with` for an optional float Python forwards as the caller sent it: an integer
@@ -56,19 +81,8 @@ impl Recognized<bool> {
     pub fn is_truthy(&self) -> bool {
         match self {
             Self::Known(flag) => *flag,
-            Self::Unrecognized(other) => python_truthy(other),
+            Self::Unrecognized(other) => json_truthy(other),
         }
-    }
-}
-
-pub fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_none_or(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(fields) => !fields.is_empty(),
     }
 }
 

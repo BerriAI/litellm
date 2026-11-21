@@ -1,0 +1,79 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "target": "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
+      "headers": {
+        "accept": [
+          "*/*"
+        ],
+        "accept-encoding": [
+          "gzip,deflate"
+        ],
+        "anthropic-version": [
+          "2023-06-01"
+        ],
+        "authorization": [
+          "AWS4-HMAC-SHA256 Credential=<aws-access-key-id>/<date>/us-west-2/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=<signature>"
+        ],
+        "content-length": [
+          "220"
+        ],
+        "content-type": [
+          "application/json"
+        ],
+        "host": [
+          "<upstream-address>"
+        ],
+        "x-amz-date": [
+          "<x-amz-date>"
+        ]
+      },
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              },
+              {
+                "type": "text",
+                "text": "{\"type\": \"object\"}"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 16,
+        "system": [
+          {
+            "type": "text",
+            "text": "be terse"
+          }
+        ],
+        "anthropic_version": "bedrock-2023-05-31"
+      }
+    }
+  ],
+  "outcome": {
+    "complete": {
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5",
+      "content": [
+        {
+          "type": "text",
+          "text": "hi"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 1,
+        "output_tokens": 2
+      }
+    }
+  }
+}

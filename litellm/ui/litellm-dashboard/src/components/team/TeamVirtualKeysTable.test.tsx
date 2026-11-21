@@ -236,7 +236,7 @@ describe("TeamVirtualKeysTable", () => {
     const inheritedBudget = await screen.findByText("$50", { exact: false });
     expect(inheritedBudget).toHaveTextContent("$50 (team member)");
     expect(screen.getByText("$75")).toBeInTheDocument();
-    expect(mockUseTeamMemberBudgets).toHaveBeenCalledWith(["team-1"]);
+    expect(mockUseTeamMemberBudgets).toHaveBeenCalledWith({ "team-1": ["user-1"] });
   });
 
   it("should show the current range from total_count when multiple pages exist", async () => {

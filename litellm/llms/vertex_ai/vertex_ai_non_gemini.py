@@ -596,7 +596,7 @@ async def async_streaming(
     """
     Add support for async streaming calls for gemini-pro
     """
-    response: Any = None
+    response = None
     if mode == "chat":
         chat: Final = llm_model.start_chat()
         optional_params.pop("stream", None)  # vertex ai raises an error when passing stream in optional params
