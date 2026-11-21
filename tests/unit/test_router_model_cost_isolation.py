@@ -28,6 +28,7 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 import respx
+import yaml
 
 import litellm
 from litellm import Router
@@ -4425,3 +4426,78 @@ def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() ->
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
+
+
+def test_detached_splits_dag_aliases_without_recursing_on_cycles() -> None:
+    from litellm.router_config import detached
+
+    shared: Final[dict[str, object]] = {"mode": "chat", "tags": ["a"]}
+    split_tuple: Final = detached((shared, shared))
+    assert isinstance(split_tuple, tuple)
+    first, second = split_tuple
+    assert isinstance(first, dict) and isinstance(second, dict)
+    assert first is not second
+    assert first["tags"] is not second["tags"]
+
+    shared_set: Final[set[str]] = {"a"}
+    copied_set: Final = detached(shared_set)
+    assert isinstance(copied_set, set) and copied_set == {"a"} and copied_set is not shared_set
+
+    cyclic: Final[dict[str, object]] = {}
+    cyclic["self"] = cyclic  # mutable-ok: constructs a self-referential test input
+    cyclic_result: Final = detached(cyclic)
+    assert isinstance(cyclic_result, dict)
+
+
+def test_set_model_list_with_shared_yaml_model_info_alias_isolates_deployment_ids_and_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared YAML anchors (`&anth_info` / `*anth_info`) passed to `set_model_list` must not share
+    a generated `model_info.id` or overwrite earlier deployments' custom pricing in `litellm.model_cost`."""
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    cfg: Final = """
+model_list:
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: sk-fake
+      input_cost_per_token: 0.000002
+      output_cost_per_token: 0.000010
+    model_info: &anth_info
+      mode: chat
+      supports_vision: true
+  - model_name: claude-opus-5-5
+    litellm_params:
+      model: anthropic/claude-opus-5.5
+      api_key: sk-fake
+      input_cost_per_token: 0.000004
+      output_cost_per_token: 0.000020
+    model_info: *anth_info
+  - model_name: claude-haiku-5-5
+    litellm_params:
+      model: anthropic/claude-haiku-5.5
+      api_key: sk-fake
+      input_cost_per_token: 0.0000001
+      output_cost_per_token: 0.0000005
+    model_info: *anth_info
+"""
+    router: Final = Router(model_list=[])
+    router.set_model_list(yaml.safe_load(cfg)["model_list"])
+
+    deployments: Final = router.registry().deployments()
+    ids_by_name: Final = {str(d["model_name"]): str(d["model_info"]["id"]) for d in deployments}
+    assert len(set(ids_by_name.values())) == 3
+    assert litellm.model_cost[ids_by_name["claude-sonnet-5"]]["input_cost_per_token"] == pytest.approx(0.000002)
+    assert litellm.model_cost[ids_by_name["claude-opus-5-5"]]["input_cost_per_token"] == pytest.approx(0.000004)
+    assert litellm.model_cost[ids_by_name["claude-haiku-5-5"]]["input_cost_per_token"] == pytest.approx(0.0000001)
+
+    opus_response: Final = router.completion(
+        model="claude-opus-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response=litellm.ModelResponse(
+            model="anthropic/claude-opus-5.5",
+            usage=litellm.Usage(prompt_tokens=2, completion_tokens=276, total_tokens=278),
+        ),
+    )
+    assert isinstance(opus_response, litellm.ModelResponse)
+    assert opus_response._hidden_params["response_cost"] == pytest.approx(2 * 0.000004 + 276 * 0.000020)

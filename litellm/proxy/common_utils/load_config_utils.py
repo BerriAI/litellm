@@ -12,6 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.web_identity_session_policy import S3_OBJECT_READ_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.proxy.common_utils.config_includes import resolve_includes
+from litellm.router_config import detached
 
 if TYPE_CHECKING:
     from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
@@ -38,11 +39,14 @@ class SyncBucketObjectReader(Protocol):
 
 def _parsed_config(object_key: str, file_contents: str) -> object | None:
     try:
-        parsed: Final = _DECODED_YAML.validate_python(yaml.safe_load(file_contents))
+        parsed: Final = detached(_DECODED_YAML.validate_python(yaml.safe_load(file_contents)))
     except yaml.YAMLError as e:
         verbose_proxy_logger.error("Config object %s is not valid YAML: %s", object_key, e)
         return None
-    return MappingProxyType({}) if parsed is None else parsed
+    if parsed is None:
+        empty: Final[Mapping[object, object]] = MappingProxyType({})
+        return empty
+    return parsed
 
 
 def s3_object_reader(bucket_name: str) -> SyncBucketObjectReader:
