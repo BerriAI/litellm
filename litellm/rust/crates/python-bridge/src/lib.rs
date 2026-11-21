@@ -23,6 +23,8 @@ mod router;
 mod routes;
 mod s3_log;
 mod secrets;
+#[cfg(feature = "fips")]
+mod tls_provider;
 mod tokenizer;
 
 #[pymodule(gil_used = true)]
@@ -146,6 +148,9 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        #[cfg(feature = "fips")]
+        let _ = crate::tls_provider::openssl_provider().install_default();
+        #[cfg(not(feature = "fips"))]
         let _ = rustls::crypto::ring::default_provider().install_default();
         module.add(
             "JWT_ID_JAG_TYP",
@@ -321,6 +326,7 @@ mod tests {
             assert_eq!(public_names, expected);
         });
     }
+    #[cfg(not(feature = "fips"))]
     #[rstest::rstest]
     fn module_import_installs_ring_as_the_process_crypto_provider() {
         Python::initialize();
@@ -333,6 +339,48 @@ mod tests {
         assert_eq!(
             format!("{installed:?}"),
             format!("{:?}", rustls::crypto::ring::default_provider())
+        );
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest::rstest]
+    fn module_import_installs_openssl_as_the_process_crypto_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            native_module(py);
+        });
+
+        let installed = rustls::crypto::CryptoProvider::get_default()
+            .expect("importing _native should install a process crypto provider");
+        assert_eq!(
+            format!("{installed:?}"),
+            format!("{:?}", crate::tls_provider::openssl_provider())
+        );
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest::rstest]
+    fn http_clients_verify_with_the_installed_openssl_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            native_module(py);
+        });
+        let settings =
+            litellm_http::HttpSettings::from_layers([litellm_http::HttpSettingsLayer::default()]);
+        let config = litellm_http::Resolution::from(&settings).config;
+
+        let tls = rustls::ClientConfig::try_from(&config)
+            .expect("the default HTTP settings build a TLS config");
+
+        assert_eq!(
+            format!(
+                "{:?}",
+                tls.crypto_provider().signature_verification_algorithms
+            ),
+            format!(
+                "{:?}",
+                crate::tls_provider::openssl_provider().signature_verification_algorithms
+            )
         );
     }
 }

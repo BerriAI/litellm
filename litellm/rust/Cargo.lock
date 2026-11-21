@@ -4693,6 +4693,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
+ "openssl",
  "parking_lot",
  "prost",
  "pyo3",
@@ -4700,6 +4701,7 @@ dependencies = [
  "reqwest",
  "rstest",
  "rustls 0.23.42",
+ "rustls-openssl",
  "serde",
  "serde_json",
  "serde_with",
@@ -6882,6 +6884,20 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework",
+]
+
+[[package]]
+name = "rustls-openssl"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddabe409dbf2e374bae07c4b8cc90dbb890de5a47890312c46951661eb78760c"
+dependencies = [
+ "foreign-types",
+ "once_cell",
+ "openssl",
+ "openssl-sys",
+ "rustls 0.23.42",
+ "zeroize",
 ]
 
 [[package]]
