@@ -399,6 +399,10 @@ impl S3Log {
         self.uploader.download(key).await
     }
 
+    pub async fn download_bounded(&self, key: &str, max_bytes: usize) -> Option<Bytes> {
+        self.uploader.download_bounded(key, Some(max_bytes)).await
+    }
+
     pub async fn flush(&self) -> Option<BatchUploadFailure> {
         let _flushing = self.flush_lock.lock().await;
         let (batch, requeued) = {
