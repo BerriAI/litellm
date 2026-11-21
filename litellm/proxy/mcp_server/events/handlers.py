@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.shared.exceptions import MCPError
-from mcp.types import METHOD_NOT_FOUND
+from mcp.types import METHOD_NOT_FOUND, EmptyResult
 from mcp_types import CLIENT_CAPABILITIES_META_KEY
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from starlette.requests import Request as StarletteRequest
 
 from litellm.proxy.mcp_server.contracts import OperationContext
@@ -25,8 +25,11 @@ from litellm.types.mcp_server.events import (
     ListEventsParams,
     ListEventsResult,
     PollEventsParams,
+    PollEventsResult,
     StreamEventsParams,
+    StreamEventsResult,
     SubscribeEventsParams,
+    SubscribeEventsResult,
     UnsubscribeEventsParams,
 )
 
@@ -35,16 +38,17 @@ if TYPE_CHECKING:
 
     from litellm.proxy.mcp_server.subscriptions import SubscriptionAuthorization
 
-OperationScope: TypeAlias = Callable[[ServerRequestContext], AbstractAsyncContextManager[OperationContext]]
+OperationScope: TypeAlias = Callable[
+    [ServerRequestContext[object, object]], AbstractAsyncContextManager[OperationContext]
+]
 AuthorizationScope: TypeAlias = Callable[
-    [ServerRequestContext], AbstractAsyncContextManager["SubscriptionAuthorization"]
+    [ServerRequestContext[object, object]], AbstractAsyncContextManager["SubscriptionAuthorization"]
 ]
 Middleware: TypeAlias = Callable[[ServerRequestContext[object, object], CallNext], Awaitable[HandlerResult]]
 
 EVENT_METHODS: Final = frozenset(
     {"events/list", "events/poll", "events/stream", "events/subscribe", "events/unsubscribe"}
 )
-_EXTENSION_MAP: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
 
 
 class _Notification(BaseModel):
@@ -80,14 +84,18 @@ def events_gate(proxy_mode: Callable[[], bool], settings: Callable[[], EventsSet
     return gate
 
 
+class _ClientCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    extensions: Mapping[str, JsonValue] | None = None
+
+
 def client_declares_events(meta: Mapping[str, object] | None) -> bool:
-    capabilities: Final = (meta or {}).get(CLIENT_CAPABILITIES_META_KEY)
-    if not isinstance(capabilities, Mapping):
-        return False
     try:
-        return EVENTS_EXTENSION in _EXTENSION_MAP.validate_python(capabilities.get("extensions") or {})
+        capabilities: Final = _ClientCapabilities.model_validate((meta or {}).get(CLIENT_CAPABILITIES_META_KEY) or {})
     except ValidationError:
         return False
+    return EVENTS_EXTENSION in (capabilities.extensions or {})
 
 
 async def advertised_extensions(
@@ -107,13 +115,9 @@ async def advertised_extensions(
     return {EVENTS_EXTENSION: {}} if servers else {}
 
 
-def request_headers(ctx: ServerRequestContext) -> Mapping[str, str] | None:
+def request_headers(ctx: ServerRequestContext[object, object]) -> Mapping[str, str] | None:
     request: Final = getattr(ctx, "request", None)
     return dict(request.headers) if isinstance(request, StarletteRequest) else None
-
-
-def _wire(model: BaseModel) -> Mapping[str, object]:
-    return model.model_dump(by_alias=True, mode="json", exclude_none=True)
 
 
 def register_event_handlers(
@@ -123,27 +127,29 @@ def register_event_handlers(
     settings: Callable[[], EventsSettings] = events_settings,
     runtime: EventsRuntime = DEFAULT_RUNTIME,
 ) -> None:
-    def served(ctx: ServerRequestContext, context: OperationContext) -> EventsSettings:
+    def served(ctx: ServerRequestContext[object, object], context: OperationContext) -> EventsSettings:
         current: Final = settings()
         if not events_served(current, ctx.protocol_version, context.mcp_proxy_mode):
             raise _method_not_found(ctx.method)
         return current
 
-    async def list_handler(ctx: ServerRequestContext, params: ListEventsParams) -> Mapping[str, object]:
+    async def list_handler(ctx: ServerRequestContext[object, object], params: ListEventsParams) -> ListEventsResult:
         async with operation_scope(ctx) as context:
             current: Final = served(ctx, context)
             if params.cursor is not None:
                 raise invalid_params("Invalid pagination cursor").to_mcp()
-            return _wire(ListEventsResult(events=await list_events(context, current, runtime)))
+            return ListEventsResult(events=await list_events(context, current, runtime))
 
-    async def poll_handler(ctx: ServerRequestContext, params: PollEventsParams) -> Mapping[str, object]:
+    async def poll_handler(ctx: ServerRequestContext[object, object], params: PollEventsParams) -> PollEventsResult:
         async with operation_scope(ctx) as context:
             result: Final = await poll(context, params, request_headers(ctx), served(ctx, context), runtime)
             if isinstance(result, Error):
                 raise result.error.to_mcp()
-            return _wire(result.ok)
+            return result.ok
 
-    async def stream_handler(ctx: ServerRequestContext, params: StreamEventsParams) -> Mapping[str, object]:
+    async def stream_handler(
+        ctx: ServerRequestContext[object, object], params: StreamEventsParams
+    ) -> StreamEventsResult:
         subscription_id: Final = ctx.request_id if ctx.request_id is not None else 0
 
         async def send(method: str, payload: JsonObject) -> None:
@@ -158,9 +164,11 @@ def register_event_handlers(
                 await push(
                     send, subscription_id, context, params, request_headers(ctx), current, authorization, runtime
                 )
-        return {"_meta": {SUBSCRIPTION_ID_META_KEY: subscription_id}}
+        return StreamEventsResult.model_validate({"_meta": {SUBSCRIPTION_ID_META_KEY: subscription_id}})
 
-    async def subscribe_handler(ctx: ServerRequestContext, params: SubscribeEventsParams) -> Mapping[str, object]:
+    async def subscribe_handler(
+        ctx: ServerRequestContext[object, object], params: SubscribeEventsParams
+    ) -> SubscribeEventsResult:
         from litellm.proxy.mcp_server.events.webhooks.subscribe import subscribe
 
         async with operation_scope(ctx) as context:
@@ -169,14 +177,16 @@ def register_event_handlers(
                 raise result.error.to_mcp()
             return result.ok
 
-    async def unsubscribe_handler(ctx: ServerRequestContext, params: UnsubscribeEventsParams) -> Mapping[str, object]:
+    async def unsubscribe_handler(
+        ctx: ServerRequestContext[object, object], params: UnsubscribeEventsParams
+    ) -> EmptyResult:
         from litellm.proxy.mcp_server.events.webhooks.subscribe import unsubscribe
 
         async with operation_scope(ctx) as context:
             result: Final = await unsubscribe(context, params, request_headers(ctx), served(ctx, context), runtime)
             if isinstance(result, Error):
                 raise result.error.to_mcp()
-            return {}
+            return EmptyResult()
 
     server.add_request_handler("events/list", ListEventsParams, list_handler)
     server.add_request_handler("events/poll", PollEventsParams, poll_handler)

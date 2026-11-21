@@ -1,8 +1,9 @@
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from litellm.types.mcp_server.events import CallbackFailure, JsonObject
 
@@ -91,6 +92,7 @@ class EventStore(Protocol):
 
 
 _SECRET_FIELDS: Final = ("client_secret", "upstream_secret")
+_RECORD: Final = TypeAdapter[dict[str, object]](dict[str, object])
 
 
 def _encrypt(value: str) -> str:
@@ -107,7 +109,7 @@ def _decrypt(value: str, field: str) -> str:
 
 
 def _row_from_record(record: BaseModel) -> SubscriptionRow:
-    raw: Final = record.model_dump()
+    raw: Final = _RECORD.validate_python(record.model_dump())
     arguments: Final = raw.get("arguments")
     return SubscriptionRow.model_validate(
         {
@@ -118,26 +120,27 @@ def _row_from_record(record: BaseModel) -> SubscriptionRow:
     )
 
 
-def _record_from_row(row: SubscriptionRow) -> dict[str, JsonValue | datetime]:
-    data: Final = row.model_dump(exclude={"created_at", "updated_at"})
+def _record_from_row(row: SubscriptionRow) -> Mapping[str, object]:
+    data: Final = _RECORD.validate_python(row.model_dump(exclude={"created_at", "updated_at"}))
     return {
         **data,
         "arguments": json.dumps(dict(row.arguments), sort_keys=True),
-        **{field: _encrypt(getattr(row, field)) for field in _SECRET_FIELDS},
+        "client_secret": _encrypt(row.client_secret),
+        "upstream_secret": _encrypt(row.upstream_secret),
     }
+
+
+class _RawQueries(Protocol):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class PrismaEventStore:
     def __init__(self, prisma_client: "PrismaClient") -> None:
-        self._db = prisma_client.db
+        from litellm.repositories.table_repositories import MCPEventDeliveryRepository, MCPEventSubscriptionRepository
 
-    @property
-    def _subscriptions(self):  # noqa: ANN202  # Prisma generates the delegate type at runtime
-        return self._db.litellm_mcpeventsubscription
-
-    @property
-    def _deliveries(self):  # noqa: ANN202  # Prisma generates the delegate type at runtime
-        return self._db.litellm_mcpeventdelivery
+        self._subscriptions: Final = MCPEventSubscriptionRepository(prisma_client).table
+        self._deliveries: Final = MCPEventDeliveryRepository(prisma_client).table
+        self._raw: Final[_RawQueries] = prisma_client.db  # pyright: ignore[reportAttributeAccessIssue]  # PrismaWrapper forwards raw queries via __getattr__
 
     async def get(self, subscription_id: str) -> SubscriptionRow | None:
         record: Final = await self._subscriptions.find_unique(where={"id": subscription_id})
@@ -146,7 +149,7 @@ class PrismaEventStore:
     async def save(self, row: SubscriptionRow) -> None:
         data: Final = _record_from_row(row)
         update: Final = {key: value for key, value in data.items() if key != "id"}
-        await self._subscriptions.upsert(where={"id": row.id}, data={"create": data, "update": update})
+        await self._subscriptions.upsert(where={"id": row.id}, data={"create": dict(data), "update": update})
 
     async def delete(self, subscription_id: str) -> None:
         await self._subscriptions.delete_many(where={"id": subscription_id})
@@ -199,7 +202,7 @@ class PrismaEventStore:
         return True
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]:
-        rows: Final = await self._db.query_raw(
+        rows: Final = await self._raw.query_raw(
             'UPDATE "LiteLLM_MCPEventDelivery" SET "claimed_until" = $1::timestamp '
             'WHERE "delivery_id" IN ('  # bounded-ok: the subquery LIMITs the claimed batch
             'SELECT "delivery_id" FROM "LiteLLM_MCPEventDelivery" '

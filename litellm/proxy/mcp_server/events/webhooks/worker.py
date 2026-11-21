@@ -65,7 +65,7 @@ class DeliveryWorker:
     async def run_forever(self) -> None:
         next_housekeeping = 0.0  # rebind-ok: monotonic deadline of the next expiry sweep
         while True:
-            handled = 0  # rebind-ok: deliveries handled by this pass
+            handled = 0
             try:
                 handled = await self.run_once()
                 if time.monotonic() >= next_housekeeping:

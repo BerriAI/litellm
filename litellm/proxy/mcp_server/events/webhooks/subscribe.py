@@ -197,7 +197,7 @@ async def _activate(
     upstream: SubscribeEventsResult,
     context: OperationContext,
     runtime: EventsRuntime,
-) -> Result[Mapping[str, object], EventsFailure]:
+) -> Result[SubscribeEventsResult, EventsFailure]:
     base: Final = subscription.base
     existing: Final = subscription.existing
     upstream_refresh: Final = parse_time(upstream.refresh_before)
@@ -208,7 +208,7 @@ async def _activate(
     )
     sealed: Final = seal_cursor(subscription.binding, upstream.cursor, runtime.now())
     if isinstance(sealed, Error):
-        return sealed
+        return Error(sealed.error)
     await subscription.request.store.save(
         base.model_copy(
             update={
@@ -242,9 +242,7 @@ async def _activate(
         truncated=upstream.truncated or subscription.opened.expired,
         delivery_status=delivery_status(refreshed) if refreshed is not None else None,
     )
-    return Ok(
-        {**result.model_dump(by_alias=True, mode="json", exclude_none=True), "refreshBefore": iso(refresh_before)}
-    )
+    return Ok(result)
 
 
 async def _prepare(
@@ -258,12 +256,12 @@ async def _prepare(
 ) -> Result[_Subscription, EventsFailure]:
     prepared: Final = await admit(context, params.name, params.arguments, "webhook", headers, settings, runtime)
     if isinstance(prepared, Error):
-        return prepared
+        return Error(prepared.error)
     sid: Final = subscription_id(request.principal, params.delivery.url, params.name, params.arguments)
     binding: Final = binding_for(context, prepared.ok, params.arguments)
     opened: Final = open_cursor(params.cursor, binding, runtime.now())
     if isinstance(opened, Error):
-        return opened
+        return Error(opened.error)
     existing: Final = await request.store.get(sid)
     live: Final = existing if existing is not None and existing.status != "terminated" else None
     if live is None:
@@ -286,13 +284,13 @@ async def subscribe(
     runtime: EventsRuntime,
     store: EventStore | None = None,
     post: Poster = post_callback,
-) -> Result[Mapping[str, object], EventsFailure]:
+) -> Result[SubscribeEventsResult, EventsFailure]:
     request: Final = _validate(context, params, settings, store)
     if isinstance(request, Error):
-        return request
+        return Error(request.error)
     prepared: Final = await _prepare(context, params, headers, settings, runtime, request.ok, post)
     if isinstance(prepared, Error):
-        return prepared
+        return Error(prepared.error)
     subscription: Final = prepared.ok
     fresh: Final = subscription.existing is None or subscription.existing.status == "terminated"
     if fresh:
@@ -304,7 +302,7 @@ async def subscribe(
         raise
     if isinstance(upstream, Error):
         await _discard_pending(subscription)
-        return upstream
+        return Error(upstream.error)
     return await _activate(subscription, upstream.ok, context, runtime)
 
 

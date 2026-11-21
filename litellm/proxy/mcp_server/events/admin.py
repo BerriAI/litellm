@@ -153,10 +153,11 @@ async def list_subscriptions(
 
 async def _token_for_alias(alias: str) -> str | None:
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
     if prisma_client is None:
         return None
-    record: Final = await prisma_client.db.litellm_verificationtoken.find_first(where={"key_alias": alias})
+    record: Final = await VerificationTokenRepository(prisma_client).table.find_first(where={"key_alias": alias})
     return record.token if record is not None else None
 
 

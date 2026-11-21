@@ -19,6 +19,7 @@ from litellm.types.mcp_server.events import (
     SUBSCRIPTION_ID_META_KEY,
     ActiveNotification,
     EventOccurrence,
+    EventsError,
     HeartbeatNotification,
     JsonObject,
     StreamEventsParams,
@@ -99,8 +100,9 @@ class PushRelay:
 
     async def _terminate(self, failure: EventsFailure) -> None:
         self._ended = True
-        error: Final = {"code": int(failure.code), "message": failure.message, "data": dict(failure.data or {})}
-        await self._emit("notifications/events/terminated", {"error": error})
+        error: Final = EventsError(code=int(failure.code), message=failure.message, data=failure.data)
+        envelope: Final = _JSON_OBJECT.validate_python({"error": error.model_dump(mode="json", exclude_none=True)})
+        await self._emit("notifications/events/terminated", envelope)
         await self._record("terminated")
 
     async def _authorized(self) -> OperationContext | None:

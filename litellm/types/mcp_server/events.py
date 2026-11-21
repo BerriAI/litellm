@@ -3,7 +3,15 @@ from enum import IntEnum
 from typing import Final, Literal, TypeAlias
 
 from mcp.types import RequestParams
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    model_serializer,
+)
 from pydantic.alias_generators import to_camel
 
 EVENTS_EXTENSION: Final = "io.modelcontextprotocol/events"
@@ -13,6 +21,7 @@ SUBSCRIPTION_ID_META_KEY: Final = "io.modelcontextprotocol/subscriptionId"
 DeliveryMode: TypeAlias = Literal["poll", "push", "webhook"]
 DELIVERY_MODES: Final[tuple[DeliveryMode, ...]] = ("poll", "push", "webhook")
 JsonObject: TypeAlias = Mapping[str, JsonValue]
+_JSON_OBJECT: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
 
 
 class EventsErrorCode(IntEnum):
@@ -117,6 +126,15 @@ class SubscribeEventsResult(_Wire):
     cursor: str | None = None
     truncated: bool = False
     delivery_status: DeliveryStatus | None = None
+
+    @model_serializer(mode="wrap")
+    def _keep_refresh_before(self, handler: SerializerFunctionWrapHandler) -> JsonObject:
+        serialized: Final = _JSON_OBJECT.validate_python(handler(self))
+        return {**serialized, "refreshBefore": self.refresh_before}
+
+
+class StreamEventsResult(_Wire):
+    meta: JsonObject | None = Field(default=None, alias="_meta")
 
 
 class UnsubscribeDelivery(_Wire):

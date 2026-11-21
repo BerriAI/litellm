@@ -1,5 +1,5 @@
 import itertools
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -94,6 +94,14 @@ class StreamRoute:
         self.send.close()
 
 
+def _subscription_of(params: Mapping[str, object] | None) -> RequestId | None:
+    try:
+        meta: Final = _JSON_OBJECT.validate_python((params or {}).get("_meta") or {})
+    except ValidationError:
+        return None
+    return as_request_id(meta.get(SUBSCRIPTION_ID_META_KEY))
+
+
 class EventsClientSession(ClientSession):
     def __init__(
         self,
@@ -119,8 +127,7 @@ class EventsClientSession(ClientSession):
 
     def _intercept_notification(self, method: str, params: Mapping[str, object] | None) -> bool:
         stream_method: Final = _STREAM_METHODS.get(method)
-        meta: Final = params.get("_meta") if params is not None else None
-        subscription: Final = as_request_id(meta.get(SUBSCRIPTION_ID_META_KEY)) if isinstance(meta, Mapping) else None
+        subscription: Final = _subscription_of(params)
         route: Final = self._event_routes.get(subscription) if subscription is not None else None
         if stream_method is None or route is None or params is None:
             return super()._intercept_notification(method, params)
@@ -139,10 +146,7 @@ class EventsClientSession(ClientSession):
         request_id: RequestId | None = None,
         timeout: float | None = None,
     ) -> Mapping[str, object]:
-        data: Final[dict[str, object]] = {
-            "method": method,
-            "params": dict(params),
-        }  # mutable-ok: the SDK stamp writes the envelope into it
+        data: Final[dict[str, object]] = {"method": method, "params": dict(params)}  # mutable-ok: SDK stamp writes it
         opts: Final[CallOptions] = {"request_id": request_id} if request_id is not None else {}
         self._stamp(data, opts)  # pyright: ignore[reportPrivateUsage]  # same per-request envelope the SDK listen driver uses
         opts.setdefault("headers", {}).update(headers)
@@ -151,7 +155,7 @@ class EventsClientSession(ClientSession):
         return await self._dispatcher.send_raw_request(method, _JSON_OBJECT.validate_python(data["params"]), opts)  # pyright: ignore[reportPrivateUsage]  # raw send so a stream carries no read timeout, as in the SDK listen driver
 
     @asynccontextmanager
-    async def stream_route(self, request_id: RequestId) -> AsyncIterator[StreamRoute]:
+    async def stream_route(self, request_id: RequestId) -> AsyncGenerator[StreamRoute, None]:
         route: Final = StreamRoute()
         self._event_routes[request_id] = route
         try:

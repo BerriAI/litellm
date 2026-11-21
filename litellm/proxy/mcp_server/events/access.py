@@ -48,7 +48,7 @@ def intersect_grants(
     server_id: str,
     expand: Callable[[Mapping[str, Sequence[str]]], Mapping[str, Sequence[str]]] = _expand,
 ) -> EventGrant:
-    restrictions: Final = tuple(
+    restrictions: Final[tuple[frozenset[str], ...]] = tuple(
         frozenset(entries)
         for entries in (
             expand(level.mcp_event_permissions).get(server_id)
@@ -57,7 +57,7 @@ def intersect_grants(
         )
         if entries is not None
     )
-    return frozenset.intersection(*restrictions) if restrictions else None
+    return restrictions[0].intersection(*restrictions[1:]) if restrictions else None
 
 
 async def event_grant(

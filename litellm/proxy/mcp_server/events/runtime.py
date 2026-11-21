@@ -88,12 +88,14 @@ async def _screen(
 
 _DESCRIPTOR_TTL_SECONDS: Final = 60.0
 _DESCRIPTOR_CACHE_SIZE: Final = 1024
+_CacheKey: TypeAlias = tuple[str, str]
+_CacheEntry: TypeAlias = tuple[float, tuple[EventType, ...]]
 
 
 class DescriptorCache:
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
-        self._entries: OrderedDict[tuple[str, str], tuple[float, tuple[EventType, ...]]] = OrderedDict()
+        self._entries: OrderedDict[_CacheKey, _CacheEntry] = OrderedDict()  # mutable-ok: bounded TTL cache
 
     async def get(
         self, target: SubscriptionTarget, load: Callable[[SubscriptionTarget], Awaitable[tuple[EventType, ...]]]

@@ -26,12 +26,12 @@ async def poll(
 ) -> Result[PollEventsResult, EventsFailure]:
     prepared: Final = await admit(context, params.name, params.arguments, "poll", headers, settings, runtime)
     if isinstance(prepared, Error):
-        return prepared
+        return Error(prepared.error)
     resolved: Final = prepared.ok.resolved
     binding: Final = binding_for(context, prepared.ok, params.arguments)
     opened: Final = open_cursor(params.cursor, binding, runtime.now())
     if isinstance(opened, Error):
-        return opened
+        return Error(opened.error)
     upstream_params: Final = PollEventsParams(
         name=resolved.upstream_name,
         arguments=params.arguments,
@@ -52,7 +52,7 @@ async def poll(
     admitted: Final = await screen_all(upstream.events, context, prepared.ok, settings, None, runtime)
     sealed: Final = seal_cursor(binding, upstream.cursor, runtime.now())
     if isinstance(sealed, Error):
-        return sealed
+        return Error(sealed.error)
     if admitted.events or admitted.dropped:
         await runtime.record(
             EventActivity(

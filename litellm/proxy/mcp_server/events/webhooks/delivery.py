@@ -88,24 +88,26 @@ async def post_callback(
 ) -> Result[CallbackResponse, CallbackFailure]:
     pinned: Final = await pin(url, resolve)
     if isinstance(pinned, Error):
-        return pinned
+        return Error(pinned.error)
     try:
-        async with httpx.AsyncClient(
-            verify=_verify_setting(),
-            follow_redirects=False,
-            timeout=DELIVERY_TIMEOUT_SECONDS,
-            trust_env=False,
-            transport=transport,
-        ) as client:
-            async with client.stream(
+        async with (
+            httpx.AsyncClient(
+                verify=_verify_setting(),
+                follow_redirects=False,
+                timeout=DELIVERY_TIMEOUT_SECONDS,
+                trust_env=False,
+                transport=transport,
+            ) as client,
+            client.stream(
                 "POST",
                 pinned.ok.url,
                 content=body,
                 headers={**headers, "host": pinned.ok.host_header},
                 extensions={"sni_hostname": pinned.ok.hostname},
-            ) as response:
-                received: Final = await _read_capped(response)
-                return Ok(CallbackResponse(status=response.status_code, body=received))
+            ) as response,
+        ):
+            received: Final = await _read_capped(response)
+            return Ok(CallbackResponse(status=response.status_code, body=received))
     except httpx.TimeoutException:
         return Error("timeout")
     except httpx.ConnectError as error:
