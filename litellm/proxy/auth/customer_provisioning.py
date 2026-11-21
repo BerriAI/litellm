@@ -7,10 +7,11 @@ app. A request that may not register runs for the customers the proxy already kn
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from fastapi import status
+from fastapi import Request, status
 
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.app_auth import authenticated_resource_alias, authenticated_resource_id
+from litellm.proxy.auth.auth_checks import missing_required_customer_header
 from litellm.proxy.auth.customer_hierarchy_auth import (
     DEFAULT_CUSTOMER_HEADER_NAMES,
     CustomerBudgetExceededError,
@@ -33,12 +34,22 @@ HierarchyResolver: TypeAlias = Callable[
 ]
 
 
-async def registration_refusal(prisma_client: "PrismaClient | None", authenticated: UserAPIKeyAuth) -> str | None:
+async def registration_refusal(
+    prisma_client: "PrismaClient | None",
+    authenticated: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> str | None:
     """Why this request may not register a new customer, or None when it may."""
     if prisma_client is None:
         return None
     from litellm.proxy.proxy_server import user_api_key_cache
 
+    missing_header: Final = await missing_required_customer_header(
+        request, route, authenticated, prisma_client, user_api_key_cache
+    )
+    if missing_header is not None:
+        return f"Missing required customer header {missing_header}."
     store: Final = AppStore(prisma_client.db, cache=user_api_key_cache)
     definition: Final = await store.definition()
     resource_id: Final = (
