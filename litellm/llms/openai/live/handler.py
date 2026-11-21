@@ -85,6 +85,14 @@ class _LivePreCallArgs(TypedDict):
 
 
 @dataclass(frozen=True, slots=True)
+class LiveAttach:
+    """Join a session that already runs upstream, such as one a browser started over WebRTC."""
+
+    session_id: str
+    metered: bool
+
+
+@dataclass(frozen=True, slots=True)
 class LiveUpstream:
     url: str
     headers: Mapping[str, str]
@@ -415,7 +423,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         websocket_scheme: Final = LIVE_WEBSOCKET_SCHEMES.get(parsed_url.scheme, parsed_url.scheme)
         return urlunsplit((websocket_scheme, parsed_url.netloc, "/v1/live/sessions", "", ""))
 
-    def _openai_upstream(self, api_base: str | None, api_key: str | None) -> LiveUpstream:
+    def openai_upstream(self, api_base: str | None, api_key: str | None) -> LiveUpstream:
         if api_key is None:
             raise ValueError("api_key is required for OpenAI Live session calls")
         return LiveUpstream(
@@ -433,11 +441,12 @@ class OpenAILiveSessions(OpenAIRealtime):
         api_base: str | None,
         api_key: str | None,
         upstream: LiveUpstream | None = None,
+        attach: LiveAttach | None = None,
     ) -> None:
-        resolved_upstream: Final = upstream if upstream is not None else self._openai_upstream(api_base, api_key)
+        resolved_upstream: Final = upstream if upstream is not None else self.openai_upstream(api_base, api_key)
         from websockets.exceptions import InvalidStatus
 
-        url: Final = resolved_upstream.url
+        url: Final = resolved_upstream.url if attach is None else f"{resolved_upstream.url}/{attach.session_id}/attach"
         headers: Final = resolved_upstream.headers
         ssl_config: Final = self._get_ssl_config(url)
         session: Final = as_str_mapping(session_start.get("session"))
@@ -463,13 +472,15 @@ class OpenAILiveSessions(OpenAIRealtime):
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_websocket:
-                await backend_websocket.send(upstream_start)
+                if attach is None:
+                    await backend_websocket.send(upstream_start)
                 try:
                     await self._bidirectional_forward(
                         websocket=websocket,
                         backend_websocket=backend_websocket,
                         event_retention=event_retention,
                         upstream_ended_abnormally=session_ended_abnormally,
+                        closes_session_with_client=attach is None,
                     )
                 except Exception:
                     session_ended_abnormally.set()
@@ -480,14 +491,15 @@ class OpenAILiveSessions(OpenAIRealtime):
                     logging_result: Final = LiteLLMRealtimeStreamLoggingObject.model_validate(
                         {"usage": Usage(), "results": list(retained_events)}
                     )
-                    self._logging_worker.ensure_initialized_and_enqueue(
-                        logging_obj.dispatch_success_handlers(
-                            logging_result, end_time=session_end_time, prefer_async_handlers=True
+                    if attach is None or attach.metered:
+                        self._logging_worker.ensure_initialized_and_enqueue(
+                            logging_obj.dispatch_success_handlers(
+                                logging_result, end_time=session_end_time, prefer_async_handlers=True
+                            )
                         )
-                    )
-                    logging_obj.model_call_details[  # rebind-ok: flags the shared logging object as already logged
-                        REALTIME_SESSION_SUCCESS_LOGGED_KEY
-                    ] = True
+                        logging_obj.model_call_details[  # rebind-ok: flags the shared logging object as already logged
+                            REALTIME_SESSION_SUCCESS_LOGGED_KEY
+                        ] = True
                     if session_ended_abnormally.is_set():
                         logging_obj.model_call_details[  # rebind-ok: flags the shared logging object for the router
                             REALTIME_SESSION_ENDED_ABNORMALLY_KEY
@@ -514,6 +526,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         backend_websocket: LiveBackendWebSocket,
         event_retention: _LiveEventRetention,
         upstream_ended_abnormally: asyncio.Event,
+        closes_session_with_client: bool = True,
     ) -> None:
         from websockets.exceptions import ConnectionClosed
 
@@ -553,7 +566,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                 await asyncio.gather(client_forward_task, return_exceptions=True)
             event_loop: Final = asyncio.get_running_loop()
             close_deadline: Final = event_loop.time() + OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS
-            if not client_close_sent.is_set():
+            if closes_session_with_client and not client_close_sent.is_set():
                 remaining_send_timeout: Final = max(close_deadline - event_loop.time(), 0)
                 with suppress(ConnectionClosed, TimeoutError, asyncio.TimeoutError):
                     await asyncio.wait_for(

@@ -37,6 +37,12 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
+from litellm.proxy.realtime_endpoints.sideband import (
+    SidebandClientWebSocket,
+    join_sideband,
+    realtime_call_id,
+)
+from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
 from litellm.types.realtime import (
     RealtimeClientSecretRequest,
     RealtimeClientSecretResponse,
@@ -83,6 +89,7 @@ class _RealtimeTokenPayload(TypedDict, total=False):
     team_id: NotRequired[ReadOnly[str | None]]
     expires_at: NotRequired[ReadOnly[object]]
     session_type: NotRequired[ReadOnly[str | None]]
+    deployment_id: NotRequired[ReadOnly[str | None]]
 
 
 _REALTIME_TOKEN_PAYLOAD_ADAPTER: Final = TypeAdapter(_RealtimeTokenPayload)
@@ -291,6 +298,7 @@ def _encode_realtime_token_payload(
     expires_at: int | None,
     session_type: str = "realtime",
     caller_auth: Mapping[str, object] | None = None,
+    deployment_id: str | None = None,
 ) -> str:
     """
     Encode metadata with the upstream ephemeral key so /realtime/calls can
@@ -305,6 +313,7 @@ def _encode_realtime_token_payload(
         "expires_at": expires_at,
         "session_type": session_type,
         **({} if caller_auth is None else {"caller_auth": caller_auth}),
+        **({} if deployment_id is None else {"deployment_id": deployment_id}),
     }
     return json.dumps(payload, separators=(",", ":"))
 
@@ -343,6 +352,57 @@ def _decode_realtime_token_payload(
     if not isinstance(decoded.get("model_id"), str):
         return None
     return decoded
+
+
+async def _serving_deployment_id(llm_router: "Router | None", model: str, data: object) -> str | None:
+    """Pick the deployment for a WebRTC call up front. The call lives on that deployment's account,
+    so the token names it for the SDP exchange and for the sideband that meters the call."""
+    request: Final = as_str_mapping(data)
+    if llm_router is None or request is None:
+        return None
+    try:
+        deployment: Final = as_str_mapping(await llm_router.select(model, dict(request)))
+    except Exception:  # noqa: BLE001  # the routed call that follows reports why no deployment serves the model
+        return None
+    model_info: Final = None if deployment is None else as_str_mapping(deployment.get("model_info"))
+    deployment_id: Final = None if model_info is None else model_info.get("id")
+    return deployment_id if isinstance(deployment_id, str) and deployment_id else None
+
+
+async def _start_realtime_billing_sideband(
+    call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None
+) -> bool:
+    """Meter a WebRTC call from the proxy's own sideband, since its audio and usage bypass the proxy.
+    False when the sideband could not join the call."""
+    from litellm.proxy.proxy_server import (
+        _route_realtime_websocket_session,  # pyright: ignore[reportPrivateUsage]  # the WebSocket session route owns realtime metering
+    )
+
+    client: Final = SidebandClientWebSocket("/v1/realtime")
+    return await join_sideband(
+        client,
+        _route_realtime_websocket_session(
+            client,  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
+            caller_auth,
+            route_model=model,
+            model=None,
+            intent=None,
+            guardrails=None,
+            request_path="/v1/realtime",
+            sideband_call_id=call_id,
+            pinned_deployment_id=deployment_id,
+        ),
+    )
+
+
+_UNMETERED_CALL_REFUSAL: Final = json.dumps(
+    {
+        "error": {
+            "message": "The proxy could not join this call to meter it, so the call was not started",
+            "type": "service_unavailable_error",
+        }
+    }
+)
 
 
 @router.post(
@@ -435,6 +495,18 @@ async def create_realtime_client_secret(
             call_type=call_type,
         )
 
+        deployment_id: Final = (
+            None
+            if is_translation_request
+            else await _serving_deployment_id(
+                llm_router,
+                model,
+                data,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dict
+            )
+        )
+        if deployment_id is not None:
+            data[PINNED_DEPLOYMENT_KEY] = deployment_id
+
         verbose_proxy_logger.debug("WebRTC: /v1/realtime/client_secrets (model=%s)", model)
 
         llm_call: Final = await route_request(
@@ -491,13 +563,14 @@ async def create_realtime_client_secret(
     raw_value: Final = upstream_json.get("value", "")
     expires_at: Final = upstream_json.get("expires_at")
     token_payload: Final = _encode_realtime_token_payload(
-        ephemeral_key=raw_value,
+        ephemeral_key=raw_value if isinstance(raw_value, str) else "",
         model_id=model,
         user_id=getattr(user_api_key_dict, "user_id", None),
         team_id=getattr(user_api_key_dict, "team_id", None),
         expires_at=expires_at if isinstance(expires_at, int) else None,
         session_type=session_type,
-        caller_auth=_caller_auth_for_token(user_api_key_dict) if session_type == "translation" else None,
+        caller_auth=_caller_auth_for_token(user_api_key_dict),
+        deployment_id=deployment_id,
     )
     encrypted_token: Final[str] = encrypt_value_helper(token_payload)
 
@@ -621,6 +694,8 @@ async def proxy_realtime_calls(
         session_type = "realtime"
 
     token_caller_auth: Final = _caller_auth_from_token(decoded_payload, user_id, team_id)
+    raw_deployment_id: Final = None if decoded_payload is None else decoded_payload.get("deployment_id")
+    token_deployment_id: Final = raw_deployment_id if isinstance(raw_deployment_id, str) else None
 
     data: dict = {}
     try:
@@ -653,6 +728,8 @@ async def proxy_realtime_calls(
         )
 
         call_type: Final = "arealtime_translation_calls" if is_translation_request else "arealtime_calls"
+        if token_deployment_id:
+            data[PINNED_DEPLOYMENT_KEY] = token_deployment_id
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=token_caller_auth,
             data=data,
@@ -694,10 +771,24 @@ async def proxy_realtime_calls(
         )
 
     upstream_resp: Final = require_attributes(upstream_reply, _UpstreamResponse, "content")
+    location: Final = upstream_resp.headers.get("location")
+    answered: Final = 200 <= upstream_resp.status_code < 300 and not is_translation_request
+    call_id: Final = realtime_call_id(location) if answered else None
+    if call_id is not None and token_caller_auth.token:
+        metered: Final = await _start_realtime_billing_sideband(
+            call_id=call_id, model=model, caller_auth=token_caller_auth, deployment_id=token_deployment_id
+        )
+        if not metered:
+            return Response(
+                content=_UNMETERED_CALL_REFUSAL,
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                media_type="application/json",
+            )
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
         media_type=_header_value(upstream_resp.headers, "content-type", "application/sdp"),
+        headers=None if location is None else {"Location": location},
     )
 
 

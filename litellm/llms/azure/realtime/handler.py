@@ -181,7 +181,12 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             else (urlencode((("api-version", api_version), ("deployment", model))),)
         )
 
-        query_parts: Final = (*base_query_parts, urlencode((("intent", intent),))) if intent else base_query_parts
+        call_id: Final = (query_params or {}).get("call_id")
+        query_parts: Final = (
+            *base_query_parts,
+            *((urlencode((("intent", intent),)),) if intent else ()),
+            *((urlencode((("call_id", call_id),)),) if call_id else ()),
+        )
 
         qs: Final = "&".join(query_parts)
         endpoint_url: Final = join_api_base(api_base, path)
