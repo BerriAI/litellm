@@ -45,6 +45,7 @@ from litellm._uuid import uuid
 from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, subscript
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (
@@ -118,7 +119,6 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object,
     get_user_object,
     invalidate_team_member_spend_state,
-    jwt_key_mapping_cache_key,
     resolve_effective_team_member_budget,
     team_max_budget_alert_emails_error,
 )
@@ -128,22 +128,22 @@ from litellm.proxy.auth.auth_utils import (
     enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     evict_local,
     evict_shared,
-    publish_auth_cache_invalidation,
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    team_membership_auth_cache_key,
-    team_membership_reservation_cache_key,
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    get_budget_window_reset_fields,
+    keeps_budget_reset,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -231,6 +231,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
 from litellm.proxy.management_helpers.utils import (
     MemberWriteTx,
     add_new_member,
+    budget_windows_json,
     management_endpoint_wrapper,
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
@@ -241,6 +242,7 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     query_raw_within_statement_timeout,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import team_counter, team_window_counter
 from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
@@ -659,9 +661,9 @@ async def refresh_cached_team(
     batches: Final = active_request_redis_batches()
     if batches is not None:
         await batches.flush_pre_call()
-    await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
+    await publish_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
-        await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
+        await publish_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
     await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id)
 
 
@@ -1549,7 +1551,7 @@ async def _write_team_update(
     max_budget_guard: _MaxBudgetGuard | None,
     original_windows: Sequence[BudgetLimitEntry] | None,
 ) -> "prisma_models.LiteLLM_TeamTable | None":
-    if "budget_limits" in team_update_data and prisma_client is not None:
+    if ("budget_limits" in team_update_data or "budget_duration" in team_update_data) and prisma_client is not None:
         async with prisma_client.tx() as tx_ctx:
             tx: Final = cast("_TeamUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
             rebased: Final = await rebase_budget_limits_update(
@@ -2113,7 +2115,7 @@ async def new_team(
                 set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
-                    value=getattr(data, field),
+                    value=attribute_or_none(data, field),
                 )
 
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
@@ -2121,7 +2123,7 @@ async def new_team(
                 set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
-                    value=getattr(data, field),
+                    value=attribute_or_none(data, field),
                 )
 
         # If budget_duration is set, set `budget_reset_at`
@@ -2139,8 +2141,7 @@ async def new_team(
             initialized_windows: Final = []
             for window in complete_team_data.budget_limits:
                 w = window if isinstance(window, dict) else window.model_dump()
-                w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-                initialized_windows.append(w)
+                initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
             complete_team_data.budget_limits = initialized_windows
 
         ## Add Team Member Budget Table
@@ -3144,7 +3145,7 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
+            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, subscript(patch_fields, "metadata"))
 
         update_request: Final = UpdateTeamRequest.model_validate({"team_id": team_id, **patch_fields})
 
@@ -3161,7 +3162,7 @@ async def patch_team(
 
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_team: LiteLLM_TeamTable) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
-    if data.budget_duration is not None and not keeps_due_budget_reset(
+    if data.budget_duration is not None and not keeps_budget_reset(
         data.budget_duration, existing_team.budget_duration, existing_team.budget_reset_at
     ):
         updated_kv["budget_reset_at"] = get_budget_reset_time(budget_duration=data.budget_duration)
@@ -3169,12 +3170,7 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_tea
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
-        initialized_windows: Final = []
-        for window in data.budget_limits:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
-        updated_kv["budget_limits"] = json.dumps(initialized_windows)
+        updated_kv["budget_limits"] = budget_windows_json(data.budget_limits, existing_team.budget_limits)
 
 
 async def handle_update_object_permission(
@@ -3910,7 +3906,7 @@ async def team_member_add(
 
     ```
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         premium_user,
@@ -5162,7 +5158,7 @@ async def _delete_roster_member_keys_tx(
     )
     await delete_many_in(team_tx.litellm_verificationtoken, "token", tokens, atomicity="caller_transaction")
     return member_keys, tuple(
-        jwt_key_mapping_cache_key(mapping.jwt_claim_name, mapping.jwt_claim_value, mapping.jwt_issuer)
+        AuthObject.jwt_key_mapping(mapping.jwt_claim_name, mapping.jwt_claim_value, mapping.jwt_issuer).key
         for mapping in jwt_mappings
     )
 
@@ -5314,8 +5310,8 @@ async def _evict_deleted_team_member_cache(
 def member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
     for user_id in user_ids:
         yield user_id
-        yield team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
-        yield team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+        yield AuthObject.team_membership(team_id=team_id, user_id=user_id).key
+        yield AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key
 
 
 async def _resolve_deleted_team_member_user_ids(

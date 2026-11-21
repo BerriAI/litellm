@@ -15,9 +15,14 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import print_verbose, verbose_logger
+from litellm.litellm_core_utils.core_helpers import dict_from_pairs
 
 from .base_cache import BaseCache
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class S3Cache(BaseCache):
@@ -133,11 +138,13 @@ class S3Cache(BaseCache):
                 # cached_response is in `b{} convert it to ModelResponse
                 cached_response = cached_response["Body"].read().decode("utf-8")  # Convert bytes to string
                 try:
-                    cached_response = json.loads(cached_response)  # Convert string to dictionary
+                    cached_response = _DECODED_JSON.validate_python(
+                        json.loads(cached_response)
+                    )  # Convert string to dictionary
                 except Exception:
-                    cached_response = ast.literal_eval(cached_response)
+                    cached_response = _DECODED_JSON.validate_python(ast.literal_eval(cached_response))
             if not isinstance(cached_response, dict):
-                cached_response = dict(cached_response)
+                cached_response = dict_from_pairs(cached_response)
             verbose_logger.debug(
                 "Got S3 Cache: key: %s, cached_response %s. Type Response %s",
                 key,

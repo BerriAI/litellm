@@ -915,7 +915,7 @@ def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence[AllMessageValues | Message] | None = None,
+    messages: Sequence[AllMessageValues | Message | Mapping[str, object]] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: str | Mapping[str, object] | None = None,

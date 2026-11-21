@@ -1,19 +1,23 @@
 import asyncio
 import json
 import logging
+from functools import partial
 from itertools import chain
 from typing import Final
 
 import httpx
+import prometheus_client
 import pytest
-from prometheus_client import REGISTRY
+from prometheus_client import CollectorRegistry, Counter
 
+from litellm.integrations.lens import exporter as exporter_module
 from litellm.integrations.lens.exporter import (
     MAX_BUFFER_EVENTS,
     MAX_EVENT_BYTES,
     ExportFailure,
     LensExporter,
     encode_record,
+    lens_export_counters,
 )
 
 
@@ -107,7 +111,7 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
     assert rows[0]["spend"] == 0.12
     assert rows[0]["api_key"] == "hash-test"
     assert rows[0]["team_id"] == "team-test"
-    assert json.loads(rows[0]["messages"]) == [{"role": "user", "content": "Check a refund"}]
+    assert (rows[0]["messages"], rows[0]["response"]) == ("", "")
     assert exporter.rows_written == 1
     assert exporter.rows_dropped == 0
     assert exporter.buffered_bytes == 0
@@ -289,11 +293,9 @@ async def test_batches_stay_bounded_without_losing_or_reordering_records() -> No
     (
         None,
         {"id": []},
-        {"id": "x", "messages": [{"content": "x" * MAX_EVENT_BYTES}]},
-        {"id": "x", "messages": [{"content": "\x01" * (MAX_EVENT_BYTES // 4)}]},
         {"id": "x", "response_cost": float("nan")},
     ),
-    ids=("missing", "invalid-id", "oversized-input", "escaped-row-expansion", "invalid-row-number"),
+    ids=("missing", "invalid-id", "invalid-row-number"),
 )
 async def test_invalid_callback_data_never_interrupts_model_requests(payload: object) -> None:
     async with httpx.AsyncClient(base_url="http://lens") as client:
@@ -303,6 +305,84 @@ async def test_invalid_callback_data_never_interrupts_model_requests(payload: ob
     assert exporter.rows_written == 0
     assert exporter.buffered_bytes == 0
     assert exporter.rows_dropped == (0 if payload is None else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "conversation",
+    (
+        {"messages": [{"role": "user", "content": "x" * MAX_EVENT_BYTES}], "response": {"id": "small"}},
+        {"messages": [{"role": "user", "content": "\x01" * (MAX_EVENT_BYTES // 4)}], "response": {"id": "small"}},
+        {"messages": [{"role": "user", "content": "hi"}], "response": {"text": "x" * MAX_EVENT_BYTES}},
+    ),
+    ids=("long-conversation", "grows-past-the-budget-when-encoded", "long-response"),
+)
+async def test_a_request_with_a_conversation_over_the_budget_reaches_lens_with_its_cost(
+    conversation: dict[str, object],
+) -> None:
+    received: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens.test", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        await exporter.async_log_success_event(
+            {
+                "response_cost": 0.42,
+                "standard_logging_object": {
+                    "id": "long-1",
+                    "status": "success",
+                    "response_cost": 0.42,
+                    "prompt_tokens": 250000,
+                    "metadata": {"user_api_key_hash": "hash-test"},
+                    **conversation,
+                },
+            },
+            None,
+            None,
+            None,
+        )
+        await exporter.aclose()
+    requests: Final = tuple(received.get_nowait() for _ in range(received.qsize()))
+    rows: Final = tuple(chain.from_iterable(json.loads(request.content) for request in requests))
+    assert [(row["request_id"], row["spend"], row["prompt_tokens"], row["api_key"]) for row in rows] == [
+        ("long-1", 0.42, 250000, "hash-test")
+    ]
+    assert (rows[0]["messages"], rows[0]["response"]) == ("", "")
+    assert exporter.rows_dropped == 0
+
+
+@pytest.mark.asyncio
+async def test_a_request_too_large_without_its_conversation_is_dropped() -> None:
+    sent: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        sent.put_nowait(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens.test", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        await exporter.async_log_success_event(
+            {
+                "standard_logging_object": {
+                    "id": "huge-metadata",
+                    "status": "success",
+                    "metadata": {"note": "x" * MAX_EVENT_BYTES},
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            },
+            None,
+            None,
+            None,
+        )
+        await exporter.aclose()
+    assert sent.empty()
+    assert exporter.rows_dropped == 1
+    assert exporter.rows_written == 0
 
 
 def test_serialization_rejects_recursive_payloads() -> None:
@@ -316,24 +396,24 @@ def test_serialization_returns_a_failure_for_invalid_payloads(value: object) -> 
     assert encode_record({"value": value}) is ExportFailure.INVALID
 
 
-def _counter_value(name: str) -> float:
-    return REGISTRY.get_sample_value(name) or 0.0
-
-
 async def _drained(exporter: LensExporter) -> None:
     while exporter.buffered_events:
         await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
-async def test_written_and_dropped_rows_are_exported_as_prometheus_counters() -> None:
+async def test_written_and_dropped_rows_are_exported_as_prometheus_counters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry: Final = CollectorRegistry()
+    # Exercise the real factory without sharing its cached collectors with other tests.
+    monkeypatch.setattr(prometheus_client, "Counter", partial(Counter, registry=registry))
+    monkeypatch.setattr(exporter_module, "lens_export_counters", lens_export_counters.__wrapped__)
     statuses: Final = iter((204, 500))
 
     def answer(request: httpx.Request) -> httpx.Response:
         return httpx.Response(next(statuses))
 
-    written_before: Final = _counter_value("litellm_lens_export_rows_written_total")
-    dropped_before: Final = _counter_value("litellm_lens_export_rows_dropped_total")
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(answer)) as client:
         exporter: Final = LensExporter(client)
         exporter.start()
@@ -344,8 +424,8 @@ async def test_written_and_dropped_rows_are_exported_as_prometheus_counters() ->
             await _drained(exporter)
         await exporter.aclose()
     assert (exporter.rows_written, exporter.rows_dropped) == (1, 1)
-    assert _counter_value("litellm_lens_export_rows_written_total") - written_before == exporter.rows_written
-    assert _counter_value("litellm_lens_export_rows_dropped_total") - dropped_before == exporter.rows_dropped
+    assert registry.get_sample_value("litellm_lens_export_rows_written_total") == exporter.rows_written
+    assert registry.get_sample_value("litellm_lens_export_rows_dropped_total") == exporter.rows_dropped
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict
 from litellm._logging import verbose_proxy_logger
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.auth.auth_checks import delete_cache_team_object, get_team_object
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.team_membership_repository import MemberAdded, NewMemberBudget, TeamMembershipRepository
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth

@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import gzip
 import json
-import time
 from collections.abc import Iterator, Mapping
 from itertools import chain
 from pathlib import Path
 from typing import Final
 
-import jwt
 from _openinference_support import _attribute_text, _rig
 from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually
@@ -25,6 +23,7 @@ from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans
 from pydantic import BaseModel, JsonValue
 
 _MODEL: Final = "claude-haiku-4-5"
+LENS_AGENT: Final = "lens-signals"
 _TRACE_PATH: Final = "/v1/traces"
 
 
@@ -223,26 +222,7 @@ def test_gateway_trace_of_a_claude_code_run_matches_the_trace_claude_code_upload
     }
 
 
-_LENS_GATEWAY_SECRET: Final = "integration-lens-gateway-secret-32-chars"
-
-
-def _lens_internal_identity() -> str:
-    now: Final = int(time.time())
-    return jwt.encode(
-        {
-            "iss": "litellm-lens",
-            "aud": "litellm",
-            "sub": "lens-internal",
-            "purpose": "analysis",
-            "iat": now,
-            "exp": now + 60,
-        },
-        _LENS_GATEWAY_SECRET,
-        algorithm="HS256",
-    )
-
-
-def test_a_model_call_lens_makes_for_its_own_analysis_is_not_sent_back_to_lens_as_a_trace(
+def test_a_model_call_lens_makes_for_its_own_analysis_is_a_trace_under_the_lens_agent(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     def upstream(_request: Request) -> Reply:
@@ -265,7 +245,6 @@ def test_a_model_call_lens_makes_for_its_own_analysis_is_not_sent_back_to_lens_a
             environment={
                 "LITELLM_LENS_URL": lens.url,
                 "LITELLM_LENS_SERVICE_TOKEN": "integration-lens-service-token-32-chars",
-                "LENS_GATEWAY_SECRET": _LENS_GATEWAY_SECRET,
             },
             workers=1,
         ) as rig,
@@ -281,7 +260,7 @@ def test_a_model_call_lens_makes_for_its_own_analysis_is_not_sent_back_to_lens_a
             headers={
                 **cc.cli_headers(rig.proxy.key),
                 "x-claude-code-session-id": "lens-analysis-session",
-                "x-lens-internal": _lens_internal_identity(),
+                "user-agent": LENS_AGENT,
             },
         )
         assert analysis.status_code == 200, analysis.text
@@ -295,10 +274,14 @@ def test_a_model_call_lens_makes_for_its_own_analysis_is_not_sent_back_to_lens_a
         collected: Final[list[tuple[dict[str, str], dict[str, str]]]] = []  # mutable-ok: the sink is drained per poll
         spans: Final = eventually(
             lambda: collected.extend(_gateway_spans(lens)) or tuple(collected),
-            lambda found: any(span.get("gen_ai.conversation.id") == "customer-session" for span, _ in found),
+            lambda found: (
+                {"customer-session", "lens-analysis-session"}
+                <= {span.get("gen_ai.conversation.id") for span, _ in found}
+            ),
             seconds=60,
         )
 
-    assert sorted(span.get("gen_ai.conversation.id", "") for span, _ in spans) == ["customer-session"], (
-        "only the customer's call is a trace: Lens analysing its own analysis calls never ends"
+    agents: Final = {span.get("gen_ai.conversation.id", ""): span.get("gen_ai.agent.name") for span, _ in spans}
+    assert agents == {"lens-analysis-session": LENS_AGENT, "customer-session": "claude-code"}, (
+        "Lens leaves its own calls out of analysis by this agent name, so the gateway has to export them under it"
     )
