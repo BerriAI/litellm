@@ -76,8 +76,7 @@ async def receive_webhook(
                 next_attempt_at=datetime.now(timezone.utc),
             )
         )
-    except Exception as error:  # noqa: BLE001  # a duplicate upstream retry is already queued; anything else is retried by the upstream
-        if "unique" not in str(error).lower():
-            verbose_logger.warning("Failed to enqueue MCP event delivery for %s: %s", subscription_id, error)
-            return Response(status_code=503)
+    except Exception as error:  # noqa: BLE001  # the upstream retries a delivery the gateway could not store durably
+        verbose_logger.warning("Failed to enqueue MCP event delivery for %s: %s", subscription_id, error)
+        return Response(status_code=503)
     return Response(status_code=204)

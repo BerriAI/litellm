@@ -2,16 +2,20 @@ import itertools
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 
 import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession
+from mcp.client._transport import ReadStream, WriteStream
+from mcp.client.session import ElicitationFnT, LoggingFnT, MessageHandlerFnT, SamplingFnT
 from mcp.shared.dispatcher import CallOptions, as_request_id
 from mcp.shared.exceptions import MCPError
 from mcp.shared.inbound import MCP_NAME_HEADER, encode_header_value, mcp_param_headers, x_mcp_header_map
+from mcp.shared.message import SessionMessage
 from mcp.types import RequestId
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.mcp_client.client import MCPClient
 from litellm.types.mcp_server.events import (
@@ -22,20 +26,20 @@ from litellm.types.mcp_server.events import (
     ListEventsResult,
 )
 
-StreamMethod = Literal[
+StreamMethod: TypeAlias = Literal[
     "notifications/events/active",
     "notifications/events/event",
     "notifications/events/heartbeat",
     "notifications/events/error",
     "notifications/events/terminated",
 ]
-_STREAM_METHODS: Final[frozenset[str]] = frozenset(
+_STREAM_METHODS: Final[Mapping[str, StreamMethod]] = MappingProxyType(
     {
-        "notifications/events/active",
-        "notifications/events/event",
-        "notifications/events/heartbeat",
-        "notifications/events/error",
-        "notifications/events/terminated",
+        "notifications/events/active": "notifications/events/active",
+        "notifications/events/event": "notifications/events/event",
+        "notifications/events/heartbeat": "notifications/events/heartbeat",
+        "notifications/events/error": "notifications/events/error",
+        "notifications/events/terminated": "notifications/events/terminated",
     }
 )
 _FRAME_BUFFER: Final = 256
@@ -56,9 +60,9 @@ class Overflow:
 
 class StreamRoute:
     def __init__(self) -> None:
-        self.send: MemoryObjectSendStream[StreamFrame | Overflow]
-        self.receive: MemoryObjectReceiveStream[StreamFrame | Overflow]
-        self.send, self.receive = anyio.create_memory_object_stream[StreamFrame | Overflow](_FRAME_BUFFER)
+        streams: Final = anyio.create_memory_object_stream[StreamFrame | Overflow](_FRAME_BUFFER)
+        self.send: MemoryObjectSendStream[StreamFrame | Overflow] = streams[0]
+        self.receive: MemoryObjectReceiveStream[StreamFrame | Overflow] = streams[1]
         self.failure: MCPError | None = None
         self._dropped_cursor: str | None = None
         self._dropping = False
@@ -71,9 +75,8 @@ class StreamRoute:
         except anyio.WouldBlock:
             self._dropping = True
             cursor: Final = frame.params.get("cursor")
-            self._dropped_cursor = (
-                cursor if isinstance(cursor, str) else self._dropped_cursor
-            )  # rebind-ok: latest skipped position
+            if isinstance(cursor, str):
+                self._dropped_cursor = cursor
         except anyio.ClosedResourceError:
             return
 
@@ -92,26 +95,40 @@ class StreamRoute:
 
 
 class EventsClientSession(ClientSession):
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, extensions={EVENTS_EXTENSION: {}}, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards MCPClient's session kwargs unchanged
-        self._event_routes: dict[
-            RequestId, StreamRoute
-        ] = {}  # mutable-ok: live stream demux table owned by this session
+    def __init__(
+        self,
+        read_stream: ReadStream[SessionMessage | Exception],
+        write_stream: WriteStream[SessionMessage],
+        read_timeout_seconds: float | None = None,
+        message_handler: MessageHandlerFnT | None = None,
+        sampling_callback: SamplingFnT | None = None,
+        elicitation_callback: ElicitationFnT | None = None,
+        logging_callback: LoggingFnT | None = None,
+    ) -> None:
+        super().__init__(
+            read_stream,
+            write_stream,
+            read_timeout_seconds=read_timeout_seconds,
+            message_handler=message_handler,
+            sampling_callback=sampling_callback,
+            elicitation_callback=elicitation_callback,
+            logging_callback=logging_callback,
+            extensions={EVENTS_EXTENSION: {}},
+        )
+        self._event_routes: Final[dict[RequestId, StreamRoute]] = {}  # mutable-ok: live stream demux table
 
     def _intercept_notification(self, method: str, params: Mapping[str, object] | None) -> bool:
-        if method in _STREAM_METHODS and params is not None:
-            meta: Final = params.get("_meta")
-            subscription: Final = (
-                as_request_id(meta.get(SUBSCRIPTION_ID_META_KEY)) if isinstance(meta, Mapping) else None
-            )
-            route: Final = self._event_routes.get(subscription) if subscription is not None else None
-            if route is not None:
-                try:
-                    route.deliver(StreamFrame(method=method, params=_JSON_OBJECT.validate_python(params)))  # pyright: ignore[reportArgumentType]  # membership in _STREAM_METHODS narrows method
-                except ValidationError:
-                    return True
-                return True
-        return super()._intercept_notification(method, params)
+        stream_method: Final = _STREAM_METHODS.get(method)
+        meta: Final = params.get("_meta") if params is not None else None
+        subscription: Final = as_request_id(meta.get(SUBSCRIPTION_ID_META_KEY)) if isinstance(meta, Mapping) else None
+        route: Final = self._event_routes.get(subscription) if subscription is not None else None
+        if stream_method is None or route is None or params is None:
+            return super()._intercept_notification(method, params)
+        try:
+            route.deliver(StreamFrame(method=stream_method, params=_JSON_OBJECT.validate_python(params)))
+        except ValidationError:
+            return True
+        return True
 
     async def events_request(
         self,
@@ -122,13 +139,16 @@ class EventsClientSession(ClientSession):
         request_id: RequestId | None = None,
         timeout: float | None = None,
     ) -> Mapping[str, object]:
-        data: Final[dict[str, object]] = {"method": method, "params": dict(params)}
+        data: Final[dict[str, object]] = {
+            "method": method,
+            "params": dict(params),
+        }  # mutable-ok: the SDK stamp writes the envelope into it
         opts: Final[CallOptions] = {"request_id": request_id} if request_id is not None else {}
         self._stamp(data, opts)  # pyright: ignore[reportPrivateUsage]  # same per-request envelope the SDK listen driver uses
         opts.setdefault("headers", {}).update(headers)
         if timeout is not None:
             opts["timeout"] = timeout
-        return await self._dispatcher.send_raw_request(method, _JSON_OBJECT.validate_python(data["params"]), opts)  # pyright: ignore[reportPrivateUsage]  # raw send so the stream carries no read timeout, as in the SDK listen driver
+        return await self._dispatcher.send_raw_request(method, _JSON_OBJECT.validate_python(data["params"]), opts)  # pyright: ignore[reportPrivateUsage]  # raw send so a stream carries no read timeout, as in the SDK listen driver
 
     @asynccontextmanager
     async def stream_route(self, request_id: RequestId) -> AsyncIterator[StreamRoute]:
@@ -149,10 +169,6 @@ def routing_headers(upstream_name: str, arguments: JsonObject, descriptor: Event
     }
 
 
-def next_stream_id() -> str:
-    return f"events-stream-{next(_stream_ids)}"
-
-
 async def _run(
     client: MCPClient, operation: Callable[[EventsClientSession], Awaitable[Mapping[str, object]]]
 ) -> Mapping[str, object]:
@@ -166,36 +182,56 @@ async def _run(
 
 
 async def call(
-    client: MCPClient,
-    method: str,
-    params: BaseModel | JsonObject,
-    headers: Mapping[str, str],
-    timeout: float | None = None,
+    client: MCPClient, method: str, params: JsonObject, headers: Mapping[str, str], timeout: float
 ) -> Mapping[str, object]:
-    payload: Final = (
-        _JSON_OBJECT.validate_python(params.model_dump(by_alias=True, mode="json", exclude_none=True))
-        if isinstance(params, BaseModel)
-        else params
-    )
-    return await _run(client, lambda session: session.events_request(method, payload, headers, timeout=timeout))
+    return await _run(client, lambda session: session.events_request(method, params, headers, timeout=timeout))
 
 
-async def list_all(client: MCPClient, max_pages: int, timeout: float | None = None) -> tuple[EventType, ...]:
-    async def pages(session: EventsClientSession) -> Mapping[str, object]:
-        cursor: str | None = None  # rebind-ok: advances through upstream pages
-        collected: tuple[EventType, ...] = ()  # rebind-ok: accumulates pages within one session
-        for _ in range(max_pages):
-            raw = await session.events_request(
-                "events/list", {"cursor": cursor} if cursor is not None else {}, {}, timeout=timeout
-            )
-            page = ListEventsResult.model_validate(raw)
-            collected = collected + page.events
-            cursor = page.next_cursor
-            if not cursor:
-                return {"events": [item.model_dump(by_alias=True, mode="json") for item in collected]}
-        raise MCPError(code=-32603, message="Upstream events/list exceeds the pagination limit")
+async def _pages(session: EventsClientSession, max_pages: int, timeout: float) -> Mapping[str, object]:
+    cursor: str | None = None  # rebind-ok: advances through upstream pages
+    collected: tuple[EventType, ...] = ()  # rebind-ok: accumulates pages within one session
+    for _ in range(max_pages):
+        raw = await session.events_request(
+            "events/list", {"cursor": cursor} if cursor is not None else {}, {}, timeout=timeout
+        )
+        page = ListEventsResult.model_validate(raw)
+        collected = collected + page.events
+        cursor = page.next_cursor
+        if not cursor:
+            return {"events": [item.model_dump(by_alias=True, mode="json") for item in collected]}
+    raise MCPError(code=-32603, message="Upstream events/list exceeds the pagination limit")
 
-    return ListEventsResult.model_validate(await _run(client, pages)).events
+
+async def list_all(client: MCPClient, max_pages: int, timeout: float) -> tuple[EventType, ...]:
+    return ListEventsResult.model_validate(
+        await _run(client, lambda session: _pages(session, max_pages, timeout))
+    ).events
+
+
+async def _drive(
+    session: EventsClientSession,
+    params: JsonObject,
+    headers: Mapping[str, str],
+    consume: Callable[[MemoryObjectReceiveStream[StreamFrame | Overflow]], Awaitable[None]],
+) -> Mapping[str, object]:
+    request_id: Final = f"events-stream-{next(_stream_ids)}"
+    async with session.stream_route(request_id) as route:
+
+        async def request() -> None:
+            try:
+                await session.events_request("events/stream", params, headers, request_id=request_id)
+            except MCPError as error:
+                route.finish(error)
+                return
+            route.finish(None)
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(request)
+            await consume(route.receive)
+            group.cancel_scope.cancel()
+        if route.failure is not None:
+            raise route.failure
+    return {}
 
 
 async def stream(
@@ -204,24 +240,4 @@ async def stream(
     headers: Mapping[str, str],
     consume: Callable[[MemoryObjectReceiveStream[StreamFrame | Overflow]], Awaitable[None]],
 ) -> None:
-    async def run(session: EventsClientSession) -> Mapping[str, object]:
-        request_id: Final = next_stream_id()
-        async with session.stream_route(request_id) as route:
-            async with anyio.create_task_group() as group:
-
-                async def request() -> None:
-                    try:
-                        await session.events_request("events/stream", params, headers, request_id=request_id)
-                    except MCPError as error:
-                        route.finish(error)
-                        return
-                    route.finish(None)
-
-                group.start_soon(request)
-                await consume(route.receive)
-                group.cancel_scope.cancel()
-            if route.failure is not None:
-                raise route.failure
-        return {}
-
-    await _run(client, run)
+    await _run(client, lambda session: _drive(session, params, headers, consume))

@@ -3,7 +3,7 @@ import socket
 import ssl
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, TypeAlias
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -20,7 +20,7 @@ from litellm.types.mcp_server.events import CallbackFailure
 DELIVERY_TIMEOUT_SECONDS: Final = 5.0
 _MAX_RESPONSE_BYTES: Final = 65536
 
-Resolver = Callable[[str, int], Awaitable[tuple[str, ...]]]
+Resolver: TypeAlias = Callable[[str, int], Awaitable[tuple[str, ...]]]
 
 
 @dataclass(frozen=True, slots=True)

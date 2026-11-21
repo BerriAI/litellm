@@ -1,12 +1,12 @@
 import hashlib
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Final
+from typing import Final, TypeAlias
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import UserAPIKeyAuth
 
-EventGrant = frozenset[str] | None
+EventGrant: TypeAlias = frozenset[str] | None
 
 
 _TOKEN_HASH: Final = re.compile(r"[0-9a-f]{64}")
@@ -37,16 +37,16 @@ async def _caller_permissions(caller: UserAPIKeyAuth) -> Sequence[LiteLLM_Object
     )
 
 
-def _expand(permissions: Mapping[str, list[str]]) -> Mapping[str, list[str]]:
+def _expand(permissions: Mapping[str, Sequence[str]]) -> Mapping[str, Sequence[str]]:
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-    return global_mcp_server_manager.expand_tool_permissions(dict(permissions))
+    return global_mcp_server_manager.expand_tool_permissions({key: list(value) for key, value in permissions.items()})
 
 
 def intersect_grants(
     levels: Sequence[LiteLLM_ObjectPermissionTable | None],
     server_id: str,
-    expand: Callable[[Mapping[str, list[str]]], Mapping[str, list[str]]] = _expand,
+    expand: Callable[[Mapping[str, Sequence[str]]], Mapping[str, Sequence[str]]] = _expand,
 ) -> EventGrant:
     restrictions: Final = tuple(
         frozenset(entries)

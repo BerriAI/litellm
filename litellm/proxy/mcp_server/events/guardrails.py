@@ -1,6 +1,6 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -22,13 +22,23 @@ class Blocked:
     guardrail: str
 
 
-ScreenOutcome = Screened | Blocked
+ScreenOutcome: TypeAlias = Screened | Blocked
 
 
 def _registered_guardrails() -> Sequence[object]:
     import litellm
 
     return tuple(litellm.callbacks)
+
+
+def _screens_events(callback: object, request_data: Mapping[str, object]) -> bool:
+    from litellm.proxy.utils import routes_through_apply_guardrail
+
+    return (
+        isinstance(callback, CustomGuardrail)
+        and routes_through_apply_guardrail(callback)
+        and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.mcp_event) is True
+    )
 
 
 async def screen_event(
@@ -53,12 +63,7 @@ async def screen_event(
         },
         "metadata": dict(caller.metadata or {}) if caller is not None else {},
     }
-    guardrails: Final = tuple(
-        callback
-        for callback in callbacks()
-        if isinstance(callback, CustomGuardrail)
-        and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.mcp_event) is True
-    )
+    guardrails: Final = tuple(callback for callback in callbacks() if _screens_events(callback, request_data))
     if not guardrails:
         return Screened(occurrence.data)
     result: Final = CallToolResult(content=[], structured_content=dict(occurrence.data))

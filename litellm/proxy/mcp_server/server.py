@@ -616,6 +616,7 @@ if MCP_AVAILABLE:
         disabled_capabilities,
         disabled_operations,
     )
+    from litellm.proxy.mcp_server.events.config import events_settings
     from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
     from litellm.proxy.mcp_server.events.webhooks.receiver import receive_webhook
     from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker
@@ -3118,12 +3119,18 @@ if MCP_AVAILABLE:
     ):
         app.router.routes.append(Route(sse_path, endpoint=_LegacySseEndpoint(), methods=[sse_method]))
 
-    async def _receive_event_webhook(subscription_id: str, request: StarletteRequest) -> Response:
-        start_delivery_worker()
-        return await receive_webhook(subscription_id, request)
+    class _EventWebhookEndpoint:
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if not events_settings().enabled:
+                await handle_streamable_http_mcp(scope, receive, send)
+                return
+            start_delivery_worker()
+            request: Final = StarletteRequest(scope, receive)
+            response: Final = await receive_webhook(request.path_params["subscription_id"], request)
+            await response(scope, receive, send)
 
-    app.add_api_route(
-        "/events/webhooks/{subscription_id}", _receive_event_webhook, methods=["POST"], include_in_schema=False
+    app.router.routes.append(
+        Route("/events/webhooks/{subscription_id}", endpoint=_EventWebhookEndpoint(), methods=["POST"])
     )
 
     # Mount the MCP handlers

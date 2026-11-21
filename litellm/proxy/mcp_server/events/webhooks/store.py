@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -9,7 +9,7 @@ from litellm.types.mcp_server.events import CallbackFailure, JsonObject
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
-SubscriptionStatus = Literal["pending", "active", "suspended", "terminated"]
+SubscriptionStatus: TypeAlias = Literal["pending", "active", "suspended", "terminated"]
 LIVE_STATUSES: Final[tuple[SubscriptionStatus, ...]] = ("pending", "active", "suspended")
 
 
@@ -79,7 +79,7 @@ class EventStore(Protocol):
 
     async def expired(self, now: datetime) -> tuple[SubscriptionRow, ...]: ...
 
-    async def enqueue(self, delivery: QueuedDelivery) -> None: ...
+    async def enqueue(self, delivery: QueuedDelivery) -> bool: ...
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]: ...
 
@@ -189,8 +189,14 @@ class PrismaEventStore:
         )
         return tuple(_row_from_record(record) for record in records)
 
-    async def enqueue(self, delivery: QueuedDelivery) -> None:
-        await self._deliveries.create(data=delivery.model_dump())
+    async def enqueue(self, delivery: QueuedDelivery) -> bool:
+        from prisma.errors import UniqueViolationError
+
+        try:
+            await self._deliveries.create(data=delivery.model_dump())
+        except UniqueViolationError:
+            return False
+        return True
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]:
         rows: Final = await self._db.query_raw(

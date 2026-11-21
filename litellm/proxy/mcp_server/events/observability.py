@@ -1,7 +1,7 @@
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, ClassVar, Final, Literal
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -11,9 +11,11 @@ if TYPE_CHECKING:
     from prometheus_client import Gauge as PrometheusGauge
     from prometheus_client import Histogram as PrometheusHistogram
 
-EventCallType = Literal["mcp_event_subscribe", "mcp_event_poll", "mcp_event_stream", "mcp_event_delivery"]
-EventOutcome = Literal["delivered", "blocked", "throttled", "failed", "terminated", "subscribed", "unsubscribed"]
-DeliveryModeLabel = Literal["poll", "push", "webhook"]
+EventCallType: TypeAlias = Literal["mcp_event_subscribe", "mcp_event_poll", "mcp_event_stream", "mcp_event_delivery"]
+EventOutcome: TypeAlias = Literal[
+    "delivered", "blocked", "throttled", "failed", "terminated", "subscribed", "unsubscribed"
+]
+DeliveryModeLabel: TypeAlias = Literal["poll", "push", "webhook"]
 
 
 @dataclass(frozen=True, slots=True)

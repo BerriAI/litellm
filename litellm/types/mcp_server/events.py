@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from enum import IntEnum
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from mcp.types import RequestParams
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -10,9 +10,9 @@ EVENTS_EXTENSION: Final = "io.modelcontextprotocol/events"
 EVENTS_PROTOCOL_VERSION: Final = "2026-07-28"
 SUBSCRIPTION_ID_META_KEY: Final = "io.modelcontextprotocol/subscriptionId"
 
-DeliveryMode = Literal["poll", "push", "webhook"]
+DeliveryMode: TypeAlias = Literal["poll", "push", "webhook"]
 DELIVERY_MODES: Final[tuple[DeliveryMode, ...]] = ("poll", "push", "webhook")
-JsonObject = Mapping[str, JsonValue]
+JsonObject: TypeAlias = Mapping[str, JsonValue]
 
 
 class EventsErrorCode(IntEnum):
@@ -27,7 +27,9 @@ class EventsErrorCode(IntEnum):
     CALLBACK_ENDPOINT_ERROR = -32027
 
 
-CallbackFailure = Literal["connection_refused", "timeout", "tls_error", "http_4xx", "http_5xx", "challenge_failed"]
+CallbackFailure: TypeAlias = Literal[
+    "connection_refused", "timeout", "tls_error", "http_4xx", "http_5xx", "challenge_failed"
+]
 
 
 class _Wire(BaseModel):

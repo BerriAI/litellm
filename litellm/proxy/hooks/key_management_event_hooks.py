@@ -318,9 +318,11 @@ class KeyManagementEventHooks:
     async def _terminate_mcp_event_subscriptions(token_hashes: Sequence[str | None]) -> None:
         try:
             from litellm.proxy.mcp_server.events.admin import terminate_key_subscriptions
+            from litellm.proxy.mcp_server.events.config import events_settings
         except ImportError:
             return
-        await terminate_key_subscriptions(token_hashes)
+        if events_settings().enabled:
+            await terminate_key_subscriptions(token_hashes)
 
     @staticmethod
     async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):
