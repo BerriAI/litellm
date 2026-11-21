@@ -15369,6 +15369,143 @@ async def test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deplo
         await stream_request(router)
 
 
+_SHARED_DEPLOYMENT_PARAMS: Final = MappingProxyType(
+    {
+        "bedrock": MappingProxyType(
+            {
+                "model": "bedrock/anthropic.claude-opus-5-5",
+                "aws_access_key_id": "configured-key-id",
+                "aws_secret_access_key": "configured-secret",
+                "aws_region_name": "us-east-1",
+            }
+        ),
+        "vertex_ai": MappingProxyType(
+            {
+                "model": "vertex_ai/gemini-4-neon",
+                "vertex_project": "configured-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": "configured-credentials",
+            }
+        ),
+        "azure": MappingProxyType(
+            {
+                "model": "azure/gpt-6.2-sol",
+                "api_base": "https://litellm-qa.openai.azure.com",
+                "api_version": "2025-04-01-preview",
+                "api_key": "configured-key",
+            }
+        ),
+        "openai": MappingProxyType(
+            {"model": "openai/gpt-6.2-sol", "api_key": "configured-key", "organization": "org-configured"}
+        ),
+    }
+)
+
+_DEPLOYMENT_FAILURES: Final = (
+    pytest.param(litellm.AuthenticationError, id="401"),
+    pytest.param(litellm.NotFoundError, id="404"),
+)
+
+
+async def _fail_on_the_shared_deployment(
+    router: Router,
+    provider: str,
+    failure: type[litellm.AuthenticationError | litellm.NotFoundError],
+    caller_fields: Mapping[str, object],
+) -> None:
+    with pytest.raises(failure):
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=failure(
+                message="The provider refused the request.",
+                llm_provider=provider,
+                model=str(_SHARED_DEPLOYMENT_PARAMS[provider]["model"]),
+            ),
+            **caller_fields,
+        )
+
+
+def _shared_router(provider: str, default_litellm_params: Mapping[str, object] | None = None) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {**_SHARED_DEPLOYMENT_PARAMS[provider]},
+                "model_info": {"id": "shared-deployment"},
+            }
+        ],
+        default_litellm_params=None if default_litellm_params is None else {**default_litellm_params},
+        num_retries=0,
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("failure", _DEPLOYMENT_FAILURES)
+@pytest.mark.parametrize(
+    ("provider", "caller_fields"),
+    [
+        pytest.param("bedrock", {"aws_access_key_id": "caller-key-id"}, id="bedrock_access_key"),
+        pytest.param("bedrock", {"aws_profile_name": "caller-profile"}, id="bedrock_profile"),
+        pytest.param("vertex_ai", {"vertex_credentials": "caller-credentials"}, id="vertex_credentials"),
+        pytest.param("azure", {"azure_ad_token": "caller-token"}, id="azure_ad_token"),
+        pytest.param("azure", {"api_version": "2024-10-21"}, id="azure_api_version"),
+        pytest.param("openai", {"organization": "org-caller"}, id="openai_organization"),
+    ],
+)
+async def test_router_failure_under_a_caller_credential_leaves_the_shared_deployment_routable(
+    provider, caller_fields, failure
+):
+    router: Final = _shared_router(provider)
+
+    await _fail_on_the_shared_deployment(router, provider, failure, caller_fields)
+
+    response: Final = await router.acompletion(
+        model="shared-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "shared-deployment"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("failure", _DEPLOYMENT_FAILURES)
+@pytest.mark.parametrize(
+    ("provider", "caller_fields", "default_litellm_params"),
+    [
+        pytest.param("bedrock", {}, None, id="bedrock_no_caller_field"),
+        pytest.param("openai", {}, None, id="openai_no_caller_field"),
+        pytest.param("bedrock", {"aws_access_key_id": "configured-key-id"}, None, id="bedrock_echoed_access_key"),
+        pytest.param("vertex_ai", {"vertex_project": "configured-project"}, None, id="vertex_echoed_project"),
+        pytest.param("azure", {"api_version": "2025-04-01-preview"}, None, id="azure_echoed_api_version"),
+        pytest.param(
+            "azure",
+            {"azure_ad_token": "default-token"},
+            {"azure_ad_token": "default-token"},
+            id="azure_echoed_router_default_token",
+        ),
+        pytest.param("openai", {"aws_region_name": "eu-west-1"}, None, id="openai_unread_aws_region"),
+        pytest.param("bedrock", {"organization": "org-caller"}, None, id="bedrock_unread_organization"),
+    ],
+)
+async def test_router_failure_under_the_deployment_credential_cools_down_the_shared_deployment(
+    provider, caller_fields, default_litellm_params, failure
+):
+    router: Final = _shared_router(provider, default_litellm_params)
+
+    await _fail_on_the_shared_deployment(router, provider, failure, caller_fields)
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_deployment_credentials():
     router = Router(
