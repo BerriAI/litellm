@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
+    _pair_tool_indices,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import truncate_tool_name
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
@@ -2087,7 +2088,7 @@ async def test_guardrail_preserves_original_tool_dicts_except_explicit_edits(mod
         {"type": "mcp_toolset", "mcp_server_name": "github"},
         {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
         {"type": "code_execution_20250825", "name": "code_execution"},
-        {"type": "future_server_tool", "settings": {"mode": "safe"}},
+        {"type": "memory_20250818", "name": "memory"},
         {"googleSearch": {}},
     ]
     untouched: Final = {**custom, "name": "Untouched", "type": "custom"}
@@ -2102,7 +2103,7 @@ async def test_guardrail_preserves_original_tool_dicts_except_explicit_edits(mod
         data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
     )
     rewritten: Final = {
-        **custom,
+        **{key: value for key, value in custom.items() if key != "input_examples" or mode != "schema"},
         **({"description": "Read [MASKED] data"} if mode == "description" else {}),
         **(
             {"input_schema": {"type": "object", "properties": {"safe": {"type": "string"}}}} if mode == "schema" else {}
@@ -2240,6 +2241,217 @@ async def test_scan_only_tool_results_preserves_unscanned_tools_and_accepts_inje
             else []
         ),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("empty", "remove", "description"))
+async def test_guardrail_removals_fail_closed_when_a_long_name_collides_with_its_alias(mode: str) -> None:
+    long_name: Final = "Read" + "_long" * 20
+    tools: Final = [
+        {"name": long_name, "description": "Read private data", "input_schema": {"type": "object"}},
+        {"name": truncate_tool_name(long_name), "description": "Read public data", "input_schema": {"type": "object"}},
+    ]
+    native: Final = {"type": "mcp_toolset", "mcp_server_name": "github"}
+    data: Final = {"tools": [native, *tools], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
+    )
+    expected_custom: Final = (
+        []
+        if mode == "empty"
+        else tools[1:]
+        if mode == "remove"
+        else [{**tools[0], "description": "Read [MASKED] data"}, tools[1]]
+    )
+    assert result["tools"] == [native, *expected_custom]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_type", ("anything", "web_search_fake", "computer_fake", "custom"))
+@pytest.mark.parametrize("mode", ("empty", "description", "copy"))
+async def test_unknown_typed_tools_are_scanned_instead_of_bypassing_the_guardrail(tool_type: str, mode: str) -> None:
+    custom: Final = {"type": tool_type, "name": "blocked-read", "description": "Read sensitive data"}
+    native: Final = {"type": "mcp_toolset", "mcp_server_name": "github"}
+    data: Final = {"tools": [custom, native], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
+    )
+    expected_custom: Final = (
+        []
+        if mode == "empty"
+        else [{**custom, "description": "Read [MASKED] data"} if mode == "description" else custom]
+    )
+    assert result["tools"] == [*expected_custom, native]
+
+
+class RelocatedToolFieldGuardrail(CustomGuardrail):
+    def __init__(self, field: str, remove: bool):
+        super().__init__(guardrail_name="relocated-field")
+        self.field: Final = field
+        self.remove: Final = remove
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools: Final = inputs.get("tools", [])
+        return {
+            **inputs,
+            "tools": [
+                {
+                    **tool,
+                    "function": {
+                        **tool["function"],
+                        "parameters": {
+                            **{
+                                key: value for key, value in tool["function"]["parameters"].items() if key != self.field
+                            },
+                            **({} if self.remove else {self.field: [{"path": "[MASKED]"}]}),
+                        },
+                    },
+                }
+                for tool in tools
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("input_examples", "vendor_examples"))
+@pytest.mark.parametrize("remove", (False, True))
+@pytest.mark.parametrize("overlap", (False, True))
+async def test_relocated_tool_field_edits_return_to_the_original_location(
+    field: str, remove: bool, overlap: bool
+) -> None:
+    schema: Final = {"type": "object", "properties": {"path": {"type": "string"}}}
+    tool: Final = {
+        "name": "Read",
+        "input_schema": {**schema, **({field: [{"path": "schema-private"}]} if overlap else {})},
+        "strict": True,
+        field: [{"path": "private"}],
+    }
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=RelocatedToolFieldGuardrail(field, remove)
+    )
+    assert result["tools"] == [
+        {
+            "name": "Read",
+            "input_schema": {**schema, **({field: [{"path": "[MASKED]"}]} if overlap and not remove else {})},
+            "strict": True,
+            **({} if remove or overlap else {field: [{"path": "[MASKED]"}]}),
+            **({"type": "custom"} if overlap else {}),
+        }
+    ]
+
+
+class ToolFieldSplitGuardrail(CustomGuardrail):
+    def __init__(self, explicit: bool, omit_schema: bool):
+        super().__init__(guardrail_name="field-split")
+        self.explicit: Final = explicit
+        self.omit_schema: Final = omit_schema
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {
+            **inputs,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["function"]["name"],
+                        **(
+                            {}
+                            if self.omit_schema
+                            else {
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {},
+                                    **({"defer_loading": False, "allowed_callers": []} if self.explicit else {}),
+                                }
+                            }
+                        ),
+                        **(
+                            {"defer_loading": False, "allowed_callers": []}
+                            if self.explicit and self.omit_schema
+                            else {}
+                        ),
+                        **({"strict": False, "cache_control": None, "type": "custom"} if self.explicit else {}),
+                    },
+                }
+                for tool in inputs.get("tools", [])
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", (False, True))
+@pytest.mark.parametrize("omit_schema", (False, True))
+@pytest.mark.parametrize("original_type", ("custom", "anything"))
+async def test_guardrail_content_omissions_remove_content_but_metadata_requires_an_explicit_edit(
+    explicit: bool,
+    omit_schema: bool,
+    original_type: str,
+) -> None:
+    metadata: Final = {
+        "defer_loading": True,
+        "allowed_callers": ["direct"],
+        "cache_control": {"type": "ephemeral"},
+        "strict": True,
+        "type": original_type,
+    }
+    tool: Final = {
+        "name": "Read",
+        "description": "Private content",
+        "input_examples": [{"path": "private"}],
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        **metadata,
+    }
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=ToolFieldSplitGuardrail(explicit, omit_schema)
+    )
+    assert result["tools"] == [
+        {
+            "name": "Read",
+            **({} if omit_schema else {"input_schema": {"type": "object", "properties": {}}}),
+            **(
+                {
+                    "defer_loading": False,
+                    "allowed_callers": [],
+                    "cache_control": None,
+                    "strict": False,
+                    "type": "custom",
+                }
+                if explicit
+                else metadata
+            ),
+        }
+    ]
+
+
+class EqualityCountedTool(dict[str, object]):
+    comparisons = 0
+
+    def __eq__(self, other: object) -> bool:
+        type(self).comparisons += 1
+        return super().__eq__(other)
+
+
+def test_duplicate_tool_matching_does_not_compare_every_pair() -> None:
+    count: Final = 256
+    before: Final = tuple(EqualityCountedTool(type="function", function={"name": "Read"}) for _ in range(count))
+    after: Final = tuple(EqualityCountedTool(type="function", function={"name": "Read"}) for _ in range(count - 1))
+    EqualityCountedTool.comparisons = 0
+    assert _pair_tool_indices(before, after) == tuple((index, index) for index in range(count - 1))
+    assert EqualityCountedTool.comparisons <= count * 4
 
 
 class ToolAppendingGuardrail(CustomGuardrail):

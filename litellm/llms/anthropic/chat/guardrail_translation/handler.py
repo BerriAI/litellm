@@ -13,13 +13,15 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+from collections import defaultdict
+from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import chain, filterfalse, groupby, repeat
+from itertools import chain, count, filterfalse, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
+from anthropic.types.beta import BetaToolUnionParam
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -65,6 +67,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     AllAnthropicToolsValues,
+    AnthropicAdvisorTool,
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.openai import (
@@ -400,10 +403,36 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
     return {**tool, "function": {**function, "name": original}}
 
 
+_NATIVE_TOOL: Final[TypeAdapter[BetaToolUnionParam | AnthropicAdvisorTool]] = TypeAdapter(
+    BetaToolUnionParam | AnthropicAdvisorTool
+)
+_MAPPED_TOOL_FIELDS: Final = frozenset(
+    {"name", "input_schema", "description", "custom", "cache_control", "strict", "type", "eager_input_streaming"}
+)
+_TOOL_METADATA_FIELDS: Final = frozenset(
+    {"defer_loading", "allowed_callers", "cache_control", "strict", "type", "eager_input_streaming"}
+)
+
+
 def _is_native_tool(tool: Mapping[str, object]) -> bool:
-    tool_type: Final = tool.get("type")
-    return is_provider_native_tool_dict(tool) or (
-        isinstance(tool_type, str) and tool_type not in ("custom", "function") and "input_schema" not in tool
+    if is_provider_native_tool_dict(tool):
+        return True
+    if tool.get("type") in (None, "custom", "function"):
+        return False
+    try:
+        _NATIVE_TOOL.validate_python(tool)
+    except ValidationError:
+        return False
+    return True
+
+
+def _tool_scan_source(tool: AllAnthropicToolsValues) -> AllAnthropicToolsValues:
+    return (
+        tool
+        if tool.get("type") == "function"
+        else cast(  # cast-ok: normalize only the guardrail scan copy
+            AllAnthropicToolsValues, {**tool, "type": "custom", "input_schema": tool.get("input_schema", {})}
+        )
     )
 
 
@@ -433,17 +462,55 @@ def _rewrite_original_tool(
     original_fields: Final = as_str_mapping(original) or {}
     if original_fields.get("type") == "function":
         return cast(AllAnthropicToolsValues, after)  # cast-ok: caller supplied an OpenAI-format tool
-    prior: Final = as_str_mapping(before.get("function")) or {}
-    returned: Final = as_str_mapping(after.get("function")) or {}
-    fields: Final = (("description", "description"), ("parameters", "input_schema"), ("strict", "strict"))
-    changed: Final = tuple((source, target) for source, target in fields if prior.get(source) != returned.get(source))
+    prior_function: Final = _tool_function_fields(before)
+    returned_function: Final = _tool_function_fields(after)
+    prior_parameters: Final = as_str_mapping(prior_function.get("parameters")) or {}
+    relocated: Final = frozenset(
+        key for key in original_fields if key not in _MAPPED_TOOL_FIELDS and key in prior_parameters
+    )
+    source_schema: Final = as_str_mapping(original_fields.get("input_schema")) or {}
+    prior: Final = _restore_relocated_tool_fields(prior_function, relocated)
+    returned: Final = _restore_relocated_tool_fields(returned_function, relocated)
+    unstructured_parameters: Final = (
+        "parameters" in returned_function and as_str_mapping(returned_function["parameters"]) is None
+    )
+    if relocated and (relocated.intersection(source_schema) or unstructured_parameters):
+        return cast(  # cast-ok: ambiguous content uses the guardrail version with original transport metadata
+            AllAnthropicToolsValues,
+            {
+                **{key: value for key, value in returned_function.items() if key != "parameters"},
+                **({"input_schema": returned_function["parameters"]} if "parameters" in returned_function else {}),
+                "type": "custom",
+                **{key: value for key, value in original_fields.items() if key in _TOOL_METADATA_FIELDS},
+                **{
+                    key: returned[key]
+                    for key in _TOOL_METADATA_FIELDS
+                    if key in returned and (key not in prior or prior[key] != returned[key])
+                },
+            },
+        )
+    fields: Final = (
+        ("description", "description"),
+        ("parameters", "input_schema"),
+        *((key, key) for key in _TOOL_METADATA_FIELDS),
+        *((key, key) for key in relocated),
+    )
+    changed: Final = tuple(
+        (source, target)
+        for source, target in fields
+        if _tool_field_changed(prior, returned, source, metadata=target in _TOOL_METADATA_FIELDS)
+    )
     replaced: Final = frozenset(target for _, target in changed)
     return cast(  # cast-ok: retain original tool fields and overlay only changed function fields
         AllAnthropicToolsValues,
         {
             **{key: value for key, value in original_fields.items() if key not in replaced},
             **{
-                target: _apply_tool_field_edits(original_fields.get(target), prior.get(source), returned[source])
+                target: (
+                    _apply_tool_field_edits(original_fields.get(target), prior[source], returned[source])
+                    if source in prior
+                    else returned[source]
+                )
                 for source, target in changed
                 if source in returned
             },
@@ -451,37 +518,41 @@ def _rewrite_original_tool(
     )
 
 
-def _tool_name_indices(tools: Sequence[Mapping[str, object]]) -> dict[str | None, tuple[int, ...]]:
-    ordered: Final = sorted(
-        enumerate(tools), key=lambda item: ((name := anthropic_tool_name(item[1])) is None, name or "")
-    )
+def _tool_field_changed(
+    prior: Mapping[str, object], returned: Mapping[str, object], source: str, *, metadata: bool
+) -> bool:
+    if metadata and source not in returned:
+        return False
+    return (source in prior) != (source in returned) or prior.get(source) != returned.get(source)
+
+
+def _tool_function_fields(tool: ChatCompletionToolParam) -> Mapping[str, object]:
+    function: Final = as_str_mapping(tool.get("function")) or {}
     return {
-        name: tuple(index for index, _ in group)
-        for name, group in groupby(ordered, key=lambda item: anthropic_tool_name(item[1]))
+        **function,
+        **{key: tool[key] for key in _TOOL_METADATA_FIELDS if key != "type" and key in tool},
     }
 
 
-def _pair_tool_group(
-    before: Sequence[Mapping[str, object]],
-    after: Sequence[Mapping[str, object]],
-    prior: Sequence[int],
-    returned: Sequence[int],
-) -> tuple[tuple[int, int], ...]:
-    candidates: Final = {index: tuple(other for other in returned if before[index] == after[other]) for index in prior}
-    exact: Final = {
-        index: matches[occurrence]
-        for position, index in enumerate(prior)
-        if (matches := candidates[index])
-        and (occurrence := sum(before[index] == before[other] for other in prior[:position])) < len(matches)
+def _restore_relocated_tool_fields(function: Mapping[str, object], relocated: frozenset[str]) -> Mapping[str, object]:
+    parameters: Final = as_str_mapping(function.get("parameters"))
+    if parameters is None:
+        return function
+    return {
+        **function,
+        "parameters": {key: value for key, value in parameters.items() if key not in relocated},
+        **{key: parameters[key] for key in relocated if key in parameters},
     }
-    used: Final = frozenset(exact.values())
-    remaining: Final = tuple(
-        zip(
-            (index for index in prior if index not in exact),
-            (other for other in returned if other not in used),
-        )
+
+
+def _indexed_tool_occurrences(
+    tools: Iterable[tuple[int, Mapping[str, object]]], *, exact: bool
+) -> Mapping[tuple[str | None, int], int]:
+    counters: Final = defaultdict[str | None, Iterator[int]](lambda: count(0))
+    keys: Final = (
+        (index, stream_item_fingerprint(tool) if exact else anthropic_tool_name(tool)) for index, tool in tools
     )
-    return (*exact.items(), *remaining)
+    return MappingProxyType({(key, next(counters[key])): index for index, key in keys})
 
 
 def _pair_tool_indices(
@@ -491,13 +562,19 @@ def _pair_tool_indices(
     after_indices: Final = {anthropic_tool_name(tool): index for index, tool in enumerate(after)}
     if len(before_indices) == len(before) and len(after_indices) == len(after):
         return tuple((index, after_indices[name]) for name, index in before_indices.items() if name in after_indices)
-    prior_groups: Final = _tool_name_indices(before)
-    returned_groups: Final = _tool_name_indices(after)
-    return tuple(
-        chain.from_iterable(
-            _pair_tool_group(before, after, prior, returned_groups.get(name, ()))
-            for name, prior in prior_groups.items()
-        )
+    prior_exact: Final = _indexed_tool_occurrences(enumerate(before), exact=True)
+    returned_exact: Final = _indexed_tool_occurrences(enumerate(after), exact=True)
+    exact: Final = {index: returned_exact[key] for key, index in prior_exact.items() if key in returned_exact}
+    used: Final = frozenset(exact.values())
+    prior_remaining: Final = _indexed_tool_occurrences(
+        ((index, tool) for index, tool in enumerate(before) if index not in exact), exact=False
+    )
+    returned_remaining: Final = _indexed_tool_occurrences(
+        ((index, tool) for index, tool in enumerate(after) if index not in used), exact=False
+    )
+    return (
+        *exact.items(),
+        *((index, returned_remaining[key]) for key, index in prior_remaining.items() if key in returned_remaining),
     )
 
 
@@ -505,12 +582,8 @@ def _reconcile_tools(
     originals: Sequence[AllAnthropicToolsValues],
     scanned: Sequence[ChatCompletionToolParam],
     returned: Sequence[ChatCompletionToolParam],
+    original_to_scanned: Mapping[int, int],
 ) -> Sequence[AllAnthropicToolsValues]:
-    custom_originals: Final = tuple((index, tool) for index, tool in enumerate(originals) if not _is_native_tool(tool))
-    original_to_scanned: Final = {
-        custom_originals[index][0]: other
-        for index, other in _pair_tool_indices(tuple(tool for _, tool in custom_originals), scanned)
-    }
     scanned_to_returned: Final = dict(_pair_tool_indices(scanned, returned))
     rewritten: Final = {
         index: scanned_to_returned[other]
@@ -1045,10 +1118,20 @@ class AnthropicMessagesHandler(BaseTranslation):
         original_tools: Final = cast(  # cast-ok: tools are supplied in the Anthropic request's tool format
             Sequence[AllAnthropicToolsValues], list_field(data, "tools")
         )
+        custom_original_indices: Final = tuple(
+            index for index, tool in enumerate(original_tools) if not _is_native_tool(tool)
+        )
+        original_to_scanned: Final = MappingProxyType(
+            {index: scanned for scanned, index in enumerate(custom_original_indices) if not scan_only_tool_results}
+        )
         translation_source: Final = {
             **{key: value for key, value in data.items() if key != "system"},
             "model": model,
-            **({"tools": [tool for tool in original_tools if not _is_native_tool(tool)]} if original_tools else {}),
+            **(
+                {"tools": [_tool_scan_source(original_tools[index]) for index in custom_original_indices]}
+                if original_tools
+                else {}
+            ),
         }
         chat_completion_compatible_request: Final = self._translate_to_openai(
             translation_source, keep_cache_control=keep_cache_control
@@ -1147,7 +1230,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                 restored_after: Final = [
                     _with_original_name(tool, original_tool_names.declared) for tool in guardrailed_tools
                 ]
-                anthropic_tools: Final = _reconcile_tools(original_tools, restored_before, restored_after)
+                anthropic_tools: Final = _reconcile_tools(
+                    original_tools, restored_before, restored_after, original_to_scanned
+                )
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
                         request_tools=original_tools,
