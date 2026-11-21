@@ -2365,3 +2365,134 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+def _fiber_mask() -> CustomGuardrail:
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+
+    return ContentFilterGuardrail(
+        guardrail_name="mask-fiber",
+        blocked_words=[BlockedWord(keyword="fiber", action=ContentFilterAction.MASK)],
+    )
+
+
+def _mcp_call(arguments: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "id": "mcptoolu_01Ask",
+        "type": "function",
+        "function": {"name": "ask_question", "arguments": json.dumps(arguments)},
+    }
+
+
+class TestClaudeMcpCallsGoThroughChatMaskGuardrails:
+    @pytest.mark.asyncio
+    async def test_pre_call_mask_reaches_replayed_mcp_call_input_in_raw_blocks_and_provider_fields(self):
+        data = {
+            "messages": [
+                {"role": "user", "content": "Ask deepwiki about react."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Asking now."},
+                        {
+                            "type": "mcp_tool_use",
+                            "id": "mcptoolu_01Raw",
+                            "name": "ask_question",
+                            "server_name": "deepwiki",
+                            "input": {"repoName": "facebook/react", "question": "Is fiber a page?"},
+                        },
+                        {
+                            "type": "mcp_tool_result",
+                            "tool_use_id": "mcptoolu_01Raw",
+                            "is_error": False,
+                            "content": [{"type": "text", "text": "No page has that title."}],
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": "Asked again.",
+                    "provider_specific_fields": {
+                        "server_tool_calls": [_mcp_call({"repoName": "facebook/react", "question": "fiber docs?"})]
+                    },
+                },
+            ]
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data, _fiber_mask())
+
+        raw_blocks = data["messages"][1]["content"]
+        assert [block["type"] for block in raw_blocks] == ["text", "mcp_tool_use", "mcp_tool_result"]
+        assert raw_blocks[1]["server_name"] == "deepwiki"
+        assert raw_blocks[1]["input"]["repoName"] == "facebook/react"
+        assert "fiber" not in raw_blocks[1]["input"]["question"]
+        [replayed_call] = data["messages"][2]["provider_specific_fields"]["server_tool_calls"]
+        assert replayed_call["id"] == "mcptoolu_01Ask"
+        assert json.loads(replayed_call["function"]["arguments"])["repoName"] == "facebook/react"
+        assert "fiber" not in replayed_call["function"]["arguments"]
+
+    @pytest.mark.asyncio
+    async def test_post_call_mask_reaches_mcp_call_arguments_in_a_response_with_no_text(self):
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        provider_specific_fields={
+                            "server_tool_calls": [_mcp_call({"repoName": "facebook/react", "question": "fiber?"})]
+                        },
+                    ),
+                )
+            ]
+        )
+
+        await OpenAIChatCompletionsHandler().process_output_response(response, _fiber_mask())
+
+        [call] = response.choices[0].message.provider_specific_fields["server_tool_calls"]
+        assert call["id"] == "mcptoolu_01Ask"
+        assert json.loads(call["function"]["arguments"])["repoName"] == "facebook/react"
+        assert "fiber" not in call["function"]["arguments"]
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_mask_reaches_streamed_mcp_call_arguments(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        def chunk(delta: Delta, finish_reason: Optional[str] = None) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="claude",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+            )
+
+        chunks = [
+            chunk(Delta(content="Checking.")),
+            chunk(
+                Delta(
+                    content=None,
+                    provider_specific_fields={
+                        "server_tool_calls": [_mcp_call({"repoName": "facebook/react", "question": "fiber?"})]
+                    },
+                )
+            ),
+            chunk(Delta(content=" Done."), finish_reason="stop"),
+        ]
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=_fiber_mask(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        [call] = chunks[1].choices[0].delta.provider_specific_fields["server_tool_calls"]
+        assert call["id"] == "mcptoolu_01Ask"
+        assert json.loads(call["function"]["arguments"])["repoName"] == "facebook/react"
+        assert "fiber" not in call["function"]["arguments"]

@@ -13,7 +13,7 @@ from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
 
 import httpx
-from pydantic import BeforeValidator, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictBool, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -66,7 +66,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import Delta, LlmProviders, Message
 
 _MessageT = TypeVar("_MessageT")
 
@@ -2158,6 +2158,84 @@ def anthropic_server_tool_call_params(message: object) -> tuple[ChatCompletionAs
         return _SERVER_TOOL_CALLS_ADAPTER.validate_python(fields.get("server_tool_calls", ()) if fields else ())
     except ValidationError:
         return ()
+
+
+def write_anthropic_server_tool_calls(
+    holder: Message | Delta, rewritten: tuple[ChatCompletionAssistantToolCall, ...]
+) -> None:
+    if rewritten == anthropic_server_tool_call_params(holder):
+        return
+    holder.provider_specific_fields = {  # rebind-ok: a guardrail rewrite must land on the message it scanned
+        **(holder.provider_specific_fields or {}),
+        "server_tool_calls": list(rewritten),
+    }
+
+
+def write_request_server_tool_calls(message: object, rewritten: tuple[ChatCompletionAssistantToolCall, ...]) -> None:
+    if rewritten == anthropic_server_tool_call_params(message):
+        return
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields")) or {}
+    if not isinstance(message, dict):
+        return
+    message["provider_specific_fields"] = {  # rebind-ok: a guardrail rewrite must land on the request it scanned
+        **fields,
+        "server_tool_calls": list(rewritten),
+    }
+
+
+class _RawServerToolUse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["server_tool_use", "mcp_tool_use"]
+    id: str
+    name: str
+    input: Mapping[str, JsonValue]
+
+
+_RAW_SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_RawServerToolUse)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def raw_server_tool_use_calls(message: object) -> tuple[tuple[int, ChatCompletionAssistantToolCall], ...]:
+    return tuple(
+        (block_idx, call)
+        for block_idx, block in enumerate(parts_of(message_field(message, "content")))
+        if (call := _raw_server_tool_use_call(block)) is not None
+    )
+
+
+def _raw_server_tool_use_call(block: object) -> ChatCompletionAssistantToolCall | None:
+    try:
+        use: Final = _RAW_SERVER_TOOL_USE_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+    return ChatCompletionAssistantToolCall(
+        id=use.id, type="function", function={"name": use.name, "arguments": json.dumps(use.input)}
+    )
+
+
+def write_raw_server_tool_use_inputs(message: object, arguments_by_block: Mapping[int, str]) -> None:
+    content: Final = message_field(message, "content")
+    blocks: Final = parts_of(content)
+    if not arguments_by_block or not isinstance(message, dict) or not isinstance(content, list):
+        return
+    message["content"] = [  # rebind-ok: a guardrail rewrite must land on the request it scanned
+        _with_raw_server_tool_use_input(block, arguments_by_block.get(block_idx))
+        for block_idx, block in enumerate(blocks)
+    ]
+
+
+def _with_raw_server_tool_use_input(block: object, arguments: str | None) -> object:
+    if arguments is None:
+        return block
+    try:
+        rewritten_input: Final = _JSON_OBJECT.validate_json(arguments)
+    except ValidationError:
+        return block
+    fields: Final = validated_object_mapping(block)
+    if fields is None or fields.get("input") == rewritten_input:
+        return block
+    return {**fields, "input": rewritten_input}
 
 
 def tool_call_is_rebuilt_as_server_tool_use(
