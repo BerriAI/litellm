@@ -884,6 +884,8 @@ class LiteLLMRoutes(enum.Enum):
             # Create/update/delete and test_connection stay admin-only.
             "/search_tools/list",
             "/search_tools/ui/available_providers",
+            "/api/plugins",
+            "/api/plugins/auth-token",
         ]
         + spend_tracking_routes
         + key_management_routes
