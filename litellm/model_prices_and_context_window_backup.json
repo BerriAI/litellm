@@ -64119,23 +64119,8 @@
                 }
             },
             {
-                "name": "gemini-legacy-media",
-                "pattern": "^gemini/(?:gemini-(?:[12](?:\\.\\d+)?|exp|(?:pro|flash)(?!-(?:lite-)?latest$))(?:-|$)|gemma-|[0-9]+$)",
-                "fill_missing_for_providers": [
-                    "gemini",
-                    "vertex_ai",
-                    "vertex_ai_beta",
-                    "vertex_ai-language-models"
-                ],
-                "description": "Older Gemini and Gemma model IDs, including retired Gemini variants, and numeric Vertex deployments use the legacy media translation. They do not accept per-part media resolution or nested media in tool responses.",
-                "model_info": {
-                    "supports_media_in_tool_response": false,
-                    "supports_part_media_resolution": false
-                }
-            },
-            {
                 "name": "gemini-multimodal-tool-media",
-                "pattern": "^gemini/gemini-(?:[3-9]|[1-9][0-9]+)(?:\\.\\d+)?-(?:pro|flash|argon)(?:-|$)",
+                "pattern": "^gemini/gemini-(?!.*(?:-tts|-image|-live|-audio|-embedding|-computer-use|-robotics|-transcribe|-translate))(?:[3-9]|[1-9][0-9]+)(?:\\.\\d+)?-(?:pro|flash|argon)(?:-|$)",
                 "fill_missing_for_providers": [
                     "gemini",
                     "vertex_ai",

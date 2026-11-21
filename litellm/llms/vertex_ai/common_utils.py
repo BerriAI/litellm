@@ -59,10 +59,11 @@ def gemini_media_capability(
     catalog: Final = cast(  # cast-ok: the live model-cost table contains model rows
         Mapping[str, Mapping[str, object]], litellm.model_cost
     )
-    if custom_llm_provider is None:
-        candidates = (model, qualified_name, f"vertex_ai/{name}", name)
-    else:
-        candidates = (f"{custom_llm_provider}/{name}", name)
+    candidates: Final = (
+        (model, qualified_name, f"vertex_ai/{name}", name)
+        if custom_llm_provider is None
+        else (f"{custom_llm_provider}/{name}", name)
+    )
     for candidate in candidates:
         row = catalog.get(candidate)
         if row is None:
