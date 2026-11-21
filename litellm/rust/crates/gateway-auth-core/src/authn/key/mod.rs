@@ -99,7 +99,7 @@ pub enum Verified<R: Rows> {
         end_user: R::EndUser,
     },
     CachedAdmin {
-        key: R::Key,
+        key: Keyed<R::Key>,
         end_user: R::EndUser,
     },
     /// A virtual key that is not blocked, expired or missing its token.
@@ -148,7 +148,7 @@ pub(crate) async fn verify<H: AuthHost>(
                     Err(Refused::new(denial, Some(&admin.row)))
                 }
                 None => Ok(Verified::CachedAdmin {
-                    key: admin.row,
+                    key: admin,
                     end_user,
                 }),
             };

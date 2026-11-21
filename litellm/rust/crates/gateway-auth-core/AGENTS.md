@@ -10,6 +10,14 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - A rule that a core path and a Python-only path both need (route groups, OAuth2 routing) lives here and Python calls it through `_native`
 - The only allowed duplicates are the Redis client (redis-py and `redis-client`), the DB client (Prisma and SQLx) and request extraction (FastAPI dependency and axum extractor). Keyspace names and value encoding still live in one place
 
+## The caller
+
+- This crate owns who the caller is. `Caller` in `identity/caller.rs`, with its role and scope, is the one caller type both hosts use, and `TryFrom<Identity>` is the only place an identity becomes one. No host builds a `Caller` by hand or keeps a caller type of its own
+- Every auth decision is pure logic here, shared by the Rust gateway and by Python through `python-bridge`. No axum and no Python
+- Each rule has one home, and it is here. That covers token hashing and `KeyHash`, blocked and expired keys, whether a token is the master key, the caller's role and which models a caller may call
+- Model authorization is `authz::authorize` over layers, each a list of models one level of the caller may call. A new `Layer` variant is added only together with the host step that serves it, never as a placeholder
+- Budgets and rate limits are counters. They are not authorization and never go through `authorize`
+
 ## The core decides, hosts fetch
 
 - No IO, no pyo3, no axum. `AuthHost` in `host.rs` is the only way out, one trait for every path so a host implements it once. The operator's own code sits apart in `OperatorHooks`, which `AuthHost::operator_hooks` hands out only on a host that can run it. Methods return `impl Future + Send`, and the core takes `&impl AuthHost`, never `dyn`
@@ -86,8 +94,8 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - On the Python side, `litellm/proxy/auth/core.py` drives a call and converts its outcome, `litellm/proxy/auth/host/python.py::PythonAuthHost` answers the trait's methods under the same names, and `tests/unit/proxy/auth/host/test_answer.py` fails when a `RustAuthStep` has no `answer.py` case, the way `router_rust/core.py` and `router_python_host.py` pair for the router. Rust never imports either, so neither is a `litellm/rust_bridge/host/` module
 - `plan/mod.rs` picks the credential path in the proxy's order. The two paths the core owns, key and JWT, run as stages, each its own module with typed inputs and outputs:
   - `authn/` decides whether the credential is genuine and accepted: `key/` prechecks the token, reads the key (`lookup.rs` names the end user, the key's own id before the request's, then reads the key with its team values) and refuses a blocked, expired or tokenless one. `jwt/` verifies the signature or reads UserInfo, runs `custom_validate`, and resolves the virtual key a JWT maps to
-  - `identity/` reads who is acting: a key's owner, team and project, or a JWT's caller (`caller.rs`), team, user and organization. It may provision, and collects the writes a request earns as `commit::Grants`
-  - `authz/` decides whether that caller may call the route or model. Every check is pure and takes no host. `TeamEligibility` is the one place identity's team selection reads the route
+  - `identity/` reads who is acting: a key's owner, team and project, or a JWT's caller (`jwt/caller.rs`), team, user and organization. It may provision, and collects the writes a request earns as `commit::Grants`. `caller.rs` turns the finished `Identity` into the `Caller` a host serves
+  - `authz/` decides whether that caller may call the route or model. Every check is pure and takes no host. `TeamEligibility` is the one place identity's team selection reads the route, and `access.rs` holds `authorize`, the model rule every layer of a caller passes
   - `admission/` runs the checks that need reads after identity: the key's temporary budget, the model it resolves to and its budgets
   - `commit.rs` applies the grants (`record_agent_authentication`, `add_team_member`, `create_key_mapping`) once nothing refuses the request, and is the only caller of those methods
 - `pipeline/` holds the orchestrators the entry points call. Each runs every check at the earliest point its input exists, so nothing is read or written for a request a check that could have run earlier refuses

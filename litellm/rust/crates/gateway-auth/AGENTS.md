@@ -1,5 +1,16 @@
 # Gateway authentication
 
+## Boundary with the auth core
+
+Rules for new and changed code. Where the text below disagrees, these win
+
+- This crate only wires `gateway-auth-core` to axum. That means reading a credential from headers, calling the core, putting the caller in request extensions behind an extractor, and mapping errors to responses
+- It holds no domain type. The caller is the core's `Caller`
+- It holds no key column, such as models, limits or priority, and it makes no auth decision
+- A new key column or a new association, such as a team, a user or a project, must never need a change here. When one seems to, the type or the rule belongs in the core or in the host
+
+## Current implementation
+
 Inbound authentication uses a verifier, identity resolver, and authorizer injected into `Auth`. `Auth::from_config` composes the current master-key implementation. `Auth::new` accepts alternate implementations and an injected clock
 
 `CredentialExtractor` selects a token or transport credential from HTTP request parts. The default `Bearer` extractor is strict. `BearerOrXApiKey` follows the Python proxy's order when the request has no non-empty Authorization header. It reads one non-empty `api-key` header, the key header older OpenAI SDKs send, and otherwise one `x-api-key` header, the Anthropic SDK's key header, both taken as sent with no `Bearer ` stripping. A malformed Authorization header never falls back to either, and a malformed `api-key` never falls back to `x-api-key`. A malformed or rejected `api-key` or `x-api-key` answers 401 `missing or invalid API key`, and every other 401, a request with no credential included, keeps `missing or invalid bearer token`. `CredentialExtractor::reject` is where a profile renames a verifier's rejection for the header it read. A host can supply another extractor with `Auth::with_extractor` for a separate route profile. A transport credential is only a selection marker, never proof of identity

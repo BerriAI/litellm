@@ -8,6 +8,10 @@
 - `admit` is the only thing that sends a request to Python. It sees each request before any layer, and every method and path it admits must have a native route, because a request it admits that no route takes gets the native 404 and is never forwarded to Python
 - `Admit` is built once from the config the native app is built from, and judges each request by its route and its caller, where only the master key is checked. A request that passes is answered natively. It does not judge the config's settings or the request's headers and body yet, so a setting or parameter only Python honors is served natively. Those judges, and a config Python can reload from its database, come in a later change, and forwarding must not be turned on for users before it
 
+## Auth
+- This crate is the native auth host. It owns its `Rows` implementation and its key row, and limits and priority live on that row beside the limiter and capacity code that read them
+- Authenticate through the core's entry points and call its `authorize` for model access, with the layers built from the rows this host read. Never re-implement an auth rule here
+
 ## Resources
 - `Resources::build` (`src/resources.rs`) makes what every part is built from, once per config: the environment (the config's `environment_variables` in front of the process environment), the `SecretResolver` over it, the HTTP client config and the inference `CoreResources` with the client pool. Inference, Redis and the database each take what they need from it. Never reach into one part for another part's pool, config or secrets, and never build a second environment overlay
 - A setting that can come from the environment, the secret manager or OIDC is read through `resources.secrets`. `resources.environment` is only for what Python reads straight from `os.environ`

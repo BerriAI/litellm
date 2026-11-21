@@ -19,6 +19,7 @@ mod testing;
 mod token;
 mod value;
 
+pub use authz::{Denied, Layer, LayerKind, ModelAsk, authorize};
 pub use error::{
     AgentIdentityFailure, AssertionRejection, BudgetExceeded, ClaimDenial, Error, JwtDenial,
     KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired, RbacDenial, Searched,
@@ -28,6 +29,7 @@ pub use host::{
     AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks,
     OrgRow, ProjectRow, Row, Rows, TeamRow, UserRow,
 };
+pub use identity::{Caller, KeyCaller, NotACaller, Scope};
 pub use outcome::{Identity, KeyOutcome, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};
 pub use request::Request;

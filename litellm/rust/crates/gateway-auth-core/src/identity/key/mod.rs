@@ -28,7 +28,7 @@ pub enum TeamGrant<R: Rows> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyContext<R: Rows> {
-    pub key: R::Key,
+    pub key: Keyed<R::Key>,
     pub end_user: R::EndUser,
     pub owner: Option<R::User>,
     pub team: TeamGrant<R>,
@@ -43,7 +43,7 @@ pub enum KeyIdentity<R: Rows> {
     },
     UserAuthRoute,
     CachedAdmin {
-        key: R::Key,
+        key: Keyed<R::Key>,
         end_user: R::EndUser,
     },
     /// `hash` is the master key's hash, which the host caches the admin identity under.
@@ -87,7 +87,7 @@ pub(crate) struct KeyPrincipal<R: Rows> {
 impl<R: Rows> From<KeyPrincipal<R>> for KeyContext<R> {
     fn from(principal: KeyPrincipal<R>) -> Self {
         Self {
-            key: principal.key.row,
+            key: principal.key,
             end_user: principal.end_user,
             owner: principal.owner,
             team: principal.team,

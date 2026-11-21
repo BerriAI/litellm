@@ -379,7 +379,10 @@ mod tests {
         assert_eq!(
             run(&host, "sk-admin", "/chat/completions", &settings).await,
             Ok(KeyIdentity::CachedAdmin {
-                key: "cached".to_owned(),
+                key: Keyed {
+                    record: host.cached.clone().unwrap(),
+                    row: "cached".to_owned(),
+                },
                 end_user: "end-user".to_owned()
             })
         );
@@ -548,13 +551,14 @@ mod tests {
             proxy_budget: true,
             ..settings
         };
+        let record = KeyRecord {
+            user_id: Some("u".to_owned()),
+            team_id: Some("t".to_owned()),
+            project_id: Some("p".to_owned()),
+            ..virtual_key()
+        };
         let host = ScriptedHost {
-            db: Some(KeyRecord {
-                user_id: Some("u".to_owned()),
-                team_id: Some("t".to_owned()),
-                project_id: Some("p".to_owned()),
-                ..virtual_key()
-            }),
+            db: Some(record.clone()),
             key_owner: Some(false),
             key_team_found: true,
             ..ScriptedHost::default()
@@ -562,7 +566,10 @@ mod tests {
         assert_eq!(
             context(run(&host, "sk-1", "/chat/completions", &settings).await),
             KeyContext {
-                key: "db+prepared".to_owned(),
+                key: Keyed {
+                    record,
+                    row: "db+prepared".to_owned(),
+                },
                 end_user: "end-user".to_owned(),
                 owner: Some("owner u".to_owned()),
                 team: TeamGrant::Loaded("team t".to_owned()),
@@ -822,7 +829,9 @@ mod tests {
             ..ScriptedHost::default()
         };
         assert_eq!(
-            context(run(&host, "sk-1", "/chat/completions", &settings).await).key,
+            context(run(&host, "sk-1", "/chat/completions", &settings).await)
+                .key
+                .row,
             key
         );
     }
@@ -867,7 +876,7 @@ mod tests {
             ..ScriptedHost::default()
         };
         let context = context(run(&host, "sk-1", "/chat/completions", &settings).await);
-        assert_eq!((context.key.as_str(), context.owner), (key, None));
+        assert_eq!((context.key.row.as_str(), context.owner), (key, None));
     }
 
     #[rstest]
@@ -902,7 +911,7 @@ mod tests {
         let host = ScriptedHost::default();
         let outcome = run_resolved(&host, virtual_key(), &settings).await;
         assert_eq!(
-            context(outcome.map_err(|refused| *refused.error)).key,
+            context(outcome.map_err(|refused| *refused.error)).key.row,
             "mapped+prepared"
         );
         assert_eq!(
