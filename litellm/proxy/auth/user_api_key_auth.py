@@ -1406,7 +1406,7 @@ async def user_api_key_auth_websocket_for_model(
             raise HTTPException(status_code=403, detail="No API key provided")
     else:
         # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
+        if not authorization.lower().startswith("bearer "):
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="Invalid Authorization header format")
 
