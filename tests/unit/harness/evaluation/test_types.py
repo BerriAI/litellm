@@ -85,6 +85,21 @@ def test_should_report_judge_token_counts_even_when_the_judge_price_is_unknown()
     assert not summary.metrics_complete
 
 
+@pytest.mark.parametrize("cost", (None, 0.0, 0.25))
+def test_native_result_requires_known_cost_for_complete_eval_metrics(cost: float | None) -> None:
+    result: Final = Result("answer", None, [], [], Usage(10, 5, 1), cost, "done", "session")
+    check: Final = CheckResult(True, "passed")
+    report: Final = EvalScorecard(
+        "suite", (EvalRun("one", "task", "target", 1, EvalStatus.PASS, result, check, 1, "passed"),)
+    )
+
+    summary: Final = report.summaries[0]
+    assert summary.cost == cost
+    assert summary.usage == Usage(10, 5, 1)
+    assert summary.passed == 1
+    assert summary.metrics_complete is (cost is not None)
+
+
 def test_should_escape_multiline_labels_and_check_output_in_markdown() -> None:
     report: Final = EvalScorecard(
         suite_id="suite",
