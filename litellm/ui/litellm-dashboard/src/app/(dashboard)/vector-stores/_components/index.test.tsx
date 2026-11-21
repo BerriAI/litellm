@@ -82,13 +82,13 @@ describe("VectorStoreManagement create flow visibility", () => {
     { label: "proxy_admin_viewer session (userRole Admin, isViewOnly)", userRole: "Admin", isViewOnly: true },
     { label: "Org Admin", userRole: "Org Admin", isViewOnly: false },
   ])(
-    "should hide the Create Vector Store tab and button and skip /credentials for $label",
+    "should hide the Create from Documents tab and button and skip /credentials for $label",
     async ({ userRole, isViewOnly }) => {
       render(
         <VectorStoreManagement accessToken="sk-test" userID="user-1" userRole={userRole} isViewOnly={isViewOnly} />,
       );
       await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test"));
-      expect(screen.queryByRole("tab", { name: "Create Vector Store" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Create from Documents" })).not.toBeInTheDocument();
       expect(screen.getByRole("tab", { name: "Manage Vector Stores" })).toHaveAttribute("aria-selected", "true");
       expect(await screen.findByText("table-loaded")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "+ Add Vector Store" })).not.toBeInTheDocument();
@@ -96,12 +96,11 @@ describe("VectorStoreManagement create flow visibility", () => {
     },
   );
 
-  it("should keep the Create Vector Store tab and button and fetch /credentials for a proxy admin", async () => {
-    const user = userEvent.setup();
+  it("should open a proxy admin on Manage Vector Stores, keep the Create from Documents tab and fetch /credentials", async () => {
     render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
     await waitFor(() => expect(mockCredentialListCall).toHaveBeenCalledWith("sk-test"));
-    expect(screen.getByRole("tab", { name: "Create Vector Store" })).toHaveAttribute("aria-selected", "true");
-    await openManageTab(user);
+    expect(screen.getByRole("tab", { name: "Manage Vector Stores" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Create from Documents" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("button", { name: "+ Add Vector Store" })).toBeInTheDocument();
   });
 });
