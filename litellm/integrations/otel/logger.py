@@ -594,6 +594,10 @@ class OpenTelemetryV2(CustomLogger):
         if carrier is not None:
             self._tenant_tracers.release(carrier.provider)
 
+    def _span_session(self, call: LLMCallEvent) -> str | None:
+        """The session a model call's span names."""
+        return call.session_id
+
     def _finish_carrier(
         self,
         carrier: "_LLMCallSpan | None",
@@ -620,7 +624,7 @@ class OpenTelemetryV2(CustomLogger):
             request_route=request_root_http_route(),
             request_purpose=call.purpose,
             trace=call.trace,
-            session_id=call.session_id,
+            session_id=self._span_session(call),
             metadata_keys=tuple(self.config.baggage_metadata_keys),
             operation=call.operation,
         )

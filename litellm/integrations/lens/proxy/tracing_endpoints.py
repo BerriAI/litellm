@@ -56,6 +56,7 @@ from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_r
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router = APIRouter(tags=["agent tracing"])
@@ -120,12 +121,42 @@ def _otlp_error(content_type: str | None, status_code: int, message: str, retry:
 
 
 @router.post("/v1/logs", include_in_schema=False)
-@router.post("/v1/traces", include_in_schema=False)
-async def ingest_otlp_traces(request: Request) -> Response:
+async def ingest_otlp_logs(request: Request) -> Response:
     return _otlp_error(
         request.headers.get("content-type"),
         410,
-        "Send traces and logs directly to the Lens endpoint shown in Lens setup.",
+        "Send logs directly to the Lens endpoint shown in Lens setup.",
+    )
+
+
+@router.post("/v1/traces", include_in_schema=False)
+async def forward_otlp_traces(
+    request: Request,
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+) -> Response:
+    """An agent that traces itself sends its spans here with its gateway key; they go to Lens as sent, filed under that key's owner."""
+    content_type: Final = request.headers.get("content-type")
+    if tracing is None:
+        return _otlp_error(content_type, 501, "Agent tracing is not enabled on this gateway.")
+    owner: Final = {
+        "x-litellm-api-key-hash": LiteLLMProxyRequestSetup.get_logged_api_key(auth),
+        "x-litellm-team-id": auth.team_id,
+        "x-litellm-org-id": auth.org_id,
+        "x-litellm-user-id": auth.user_id,
+        "content-type": content_type or "application/x-protobuf",
+        "content-encoding": request.headers.get("content-encoding"),
+    }
+    forwarded: Final = await tracing.storage.forward_spans(
+        await request.body(), {name: value for name, value in owner.items() if value}
+    )
+    if forwarded is None:
+        return _otlp_error(content_type, 503, "Lens is unavailable. Please try again.", retry=True)
+    status_code, body = forwarded
+    return Response(
+        content=body,
+        status_code=status_code,
+        media_type=(content_type or "application/x-protobuf").split(";", 1)[0],
     )
 
 

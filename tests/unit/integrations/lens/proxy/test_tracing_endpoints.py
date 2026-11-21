@@ -5,6 +5,7 @@ Tests for the agent tracing endpoints (litellm/integrations/lens/proxy/tracing_e
 import asyncio
 import gzip
 import json
+from queue import Queue
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -174,7 +175,7 @@ def _assert_validation_error(response: Response, error_type: str, location: tupl
         ),
     ),
 )
-def test_trace_read_permissions_with_retired_uploads(
+def test_trace_read_permissions(
     client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, scope: TraceScope | None
 ) -> None:
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
@@ -185,10 +186,6 @@ def test_trace_read_permissions_with_retired_uploads(
         receiver.list_traces.assert_not_awaited()
     else:
         receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None)
-
-    write: Final = client.post("/v1/traces", json={})
-    assert write.status_code == 410
-    receiver.ingest.assert_not_called()
 
 
 @pytest.fixture
@@ -216,21 +213,99 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-@pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"))
 @pytest.mark.parametrize("media_type", ("application/json", "application/x-protobuf"))
-def test_gateway_uploads_return_setup_guidance_without_reading_the_body(
-    client: TestClient, receiver: MagicMock, endpoint: str, media_type: str
+def test_log_uploads_return_setup_guidance_without_reading_the_body(
+    client: TestClient, receiver: MagicMock, media_type: str
 ) -> None:
     from google.rpc.status_pb2 import Status
 
-    response: Final = client.post(endpoint, content=b"invalid payload", headers={"content-type": media_type})
+    response: Final = client.post("/v1/logs", content=b"invalid payload", headers={"content-type": media_type})
     assert response.status_code == 410
     assert response.headers["content-type"] == media_type
     message: Final = (
         response.json()["message"] if media_type == "application/json" else Status.FromString(response.content).message
     )
-    assert message == "Send traces and logs directly to the Lens endpoint shown in Lens setup."
+    assert message == "Send logs directly to the Lens endpoint shown in Lens setup."
     receiver.ingest.assert_not_called()
+
+
+AGENT_SPANS: Final = b"\x0a\x02agent spans exactly as the agent sent them"
+
+
+def _forward_agent_spans(client: TestClient, lens: httpx.MockTransport, headers: Mapping[str, str]) -> Response:
+    tracing: Final = TraceReceiver(
+        storage=LensTraceStorage(RemoteTraceStore(httpx.AsyncClient(base_url="http://lens", transport=lens)))
+    )
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+    return client.post("/v1/traces", content=AGENT_SPANS, headers=headers)
+
+
+def test_agent_spans_reach_lens_unchanged_under_the_owner_of_the_key_that_sent_them(client: TestClient) -> None:
+    received: Final = Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return httpx.Response(200, content=b"stored")
+
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-key", team_id="team-a", org_id="org-a", user_id="user-a"
+    )
+    response: Final = _forward_agent_spans(
+        client,
+        httpx.MockTransport(accept),
+        {
+            "content-type": "application/x-protobuf",
+            "content-encoding": "gzip",
+            "x-litellm-api-key-hash": "another-key",
+            "x-litellm-team-id": "another-team",
+        },
+    )
+
+    forwarded: Final = received.get_nowait()
+    owner: Final = {name: value for name, value in forwarded.headers.items() if name.startswith("x-litellm-")}
+    assert (response.status_code, response.content, response.headers["content-type"]) == (
+        200,
+        b"stored",
+        "application/x-protobuf",
+    )
+    assert (forwarded.url.path, forwarded.content, forwarded.headers["content-encoding"]) == (
+        "/v1/traces",
+        AGENT_SPANS,
+        "gzip",
+    )
+    assert owner == {
+        "x-litellm-api-key-hash": "hashed-key",
+        "x-litellm-team-id": "team-a",
+        "x-litellm-org-id": "org-a",
+        "x-litellm-user-id": "user-a",
+    }
+
+
+@pytest.mark.parametrize("media_type", ("application/json", "application/x-protobuf"))
+def test_agent_spans_are_retried_later_when_lens_cannot_be_reached(client: TestClient, media_type: str) -> None:
+    from google.rpc.status_pb2 import Status
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("lens is down", request=request)
+
+    response: Final = _forward_agent_spans(client, httpx.MockTransport(refuse), {"content-type": media_type})
+
+    message: Final = (
+        response.json()["message"] if media_type == "application/json" else Status.FromString(response.content).message
+    )
+    assert (response.status_code, message, response.headers["retry-after"]) == (
+        503,
+        "Lens is unavailable. Please try again.",
+        str(tracing_endpoints.OTLP_RETRY_AFTER_SECONDS),
+    )
+
+
+def test_agent_spans_are_refused_on_a_gateway_without_tracing(client: TestClient) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: None
+
+    response: Final = client.post("/v1/traces", content=AGENT_SPANS, headers={"content-type": "application/json"})
+
+    assert (response.status_code, response.json()["message"]) == (501, "Agent tracing is not enabled on this gateway.")
 
 
 def test_list_traces_passes_scope_window_and_cursor(client, receiver):

@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
+from opentelemetry.trace import get_current_span
 
 from litellm.integrations.lens.lens_trace_adapter import (
     AgentCall,
     ToolExchange,
+    agent_trace_of,
     agent_call,
     agent_name,
     tool_exchanges,
@@ -324,71 +327,31 @@ def test_the_title_call_opencode_makes_is_named_but_its_task_is_its_own_prompt()
     assert (made_by.agent, made_by.task) == ("opencode", "Generate a title for this conversation:")
 
 
-_SESSION = "4b5aa664-9999-4eb9-bf98-808a69637396"
-_REMINDER = "<system-reminder>\nContents of AGENTS.md\n</system-reminder>\n"
-_FIRST = {"role": "user", "content": [{"type": "text", "text": f"{_REMINDER}run ls"}]}
-_ASKS_LS = {"role": "assistant", "content": [{"type": "tool_use", "id": "call-ls", "name": "Bash", "input": {}}]}
-_LS_RESULT = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-ls", "content": "a.txt"}]}
-_SECOND = {"role": "user", "content": "what is 9 plus 4?"}
-_SUGGEST = {"role": "user", "content": "[SUGGESTION MODE: Suggest what the user might naturally type next]"}
+AGENT_TRACE_ID: Final = "0af7651916cd43dd8448eb211c80319c"
+AGENT_SPAN_ID: Final = "b7ad6b7169203331"
 
 
-def test_the_call_that_carries_a_typed_message_opens_its_interaction() -> None:
-    from litellm.integrations.lens.lens_trace_adapter import interaction
-
-    opened = interaction(_SESSION, [_FIRST])
-
-    assert opened is not None
-    assert (opened.sequence, opened.prompt, opened.opens) == (1, "run ls", True)
+def _call_with_headers(headers: dict[str, str]) -> dict[str, object]:
+    return {"litellm_params": {"proxy_server_request": {"headers": headers}}}
 
 
-def test_a_call_that_only_adds_tool_results_continues_the_same_interaction() -> None:
-    from litellm.integrations.lens.lens_trace_adapter import interaction
+def test_a_call_whose_request_names_the_agents_span_is_placed_under_it() -> None:
+    placed: Final = agent_trace_of(_call_with_headers({"traceparent": f"00-{AGENT_TRACE_ID}-{AGENT_SPAN_ID}-01"}))
 
-    opened = interaction(_SESSION, [_FIRST])
-    continued = interaction(_SESSION, [_FIRST, _ASKS_LS, _LS_RESULT])
-
-    assert opened is not None and continued is not None
-    assert (continued.key, continued.sequence, continued.opens) == (opened.key, 1, False)
+    assert placed is not None
+    parent: Final = get_current_span(placed).get_span_context()
+    assert (format(parent.trace_id, "032x"), format(parent.span_id, "016x")) == (AGENT_TRACE_ID, AGENT_SPAN_ID)
 
 
-def test_the_next_typed_message_is_a_new_interaction_in_the_same_session() -> None:
-    from litellm.integrations.lens.lens_trace_adapter import interaction
-
-    first = interaction(_SESSION, [_FIRST, _ASKS_LS, _LS_RESULT])
-    second = interaction(_SESSION, [_FIRST, _ASKS_LS, _LS_RESULT, {"role": "assistant", "content": "1 file"}, _SECOND])
-    elsewhere = interaction("another-session", [_FIRST])
-
-    assert first is not None and second is not None and elsewhere is not None
-    assert (second.sequence, second.prompt, second.opens) == (2, "what is 9 plus 4?", True)
-    assert len({first.key, second.key, elsewhere.key}) == 3
-
-
-def test_a_request_with_no_typed_message_has_no_interaction() -> None:
-    from litellm.integrations.lens.lens_trace_adapter import interaction
-
-    only_setup = [{"role": "user", "content": _REMINDER}, _ASKS_LS, _LS_RESULT]
-
-    assert interaction(_SESSION, only_setup) is None
-
-
-def test_a_payload_tells_a_subagent_request_and_a_side_request_from_the_agents_thread() -> None:
-    def payload(headers: dict[str, str], tools: list[dict[str, str]]) -> dict[str, object]:
-        return {
-            "metadata": {"user_agent": "claude-cli/2.1.330", "requester_custom_headers": headers},
-            "messages": [_FIRST],
-            "model_parameters": {"tools": tools},
-        }
-
-    thread = agent_call(payload({}, [{"name": "Bash"}]))
-    subagent = agent_call(payload({"x-claude-code-agent-id": "a995473280eb4a327"}, [{"name": "Bash"}]))
-    side = agent_call(payload({}, []))
-
-    suggestion = agent_call(
-        {**payload({}, [{"name": "Bash"}]), "messages": [_FIRST, {"role": "assistant", "content": "2 files"}, _SUGGEST]}
-    )
-
-    assert (thread.subagent, thread.beside_thread) == (None, False)
-    assert (subagent.subagent, subagent.beside_thread) == ("a995473280eb4a327", False)
-    assert (side.subagent, side.beside_thread) == (None, True)
-    assert (suggestion.subagent, suggestion.beside_thread) == (None, True)
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param(_call_with_headers({}), id="no-traceparent"),
+        pytest.param(_call_with_headers({"traceparent": "not-a-trace"}), id="unreadable-traceparent"),
+        pytest.param(_call_with_headers({"traceparent": f"00-{'0' * 32}-{AGENT_SPAN_ID}-01"}), id="all-zero-trace-id"),
+        pytest.param({}, id="sdk-call-with-no-proxy-request"),
+        pytest.param({"litellm_params": {"proxy_server_request": None}}, id="proxy-request-not-recorded"),
+    ),
+)
+def test_a_call_that_names_no_agent_span_keeps_the_gateways_own_trace(kwargs: dict[str, object]) -> None:
+    assert agent_trace_of(kwargs) is None
