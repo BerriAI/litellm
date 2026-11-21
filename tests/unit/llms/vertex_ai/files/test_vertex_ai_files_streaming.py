@@ -344,8 +344,9 @@ class TestBatchRowServiceTier:
             (_chat_batch_row(service_tier="priority", drop_params=True), {}),
             (_chat_batch_row(service_tier="priority"), {"drop_params": True}),
             (_responses_batch_row(service_tier="priority", drop_params=True), {}),
+            (_responses_batch_row(service_tier="priority", drop_params=None), {"drop_params": True}),
         ],
-        ids=["row", "deployment", "responses-row"],
+        ids=["row", "deployment", "responses-row", "responses-row-null"],
     )
     def test_drop_params_on_the_row_or_deployment_uploads_the_row_without_a_tier(
         self, row: bytes, litellm_params: dict[str, object]
@@ -354,6 +355,11 @@ class TestBatchRowServiceTier:
 
         assert "serviceTier" not in uploaded["request"]
         assert uploaded["request"]["contents"] == [{"role": "user", "parts": [{"text": "Say hi"}]}]
+
+    @pytest.mark.parametrize("row_builder", [_chat_batch_row, _responses_batch_row], ids=["chat", "responses"])
+    def test_drop_params_false_on_the_row_wins_over_the_deployment(self, row_builder: Callable[..., bytes]) -> None:
+        with pytest.raises(VertexAIError, match="do not support `service_tier`"):
+            _upload_batch_row(row_builder(service_tier="priority", drop_params=False), {"drop_params": True})
 
     @pytest.mark.parametrize("service_tier", ["auto", "default", "standard", "SERVICE_TIER_STANDARD"])
     def test_a_tier_without_a_vertex_header_uploads_the_row(self, service_tier: str) -> None:

@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.model_param_helper import embeds_thought_signatu
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.service_tier_utils import GEMINI_TRAFFIC_TYPE_SERVICE_TIERS
 from litellm.litellm_core_utils.tool_fields import (
     declared_function_name,
     qualified_member_name,
@@ -216,9 +217,8 @@ SENT_SERVICE_TIERS: Final = frozenset({"priority", "flex", "standard"})
 PROVIDER_DEFAULT_SERVICE_TIERS: Final = frozenset({"auto", "default", "unspecified"})
 VERTEX_SHARED_REQUEST_TIERS: Final = frozenset({"priority", "flex"})
 SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"standard_only": "standard"})
-GEMINI_SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType({**SERVICE_TIER_ALIASES, "auto": "priority"})
-VERTEX_TRAFFIC_TYPE_SERVICE_TIERS: Final[Mapping[str, str]] = MappingProxyType(
-    {"ON_DEMAND": "default", "ON_DEMAND_PRIORITY": "priority", "ON_DEMAND_FLEX": "flex"}
+GEMINI_SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
+    {**SERVICE_TIER_ALIASES, "auto": "priority", "default": "standard"}
 )
 
 
@@ -226,8 +226,8 @@ def _response_service_tier(header_tier: str | None, traffic_type: object) -> str
     if header_tier:
         lowered: Final = header_tier.lower()
         return "default" if lowered == "standard" else lowered
-    if isinstance(traffic_type, str):
-        return VERTEX_TRAFFIC_TYPE_SERVICE_TIERS.get(traffic_type.upper())
+    if isinstance(traffic_type, str) and traffic_type:
+        return GEMINI_TRAFFIC_TYPE_SERVICE_TIERS.get(traffic_type.upper(), "default")
     return None
 
 
