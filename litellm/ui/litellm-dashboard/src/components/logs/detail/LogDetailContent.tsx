@@ -292,14 +292,14 @@ export function LogDetailContent({
 // ============================================================================
 
 function DescriptionList({ children }: { children: React.ReactNode }) {
-  return <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">{children}</div>;
+  return <div className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">{children}</div>;
 }
 
 function DescriptionItem({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0.5">
       <span className="shrink-0 text-muted-foreground after:content-[':']">{label}</span>
-      <span className="min-w-0 break-words">{children}</span>
+      <span className="min-w-0 break-all">{children}</span>
     </div>
   );
 }
