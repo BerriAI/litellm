@@ -117,14 +117,6 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
 
-def _count_or_estimate_batch_entry_tokens(entry: object, raw_line: bytes) -> int:
-    try:
-        counted: Final = count_entry_tokens(decoded_json_object(entry))
-    except Exception:
-        return estimate_batch_entry_tokens(raw_line)
-    return estimate_batch_entry_tokens(raw_line) if counted is None else counted
-
-
 class _FileContentFetchKwargs(TypedDict, total=False, extra_items=object):
     pass
 
@@ -1103,6 +1095,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     output_tokens += entry_output_tokens
                     continue
 
+                try:
+                    if (counted := count_entry_tokens(decoded_json_object(entry))) is None:
+                        entry_total_tokens = estimate_batch_entry_tokens(raw_line)
+                    else:
+                        entry_total_tokens = counted
+                except Exception:
+                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
+                total_tokens += entry_total_tokens
+
                 row_model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
                 model: str | None = routing_alias_by_row_model.get(row_model, row_model) if row_model else None
                 if model:
@@ -1113,9 +1114,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 else:
                     entry_output_tokens = no_max_tokens_output_floor(min_configured_otpm_limit)
                 output_tokens += entry_output_tokens
-
-                entry_total_tokens = _count_or_estimate_batch_entry_tokens(entry, raw_line)
-                total_tokens += entry_total_tokens
 
                 if isinstance(model, str) and isinstance(row_model, str):
                     model_usage = per_model_usage.setdefault(
