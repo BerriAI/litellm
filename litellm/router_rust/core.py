@@ -5523,6 +5523,14 @@ class _Driver:
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
                 in_call = True  # rebind-ok: see above
+                attempt.set_recorder(
+                    host.deployment_attempt_recorder(
+                        call.host_op,
+                        stream=compacted.get("stream"),
+                        fallback_level=step.get("fallback_level"),
+                        retry=step.get("retry"),
+                    )
+                )
                 pending: Final[object] = (
                     self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
                         _with_target_order(call.kwargs, step.get("target_order")),
