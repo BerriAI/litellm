@@ -838,7 +838,7 @@ def _response_fields(result: object) -> Mapping[str, object]:
     if has_attributes(result, _KeyValuePairs, "__iter__") or has_attributes(result, _KeyValuePairs, "__getitem__"):
         return dict(result)
     dict_from_pairs(result)
-    return _response_fields(result)
+    raise TypeError(f"{type(result).__name__!r} object is not iterable")
 
 
 async def _emit_management_endpoint_otel_span(

@@ -19,7 +19,6 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
     callable_of,
-    has_attributes,
     normalize_drop_params,
     require_attributes,
 )
@@ -81,10 +80,7 @@ def _named_endpoint(owner: object, name: str) -> Callable[..., Awaitable[object]
 
 
 def _async_endpoint(endpoint: object) -> Callable[..., Awaitable[object]]:
-    if has_attributes(endpoint, _AsyncEndpoint, "__call__"):
-        return endpoint
-    callable_of(endpoint)
-    return _async_endpoint(endpoint)
+    return require_attributes(callable_of(endpoint), _AsyncEndpoint, "__call__")
 
 
 _PER_REQUEST_ROUTER_SETTINGS: Final = (

@@ -1152,6 +1152,26 @@ def test_callable_of_returns_a_callable_unchanged() -> None:
     assert callable_of(len) is len
 
 
+class _AnswersEveryOtherLookup:
+    def __init__(self) -> None:
+        self.lookups = 0
+
+    def __getattr__(self, name: str) -> object:
+        self.lookups += 1
+        if self.lookups % 2:
+            raise AttributeError(name)
+        return name
+
+
+def test_require_attributes_raises_instead_of_retrying_when_an_attribute_answers_only_every_other_lookup() -> None:
+    flickering: Final = _AnswersEveryOtherLookup()
+
+    with pytest.raises(AttributeError):
+        _required_keys(flickering)
+
+    assert flickering.lookups == 2
+
+
 @pytest.mark.parametrize("value", [_DATE, [("a", 1)], None], ids=["date", "pairs", "none"])
 def test_keyword_arguments_never_calls_the_target_with_a_value_that_is_not_a_mapping(value: object) -> None:
     calls: Final[list[object]] = []

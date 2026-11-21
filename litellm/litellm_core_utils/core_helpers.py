@@ -255,7 +255,7 @@ def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shap
         return value
     for name in names:
         getattr(value, name)
-    return require_attributes(value, shape, *names)
+    raise AttributeError(f"{type(value).__name__!r} object lacks {names!r}")
 
 
 def int_of(value: object) -> int:
@@ -298,7 +298,7 @@ def callable_of(value: object) -> Callable[..., object]:
     if callable(value):
         return value
     value()  # pyright: ignore[reportCallIssue]  # raises its own TypeError
-    return callable_of(value)
+    raise TypeError(f"{type(value).__name__!r} object is not callable")
 
 
 class KeywordArguments(Protocol):
@@ -311,7 +311,7 @@ def keyword_arguments(value: object, target: Callable[..., object]) -> KeywordAr
     if has_attributes(value, KeywordArguments, "keys"):
         return value
     target(**value)  # pyright: ignore[reportCallIssue]  # ** fails before target runs
-    return keyword_arguments(value, target)
+    raise TypeError(f"argument after ** must be a mapping, not {type(value).__name__}")
 
 
 def unpackable_mapping(value: object) -> KeywordArguments:

@@ -1987,7 +1987,7 @@ def _allocation_total(allocated: int, requested: object) -> float:
     if has_attributes(requested, _AddsToAllocation, "__radd__"):
         return allocated + requested
     sum_of(allocated, requested)
-    return _allocation_total(allocated, requested)
+    raise TypeError(f"unsupported operand type(s) for +: 'int' and {type(requested).__name__!r}")
 
 
 def _check_key_model_specific_limits(
