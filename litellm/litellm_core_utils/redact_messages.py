@@ -196,17 +196,24 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     return {
         **fields,
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
-        **{
-            key: None
-            for key in ("thinking_blocks", "reasoningContentBlocks", "citations", "tool_results")
-            if key in fields
-        },
+        **{key: None for key in ("thinking_blocks", "reasoningContentBlocks", "citations") if key in fields},
+        **({"tool_results": _without_mcp_tool_results(fields["tool_results"])} if "tool_results" in fields else {}),
         **(
             {"server_tool_calls": _redacted_tool_call_dicts(fields["server_tool_calls"])}
             if "server_tool_calls" in fields
             else {}
         ),
     }
+
+
+def _is_mcp_tool_result(result: object) -> bool:
+    return (mapping := _as_mapping(result)) is not None and mapping.get("type") == "mcp_tool_result"
+
+
+def _without_mcp_tool_results(results: object) -> object:
+    if (result_list := as_object_list(results)) is None:
+        return results
+    return [result for result in result_list if not _is_mcp_tool_result(result)] or None
 
 
 def _redacted_tool_call_dict(call: object) -> object:

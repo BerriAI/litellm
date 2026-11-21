@@ -1567,6 +1567,84 @@ async def test_previous_response_id_leaves_out_a_stored_mcp_call_that_message_lo
     assert "mcp_tool_result" not in json.dumps(messages)
 
 
+_CODE_EXECUTION_CALL_ID: Final = "srvtoolu_01Bash"
+_STORED_CODE_EXECUTION_TURN: Final = _stored_mcp_turn(
+    {
+        "id": "chatcmpl-mcp-turn",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "2**40 is 1099511627776.",
+                    "tool_calls": [
+                        {
+                            "id": _CODE_EXECUTION_CALL_ID,
+                            "type": "function",
+                            "function": {
+                                "name": "bash_code_execution",
+                                "arguments": json.dumps({"command": "python3 -c 'print(2**40)'"}),
+                            },
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "tool_results": [
+                            {
+                                "type": "bash_code_execution_tool_result",
+                                "tool_use_id": _CODE_EXECUTION_CALL_ID,
+                                "content": {
+                                    "type": "bash_code_execution_result",
+                                    "stdout": "1099511627776\n",
+                                    "stderr": "",
+                                    "return_code": 0,
+                                    "content": [],
+                                },
+                            }
+                        ],
+                    },
+                },
+            }
+        ],
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_pairs_a_code_execution_call_with_its_result_after_message_logging_redacted_it() -> (
+    None
+):
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    redacted_turn: Final = {
+        **_STORED_CODE_EXECUTION_TURN,
+        "response": perform_redaction(
+            model_call_details={}, result=json.loads(json.dumps(_STORED_CODE_EXECUTION_TURN["response"]))
+        ),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([redacted_turn])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-mcp-turn",
+            input="Now divide it by 2.",
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    sent_blocks: Final = chain.from_iterable(
+        message["content"] for message in json.loads(anthropic.body)["messages"] if message["role"] == "assistant"
+    )
+    assert [
+        (block["type"], block.get("id", block.get("tool_use_id"))) for block in sent_blocks if block["type"] != "text"
+    ] == [
+        ("server_tool_use", _CODE_EXECUTION_CALL_ID),
+        ("bash_code_execution_tool_result", _CODE_EXECUTION_CALL_ID),
+    ]
+
+
 _LOCAL_TIME_FUNCTION: Final = {
     "type": "function",
     "name": LOCAL_TIME_TOOL["name"],
