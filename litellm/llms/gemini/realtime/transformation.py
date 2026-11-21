@@ -1601,12 +1601,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     self.transform_video_delta_events(_avatar_parts, current_output_item_id, current_response_id)
                 )
                 del server_content["modelTurn"]
-            if (
-                "inputTranscription" in server_content
-                and isinstance(input_tx := server_content["inputTranscription"], dict)
-                and "text" in input_tx
-                and input_tx["text"]
-            ):
+            input_tx: Final = server_content.get("inputTranscription")
+            if isinstance(input_tx, dict) and input_tx.get("text"):
                 transcription_usage: Final = self._consume_input_transcription_usage_estimate(model)
                 returned_message.append(
                     cast(
@@ -1639,10 +1635,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             delta_type="audio",
                         )
                     )
-                    # with avatar video the audio is muxed in the mp4, no audio part comes:
-                    # the transcript-opened item must still be closed by generationComplete
-                    if current_delta_type is None:
-                        current_delta_type = "audio"  # rebind-ok: the transcript opened an audio item
                 returned_message.append(
                     cast(
                         OpenAIRealtimeEvents,
