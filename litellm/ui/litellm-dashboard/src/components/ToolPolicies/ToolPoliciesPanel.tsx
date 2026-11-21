@@ -2,6 +2,7 @@
 
 import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ShieldCheck } from "lucide-react";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
@@ -148,7 +149,10 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
   return (
     <PageContent>
       <PageHeader>
-        <PageHeaderTitle>{t("toolPolicies.panel.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <ShieldCheck />
+          {t("toolPolicies.panel.title")}
+        </PageHeaderTitle>
       </PageHeader>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

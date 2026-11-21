@@ -2,7 +2,7 @@ import { useTerminology } from "@/contexts/TerminologyContext";
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
-import { Info, Plus } from "lucide-react";
+import { Bot, Info, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getAgentsList, deleteAgentCall } from "@/components/networking";
 import AddAgentForm from "./add_agent_form";
@@ -145,7 +145,10 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("agents.panel.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Bot />
+            {t("agents.panel.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{term(t("agents.panel.description"))}</PageHeaderDescription>
           {isAdmin && (
             <PageHeaderControls>

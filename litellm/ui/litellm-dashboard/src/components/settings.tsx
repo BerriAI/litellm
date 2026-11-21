@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Bell, Plus } from "lucide-react";
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
@@ -616,7 +616,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("shell.nav.items.loggingAndAlerts")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Bell />
+            {t("shell.nav.items.loggingAndAlerts")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("shell.pageDescriptions.loggingAndAlerts")}</PageHeaderDescription>
           {activeTab === "logging-callbacks" && (
             <PageHeaderControls>

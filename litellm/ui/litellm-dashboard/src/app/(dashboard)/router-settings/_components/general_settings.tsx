@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
-import { Trash2 } from "lucide-react";
+import { Route, Trash2 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/table_cells";
 
 import RouterSettings from "@/components/router_settings";
@@ -321,7 +321,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("shell.nav.items.routerSettings")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Route />
+            {t("shell.nav.items.routerSettings")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("shell.pageDescriptions.routerSettings")}</PageHeaderDescription>
         </PageHeader>
         <Tabs defaultValue="loadbalancing" className="w-full gap-6">

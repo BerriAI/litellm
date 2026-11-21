@@ -2,7 +2,7 @@ import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/rol
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
-import { CircleHelp, Plug, Search } from "lucide-react";
+import { CircleHelp, Plug, Search, Server } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -513,6 +513,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           />
           <PageHeader>
             <PageHeaderTitle>
+              <Server />
               {t("mcpServers.servers.header.title")}
               {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
             </PageHeaderTitle>

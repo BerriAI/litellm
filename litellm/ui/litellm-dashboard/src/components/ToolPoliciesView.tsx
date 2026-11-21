@@ -2,6 +2,7 @@
 
 import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import { ShieldCheck } from "lucide-react";
 
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -32,7 +33,10 @@ export default function ToolPoliciesView({ accessToken }: ToolPoliciesViewProps)
     return (
       <Page>
         <PageHeader>
-          <PageHeaderTitle>{t("toolPolicies.view.adminOnly.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <ShieldCheck />
+            {t("toolPolicies.view.adminOnly.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("toolPolicies.view.adminOnly.message")}</PageHeaderDescription>
         </PageHeader>
       </Page>

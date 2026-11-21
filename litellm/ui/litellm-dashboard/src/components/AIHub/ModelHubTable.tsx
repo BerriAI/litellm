@@ -39,7 +39,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Copy, Inbox, Search as SearchIcon, X } from "lucide-react";
+import { Copy, Inbox, LayoutGrid, Search as SearchIcon, X } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -473,7 +473,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <HubContent>
             {!isChat && (
               <PageHeader>
-                <PageHeaderTitle>{term(t("aiHub.modelHubTable.title"))}</PageHeaderTitle>
+                <PageHeaderTitle>
+                  <LayoutGrid />
+                  {term(t("aiHub.modelHubTable.title"))}
+                </PageHeaderTitle>
                 {isAdminRole(userRole || "") ? (
                   <PageHeaderDescription>{t("aiHub.modelHubTable.adminDescription")}</PageHeaderDescription>
                 ) : (

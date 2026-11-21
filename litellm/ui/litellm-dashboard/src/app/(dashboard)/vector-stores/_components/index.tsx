@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { useTranslation } from "react-i18next";
-import { RefreshCw } from "lucide-react";
+import { Database, RefreshCw } from "lucide-react";
 import {
   vectorStoreListCall,
   vectorStoreDeleteCall,
@@ -148,7 +148,10 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("vectorStores.page.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Database />
+            {t("vectorStores.page.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("vectorStores.page.description")}</PageHeaderDescription>
           <PageHeaderControls className="flex-wrap">
             {activeTab === "manage" && canCreateVectorStores && (

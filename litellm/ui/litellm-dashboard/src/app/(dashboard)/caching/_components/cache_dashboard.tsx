@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { RefreshCw } from "lucide-react";
+import { Database, RefreshCw } from "lucide-react";
 import { cachingHealthCheckCall } from "@/components/networking";
 import { deriveErrorMessage } from "@/lib/http/client";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -173,7 +173,10 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("shell.nav.items.responseCache")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Database />
+            {t("shell.nav.items.responseCache")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("shell.pageDescriptions.caching")}</PageHeaderDescription>
           <PageHeaderControls className="flex-wrap">
             <Button

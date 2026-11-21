@@ -4,7 +4,7 @@ import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { Copy, Inbox, Info } from "lucide-react";
+import { Copy, Inbox, Info, LayoutGrid } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
@@ -359,7 +359,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               {!isChat && isEmbedded && (
                 <>
                   <PageHeader>
-                    <PageHeaderTitle>{t("aiHub.modelHubTable.title")}</PageHeaderTitle>
+                    <PageHeaderTitle>
+                      <LayoutGrid />
+                      {t("aiHub.modelHubTable.title")}
+                    </PageHeaderTitle>
                     <PageHeaderDescription>{t("aiHub.modelHubTable.userDescription")}</PageHeaderDescription>
                   </PageHeader>
                   <div className="p-4 bg-info/10 border border-info/20 rounded-lg">

@@ -1,6 +1,7 @@
 import type { SkillListQuery } from "@/components/claude_code_plugins/types";
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { Blocks } from "lucide-react";
 import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
 import { useSkillFilters, skillSortQuery } from "@/components/claude_code_plugins/skillCatalog";
 import React, { useState } from "react";
@@ -204,7 +205,10 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
         ) : (
           <>
             <PageHeader>
-              <PageHeaderTitle>{t("skills.panel.title")}</PageHeaderTitle>
+              <PageHeaderTitle>
+                <Blocks />
+                {t("skills.panel.title")}
+              </PageHeaderTitle>
               <PageHeaderDescription>{t("skills.panel.intro")}</PageHeaderDescription>
               <PageHeaderControls>
                 <Button onClick={() => setIsAddModalVisible(true)} disabled={!canWrite}>

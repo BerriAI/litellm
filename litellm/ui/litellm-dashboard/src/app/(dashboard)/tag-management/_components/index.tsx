@@ -1,7 +1,7 @@
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Tags } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import TagInfoView from "./tag_info";
@@ -148,7 +148,10 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
         <Page className="h-full">
           <PageContent>
             <PageHeader>
-              <PageHeaderTitle>{t("tagManagement.page.title")}</PageHeaderTitle>
+              <PageHeaderTitle>
+                <Tags />
+                {t("tagManagement.page.title")}
+              </PageHeaderTitle>
               <PageHeaderDescription>
                 {t("tagManagement.page.intro")}
                 <br />

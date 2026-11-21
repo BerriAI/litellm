@@ -4,7 +4,7 @@ import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 
 import { useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Network, RefreshCw } from "lucide-react";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
@@ -195,7 +195,10 @@ export default function ModelsAndEndpointsPage() {
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("modelsAndEndpoints.page.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Network />
+            {t("modelsAndEndpoints.page.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>
             {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}
           </PageHeaderDescription>

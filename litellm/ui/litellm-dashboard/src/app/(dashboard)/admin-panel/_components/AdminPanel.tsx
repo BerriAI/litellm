@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Info, TriangleAlert } from "lucide-react";
+import { Info, Settings, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useBaseUrl } from "@/components/constants";
@@ -435,7 +435,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("shell.nav.items.adminSettings")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Settings />
+            {t("shell.nav.items.adminSettings")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("adminPanel.page.subtitle")}</PageHeaderDescription>
         </PageHeader>
         <Tabs defaultValue={tabItems[0].key} className="gap-6">

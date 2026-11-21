@@ -1,6 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -371,7 +372,10 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         </Dialog>
 
         <PageHeader>
-          <PageHeaderTitle>{t("searchTools.page.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Search />
+            {t("searchTools.page.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("searchTools.page.subtitle")}</PageHeaderDescription>
           {isAdminRole(userRole) && (
             <PageHeaderControls>

@@ -6,7 +6,7 @@ import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls 
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
-import { Plus } from "lucide-react";
+import { Database, Plus } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
@@ -182,7 +182,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("memory.view.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Database />
+            {t("memory.view.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>
             <Trans
               i18nKey="memory.view.intro"

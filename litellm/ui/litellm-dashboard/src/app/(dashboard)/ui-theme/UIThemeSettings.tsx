@@ -1,5 +1,6 @@
 import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import { Palette } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -130,7 +131,10 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("uiTheme.settings.title")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Palette />
+            {t("uiTheme.settings.title")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("uiTheme.settings.description")}</PageHeaderDescription>
         </PageHeader>
         <Card className="w-full max-w-4xl">
