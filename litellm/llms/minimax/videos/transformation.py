@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
@@ -34,6 +34,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # factory stub leaves params untyped
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMFrozenBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 from litellm.types.videos.utils import (
@@ -51,12 +52,12 @@ class MinimaxVideoError(BaseLLMException):
     pass
 
 
-class _TaskError(BaseModel, frozen=True):
+class _TaskError(LiteLLMFrozenBaseModel, frozen=True):
     code: str | None = None
     message: str | None = None
 
 
-class _TaskUsage(BaseModel, frozen=True):
+class _TaskUsage(LiteLLMFrozenBaseModel, frozen=True):
     total_seconds: int | None = None
     input_seconds: int | None = None
     output_seconds: int | None = None
@@ -64,22 +65,22 @@ class _TaskUsage(BaseModel, frozen=True):
     input_audio_seconds: int | None = None
 
 
-class _TaskContent(BaseModel, frozen=True):
+class _TaskContent(LiteLLMFrozenBaseModel, frozen=True):
     url: str | None = None
     prompt: str | None = None
 
 
-class _ContentItem(BaseModel, frozen=True):
+class _ContentItem(LiteLLMFrozenBaseModel, frozen=True):
     type: str = ""
     text: str | None = None
     role: str | None = None
 
 
-class _MediaUrl(BaseModel, frozen=True, extra="forbid"):
+class _MediaUrl(LiteLLMFrozenBaseModel, frozen=True, extra="forbid"):
     url: str
 
 
-class _CallerMediaItem(BaseModel, frozen=True, extra="forbid"):
+class _CallerMediaItem(LiteLLMFrozenBaseModel, frozen=True, extra="forbid"):
     type: Literal["image_url", "video_url", "audio_url"]
     image_url: _MediaUrl | None = None
     video_url: _MediaUrl | None = None
@@ -87,7 +88,7 @@ class _CallerMediaItem(BaseModel, frozen=True, extra="forbid"):
     role: Literal["first_frame", "last_frame", "reference_image", "reference_video", "reference_audio"] | None = None
 
 
-class _MiniMaxTask(BaseModel, frozen=True):
+class _MiniMaxTask(LiteLLMFrozenBaseModel, frozen=True):
     id: str = Field(min_length=1)
     model: str | None = None
     status: str
@@ -103,20 +104,20 @@ class _MiniMaxTask(BaseModel, frozen=True):
     modality: str | None = None
 
 
-class _TaskIdResponse(BaseModel, frozen=True):
+class _TaskIdResponse(LiteLLMFrozenBaseModel, frozen=True):
     task_id: str = Field(min_length=1)
 
 
-class _TaskResponse(BaseModel, frozen=True):
+class _TaskResponse(LiteLLMFrozenBaseModel, frozen=True):
     task: _MiniMaxTask
 
 
-class _ListResponse(BaseModel, frozen=True):
+class _ListResponse(LiteLLMFrozenBaseModel, frozen=True):
     items: Sequence[_MiniMaxTask] | None = None
     total: int | None = None
 
 
-class _DeleteResponse(BaseModel, frozen=True):
+class _DeleteResponse(LiteLLMFrozenBaseModel, frozen=True):
     task_id: str = Field(min_length=1)
     status: str
 

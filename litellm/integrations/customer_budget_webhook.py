@@ -2,7 +2,7 @@ import os
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, HttpUrl, TypeAdapter
+from pydantic import ConfigDict, HttpUrl, TypeAdapter
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -11,9 +11,10 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.customer_budget import CustomerBudgetEvent
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class _Settings(BaseModel):
+class _Settings(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     endpoint: HttpUrl | None = None

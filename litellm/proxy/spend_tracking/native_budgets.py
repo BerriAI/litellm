@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic import Field as PydanticField
 
 import litellm
@@ -22,6 +22,7 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation, coerce_record
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.native_budgets import BudgetCheck, NativeSettlement
 
 if TYPE_CHECKING:
@@ -32,7 +33,7 @@ def new_reservation_id() -> str:
     return uuid.uuid4().hex
 
 
-class _BudgetExceededFields(BaseModel):
+class _BudgetExceededFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     current_cost: float
@@ -42,32 +43,32 @@ class _BudgetExceededFields(BaseModel):
     entity_id: str | None
 
 
-class _DetailFields(BaseModel):
+class _DetailFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     detail: str
 
 
-class _MessageFields(BaseModel):
+class _MessageFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     message: str
 
 
-class _Held(BaseModel):
+class _Held(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     admission: Literal["held"]
     reservation: Mapping[str, object]
 
 
-class _Skipped(BaseModel):
+class _Skipped(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     admission: Literal["skipped"]
 
 
-class _Refused(BaseModel):
+class _Refused(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     admission: Literal["refused"]
@@ -290,7 +291,7 @@ async def settle_native_reservation(
     )
 
 
-class BudgetDecision(BaseModel):
+class BudgetDecision(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     decision: Literal["skip", "pass", "alert", "throttle", "refuse"]

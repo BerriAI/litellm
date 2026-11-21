@@ -2,11 +2,12 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.proxy.management_helpers.customer_hierarchy import PrismaRecord
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
 class _UserRepository(PrismaTableRepository[PrismaRecord]):
@@ -29,7 +30,7 @@ class _ObjectPermissionRepository(PrismaTableRepository[PrismaRecord]):
     table_name = "litellm_objectpermissiontable"
 
 
-class _Grantee(BaseModel):
+class _Grantee(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     object_permission_id: str | None = None
@@ -37,7 +38,7 @@ class _Grantee(BaseModel):
     organization_id: str | None = None
 
 
-class _Permission(BaseModel):
+class _Permission(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     apps: tuple[str, ...] | None = None

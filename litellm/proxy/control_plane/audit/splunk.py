@@ -4,18 +4,19 @@ from dataclasses import dataclass
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.control_plane.audit.ocsf import AuditRecord
 from litellm.proxy.control_plane.audit.pipeline import Batch, Delivered, DeliveryResult, Rejected, Undelivered
 from litellm.proxy.control_plane.audit.transport import Poster
 from litellm.proxy.control_plane.settings import SplunkHecSettings
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 EVENT_PATH: Final = "/services/collector/event"
 
 
-class HecReply(BaseModel):
+class HecReply(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     text: str = ""

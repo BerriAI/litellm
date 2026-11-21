@@ -5,8 +5,9 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import AliasChoices, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.arize.arize_phoenix import (
     ArizePhoenixLogger as _V1Phoenix,
 )
@@ -16,10 +17,11 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 
 
-class _PhoenixSettings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+class _PhoenixSettings(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     project_name: str = Field(
         default="default",

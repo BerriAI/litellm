@@ -106,6 +106,7 @@ from litellm.types.llms.anthropic import (
     AnthropicWebSearchTool,
     AnthropicWebSearchUserLocation,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     AllMessageValues,
@@ -3633,7 +3634,7 @@ def response_body(completion_response: object) -> dict[str, object]:
     return require_attributes(completion_response, dict[str, object], "__getitem__")
 
 
-class JsonModeRequest(BaseModel):
+class JsonModeRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     tools: object = None

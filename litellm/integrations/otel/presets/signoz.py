@@ -3,10 +3,11 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
@@ -14,13 +15,14 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 from litellm.types.utils import StandardCallbackDynamicParams
 
 SIGNOZ_INGESTION_ENDPOINT_ENV: Final = "SIGNOZ_INGESTION_ENDPOINT"
 
 
-class _SigNozSettings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+class _SigNozSettings(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     endpoint: str | None = Field(default=None, validation_alias=SIGNOZ_INGESTION_ENDPOINT_ENV)
     ingestion_key: str | None = Field(default=None, validation_alias="SIGNOZ_INGESTION_KEY")

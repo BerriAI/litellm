@@ -42,6 +42,7 @@ from litellm.proxy._types import SpecialHeaders
 from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 from litellm.proxy.mcp_server.utils import JSONLeafPath, json_string_leaves
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, Mode
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import AktoGuardrailConfigModelOptionalParams
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
@@ -99,7 +100,7 @@ OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 JSON_CONTAINER: Final[TypeAdapter[dict[str, object] | list[object]]] = TypeAdapter(dict[str, object] | list[object])
 
 
-class AktoVerdict(BaseModel):
+class AktoVerdict(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     allowed: bool = Field(validation_alias=AliasChoices("Allowed", "allowed"))
@@ -125,11 +126,11 @@ class AktoVerdict(BaseModel):
         return not self.allowed and self.behaviour.strip().lower() in BLOCKING_BEHAVIOURS
 
 
-class _AktoResponseData(BaseModel):
+class _AktoResponseData(LiteLLMBaseModel):
     guardrailsResult: AktoVerdict | None = None
 
 
-class _AktoResponse(BaseModel):
+class _AktoResponse(LiteLLMBaseModel):
     data: _AktoResponseData | None = None
 
 

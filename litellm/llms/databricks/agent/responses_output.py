@@ -1,21 +1,22 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.databricks.common_utils import DatabricksException
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import GenericStreamingChunk, Usage
 
 
-class _ContentPart(BaseModel):
+class _ContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str = ""
     text: str | None = None
 
 
-class OutputItem(BaseModel):
+class OutputItem(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str = ""
@@ -23,7 +24,7 @@ class OutputItem(BaseModel):
     content: tuple[_ContentPart, ...] | None = None
 
 
-class AgentUsage(BaseModel):
+class AgentUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     input_tokens: int
@@ -38,7 +39,7 @@ class AgentUsage(BaseModel):
         )
 
 
-class AgentResponse(BaseModel):
+class AgentResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     output: tuple[OutputItem, ...]
@@ -46,7 +47,7 @@ class AgentResponse(BaseModel):
     usage: AgentUsage | None = None
 
 
-class _StreamEvent(BaseModel):
+class _StreamEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str = ""

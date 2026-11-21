@@ -3,8 +3,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, ConfigDict, Field, model_validator
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     CustomerBudgetUsage,
@@ -25,7 +26,7 @@ class AppMemberBudgetSource(str, Enum):
     NONE = "none"
 
 
-class AppDefinition(BaseModel):
+class AppDefinition(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     resource_type: AppResourceType | None = None
@@ -38,7 +39,7 @@ class AppDefinition(BaseModel):
     )
 
 
-class AppResource(BaseModel):
+class AppResource(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     resource_type: AppResourceType
@@ -47,7 +48,7 @@ class AppResource(BaseModel):
     app_id: str | None = None
 
 
-class AppSettings(BaseModel):
+class AppSettings(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     budget: Budget | None = None
@@ -99,7 +100,7 @@ class AppCreate(AppSettings):
     resource_type: AppResourceType | None = None
 
 
-class App(BaseModel):
+class App(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     app_id: str
@@ -125,7 +126,7 @@ class App(BaseModel):
     default_customer_member_budget: Budget | None = None
 
 
-class AppOrganizationPut(BaseModel):
+class AppOrganizationPut(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tier_budget_id: str | None = None
@@ -151,7 +152,7 @@ class AppOrganizationPut(BaseModel):
         return self
 
 
-class AppMemberPut(BaseModel):
+class AppMemberPut(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     budget_id: str | None = Field(
@@ -174,7 +175,7 @@ class AppMemberPut(BaseModel):
         return self
 
 
-class AppOrganization(BaseModel):
+class AppOrganization(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     app_id: str
@@ -196,7 +197,7 @@ class AppOrganization(BaseModel):
     effective_customer_member_budget: Budget | None = None
 
 
-class AppMember(BaseModel):
+class AppMember(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     app_id: str

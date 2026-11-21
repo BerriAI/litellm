@@ -20,7 +20,7 @@ from typing import (
 )
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 from typing_extensions import ReadOnly, TypedDict
@@ -120,6 +120,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.auth.customer_hierarchy import customer_budget_scopes_metadata
 
 # Cache special headers as a frozenset for O(1) lookup performance
@@ -134,7 +135,7 @@ _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
-class _CustomerPolicyCarrier(BaseModel):
+class _CustomerPolicyCarrier(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     user_api_key_auth: object = None

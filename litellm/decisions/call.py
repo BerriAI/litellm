@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 import httpx
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails, InitErrorDetails, to_jsonable_python
 from typing_extensions import assert_never
 
@@ -77,6 +77,7 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader, is_decisions_model_mode
@@ -376,7 +377,7 @@ def _str_or_none(value: object) -> str | None:
 _DeploymentFlag: TypeAlias = Annotated[bool | None, BeforeValidator(_bool_or_none)]
 
 
-class _DeploymentCapabilities(BaseModel):
+class _DeploymentCapabilities(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     mode: Annotated[str | None, BeforeValidator(_str_or_none)] = None

@@ -4,7 +4,7 @@ from functools import partial
 from itertools import chain
 from typing import Annotated, Final
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
@@ -148,7 +148,7 @@ def bedrock_guardrail_trace(response: object) -> Mapping[str, object] | None:
     return next((trace for trace in traces if trace is not None), None)
 
 
-class _Assessment(BaseModel):
+class _Assessment(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
     invocation_metrics: Mapping[str, JsonValue] = Field(default_factory=dict, alias="invocationMetrics")
 
@@ -164,7 +164,7 @@ class _Assessment(BaseModel):
         }
 
 
-class _GuardrailTrace(BaseModel):
+class _GuardrailTrace(LiteLLMBaseModel):
     """Both trace shapes: Converse ``inputAssessment`` {id: a} and ``outputAssessments`` {id: [a, ...]}, Invoke
     ``input`` {id: a} and ``outputs`` [{id: a}, ...]."""
 

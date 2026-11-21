@@ -3,7 +3,7 @@ from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, NoReturn
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -26,6 +26,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     unwrap_custom_tool_arguments,
 )
 from litellm.types.llms.azure_ai import FoundryAgentReference
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -153,7 +154,7 @@ def _router_request(model: str, request: Mapping[str, object]) -> Mapping[str, o
     }
 
 
-class _RequestedTools(BaseModel):
+class _RequestedTools(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     tools: tuple[object, ...] | None = None
@@ -367,7 +368,7 @@ def _agent_reference(model: str) -> FoundryAgentReference:
     return FoundryAgentReference(type="agent_reference", name=name)
 
 
-class _CallerAgentReference(BaseModel):
+class _CallerAgentReference(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, coerce_numbers_to_str=True)
 
     name: str

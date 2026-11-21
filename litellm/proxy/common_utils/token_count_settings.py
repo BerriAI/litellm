@@ -3,12 +3,13 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.token_count import TokenCountProvider, TokenCountSourceFields, TokenCountTokenizer
 from litellm.types.utils import TokenCountResponse
 
@@ -19,12 +20,12 @@ TOKENIZER_LOAD_REUSE_SECONDS: Final = 60.0
 TOKENIZER_LOAD_MAX_RUNNING: Final = 4
 
 
-class _UpstreamErrorDetail(BaseModel):
+class _UpstreamErrorDetail(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
     message: str
 
 
-class _UpstreamErrorEnvelope(BaseModel):
+class _UpstreamErrorEnvelope(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
     type: Literal["error"]
     error: _UpstreamErrorDetail

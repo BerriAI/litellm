@@ -3,13 +3,14 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import Never
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -59,7 +60,7 @@ _STATUS_BY_BUSINESS_CODE: Final = MappingProxyType(
 )
 
 
-class _RequestedTools(BaseModel):
+class _RequestedTools(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     tools: JsonValue = None

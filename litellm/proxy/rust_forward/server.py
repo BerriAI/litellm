@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.proxy.server_listener import NO_TRUSTED_PROXIES
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _TRUSTED_PROXIES: Final = TypeAdapter(str)
 
@@ -53,7 +54,7 @@ def local_config_path(cli_config: str | None, environ: Mapping[str, str]) -> str
     return os.path.abspath(path)
 
 
-class UvicornCliParams(BaseModel):
+class UvicornCliParams(LiteLLMBaseModel):
     """The options uvicorn's own CLI parsed that decide how it serves the public port."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")

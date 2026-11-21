@@ -5,12 +5,13 @@ Arize Phoenix API client for fetching prompt versions from Arize Phoenix.
 import urllib.parse
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class _PromptVersionResponse(BaseModel):
+class _PromptVersionResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", strict=True, frozen=True, hide_input_in_errors=True)
 
     data: dict[str, object] | None = None

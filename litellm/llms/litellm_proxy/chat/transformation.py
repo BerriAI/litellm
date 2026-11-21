@@ -4,11 +4,12 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import add_path_to_api_base
 
@@ -18,13 +19,13 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 
-class _ProxyModel(BaseModel):
+class _ProxyModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
 
 
-class _ProxyModelList(BaseModel):
+class _ProxyModelList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_ProxyModel, ...]

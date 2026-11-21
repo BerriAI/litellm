@@ -23,6 +23,7 @@ from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.selection import Selection
 from litellm.rust_bridge.execution import Execution, drive
 from litellm.types.integrations.custom_logger_v2 import Strict
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
 class RustHandle(Protocol):
@@ -51,7 +52,7 @@ def _streamless(execution: Execution, head: object) -> object:
     raise RuntimeError("a rust callback cannot open a stream")
 
 
-class _Wire(BaseModel):
+class _Wire(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import override
 
 import litellm
@@ -32,6 +32,7 @@ from litellm.llms.dashscope.common_utils import (
     resolve_dashscope_family_api_key,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.utils import Usage
 
@@ -65,24 +66,24 @@ SPEECH_SYNTHESIZER_FAMILY: Final = _TextToSpeechFamily(
 )
 
 
-class _Audio(BaseModel):
+class _Audio(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     url: str
 
 
-class _Output(BaseModel):
+class _Output(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     audio: _Audio
 
 
-class _Usage(BaseModel):
+class _Usage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     input_tokens: int | None = None
     output_tokens: int | None = None
     characters: int | None = None
 
 
-class _SpeechResponse(BaseModel):
+class _SpeechResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     output: _Output | None = None
     usage: _Usage | None = None

@@ -7,7 +7,7 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, StrictStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm import constants
@@ -33,6 +33,7 @@ from litellm.repositories.daily_activity_sql import (
     build_user_page_sql,
 )
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
     CustomerTeamRollupRow,
@@ -122,7 +123,7 @@ _EXPORT_ADAPTER: Final = TypeAdapter(tuple[ExportRow, ...])
 _METADATA_TAGS_ADAPTER: Final = TypeAdapter(list[StrictStr])
 
 
-class _CustomerDailyRow(BaseModel):
+class _CustomerDailyRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str

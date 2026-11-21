@@ -5,6 +5,7 @@ from typing import Final, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, create_model
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.types.llms.base import HiddenParams
 
 _HIDDEN_PARAMS_ATTR: Final = "_hidden_params"
@@ -63,7 +64,9 @@ def stored_attribute(obj: object, name: str) -> object:
 
 @cache
 def _assigned_extras_join_fields_set() -> bool:
-    probe: Final = create_model("_ExtraAssignmentProbe", __config__=ConfigDict(extra="allow"))()
+    probe: Final = create_model(
+        "_ExtraAssignmentProbe", __config__=ConfigDict(extra="allow", defer_build=DEFER_PYDANTIC_BUILD)
+    )()
     setattr(probe, "assigned", None)
     return "assigned" in probe.model_fields_set
 

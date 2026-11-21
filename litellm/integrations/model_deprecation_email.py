@@ -14,7 +14,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import AliasPath, BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AliasPath, ConfigDict, Field, TypeAdapter
 
 from litellm.integrations.email_templates.model_deprecation_email import (
     render_model_deprecation_email,
@@ -33,6 +33,7 @@ from litellm.types.integrations.model_deprecation_email import (
     DeprecationEmailMilestone,
     ModelDeprecationEmail,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.model_deprecation import (
     DEPRECATION_IDLE_POLL_SECONDS,
     ModelDeprecationInfo,
@@ -46,7 +47,7 @@ _RECEIPT_PREFIX: Final = "model_deprecation_email:"
 _PAGE_SIZE: Final = 100
 
 
-class _OptIn(BaseModel):
+class _OptIn(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     enabled: bool = Field(
         False,
@@ -55,12 +56,12 @@ class _OptIn(BaseModel):
     )
 
 
-class _RequestCount(BaseModel):
+class _RequestCount(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     api_requests: int
 
 
-class _UsedKey(BaseModel):
+class _UsedKey(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     api_key: str
     metrics: _RequestCount = Field(alias="_sum")
@@ -74,7 +75,7 @@ class _DeliveryStatus(str, Enum):
     SENT = "sent"
 
 
-class _Receipt(BaseModel):
+class _Receipt(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     revision: int = 0
     status: _DeliveryStatus = _DeliveryStatus.SENDING

@@ -2,13 +2,14 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 
 _DEFAULT_API_BASE: Final = "https://openrouter.ai/api/v1"
@@ -22,13 +23,13 @@ class OpenRouterException(BaseLLMException):
     pass
 
 
-class _CatalogModel(BaseModel):
+class _CatalogModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
 
 
-class _Catalog(BaseModel):
+class _Catalog(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_CatalogModel, ...]

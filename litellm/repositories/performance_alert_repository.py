@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma generates transaction types
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
 from litellm.models.alert import METRIC_ALERT_TYPES
@@ -28,6 +28,7 @@ from litellm.models.performance_alert import (
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.alert_repository import record_alerts
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -46,14 +47,14 @@ class _Database(Protocol):
     def tx(self, *, timeout: timedelta) -> AbstractAsyncContextManager[_Transaction]: ...
 
 
-class _MonitoringRow(BaseModel):
+class _MonitoringRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool
     alerts_used: int | None
 
 
-class _StateRow(BaseModel):
+class _StateRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     day: date | None
@@ -67,7 +68,7 @@ class _StateRow(BaseModel):
     start_after: str
 
 
-class _IdRow(BaseModel):
+class _IdRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     resource_id: str

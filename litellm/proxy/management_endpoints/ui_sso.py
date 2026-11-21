@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import AliasPath, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import AliasPath, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -887,7 +887,7 @@ async def cli_sso_complete(request: Request, login_id: str):
     return HTMLResponse(content=html_content, status_code=200)
 
 
-class _CliSsoTeamChoiceFlow(BaseModel):
+class _CliSsoTeamChoiceFlow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     browser_team_choice: bool = Field(default=False, validation_alias=CLI_SSO_BROWSER_TEAM_CHOICE)
@@ -4715,7 +4715,7 @@ class SSOAuthenticationHandler:
         return userinfo
 
 
-class _SSOTokenResponse(BaseModel):
+class _SSOTokenResponse(LiteLLMBaseModel):
     """The id_token and refresh token fastapi-sso keeps on the SSO instance after the code exchange,
     read through a validated view because the package ships no type information."""
 

@@ -1,17 +1,18 @@
 from typing import Final
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_key_object, get_team_object
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.rust_bridge._native import NativeDatabaseFailure
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.apps import AppFailure, AppResourceType
 
 
-class _ResourceIdentity(BaseModel):
+class _ResourceIdentity(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     token: str | None = Field(default=None, repr=False)

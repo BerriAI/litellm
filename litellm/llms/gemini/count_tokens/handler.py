@@ -2,13 +2,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
-from pydantic import ConfigDict, RootModel, with_config
+from pydantic import ConfigDict, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, json_contains
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.types.llms.base_model import LiteLLMRootModel
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ class _GeminiCountTokensResponse(TypedDict):
     tokenizer_used: NotRequired[ReadOnly[str]]
 
 
-class _GeminiCountTokensResponseRoot(RootModel[_GeminiCountTokensResponse]):
+class _GeminiCountTokensResponseRoot(LiteLLMRootModel[_GeminiCountTokensResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 

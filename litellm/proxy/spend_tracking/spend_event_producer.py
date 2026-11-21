@@ -29,9 +29,11 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 
 COLLECTOR_ENV_PREFIX: Final = "LITELLM_COLLECTOR_"
 COLLECTOR_JOB_ROLE: Final = "collector"
@@ -43,11 +45,16 @@ UnavailablePolicy: TypeAlias = Literal["fallback", "drop"]
 PublishOutcome: TypeAlias = Literal["queued", "fallback", "dropped"]
 
 
-class CollectorSettings(BaseSettings):
+class CollectorSettings(LiteLLMBaseSettings):
     """``LITELLM_COLLECTOR_*`` env vars, shared by the gateway producer and the sidecar consumer."""
 
     model_config = SettingsConfigDict(
-        env_prefix=COLLECTOR_ENV_PREFIX, case_sensitive=False, extra="ignore", frozen=True, populate_by_name=True
+        env_prefix=COLLECTOR_ENV_PREFIX,
+        case_sensitive=False,
+        extra="ignore",
+        frozen=True,
+        populate_by_name=True,
+        defer_build=DEFER_PYDANTIC_BUILD,
     )
 
     enabled: bool = False

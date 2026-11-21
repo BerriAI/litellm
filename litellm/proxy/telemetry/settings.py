@@ -5,9 +5,11 @@ from enum import Enum
 from typing import Annotated, Final
 
 from pydantic import AfterValidator, Field, HttpUrl, ValidationError, ValidationInfo, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.telemetry.consent import OFF, TelemetryConsent, parse_consent
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 
 ENV_PREFIX: Final = "LITELLM_TELEMETRY_"
 FLUSH_INTERVAL_SECONDS: Final = 300.0
@@ -31,10 +33,12 @@ def _valid_groups(groups: str | None) -> str | None:
     return groups
 
 
-class TelemetrySettings(BaseSettings):
+class TelemetrySettings(LiteLLMBaseSettings):
     """``LITELLM_TELEMETRY_*`` env vars"""
 
-    model_config = SettingsConfigDict(env_prefix=ENV_PREFIX, case_sensitive=False, extra="ignore", frozen=True)
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX, case_sensitive=False, extra="ignore", frozen=True, defer_build=DEFER_PYDANTIC_BUILD
+    )
 
     disabled: bool = False
     groups: Annotated[str | None, AfterValidator(_valid_groups)] = None

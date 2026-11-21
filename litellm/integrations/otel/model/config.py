@@ -10,6 +10,7 @@ from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
@@ -17,6 +18,7 @@ from litellm.integrations.otel.model.baggage import (
 )
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VALUES,
     CaptureMessageContent,
@@ -47,8 +49,8 @@ class ExporterOwner(str, Enum):
     SIGNOZ = "signoz"
 
 
-class _OTelV2Flag(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+class _OTelV2Flag(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
 
@@ -151,8 +153,8 @@ class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
         return {key: settings[key] for key in settings if key != "excluded_services"}
 
 
-class OpenTelemetryV2Config(BaseSettings):
-    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+class OpenTelemetryV2Config(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     @classmethod
     def settings_customise_sources(
@@ -405,8 +407,8 @@ def _normalized_capture_message_content(value: object) -> object:
     return value
 
 
-class _CaptureMessageContentSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+class _CaptureMessageContentSettings(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", frozen=True, defer_build=DEFER_PYDANTIC_BUILD)
 
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
@@ -428,8 +430,8 @@ def _normalized_span_scope(value: object) -> object:
     return value.strip().lower() if isinstance(value, str) else value
 
 
-class _LangfuseDestinationSpanScopeSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+class _LangfuseDestinationSpanScopeSettings(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", frozen=True, defer_build=DEFER_PYDANTIC_BUILD)
 
     langfuse_destination_span_scope: OtelSpanScope = Field(
         default="full",

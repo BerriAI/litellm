@@ -3,13 +3,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter, model_validator
+from pydantic import ConfigDict, Discriminator, Field, Tag, TypeAdapter, model_validator
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from switchyard_rust.libsy import Algorithm, TaskClassifierConfig
 
 
-class LlmClassifierConfig(BaseModel):
+class LlmClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["llm"] = "llm"
@@ -21,7 +23,7 @@ class LlmClassifierConfig(BaseModel):
     prompt: str | None = None
 
 
-class DecisionClassifierConfig(BaseModel):
+class DecisionClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["decision"]
@@ -49,7 +51,7 @@ ClassifierConfig: TypeAlias = Annotated[
 ]
 
 
-class StageOptions(BaseModel):
+class StageOptions(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     picker: Literal["efficient_first", "capable_first"] = "efficient_first"
@@ -59,7 +61,7 @@ class StageOptions(BaseModel):
     only_on_wrong_signal_escalation: bool = True
 
 
-class StageModels(BaseModel):
+class StageModels(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
     capable: str = Field(min_length=1)
@@ -75,7 +77,7 @@ class StageModels(BaseModel):
         return self
 
 
-class SwitchyardRouterConfig(BaseModel):
+class SwitchyardRouterConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     algorithm: Literal["stage_router"] = "stage_router"

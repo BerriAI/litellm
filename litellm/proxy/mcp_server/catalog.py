@@ -25,6 +25,7 @@ from typing_extensions import Self
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
@@ -742,7 +743,7 @@ async def list_tools_page(
     )
 
 
-class _UpstreamPosition(BaseModel):
+class _UpstreamPosition(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     server_id: str
@@ -752,7 +753,7 @@ class _UpstreamPosition(BaseModel):
     seen: tuple[str, ...] = ()
 
 
-class _ListingState(BaseModel):
+class _ListingState(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     caller_scope: str

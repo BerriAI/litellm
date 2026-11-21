@@ -2,12 +2,13 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Protocol
 
 import orjson
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -90,7 +91,7 @@ def encode_character_id_in_response(response: object, custom_llm_provider: objec
     return response
 
 
-class VideoRequestRoute(BaseModel):
+class VideoRequestRoute(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: object = None

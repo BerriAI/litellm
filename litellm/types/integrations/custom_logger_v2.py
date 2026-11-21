@@ -16,6 +16,8 @@ from pydantic import (
 )
 from pydantic import Field as Member
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
+
 _LOGGER: Final = logging.getLogger("LiteLLM")
 
 RecordT: Final = TypeVar("RecordT", bound=BaseModel)
@@ -41,7 +43,7 @@ Formatted: TypeAlias = Annotated[str, PlainValidator(str)]
 _I128_BOUND: Final = 2**127
 
 
-class Strict(BaseModel):
+class Strict(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 

@@ -7,7 +7,7 @@ from typing import Final, Protocol, TypeAlias
 from urllib.parse import urlencode
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.control_plane.audit.ocsf import AuditRecord, section
@@ -15,6 +15,7 @@ from litellm.proxy.control_plane.audit.pipeline import Batch, Delivered, Deliver
 from litellm.proxy.control_plane.audit.sinks import ocsf_line
 from litellm.proxy.control_plane.audit.transport import Poster
 from litellm.proxy.control_plane.settings import SentinelSettings
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 API_VERSION: Final = "2023-01-01"
 MAX_PAYLOAD_BYTES: Final = 1_000_000
@@ -50,7 +51,7 @@ class TokenSource(Protocol):
     async def __call__(self) -> str | TokenRefused: ...
 
 
-class TokenReply(BaseModel):
+class TokenReply(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     access_token: str

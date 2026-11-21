@@ -32,9 +32,9 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
+    Usage,
     all_litellm_params,
     is_decisions_model_mode,
-    Usage,
     text_tokens_without_nested_reasoning,
 )
 
@@ -189,6 +189,41 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+    assert "prompt_tokens" in Usage.model_json_schema()["properties"]
+
+
+def test_openai_model_wrappers_defer_first_use_and_preserve_schema() -> None:
+    from pydantic import ValidationError
+
+    from litellm.types.utils import (
+        ChoiceLogprobs,
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    class DeferredChoiceLogprobs(ChoiceLogprobs):
+        pass
+
+    class DeferredUsage(Usage):
+        pass
+
+    assert all(
+        model.model_config.get("defer_build") is True
+        for model in (ChoiceLogprobs, CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, Usage)
+    )
+    assert not DeferredChoiceLogprobs.__pydantic_complete__
+    assert not DeferredUsage.__pydantic_complete__
+
+    choice_logprobs: Final = DeferredChoiceLogprobs.model_validate({})
+    assert choice_logprobs.content is None
+    assert "content" in DeferredChoiceLogprobs.model_json_schema()["properties"]
+
+    usage: Final = DeferredUsage.model_validate({"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15})
+    assert usage.model_dump(exclude_none=True) == {"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15}
+    assert "prompt_tokens" in DeferredUsage.model_json_schema()["properties"]
+    with pytest.raises(ValidationError):
+        DeferredUsage.model_validate({"prompt_tokens": "invalid", "completion_tokens": 8, "total_tokens": 15})
 
 
 def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
@@ -1227,21 +1262,13 @@ def test_batch_dump_applies_exclude_none_to_provider_usage_detail_fields() -> No
 
 def test_parallel_first_usage_construction_does_not_race_schema_build() -> None:
     probe: Final = r"""
-import inspect
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, sys.argv[1])
-from pydantic import BaseModel
 from litellm.types.utils import Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper
 
-try:
-    rebuild_code = BaseModel.model_rebuild.__func__.__code__
-    source, first_line = inspect.getsourcelines(BaseModel.model_rebuild)
-    delete_line = next((first_line + i for i, line in enumerate(source) if "delattr(cls, attr)" in line), None)
-except (AttributeError, OSError, TypeError):
-    rebuild_code, delete_line = None, None
 sys.setswitchinterval(1e-6)
 
 cases = (
@@ -1250,26 +1277,15 @@ cases = (
     (CompletionTokensDetailsWrapper, {"reasoning_tokens": 4, "text_tokens": 1}),
 )
 for model, fields in cases:
-    barrier = threading.Barrier(8, timeout=5)
     start_barrier = threading.Barrier(8, timeout=5)
-    def trace(frame, event, arg):
-        if (event == "line" and delete_line is not None and frame.f_code is rebuild_code
-            and frame.f_lineno == delete_line and frame.f_locals.get("cls") is model
-            and frame.f_locals.get("attr") == "__pydantic_core_schema__"):
-            barrier.wait()
-        return trace
-
     def construct(index):
-        sys.settrace(trace)
-        try:
-            start_barrier.wait()
-            return model(**fields).model_dump()
-        finally:
-            sys.settrace(None)
+        start_barrier.wait()
+        return model(**fields).model_dump()
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = tuple(pool.map(construct, range(8)))
     assert len(results) == 8
+    assert model.__pydantic_complete__
     for result in results:
         assert {key: result[key] for key in fields} == fields, result
     print(model.__name__ + ": 8 parallel constructions passed")

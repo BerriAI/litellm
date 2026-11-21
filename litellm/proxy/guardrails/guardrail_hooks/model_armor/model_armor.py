@@ -7,8 +7,10 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, runtime_ch
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.types.llms.base_model import LiteLLMRootModel
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -148,7 +150,7 @@ class _ModelArmorResponse(TypedDict):
     text: NotRequired[ReadOnly[str | None]]
 
 
-class _ModelArmorResponseRoot(RootModel[_ModelArmorResponse]):
+class _ModelArmorResponseRoot(LiteLLMRootModel[_ModelArmorResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 

@@ -23,7 +23,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -47,6 +47,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.model_access_group_budget_repository import ModelAccessGroupBudgetRepository
 from litellm.repositories.model_repository import ModelRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AccessGroupBudget,
     AccessGroupBudgetRequest,
@@ -219,7 +220,7 @@ _LOCK_RETRY_BACKOFF_SECONDS: Final = (0.05, 0.1, 0.2, 0.4, 0.8)
 _LOCK_RETRY_LONGEST_DELAY_SECONDS: Final = 1.0
 
 
-class _LockedModelRow(BaseModel):
+class _LockedModelRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_id: str
@@ -228,7 +229,7 @@ class _LockedModelRow(BaseModel):
 _LOCKED_MODEL_ROWS: Final = TypeAdapter(tuple[_LockedModelRow, ...])
 
 
-class _AccessGroupLock(BaseModel):
+class _AccessGroupLock(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     locked: bool

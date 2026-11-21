@@ -215,6 +215,7 @@ from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import RouterWeights, validate_router_weights
 
@@ -912,7 +913,7 @@ _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(str
 _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
-class _DashboardBillingRequest(BaseModel):
+class _DashboardBillingRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     dashboard_fallback_model: str | None = None
 

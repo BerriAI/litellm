@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, TypeVar
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.repositories.table_repositories import AuditLogRepository, NewAuditLog
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import StandardAuditLogPayload
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_
 _AUDIT_JSON: Final = TypeAdapter(JsonValue)
 
 
-class _AuditValues(BaseModel):
+class _AuditValues(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     updated_values: str | None = None
@@ -309,7 +310,7 @@ def _json_encoded(request_data: LiteLLM_AuditLogs) -> LiteLLM_AuditLogs:
     )
 
 
-class _AuditLogColumns(BaseModel):
+class _AuditLogColumns(LiteLLMBaseModel):
     """An audit log's columns read off `LiteLLM_AuditLogs`, whose actor and two values are loosely typed."""
 
     model_config = ConfigDict(frozen=True, from_attributes=True)

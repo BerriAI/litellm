@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma's generated delegates are dynamic
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.models.plugin_upload import (
     PluginPublication,
@@ -32,6 +32,7 @@ from litellm.models.skill_submission import (
 )
 from litellm.repositories.plugin_publication import PluginPublicationTransaction, publish_plugin, verified_archive
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.skill_scanning import SkillScan
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
-class _StoredProposal(BaseModel):
+class _StoredProposal(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     manifest: Mapping[str, object]
@@ -53,14 +54,14 @@ class _StoredProposal(BaseModel):
         )
 
 
-class _PendingUsage(BaseModel):
+class _PendingUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     count: int
     storage_bytes: int
 
 
-class _SubmissionRow(BaseModel):
+class _SubmissionRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str

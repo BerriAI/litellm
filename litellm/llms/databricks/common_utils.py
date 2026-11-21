@@ -18,13 +18,14 @@ from types import MappingProxyType
 from typing import Final, Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _DEFAULT_M2M_TOKEN_LIFETIME_SECONDS: Final = 3600
 _TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
@@ -66,7 +67,7 @@ DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
 )
 
 
-class OAuthM2MToken(BaseModel):
+class OAuthM2MToken(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     access_token: str

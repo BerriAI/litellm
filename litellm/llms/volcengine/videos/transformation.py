@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final, TypeVar
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import BaseModel, StrictBool, StrictInt, StrictStr, TypeAdapter, ValidationError
+from pydantic import StrictBool, StrictInt, StrictStr, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -27,6 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.volcengine.common_utils import get_volcengine_base_url
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMFrozenBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelInfo
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -44,20 +45,20 @@ class VolcEngineVideoError(BaseLLMException):
     pass
 
 
-class _TaskError(BaseModel, frozen=True):
+class _TaskError(LiteLLMFrozenBaseModel, frozen=True):
     code: str | None = None
     message: str | None = None
 
 
-class _TaskContent(BaseModel, frozen=True):
+class _TaskContent(LiteLLMFrozenBaseModel, frozen=True):
     video_url: str | None = None
 
 
-class _TaskUsage(BaseModel, frozen=True):
+class _TaskUsage(LiteLLMFrozenBaseModel, frozen=True):
     total_tokens: int | None = None
 
 
-class _Task(BaseModel, frozen=True):
+class _Task(LiteLLMFrozenBaseModel, frozen=True):
     id: str
     status: str
     model: str | None = None
@@ -71,22 +72,22 @@ class _Task(BaseModel, frozen=True):
     duration: int | float | None = None
 
 
-class _TaskCreateResponse(BaseModel, frozen=True):
+class _TaskCreateResponse(LiteLLMFrozenBaseModel, frozen=True):
     id: str | None = None
     error: _TaskError | None = None
 
 
-class _TaskList(BaseModel, frozen=True):
+class _TaskList(LiteLLMFrozenBaseModel, frozen=True):
     items: Sequence[_Task] = ()
     total: int | None = None
 
 
-class _ContentItem(BaseModel, frozen=True):
+class _ContentItem(LiteLLMFrozenBaseModel, frozen=True):
     type: str | None = None
     role: str | None = None
 
 
-class _KnownFields(BaseModel, frozen=True):
+class _KnownFields(LiteLLMFrozenBaseModel, frozen=True):
     resolution: StrictStr | None = None
     ratio: StrictStr | None = None
     seed: StrictInt | None = None

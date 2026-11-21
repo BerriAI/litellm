@@ -80,6 +80,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMFrozenBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -305,6 +306,7 @@ def _tier_classification_model(labels: Sequence[str]) -> type[BaseModel]:
     """TierClassification with its Literal widened to the labels the rubric told the model to emit."""
     return create_model(
         TierClassification.__name__,
+        __base__=LiteLLMBaseModel,
         __doc__=TierClassification.__doc__,
         tier=(Literal[tuple(labels)], ...),
     )
@@ -884,19 +886,19 @@ _CODEX_COMPACTION_SUMMARY_PREFIX: Final = (
 )
 
 
-class _CodexTurnMetadata(BaseModel, frozen=True):
+class _CodexTurnMetadata(LiteLLMFrozenBaseModel, frozen=True):
     request_kind: str | None = None
 
 
-class _CodexTurnMetadataCarrier(BaseModel, frozen=True):
+class _CodexTurnMetadataCarrier(LiteLLMFrozenBaseModel, frozen=True):
     turn_metadata: str | None = Field(default=None, alias=_CODEX_TURN_METADATA_KEY)
 
 
-class _CodexProxyRequest(BaseModel, frozen=True):
+class _CodexProxyRequest(LiteLLMFrozenBaseModel, frozen=True):
     headers: _CodexTurnMetadataCarrier | None = None
 
 
-class _CodexRequestMetadata(BaseModel, frozen=True):
+class _CodexRequestMetadata(LiteLLMFrozenBaseModel, frozen=True):
     """Codex sends its turn metadata in the Responses body's `client_metadata` and projects it onto a
     header of the same name for transports without that field"""
 

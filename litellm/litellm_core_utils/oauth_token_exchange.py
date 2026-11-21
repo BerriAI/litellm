@@ -12,11 +12,12 @@ from typing import (
 )
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 TokenExchangeProfile: TypeAlias = Literal["rfc8693", "jwt_bearer_obo"]
 
@@ -59,14 +60,14 @@ class OAuthTokenExchangeError(Exception):
         super().__init__(message)
 
 
-class _OAuthTokenResponse(BaseModel):
+class _OAuthTokenResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     access_token: str
     expires_in: int = Field(gt=0)
 
 
-class _OAuthErrorResponse(BaseModel):
+class _OAuthErrorResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     error: str | None = None

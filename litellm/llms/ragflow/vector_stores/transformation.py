@@ -2,12 +2,13 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, RootModel, with_config
+from pydantic import ConfigDict, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMRootModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
@@ -37,7 +38,7 @@ class _RAGFlowCreateResponse(TypedDict):
     data: ReadOnly[NotRequired[_RAGFlowDataset]]
 
 
-class _RAGFlowCreateResponseRoot(RootModel[_RAGFlowCreateResponse]):
+class _RAGFlowCreateResponseRoot(LiteLLMRootModel[_RAGFlowCreateResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 

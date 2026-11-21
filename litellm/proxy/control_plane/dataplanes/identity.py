@@ -1,11 +1,13 @@
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 USER_INFO_PATH: Final = "/user/info"
 
 
-class UserInfo(BaseModel):
+class UserInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     user_id: str | None = None
@@ -13,7 +15,7 @@ class UserInfo(BaseModel):
     user_role: str | None = None
 
 
-class UserInfoBody(BaseModel):
+class UserInfoBody(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     user_id: str | None = None

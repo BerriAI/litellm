@@ -1,7 +1,9 @@
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
@@ -14,7 +16,7 @@ def validate_reco_tenant_id(value: str) -> str:
     return value
 
 
-class RecoOptionalParams(BaseModel):
+class RecoOptionalParams(LiteLLMBaseModel):
     """Configuration parameters for the Reco guardrail"""
 
     model_config = ConfigDict(frozen=True)

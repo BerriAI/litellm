@@ -2,8 +2,10 @@ from datetime import date as Date
 from datetime import datetime, timezone
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, AwareDatetime, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 MetricAlertType: TypeAlias = Literal["spend", "traffic", "latency", "reliability"]
 AlertType: TypeAlias = MetricAlertType | Literal["model_deprecation", "prompt_cache"]
@@ -25,7 +27,7 @@ AlertID: TypeAlias = Annotated[
 ]
 
 
-class MetricEvidence(BaseModel):
+class MetricEvidence(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     value: float = Field(ge=0, allow_inf_nan=False, description="Observed metric value in the alert window.")
@@ -34,7 +36,7 @@ class MetricEvidence(BaseModel):
     sample_size: int = Field(ge=0, le=MAX_ALERT_ID, description="Number of requests in the alert window.")
 
 
-class DeprecationEvidence(BaseModel):
+class DeprecationEvidence(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     deprecation_date: Date = Field(description="Date the affected model retires.")
@@ -43,7 +45,7 @@ class DeprecationEvidence(BaseModel):
     )
 
 
-class PromptCacheEvidence(BaseModel):
+class PromptCacheEvidence(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     config_fingerprint: str = Field(min_length=1, max_length=64, description="Cache-relevant deployment settings.")
@@ -59,7 +61,7 @@ class PromptCacheEvidence(BaseModel):
     ttl_seconds: Literal[300] = Field(description="Cache lifetime of the prefix's breakpoint.")
 
 
-class AlertSummary(BaseModel):
+class AlertSummary(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: AlertID
@@ -70,14 +72,14 @@ class AlertSummary(BaseModel):
     evidence: MetricEvidence
 
 
-class AlertRecipient(BaseModel):
+class AlertRecipient(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     user_id: str
     email: str
 
 
-class AlertDetection(BaseModel):
+class AlertDetection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: AlertType = Field(description="Built-in alert category.")
@@ -156,7 +158,7 @@ class Alert(AlertDetection):
     updated_by: str | None = Field(default=None, max_length=1024, description="User who last changed the status.")
 
 
-class AlertHistoryPoint(BaseModel):
+class AlertHistoryPoint(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     date: Date = Field(description="UTC day represented by this value.")
@@ -172,13 +174,13 @@ class AlertView(Alert):
     )
 
 
-class AlertUpdate(BaseModel):
+class AlertUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: AlertStatus = Field(description="Mark resolved, dismiss, or reopen the alert.")
 
 
-class AlertBulkUpdate(BaseModel):
+class AlertBulkUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: Literal["resolved", "dismissed"] = Field(description="Status to apply to every matching open saved alert.")
@@ -187,13 +189,13 @@ class AlertBulkUpdate(BaseModel):
     )
 
 
-class AlertBulkResult(BaseModel):
+class AlertBulkResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     updated: int = Field(ge=0, description="Number of open saved alerts changed.")
 
 
-class AlertPage(BaseModel):
+class AlertPage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[Alert, ...] = Field(description="Alerts ordered newest first.")
@@ -202,7 +204,7 @@ class AlertPage(BaseModel):
     )
 
 
-class AlertViewPage(BaseModel):
+class AlertViewPage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[AlertView, ...] = Field(description="Alerts ordered newest first, with current Usage history.")

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Final, NoReturn, cast  # noqa: TID251  # runtime Mapping keys and values are objects
 
 import httpx
-from pydantic import AwareDatetime, BaseModel, ConfigDict, SecretStr, ValidationError
+from pydantic import AwareDatetime, ConfigDict, SecretStr, ValidationError
 
 from litellm.exceptions import (
     BadRequestError,
@@ -22,6 +22,7 @@ from litellm.exceptions import (
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .github_host import github_host_endpoints, normalized_github_host
 from .per_user_auth import GithubCopilotUserSession
@@ -156,7 +157,7 @@ def _stored_private_key(name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-class _InstallationToken(BaseModel):
+class _InstallationToken(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     token: SecretStr
     expires_at: AwareDatetime

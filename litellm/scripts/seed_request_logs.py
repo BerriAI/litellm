@@ -13,9 +13,10 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 from litellm.scripts.seed_tracing_fixtures import JSON_OBJECT, spend_fixtures
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
@@ -30,12 +31,30 @@ Profile = Literal["default", "large"]
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 WORDS: Final = (
-    "trace", "span", "token", "request", "response", "latency", "router", "fallback", "cache", "budget",
-    "guardrail", "stream", "deployment", "proxy", "callback", "cursor", "schema", "payload", "retry", "quota",
+    "trace",
+    "span",
+    "token",
+    "request",
+    "response",
+    "latency",
+    "router",
+    "fallback",
+    "cache",
+    "budget",
+    "guardrail",
+    "stream",
+    "deployment",
+    "proxy",
+    "callback",
+    "cursor",
+    "schema",
+    "payload",
+    "retry",
+    "quota",
 )
 
 
-class SeededLog(BaseModel):
+class SeededLog(LiteLLMBaseModel):
     """One synthetic spend-log row before it is shaped for Postgres."""
 
     model_config = ConfigDict(frozen=True)
@@ -105,7 +124,9 @@ def chat_turns(rng: random.Random, turns: int, chars_per_turn: int) -> list[Json
     return list(chain.from_iterable(turn(index) for index in range(turns)))
 
 
-def chat_response(content: str, tool_calls: list[JsonValue] | None, prompt_tokens: int, completion_tokens: int) -> JsonValue:
+def chat_response(
+    content: str, tool_calls: list[JsonValue] | None, prompt_tokens: int, completion_tokens: int
+) -> JsonValue:
     message: dict[str, JsonValue] = {"role": "assistant", "content": content}
     if tool_calls:
         message["tool_calls"] = tool_calls
@@ -168,7 +189,10 @@ def anthropic_log(rng: random.Random, offset_minutes: int) -> SeededLog:
                 {"type": "tool_use", "id": "toolu_seed_1", "name": "seed_tool_1", "input": {"query": "spend"}},
             ],
         },
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_seed_1", "content": prose(rng, 20_000)}]},
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_seed_1", "content": prose(rng, 20_000)}],
+        },
     ]
     tools: Final[list[JsonValue]] = [
         {"name": f"seed_tool_{index}", "description": "Synthetic Anthropic tool", "input_schema": {"type": "object"}}
@@ -181,7 +205,12 @@ def anthropic_log(rng: random.Random, offset_minutes: int) -> SeededLog:
         "model": "claude-opus-5-5",
         "content": [
             {"type": "text", "text": prose(rng, 50_000)},
-            {"type": "tool_use", "id": "toolu_seed_2", "name": "seed_tool_2", "input": {"query": "latency", "limit": 5}},
+            {
+                "type": "tool_use",
+                "id": "toolu_seed_2",
+                "name": "seed_tool_2",
+                "input": {"query": "latency", "limit": 5},
+            },
         ],
         "stop_reason": "tool_use",
         "usage": {"input_tokens": 6000, "output_tokens": 12_500},
@@ -228,7 +257,8 @@ def failure_log(rng: random.Random, offset_minutes: int) -> SeededLog:
             "error_class": "ContextWindowExceededError",
             "llm_provider": "openai",
             "error_message": "This model's maximum context length is 128000 tokens. Your messages resulted in 75000 tokens plus 300000 characters of synthetic prose.",
-            "traceback": "Traceback (most recent call last):\n" + "\n".join(f"  File seed_{index}.py, line {index}" for index in range(40)),
+            "traceback": "Traceback (most recent call last):\n"
+            + "\n".join(f"  File seed_{index}.py, line {index}" for index in range(40)),
         },
     )
 
@@ -244,7 +274,13 @@ def seeded_logs(rng: random.Random) -> tuple[SeededLog, ...]:
         chat_log(rng, "response-5mb", messages=single, response_chars=5_000_000, offset_minutes=50),
         chat_log(rng, "turns-200", messages=chat_turns(rng, 200, 500), response_chars=2000, offset_minutes=70),
         chat_log(rng, "turns-1000", messages=chat_turns(rng, 1000, 500), response_chars=2000, offset_minutes=90),
-        chat_log(rng, "system-prompt-200kb", messages=[{"role": "system", "content": prose(rng, 200_000)}, *single], response_chars=1500, offset_minutes=110),
+        chat_log(
+            rng,
+            "system-prompt-200kb",
+            messages=[{"role": "system", "content": prose(rng, 200_000)}, *single],
+            response_chars=1500,
+            offset_minutes=110,
+        ),
         chat_log(rng, "tools-50", messages=single, response_chars=800, tools=50, called_tools=6, offset_minutes=130),
         anthropic_log(rng, offset_minutes=150),
         failure_log(rng, offset_minutes=170),
@@ -304,7 +340,9 @@ def metadata(log: SeededLog, template: dict[str, JsonValue]) -> dict[str, JsonVa
     return seeded
 
 
-def postgres_row(log: SeededLog, template: dict[str, JsonValue], now: datetime) -> LiteLLM_SpendLogsCreateWithoutRelationsInput:
+def postgres_row(
+    log: SeededLog, template: dict[str, JsonValue], now: datetime
+) -> LiteLLM_SpendLogsCreateWithoutRelationsInput:
     from prisma import Json
     from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 
@@ -354,14 +392,16 @@ FROM "LiteLLM_SpendLogs" AS s CROSS JOIN generate_series(1, $2::int) AS c(n)
 WHERE s.request_id = $1"""
 
 
-class SeedOptions(BaseModel):
+class SeedOptions(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     profile: Profile
     timeout_seconds: float = 120
 
 
 def seed_arguments(argv: Sequence[str] | None = None) -> SeedOptions:
-    parser: Final = argparse.ArgumentParser(description="Insert synthetic request logs of controlled sizes into a local proxy DB")
+    parser: Final = argparse.ArgumentParser(
+        description="Insert synthetic request logs of controlled sizes into a local proxy DB"
+    )
     parser.add_argument("--profile", choices=PROFILES, default="default")
     parser.add_argument("--timeout-seconds", type=float, default=os.environ.get("LENS_DEV_SEED_TIMEOUT_SECONDS", "120"))
     arguments: Final = SeedOptions.model_validate(vars(parser.parse_args(argv)))

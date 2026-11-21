@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
@@ -30,6 +30,7 @@ from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.models.alert import AlertDetection, AlertStore, PromptCacheEvidence
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .evidence import CacheablePrefix, NotCaching, cache_counters, cacheable_prefix, fingerprint_key, keyed_digest
 
@@ -179,7 +180,7 @@ async def quiet(run: RunScript, update: Assessed, now_ms: int) -> None:
     await run(keys, ("quiet", 0, 0, now_ms, _QUIET_MS, "", 0, MISSES_TO_ALERT))
 
 
-class _Payload(BaseModel):
+class _Payload(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
@@ -194,13 +195,13 @@ class _Payload(BaseModel):
     end_time: float = Field(alias="endTime")
 
 
-class _Request(BaseModel):
+class _Request(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     complete_input_dict: object = None
 
 
-class _Call(BaseModel):
+class _Call(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", arbitrary_types_allowed=True)
 
     standard_logging_object: _Payload

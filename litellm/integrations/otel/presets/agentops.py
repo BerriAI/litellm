@@ -16,9 +16,10 @@ import httpx
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import Field, TypeAdapter
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
@@ -26,6 +27,7 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 
 _AGENTOPS_ENDPOINT: Final = "https://otlp.agentops.ai/v1/traces"
 _AGENTOPS_AUTH_ENDPOINT: Final = "https://api.agentops.ai/v3/auth/token"
@@ -33,8 +35,8 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _AGENTOPS_EXPORTER_KIND: Final = "agentops"
 
 
-class _AgentOpsSettings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+class _AgentOpsSettings(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     api_key: str | None = Field(default=None, validation_alias="AGENTOPS_API_KEY")
     service_name: str = Field(default="agentops", validation_alias="AGENTOPS_SERVICE_NAME")

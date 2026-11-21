@@ -2570,7 +2570,7 @@ def _known_spend_logs_metadata_field(name: str) -> str:
 SpendLogsMetadataFieldName: TypeAlias = Annotated[str, AfterValidator(_known_spend_logs_metadata_field)]
 
 
-class SpendLogsMetadataFields(BaseModel):
+class SpendLogsMetadataFields(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     include: tuple[SpendLogsMetadataFieldName, ...] | None = None

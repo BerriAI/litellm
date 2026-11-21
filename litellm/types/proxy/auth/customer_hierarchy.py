@@ -5,7 +5,6 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
@@ -16,6 +15,7 @@ from pydantic import (
 
 from litellm.models.budget import BudgetLimit
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     CapPolicy,
@@ -40,7 +40,7 @@ class CustomerRequestIdentity:
     customer_team_id: str | None = None
 
 
-class AppDurationLimit(BaseModel):
+class AppDurationLimit(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     budget_duration: str
@@ -67,7 +67,7 @@ def app_budget_limits(
     return (*windows, AppDurationLimit(budget_duration=budget.budget_duration, max_budget=budget.max_budget))
 
 
-class CustomerScopeAuth(BaseModel):
+class CustomerScopeAuth(LiteLLMBaseModel):
     """One level of the customer hierarchy a request runs under, with the limits its budget row grants."""
 
     model_config = ConfigDict(frozen=True)
@@ -98,7 +98,7 @@ class CustomerScopeAuth(BaseModel):
 _APP_FIELDS: Final = ("app_id", "app_alias", "app_customer_margin")
 
 
-class CustomerHierarchyAuth(BaseModel):
+class CustomerHierarchyAuth(LiteLLMBaseModel):
     """The levels a request is charged to. A request that named only an organization alias has no team or member."""
 
     model_config = ConfigDict(frozen=True)

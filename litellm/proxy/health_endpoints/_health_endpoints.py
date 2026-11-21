@@ -15,7 +15,7 @@ from typing import Final, Literal, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -101,6 +101,7 @@ from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownMan
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import reject_server_owned_wif_fields
 from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
@@ -283,19 +284,19 @@ _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 _DEPLOYMENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-class _ModelGrants(BaseModel):
+class _ModelGrants(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     models: tuple[object, ...] = ()
 
 
-class _ModelInfoAccessGroups(BaseModel):
+class _ModelInfoAccessGroups(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     access_groups: tuple[object, ...]
 
 
-class _DeploymentAccessGroups(BaseModel):
+class _DeploymentAccessGroups(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_info: _ModelInfoAccessGroups

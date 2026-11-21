@@ -5,7 +5,7 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -80,12 +81,12 @@ def _google_system_part(value: JsonValue) -> JsonValue:
 _GOOGLE_REPEATED_FIELD: Final = BeforeValidator(_google_repeated_field)
 
 
-class _GoogleCountTokensTextPart(BaseModel):
+class _GoogleCountTokensTextPart(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     text: str | None
 
 
-class _GoogleCountTokensSystemInstruction(BaseModel):
+class _GoogleCountTokensSystemInstruction(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     parts: Annotated[
         tuple[Annotated[_GoogleCountTokensTextPart, BeforeValidator(_google_system_part)], ...],
@@ -93,7 +94,7 @@ class _GoogleCountTokensSystemInstruction(BaseModel):
     ] = ()
 
 
-class _GoogleCountTokensFunctionDeclaration(BaseModel):
+class _GoogleCountTokensFunctionDeclaration(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
     name: str
     description: str | None = None
@@ -101,14 +102,14 @@ class _GoogleCountTokensFunctionDeclaration(BaseModel):
     parameters_json_schema: JsonValue | None = Field(default=None, alias="parametersJsonSchema")
 
 
-class _GoogleCountTokensTool(BaseModel):
+class _GoogleCountTokensTool(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
     function_declarations: Annotated[tuple[_GoogleCountTokensFunctionDeclaration, ...], _GOOGLE_REPEATED_FIELD] = Field(
         default=(), alias="functionDeclarations"
     )
 
 
-class _GoogleCountTokensRequest(BaseModel):
+class _GoogleCountTokensRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
     contents: Annotated[tuple[Mapping[str, JsonValue], ...], BeforeValidator(_google_contents)] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")

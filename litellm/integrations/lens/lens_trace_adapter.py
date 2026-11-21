@@ -34,6 +34,7 @@ from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import LLMCallEvent
 from litellm.integrations.otel.model.utils import to_ns
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import CaptureMessageContent
 
 
@@ -79,21 +80,21 @@ class ToolExchange:
     result: str
 
 
-class _Function(BaseModel):
+class _Function(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     name: str | None = None
     arguments: object = None
 
 
-class _ToolCall(BaseModel):
+class _ToolCall(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     id: str | None = None
     function: _Function = _Function()
 
 
-class _Block(BaseModel):
+class _Block(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: str | None = None
@@ -105,7 +106,7 @@ class _Block(BaseModel):
     text: str | None = None
 
 
-class _Item(BaseModel):
+class _Item(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: str | None = None
@@ -268,26 +269,26 @@ def _derived_session(key_hash: str | None, system_prompt: str, task: str, first_
     return f"derived-{digest[:32]}"
 
 
-class _Metadata(BaseModel):
+class _Metadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     user_agent: str | None = None
     user_api_key_hash: str | None = None
 
 
-class _Choice(BaseModel):
+class _Choice(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     message: _Item = _Item()
 
 
-class _Response(BaseModel):
+class _Response(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     choices: tuple[_Choice, ...] = ()
 
 
-class _Payload(BaseModel):
+class _Payload(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     metadata: _Metadata = _Metadata()

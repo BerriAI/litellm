@@ -5,9 +5,10 @@ from itertools import chain
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_spend_update_writer import SpendBatchManager
@@ -48,7 +49,7 @@ class LedgerDatabase(Protocol):
     def tx(self, *, timeout: timedelta) -> _TransactionManager: ...
 
 
-class _Delivery(BaseModel):
+class _Delivery(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     delivery_id: str
@@ -72,7 +73,7 @@ class DeliveryBatchResult:
     error: str | None = None
 
 
-class DeliveryBacklog(BaseModel):
+class DeliveryBacklog(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     pending_count: int
@@ -80,7 +81,7 @@ class DeliveryBacklog(BaseModel):
     oldest_pending_seconds: float
 
 
-class DeliveryStorage(BaseModel):
+class DeliveryStorage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     batch_count: int

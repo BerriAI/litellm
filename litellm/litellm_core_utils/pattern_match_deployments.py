@@ -9,14 +9,15 @@ from collections.abc import Mapping
 from re import Match
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.router import LiteLLM_Params
 
 
-class _RoutedDeployment(BaseModel):
+class _RoutedDeployment(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     litellm_params: LiteLLM_Params

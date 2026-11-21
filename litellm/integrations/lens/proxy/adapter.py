@@ -9,7 +9,7 @@ from urllib.parse import quote, urlencode, urlsplit
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from starlette.responses import JSONResponse, RedirectResponse
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
@@ -28,6 +28,7 @@ from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_builder
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 PUBLIC_CONTRACT: Final = 1
@@ -42,7 +43,7 @@ _LOGIN_UNAVAILABLE: Final = (
 )
 
 
-class Identity(BaseModel):
+class Identity(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     user_role: LitellmUserRoles
     user_id: str | None
@@ -108,7 +109,7 @@ async def delegated_identity(
     )
 
 
-class ServiceStatus(BaseModel):
+class ServiceStatus(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     storage_ready: bool = False
     credentials_ready: bool = False
@@ -117,7 +118,7 @@ class ServiceStatus(BaseModel):
     public_contract: int = 0
 
 
-class ServiceConnection(BaseModel):
+class ServiceConnection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     url: str
     connected: bool

@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from apscheduler.triggers import cron  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]  # untyped
-from pydantic import AwareDatetime, BaseModel, ConfigDict, TypeAdapter
+from pydantic import AwareDatetime, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -19,6 +19,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import bounded_tx, trusted_sql
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -127,7 +128,7 @@ class ScheduledJob:
     run: Callable[["PrismaClient"], Awaitable[JobResult]]
 
 
-class PendingRun(BaseModel):
+class PendingRun(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -135,7 +136,7 @@ class PendingRun(BaseModel):
     scheduled_for: AwareDatetime
 
 
-class JobState(BaseModel):
+class JobState(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     now: AwareDatetime
@@ -208,7 +209,7 @@ def default_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
-class _Claimed(BaseModel):
+class _Claimed(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -403,7 +404,7 @@ class ScheduledJobRunner:
         verbose_proxy_logger.info("Scheduled job %s run %s %s", self.job.name, run_id, result)
 
 
-class _Locked(BaseModel):
+class _Locked(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     locked: bool

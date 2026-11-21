@@ -8,7 +8,7 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -16,19 +16,20 @@ from litellm.harness.endpoint import response_cost
 from litellm.harness.evaluation.types import CheckResult, CommandCheck, EvalCheck, JudgeCheck, PredicateCheck
 from litellm.harness.sandbox.base import Sandbox
 from litellm.harness.types import Result, Usage
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse
 
 _MAX_DETAIL_CHARS: Final = 4000
 
 
-class _JudgeVerdict(BaseModel):
+class _JudgeVerdict(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     passed: bool = Field(strict=True)
     reason: str = Field(strict=True)
 
 
-class _JudgeUsage(BaseModel):
+class _JudgeUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     prompt_tokens: int | None = None

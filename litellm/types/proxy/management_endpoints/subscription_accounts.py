@@ -1,14 +1,15 @@
 from datetime import date
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from litellm.models.subscription_account import LiteLLM_SubscriptionAccountTable
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 CURRENCY_CODE_PATTERN: Final = r"^[A-Z]{3}$"
 
 
-class SubscriptionAccountFeeRequest(BaseModel):
+class SubscriptionAccountFeeRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     custom_llm_provider: str = Field(min_length=1)
@@ -19,7 +20,7 @@ class SubscriptionAccountFeeRequest(BaseModel):
     label: str | None = None
 
 
-class UpdateSubscriptionAccountFeeRequest(BaseModel):
+class UpdateSubscriptionAccountFeeRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     subscription_account_id: str
@@ -29,20 +30,20 @@ class UpdateSubscriptionAccountFeeRequest(BaseModel):
     label: str | None = None
 
 
-class DeleteSubscriptionAccountRequest(BaseModel):
+class DeleteSubscriptionAccountRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     subscription_account_id: str
 
 
-class BillingPeriod(BaseModel):
+class BillingPeriod(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     start: date
     end: date
 
 
-class SubscriptionAccountUsage(BaseModel):
+class SubscriptionAccountUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     custom_llm_provider: str
@@ -53,7 +54,7 @@ class SubscriptionAccountUsage(BaseModel):
     fixed_cost: float | None
 
 
-class SubscriptionUsageResponse(BaseModel):
+class SubscriptionUsageResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     start_date: date

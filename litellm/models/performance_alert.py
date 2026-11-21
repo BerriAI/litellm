@@ -3,9 +3,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from litellm.models.alert import MAX_ALERT_ID, AlertDetection, AlertType, MetricEvidence
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 PerformanceScope: TypeAlias = Literal["gateway", "model", "team", "user", "key"]
 SCOPES: Final[tuple[PerformanceScope, ...]] = ("gateway", "model", "team", "user", "key")
@@ -25,7 +26,7 @@ RELIABILITY_MIN_INCREASE: Final = 0.02
 RELIABILITY_MIN_REQUESTS: Final = 500
 
 
-class AlertThreshold(BaseModel):
+class AlertThreshold(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     multiplier: float = Field(gt=1, allow_inf_nan=False, strict=True, description="Minimum multiple of the baseline.")
@@ -37,7 +38,7 @@ class AlertThreshold(BaseModel):
     )
 
 
-class PerformanceAlertThresholds(BaseModel):
+class PerformanceAlertThresholds(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     spend: AlertThreshold = Field(
@@ -68,7 +69,7 @@ class PerformanceAlertThresholds(BaseModel):
 DEFAULT_THRESHOLDS: Final = PerformanceAlertThresholds()
 
 
-class ResourceWindow(BaseModel):
+class ResourceWindow(LiteLLMBaseModel):
     """One resource's totals for the evaluated day, and summed over the seven days before it."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -88,7 +89,7 @@ class ResourceWindow(BaseModel):
     timed_days: int = Field(ge=0, le=BASELINE_DAYS)
 
 
-class SweepState(BaseModel):
+class SweepState(LiteLLMBaseModel):
     """Where the daily sweep stands. Scopes are walked in ID order. When the previous day stopped partway, that scope
     starts where it stopped and wraps around, so an unfinished sweep does not leave out the same resources every day."""
 
@@ -124,7 +125,7 @@ class ResourceUnreadableError(Exception):
     Any other database error ends the run so the next run resumes from the same place."""
 
 
-class AlertMonitoring(BaseModel):
+class AlertMonitoring(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = Field(description="Whether performance monitoring is enabled. Defaults to true.")
@@ -141,19 +142,19 @@ class AlertMonitoring(BaseModel):
         return self.enabled and (self.alert_limit is None or self.alerts_used < self.alert_limit)
 
 
-class AlertMonitoringUpdate(BaseModel):
+class AlertMonitoringUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = Field(strict=True, description="Enable or disable performance monitoring for this gateway.")
 
 
-class ModelDeprecationMonitoringUpdate(BaseModel):
+class ModelDeprecationMonitoringUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model_deprecations_enabled: bool = Field(strict=True, description="Enable or disable model deprecation alerts.")
 
 
-class AlertThresholdsUpdate(BaseModel):
+class AlertThresholdsUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     thresholds: PerformanceAlertThresholds = Field(

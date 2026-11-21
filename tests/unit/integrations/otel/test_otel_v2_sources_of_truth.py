@@ -1,14 +1,23 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import importlib
+import inspect
 import json
 import logging
 import re
-from collections.abc import Mapping
+import sys
+import threading
+import time
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Final
+from queue import Queue
+from types import FrameType
+from typing import Final, TypeAlias, cast
 
 import pytest
+from pydantic import BaseModel
 
 import litellm
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
@@ -49,6 +58,8 @@ from litellm.integrations.otel.model.spans import (
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.types.responses.main import build_web_search_call
+
+TraceCallback: TypeAlias = Callable[[FrameType, str, object], "TraceCallback | None"]
 
 
 @pytest.fixture(autouse=True)
@@ -1805,6 +1816,63 @@ def test_v2_flag_is_off_by_default(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is True
+
+
+def test_concurrent_first_use_of_v2_flag_does_not_delete_its_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.model import config as config_mod
+
+    config_mod = importlib.reload(config_mod)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    config_mod.is_otel_v2_enabled.cache_clear()
+
+    flag_cls: Final = config_mod._OTelV2Flag
+    rebuild = BaseModel.model_rebuild.__func__
+    source, first_line = inspect.getsourcelines(rebuild)
+    delete_line: Final = next(
+        first_line + index for index, line in enumerate(source) if line.strip() == "delattr(cls, attr)"
+    )
+    rebuild_barrier: Final = threading.Barrier(2, timeout=1)
+    start_barrier: Final = threading.Barrier(2, timeout=5)
+    traced_deletes: Final[Queue[int]] = Queue()
+
+    def trace(frame: FrameType, event: str, arg: object) -> TraceCallback | None:
+        frame_locals: Mapping[str, object] = cast(Mapping[str, object], frame.f_locals)
+        if (
+            event == "line"
+            and frame.f_code is rebuild.__code__
+            and frame.f_lineno == delete_line
+            and frame_locals.get("cls") is flag_cls
+            and frame_locals.get("attr") == "__pydantic_core_schema__"
+        ):
+            traced_deletes.put(threading.get_ident())
+            try:
+                rebuild_barrier.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+            time.sleep(0)
+        return trace
+
+    def first_use() -> bool:
+        sys.settrace(trace)
+        start_barrier.wait(timeout=5)
+        return config_mod.is_otel_v2_enabled()
+
+    previous_thread_trace: Final = threading.gettrace()
+    previous_switch_interval: Final = sys.getswitchinterval()
+    threading.settrace(trace)
+    sys.setswitchinterval(1e-6)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures: Final = tuple(executor.submit(first_use) for _ in range(2))
+            results: Final = tuple(future.result(timeout=10) for future in futures)
+    finally:
+        config_mod.is_otel_v2_enabled.cache_clear()
+        threading.settrace(previous_thread_trace)
+        sys.setswitchinterval(previous_switch_interval)
+
+    assert results == (True, True)
+    assert traced_deletes.qsize() == 1
+    assert rebuild_barrier.broken
 
 
 def test_v2_flag_resolved_once_not_per_call(monkeypatch):

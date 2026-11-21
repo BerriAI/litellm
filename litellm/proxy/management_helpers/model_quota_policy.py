@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 import litellm
 from litellm.exceptions import BadRequestError
@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.routing_common_utils import provider_for_generic
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -30,7 +31,7 @@ def _is_known_provider(provider: str) -> bool:
     return provider in litellm.provider_list or JSONProviderRegistry.exists(provider)
 
 
-class ModelQuotaPolicy(BaseModel):
+class ModelQuotaPolicy(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     default: frozenset[QuotaLimit] = frozenset(_LIMITS)

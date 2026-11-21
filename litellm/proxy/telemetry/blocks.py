@@ -2,9 +2,10 @@ from collections import Counter
 from collections.abc import Iterator
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.telemetry.records import BlockCounts, BlockType
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _PART_TYPES: Final = {
     "text": BlockType.TEXT,
@@ -24,13 +25,13 @@ _PART_TYPES: Final = {
 }
 
 
-class _Part(BaseModel):
+class _Part(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     type: str
 
 
-class _Message(BaseModel):
+class _Message(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     role: str

@@ -9,9 +9,10 @@ from typing import Final, TypeVar
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .tool_search import chat_config_builds_anthropic_request, provider_chat_config
 
@@ -61,7 +62,7 @@ def provider_compaction_summary(provider_specific_fields: object) -> str | None:
     return None if block is None else block.summary
 
 
-class _AssistantTurnFields(BaseModel):
+class _AssistantTurnFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     content: object = None

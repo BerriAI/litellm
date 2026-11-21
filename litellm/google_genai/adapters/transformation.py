@@ -7,7 +7,6 @@ from typing import Annotated, Final, TypeAlias, TypeVar, cast
 
 from pydantic import (
     AllowInfNan,
-    BaseModel,
     BeforeValidator,
     ConfigDict,
     JsonValue,
@@ -26,6 +25,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
 from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -198,7 +198,7 @@ _GoogleInt: TypeAlias = Annotated[StrictInt, BeforeValidator(_google_int)]
 _GoogleFloat: TypeAlias = Annotated[StrictFloat, AllowInfNan(False), BeforeValidator(_google_float)]
 
 
-class _CompletionConfigParams(BaseModel):
+class _CompletionConfigParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     temperature: _GoogleFloat | None = None

@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
 from litellm.types.files import get_file_extension_from_mime_type, get_file_mime_type_from_extension
 from litellm.types.llms.anthropic import *
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.bedrock import CachePointBlock
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -6725,20 +6726,20 @@ def _mapping_or_none(value: object) -> object:
     return None
 
 
-class CustomPromptRole(BaseModel):
+class CustomPromptRole(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     pre_message: str | None = None
     post_message: str | None = None
 
 
-class CustomPromptRoles(BaseModel):
+class CustomPromptRoles(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, title="custom prompt template")
 
     roles: Mapping[str, Annotated[CustomPromptRole | None, BeforeValidator(_mapping_or_none)]]
 
 
-class CustomPromptTemplate(BaseModel):
+class CustomPromptTemplate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, title="custom prompt template")
 
     roles: Annotated[Mapping[object, object] | None, BeforeValidator(_mapping_or_none)] = None

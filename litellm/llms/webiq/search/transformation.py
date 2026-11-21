@@ -10,12 +10,13 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse, SearchResult
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
-class _WebIQResult(BaseModel):
+class _WebIQResult(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
 
     title: str
@@ -24,7 +25,7 @@ class _WebIQResult(BaseModel):
     lastUpdatedAt: str | None = None
 
 
-class _WebIQResponse(BaseModel):
+class _WebIQResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
 
     webResults: tuple[_WebIQResult, ...]

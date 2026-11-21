@@ -7,7 +7,7 @@ from fastapi import Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException
 from typing_extensions import assert_never
 
@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.openai_error_payload import error_status_code
 from litellm.proxy.common_utils.validation_error_body import ValidationErrorDetail, public_validation_errors
 from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.scim_v2 import SCIMError, ScimErrorDetail, ScimType
 
 SCIM_CONTENT_TYPE: Final = "application/scim+json"
@@ -146,7 +147,7 @@ def _scim_error_for(exc: Exception) -> ScimError:
             return _unexpected_scim_error(exc)
 
 
-class _ScimUserName(BaseModel):
+class _ScimUserName(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     user_name: str = Field(alias="userName")

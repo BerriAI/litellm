@@ -32,7 +32,7 @@ from time import time as unix_time
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, final, overload
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
@@ -272,6 +272,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 from litellm.router_utils.routing_read_batch import RoutingReadBatch
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.router import (
     AllowedFailsPolicy,
     Deployment,
@@ -1080,7 +1081,7 @@ def _routed_model(request: Mapping[str, object]) -> object:
     return model if model is None or isinstance(model, str) else str(model)
 
 
-class RequestStartFields(BaseModel):
+class RequestStartFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     fallbacks: Sequence[str | Mapping[str, object]] | None = None

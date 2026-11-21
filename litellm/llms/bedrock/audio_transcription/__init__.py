@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
@@ -18,6 +18,7 @@ from litellm.rust_bridge.transcription.native import (
     RustTranscription,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import FileTypes, TranscriptionResponse, TranscriptionUsageTokensObject
 
 SUPPORTED_OPENAI_TRANSCRIPTION_PARAMS: Final = ("language", "prompt", "temperature", "response_format")
@@ -66,7 +67,7 @@ def map_openai_transcription_params(
     }
 
 
-class _RustTranscriptionResult(BaseModel):
+class _RustTranscriptionResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     text: str

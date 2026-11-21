@@ -8,23 +8,24 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final
 
-from pydantic import AliasPath, BaseModel, ConfigDict, Field
+from pydantic import AliasPath, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.alert import AlertSummary
 from litellm.repositories.alert_repository import AlertRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 
 
-class _EmailSettings(BaseModel):
+class _EmailSettings(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     enabled: bool = Field(False, strict=True, validation_alias=AliasPath("email_settings", "Performance Alerts"))
 
 
-class _Delivery(BaseModel):
+class _Delivery(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     revision: int = 1

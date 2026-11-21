@@ -8,7 +8,7 @@ from datetime import datetime
 from itertools import product
 from typing import Final, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, InstanceOf, TypeAdapter
+from pydantic import ConfigDict, InstanceOf, TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -31,6 +31,7 @@ from litellm.types.integrations.customer_budget import (
     CustomerBudgetScope,
 )
 from litellm.types.integrations.slack_alerting import SlackAlertingArgsEnum
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.auth.customer_hierarchy import app_budget_limits
 from litellm.types.proxy.management_endpoints.apps import App, AppFailure, AppMember, AppOrganization
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, CustomerBudgetUsage
@@ -47,7 +48,7 @@ class _CustomerBudgetTable(Protocol):
     ) -> PrismaRecord | None: ...
 
 
-class _CustomerRow(BaseModel):
+class _CustomerRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     spend: float = 0.0

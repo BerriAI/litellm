@@ -6,9 +6,10 @@ from typing import Final, Literal
 from openai.types.chat.chat_completion_allowed_tool_choice_param import ChatCompletionAllowedToolChoiceParam
 from openai.types.chat.chat_completion_allowed_tools_param import ChatCompletionAllowedToolsParam
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "litellm_proxy"})
 _FIRST_AZURE_API_VERSION_WITH_TOOL_CHOICE: Final = "2023-12-01"
@@ -39,21 +40,21 @@ RESPONSES_ALLOWED_TOOLS_LAYOUT: Final = (
 )
 
 
-class ChatAllowedTools(BaseModel):
+class ChatAllowedTools(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["auto", "required"]
     tools: tuple[Mapping[str, object], ...] = Field(min_length=1)
 
 
-class ChatAllowedToolsToolChoice(BaseModel):
+class ChatAllowedToolsToolChoice(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["allowed_tools"]
     allowed_tools: ChatAllowedTools
 
 
-class ResponsesAllowedToolsToolChoice(BaseModel):
+class ResponsesAllowedToolsToolChoice(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["allowed_tools"]
@@ -69,7 +70,7 @@ _ALLOWED_TOOLS_TOOL_CHOICE: Final[TypeAdapter[ChatAllowedToolsToolChoice | Respo
 _SELECTOR: Final = TypeAdapter(dict[str, object])
 
 
-class _ToolChoiceType(BaseModel):
+class _ToolChoiceType(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str

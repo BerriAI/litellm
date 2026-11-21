@@ -35,6 +35,7 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
 from litellm.types.proxy.management_endpoints.apps import (
     App,
@@ -69,13 +70,13 @@ class _DefinitionState(AppDefinition):
     locked: bool = False
 
 
-class _ConfigRecord(BaseModel):
+class _ConfigRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     param_value: object
 
 
-class _ResourceRecord(BaseModel):
+class _ResourceRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     team_id: str | None = None
@@ -87,13 +88,13 @@ class _ResourceRecord(BaseModel):
     token: str | None = Field(default=None, repr=False)
 
 
-class _CachedRow(BaseModel):
+class _CachedRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     values: Mapping[str, object] | None
 
 
-class _SharedProfiles(BaseModel):
+class _SharedProfiles(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     ids: tuple[str, ...]

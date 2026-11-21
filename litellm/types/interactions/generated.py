@@ -8,9 +8,10 @@ import builtins
 from enum import Enum
 from typing import Final, Literal
 
-from pydantic import AwareDatetime, Base64Str, Field, RootModel
+from pydantic import AwareDatetime, Base64Str, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMRootModel
 
 
 class Annotation(LiteLLMBaseModel):
@@ -352,7 +353,7 @@ class Status3(Enum):
     REQUIRES_CONTINUATION = "requires_continuation"
 
 
-class ModelOption(RootModel[str]):
+class ModelOption(LiteLLMRootModel[str]):
     root: str = Field(
         ...,
         description="The model that will complete your prompt.\\n\\nSee [models](https://ai.google.dev/gemini-api/docs/models) for additional details.",
@@ -360,19 +361,19 @@ class ModelOption(RootModel[str]):
     )
 
 
-class AgentOption(RootModel[str]):
+class AgentOption(LiteLLMRootModel[str]):
     root: str = Field(..., description="The agent to interact with.", title="Agent")
 
 
-class ImageMimeTypeOption(RootModel[str]):
+class ImageMimeTypeOption(LiteLLMRootModel[str]):
     root: str = Field(..., description="The mime type of the image.", title="ImageMimeType")
 
 
-class AudioMimeTypeOption(RootModel[str]):
+class AudioMimeTypeOption(LiteLLMRootModel[str]):
     root: str = Field(..., description="The mime type of the audio.", title="AudioMimeType")
 
 
-class VideoMimeTypeOption(RootModel[str]):
+class VideoMimeTypeOption(LiteLLMRootModel[str]):
     root: str = Field(..., description="The mime type of the video.", title="VideoMimeType")
 
 
@@ -405,11 +406,11 @@ class VideoContent(LiteLLMBaseModel):
     resolution: MediaResolution | None = Field(None, description="The resolution of the media.")
 
 
-class ThoughtSummary1(RootModel[TextContent | ImageContent]):
+class ThoughtSummary1(LiteLLMRootModel[TextContent | ImageContent]):
     root: TextContent | ImageContent = Field(..., discriminator="type")
 
 
-class ThoughtSummary(RootModel[list[ThoughtSummary1]]):
+class ThoughtSummary(LiteLLMRootModel[list[ThoughtSummary1]]):
     root: list[ThoughtSummary1] = Field(..., description="A summary of the thought.")
 
 
@@ -590,7 +591,9 @@ class ToolChoiceConfig(LiteLLMBaseModel):
     allowed_tools: AllowedTools | None = None
 
 
-class Tool(RootModel[Function | GoogleSearch | CodeExecution | UrlContext | ComputerUse | McpServer | FileSearch]):
+class Tool(
+    LiteLLMRootModel[Function | GoogleSearch | CodeExecution | UrlContext | ComputerUse | McpServer | FileSearch]
+):
     root: Function | GoogleSearch | CodeExecution | UrlContext | ComputerUse | McpServer | FileSearch = Field(
         ..., discriminator="type"
     )
@@ -605,7 +608,7 @@ class ThoughtContent(LiteLLMBaseModel):
     summary: ThoughtSummary | None = Field(None, description="A summary of the thought.")
 
 
-class ToolChoice(RootModel[ToolChoiceType | ToolChoiceConfig]):
+class ToolChoice(LiteLLMRootModel[ToolChoiceType | ToolChoiceConfig]):
     root: ToolChoiceType | ToolChoiceConfig = Field(..., description="The configuration for tool choice.")
 
 
@@ -673,7 +676,7 @@ class ContentDelta(LiteLLMBaseModel):
 
 
 class Content(
-    RootModel[
+    LiteLLMRootModel[
         TextContent
         | ImageContent
         | AudioContent
@@ -1029,7 +1032,7 @@ class InteractionRequiresAction(LiteLLMBaseModel):
 
 
 class InteractionSseEvent(
-    RootModel[
+    LiteLLMRootModel[
         # New schema events (Api-Revision: 2026-05-20)
         StepStart
         | StepDelta

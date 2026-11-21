@@ -16,10 +16,11 @@ from typing import (
     cast,  # noqa: TID251  # narrows the untyped Redis cache to the str-keyed Protocol
 )
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 _NOT_CONNECTED: Final = USER_PROVIDER_CREDENTIAL_NOT_CONNECTED
 
 
-class GithubCopilotUserConnectionPayload(BaseModel):
+class GithubCopilotUserConnectionPayload(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     access_token: str = Field(repr=False)

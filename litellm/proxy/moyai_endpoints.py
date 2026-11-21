@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -35,6 +35,7 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import UISettingsRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -46,21 +47,21 @@ _MOYAI_NONCE_CONFIG_PREFIX: Final = "moyai_connect_nonce:"
 _MOYAI_CONNECT_EXCHANGE_ROUTE: Final = "/moyai/connect/exchange"
 
 
-class MoyaiConnectStartRequest(BaseModel):
+class MoyaiConnectStartRequest(LiteLLMBaseModel):
     moyai_url: str
     return_to: str
 
 
-class MoyaiConnectStartResponse(BaseModel):
+class MoyaiConnectStartResponse(LiteLLMBaseModel):
     connect_url: str
 
 
-class MoyaiConnectExchangeRequest(BaseModel):
+class MoyaiConnectExchangeRequest(LiteLLMBaseModel):
     code: str
     moyai_url: str
 
 
-class MoyaiConnectExchangeResponse(BaseModel):
+class MoyaiConnectExchangeResponse(LiteLLMBaseModel):
     api_key: str
     key_alias: str
     api_base: str

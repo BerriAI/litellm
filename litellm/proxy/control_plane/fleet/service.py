@@ -5,20 +5,21 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.proxy.control_plane.common.fanout import Failure, parse_reply
 from litellm.proxy.control_plane.dataplanes.client import CallResult, DataplaneClient, DataplaneReply
 from litellm.proxy.control_plane.dataplanes.credentials import Caller
 from litellm.proxy.control_plane.dataplanes.identity import USER_INFO_PATH, parse_user_info, resolved_user_id
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.control_plane.fleet import FleetModel, FleetModelGroup, FleetTeam
 
 MODEL_INFO_PATH: Final = "/model/info"
 TEAM_LIST_PATH: Final = "/team/list"
 
 
-class _Lenient(BaseModel):
+class _Lenient(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
 

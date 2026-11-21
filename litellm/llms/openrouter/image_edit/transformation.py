@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -58,6 +58,7 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.llms.base_model import LiteLLMRootModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     FileTypes,
@@ -119,7 +120,7 @@ class _OpenRouterImageEditResponse(TypedDict):
     model: ReadOnly[NotRequired[object]]
 
 
-class _OpenRouterImageEditResponseRoot(RootModel[_OpenRouterImageEditResponse]):
+class _OpenRouterImageEditResponseRoot(LiteLLMRootModel[_OpenRouterImageEditResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 

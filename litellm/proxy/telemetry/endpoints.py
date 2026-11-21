@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
@@ -15,11 +15,12 @@ from litellm.telemetry.records import TelemetryGroup, UIAction, UIEvent
 from litellm.telemetry.report import report_to_json
 from litellm.telemetry.sample import sample_report
 from litellm.telemetry.sink import TelemetrySink
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
 
-class TelemetryReportsResponse(BaseModel):
+class TelemetryReportsResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     reports: tuple[StoredReport, ...]
@@ -27,13 +28,13 @@ class TelemetryReportsResponse(BaseModel):
     next_after_id: str | None
 
 
-class UIEventAccepted(BaseModel):
+class UIEventAccepted(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     accepted: Literal[True] = True
 
 
-class UIEventBody(BaseModel):
+class UIEventBody(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     page: str = Field(max_length=48, pattern=r"^[a-z]+(-[a-z]+)*$")
@@ -101,7 +102,7 @@ _EVERYTHING: Final = TelemetryConsent(frozenset(TelemetryGroup))
 _REPORT_JSON: Final = TypeAdapter(Mapping[str, JsonValue])
 
 
-class TelemetryGroupInfo(BaseModel):
+class TelemetryGroupInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     group: TelemetryGroup
@@ -109,7 +110,7 @@ class TelemetryGroupInfo(BaseModel):
     enabled: bool
 
 
-class TelemetrySettingsResponse(BaseModel):
+class TelemetrySettingsResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     groups: tuple[TelemetryGroupInfo, ...]
@@ -128,7 +129,7 @@ class TelemetrySettingsResponse(BaseModel):
     report_is_sample: bool
 
 
-class TelemetrySettingsUpdate(BaseModel):
+class TelemetrySettingsUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     groups: tuple[str, ...]
@@ -254,7 +255,7 @@ async def update_telemetry_settings(
     return await _settings_response(runtime, StoredChoice(consent, update.destination), True, user_api_key_dict)
 
 
-class UIEventsEnabledResponse(BaseModel):
+class UIEventsEnabledResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool

@@ -7,35 +7,36 @@ from itertools import accumulate, repeat, takewhile
 from typing import Final, Literal, TextIO
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import ConfigDict, JsonValue, ValidationError
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.vector_stores.utils import is_litellm_written_metadata_key
 
 DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 LIST_PAGE_SIZE: Final = "100"
 
 
-class VectorStore(BaseModel):
+class VectorStore(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
     metadata: dict[str, JsonValue] | None = None
 
 
-class VectorStorePage(BaseModel):
+class VectorStorePage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[VectorStore, ...]
     has_more: bool = False
 
 
-class OpenAIErrorBody(BaseModel):
+class OpenAIErrorBody(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     message: str = ""
 
 
-class OpenAIErrorResponse(BaseModel):
+class OpenAIErrorResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     error: OpenAIErrorBody

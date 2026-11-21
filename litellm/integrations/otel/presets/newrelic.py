@@ -5,9 +5,10 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -15,6 +16,7 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Region -> OTLP base endpoint. A fixed table by design: team config picks a
@@ -30,8 +32,8 @@ NEWRELIC_OTLP_ENDPOINT_BY_REGION: Final[Mapping[str, str]] = MappingProxyType(
 _DEFAULT_REGION: Final = "us"
 
 
-class _NewRelicSettings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+class _NewRelicSettings(LiteLLMBaseSettings):
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     # The same env vars the agent-based integration documents; the key is the
     # operator-level fallback for traffic without team credentials, the region

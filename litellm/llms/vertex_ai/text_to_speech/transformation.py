@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -34,6 +34,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_lyria_model_info,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.llms.vertex_ai_text_to_speech import (
     VertexTextToSpeechAudioConfig,
@@ -99,7 +100,7 @@ _CLOUD_TTS_MULTI_REGIONS: Final = frozenset(("us", "eu"))
 _DEFAULT_GEMINI_TTS_VOICE: Final = "Kore"
 
 
-class _GeminiCloudTtsInput(BaseModel):
+class _GeminiCloudTtsInput(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     text: str | None = None
@@ -107,14 +108,14 @@ class _GeminiCloudTtsInput(BaseModel):
     prompt: str | None = None
 
 
-class _GeminiCloudTtsAudioConfig(BaseModel):
+class _GeminiCloudTtsAudioConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     audioEncoding: str = ""
     sampleRateHertz: int | None = None
 
 
-class _GeminiCloudTtsRequest(BaseModel):
+class _GeminiCloudTtsRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     input: _GeminiCloudTtsInput

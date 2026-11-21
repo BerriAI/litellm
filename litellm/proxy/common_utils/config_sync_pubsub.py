@@ -7,10 +7,11 @@ from dataclasses import asdict, dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast  # noqa: TID251  # untyped prisma/redis boundary
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -117,7 +118,7 @@ class _PubSubEnvelope:
     data: str | bytes
 
 
-class _WrittenModelRow(BaseModel):
+class _WrittenModelRow(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, frozen=True)
 
     model_id: str

@@ -9,21 +9,23 @@ from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING, BinaryIO, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma import Prisma
     from prisma.types import DatasourceOverride
 
 
-class _AddressFields(BaseModel):
+class _AddressFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     ip: Literal["127.0.0.1"]
     port: int = Field(gt=0, le=65535)
     message: str
 
 
-class _ListeningEvent(BaseModel):
+class _ListeningEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     target: Literal["query_engine::server"]
     fields: _AddressFields
