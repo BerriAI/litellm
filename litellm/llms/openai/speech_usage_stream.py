@@ -3,6 +3,7 @@ import re
 from collections.abc import AsyncIterator, Iterator, Mapping
 from fractions import Fraction
 from functools import reduce
+from itertools import accumulate
 from typing import Final
 
 import httpx
@@ -41,6 +42,8 @@ _AAC_SAMPLES_PER_BLOCK: Final = 1024
 _AAC_ENCODER_DELAY_SAMPLES: Final = 1024
 _FLAC_FIXED_BLOCK_SYNC: Final = b"\xff\xf8"
 _FLAC_MIN_FRAME_BYTES: Final = 9
+_FLAC_MAX_CHECKSUM_BYTES: Final = 1 << 18
+_FLAC_SYNC: Final = re.compile(re.escape(_FLAC_FIXED_BLOCK_SYNC))
 
 
 class _SpeechUsage(BaseModel):
@@ -168,8 +171,11 @@ def _flac_crc16_shift(crc: int, _bit: int) -> int:
     return (crc << 1 ^ 0x8005 if crc & 0x8000 else crc << 1) & 0xFFFF
 
 
+_FLAC_CRC16_TABLE: Final = tuple(reduce(_flac_crc16_shift, range(8), byte << 8) for byte in range(256))
+
+
 def _flac_crc16_step(crc: int, byte: int) -> int:
-    return reduce(_flac_crc16_shift, range(8), crc ^ byte << 8)
+    return crc << 8 & 0xFFFF ^ _FLAC_CRC16_TABLE[crc >> 8 ^ byte]
 
 
 def _flac_crc16(data: bytes) -> int:
@@ -215,11 +221,13 @@ def _flac_seconds(head: bytes, tail: bytes) -> Fraction | None:
     fixed_blocks: Final = head[:4] == b"fLaC" and head[4] & 0x7F == 0 and head[8:10] == head[10:12]
     if not fixed_blocks or block_size == 0 or sample_rate == 0:
         return None
+    candidates: Final = tuple(len(tail) - found.start() for found in reversed(tuple(_FLAC_SYNC.finditer(tail))))
     samples: Final = next(
         (
             played
-            for found in reversed(tuple(re.finditer(_FLAC_FIXED_BLOCK_SYNC, tail)))
-            if (played := _flac_frame_end_samples(tail[found.start() :], block_size)) is not None
+            for length, checksummed in zip(candidates, accumulate(candidates))
+            if checksummed <= _FLAC_MAX_CHECKSUM_BYTES
+            and (played := _flac_frame_end_samples(tail[-length:], block_size)) is not None
         ),
         None,
     )

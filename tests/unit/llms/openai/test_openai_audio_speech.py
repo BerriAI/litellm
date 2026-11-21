@@ -465,6 +465,12 @@ def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object], delta
             id="flac whose last frame holds samples that look like a later frame",
         ),
         pytest.param(
+            _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\x1f", b"\xff\xf8\x20\x08\x00" * 100),
+            {"response_format": "flac"},
+            _BILLED_TOKENS,
+            id="flac whose last frame holds a hundred frame lookalikes",
+        ),
+        pytest.param(
             _FLAC_LONG,
             {"response_format": "flac"},
             _FLAC_LONG_BILLED_TOKENS,
@@ -496,6 +502,11 @@ def test_token_priced_speech_bills_the_length_of_the_audio_not_the_tokens_the_do
         ),
         pytest.param(
             _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\x9f"), "flac", id="flac with a malformed frame number"
+        ),
+        pytest.param(
+            _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\x1f", b"\xff\xf8\x20\x08\x00" * 400),
+            "flac",
+            id="flac with more frame lookalikes than are worth checksumming",
         ),
         pytest.param(b"", "aac", id="aac with no frames"),
         pytest.param(_AAC, "webm", id="a format whose length is not read"),
