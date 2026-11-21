@@ -89,3 +89,38 @@ def test_a_loaded_tool_that_was_never_deferred_stays_undeferred() -> None:
     bridged: Final = bridge_client_tool_search([_SEARCH_CALL, _search_output(loaded_lint)], [_CODEX_TOOL_SEARCH])
 
     assert bridged.tools == (_CODEX_TOOL_SEARCH, loaded_lint)
+
+
+def test_a_loaded_namespace_tool_over_64_characters_is_announced_by_the_name_the_model_can_call() -> None:
+    long_tool: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+    vault: Final = {
+        "type": "namespace",
+        "name": "mcp__vault",
+        "description": "Vault tools",
+        "tools": [{**_SHELL, "name": long_tool}],
+    }
+
+    bridged: Final = bridge_client_tool_search([_SEARCH_CALL, _search_output(vault)], [_CODEX_TOOL_SEARCH])
+    chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+        tools=list(bridged.tools)
+    )
+    vault_chat_names: Final = [
+        tool["function"]["name"] for tool in chat_tools if long_tool[:20] in tool["function"]["name"]
+    ]
+
+    assert len(vault_chat_names) == 1
+    assert len(vault_chat_names[0]) <= 64
+    assert bridged.input[1]["output"].endswith(f"callable: {vault_chat_names[0]}")
+
+
+def test_a_long_namespace_tool_offered_eagerly_and_loaded_again_is_sent_once() -> None:
+    long_tool: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+    vault: Final = {"type": "namespace", "name": "mcp__vault", "tools": [{**_SHELL, "name": long_tool}]}
+
+    bridged: Final = bridge_client_tool_search([_SEARCH_CALL, _search_output(vault)], [_CODEX_TOOL_SEARCH, vault])
+    chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+        tools=list(bridged.tools)
+    )
+    chat_names: Final = [tool["function"]["name"] for tool in chat_tools]
+
+    assert len(chat_names) == len(set(chat_names)), chat_names

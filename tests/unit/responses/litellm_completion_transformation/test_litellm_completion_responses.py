@@ -8625,3 +8625,290 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+_VAULT_TOOL: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+_APPS_NAMESPACE: Final = "mcp__codex_apps__atlassian_rovo__legacy"
+_APPS_TOOLS: Final = ("atlassian_rovo_legacy_addcommenttojiraissue", "atlassian_rovo_legacy_addworklogtojiraissue")
+_LONG_NAMESPACE_TOOLS: Final = (
+    {
+        "type": "namespace",
+        "name": "mcp__vault",
+        "description": "Vault tools",
+        "tools": [{"type": "function", "name": _VAULT_TOOL, "parameters": {"type": "object", "properties": {}}}],
+    },
+    {
+        "type": "namespace",
+        "name": _APPS_NAMESPACE,
+        "description": "Atlassian tools",
+        "tools": [
+            {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+            for name in _APPS_TOOLS
+        ],
+    },
+)
+_LONG_NAMESPACE_MEMBERS: Final = (("mcp__vault", _VAULT_TOOL), *((_APPS_NAMESPACE, name) for name in _APPS_TOOLS))
+
+
+def _chat_tool_call_response(call_id: str, chat_name: str) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-long-name",
+        created=1,
+        model="bedrock/us.anthropic.claude-sonnet-5-5",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id=call_id, type="function", function=Function(name=chat_name, arguments="{}")
+                        )
+                    ],
+                ),
+            )
+        ],
+    )
+
+
+class TestLongNamespaceToolNames:
+    """Bedrock Converse, OpenAI and Gemini reject tool names over 64 characters, and joining a
+    Responses namespace with its tool name can pass that (LIT-10289)."""
+
+    @staticmethod
+    def _chat_tool_names(tools: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=list(tools)
+        )
+        return tuple(str(tool["function"]["name"]) for tool in chat_tools)
+
+    def test_joined_names_fit_in_64_characters_and_stay_distinct(self) -> None:
+        chat_names: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)
+
+        assert all(len(name) <= 64 for name in chat_names), chat_names
+        assert len(frozenset(chat_names)) == len(_LONG_NAMESPACE_MEMBERS), chat_names
+        assert all(name.endswith(f"__{tool}") for name, tool in zip(chat_names[1:], _APPS_TOOLS)), chat_names
+
+    def test_namespaces_that_differ_only_past_the_cut_still_get_distinct_names(self) -> None:
+        tools: Final = [
+            {
+                "type": "namespace",
+                "name": f"mcp__codex_apps__vault_connector_with_a_very_long_shared_name_{suffix}",
+                "tools": [{"type": "function", "name": "read_secret", "parameters": {"type": "object"}}],
+            }
+            for suffix in ("east", "west")
+        ]
+
+        chat_names: Final = self._chat_tool_names(tools)
+
+        assert len(frozenset(chat_names)) == 2, chat_names
+        assert all(len(name) <= 64 for name in chat_names), chat_names
+
+    def test_tool_names_too_long_on_their_own_still_get_distinct_names(self) -> None:
+        tool_names: Final = tuple(
+            f"read_the_current_secret_value_from_the_vault_for_the_{region}" for region in ("east", "west")
+        )
+        tools: Final = [
+            {
+                "type": "namespace",
+                "name": "mcp__vault",
+                "tools": [{"type": "function", "name": name, "parameters": {"type": "object"}} for name in tool_names],
+            }
+        ]
+
+        chat_names: Final = self._chat_tool_names(tools)
+
+        assert len(frozenset(chat_names)) == 2, chat_names
+        assert all(len(name) <= 64 for name in chat_names), chat_names
+
+    def test_a_top_level_function_named_like_a_shortened_name_is_rejected(self) -> None:
+        shortened: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS[:1])[0]
+        tools: Final = [
+            *_LONG_NAMESPACE_TOOLS[:1],
+            {"type": "function", "name": shortened, "parameters": {"type": "object", "properties": {}}},
+        ]
+
+        with pytest.raises(ValueError, match="conflict with flattened namespace tools"):
+            self._chat_tool_names(tools)
+
+    def test_names_that_already_fit_are_sent_unchanged(self) -> None:
+        tools: Final = [
+            {
+                "type": "namespace",
+                "name": "mcp__everything",
+                "tools": [{"type": "function", "name": "get_sum", "parameters": {"type": "object"}}],
+            }
+        ]
+
+        assert self._chat_tool_names(tools) == ("mcp__everything__get_sum",)
+
+    @pytest.mark.parametrize(("namespace", "tool_name"), _LONG_NAMESPACE_MEMBERS, ids=("vault", "apps_a", "apps_b"))
+    def test_a_call_to_a_shortened_name_comes_back_as_the_original_tool_on_every_turn(
+        self, namespace: str, tool_name: str
+    ) -> None:
+        position: Final = _LONG_NAMESPACE_MEMBERS.index((namespace, tool_name))
+        chat_name: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)[position]
+        assert len(chat_name) <= 64
+        call_id: Final = f"call_long_{position}"
+        request: Final = cast(ResponsesAPIOptionalRequestParams, {"tools": list(_LONG_NAMESPACE_TOOLS)})
+
+        try:
+            first_turn: Final = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="Read the secret",
+                    responses_api_request=request,
+                    chat_completion_response=_chat_tool_call_response(call_id, chat_name),
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=call_id)
+        calls: Final = [item for item in first_turn.output if item.type == "function_call"]
+        assert [(call.name, call.namespace) for call in calls] == [(tool_name, namespace)]
+
+        replayed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            input=cast(
+                ResponseInputParam,
+                [
+                    {"type": "message", "role": "user", "content": "Read the secret"},
+                    {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "namespace": namespace,
+                        "arguments": "{}",
+                    },
+                    {"type": "function_call_output", "call_id": call_id, "output": "s3cr3t"},
+                ],
+            ),
+            responses_api_request=request,
+            custom_llm_provider="bedrock",
+        )
+        replayed_names: Final = [
+            call["function"]["name"] for message in replayed["messages"] for call in message.get("tool_calls") or ()
+        ]
+        assert replayed_names == [chat_name]
+        assert chat_name in [tool["function"]["name"] for tool in replayed["tools"]]
+
+    def test_a_streamed_call_to_a_shortened_name_comes_back_as_the_original_tool(self) -> None:
+        from unittest.mock import Mock
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        chat_name: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)[0]
+        assert len(chat_name) <= 64
+        stream: Final = Mock(spec=litellm.CustomStreamWrapper)
+        stream.logging_obj = Mock()
+        iterator: Final = LiteLLMCompletionStreamingIterator(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            litellm_custom_stream_wrapper=stream,
+            request_input="Read the secret",
+            responses_api_request=cast(ResponsesAPIOptionalRequestParams, {"tools": list(_LONG_NAMESPACE_TOOLS)}),
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_stream", "function": {"name": chat_name, "arguments": "{}"}}]
+        )
+
+        added: Final = iterator._pending_tool_events[0]
+        assert (added.item.name, added.item.namespace) == (_VAULT_TOOL, "mcp__vault")
+
+    def test_a_server_tool_search_that_finds_a_shortened_name_loads_the_original_tool(self) -> None:
+        vault: Final = _LONG_NAMESPACE_TOOLS[0]
+        deferred_vault: Final = {**vault, "tools": [{**vault["tools"][0], "defer_loading": True}]}
+        chat_name: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)[0]
+        assert len(chat_name) <= 64
+
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=_chat_response_with_tool_search_result(
+                {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [{"type": "tool_reference", "tool_name": chat_name}],
+                }
+            ),
+            responses_api_request={"tools": [{"type": "tool_search", "execution": "server"}, deferred_vault]},
+        )
+
+        search_output: Final = next(item for item in items if isinstance(item, OutputToolSearchOutput))
+        assert [dict(tool) for tool in search_output.tools] == [deferred_vault]
+
+    @pytest.mark.parametrize("stream", (False, True), ids=("non_streaming", "streaming"))
+    def test_a_resumed_turn_that_repeats_a_call_from_history_gets_the_original_tool_back(self, stream: bool) -> None:
+        """Codex can resume a session before its MCP server is listed again, so the long tool is only in history."""
+        from unittest.mock import Mock
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        chat_name: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)[0]
+        assert len(chat_name) <= 64
+        history: Final = cast(
+            ResponseInputParam,
+            [
+                {"type": "message", "role": "user", "content": "Read the secret"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_earlier",
+                    "name": _VAULT_TOOL,
+                    "namespace": "mcp__vault",
+                    "arguments": "{}",
+                },
+                {"type": "function_call_output", "call_id": "call_earlier", "output": "s3cr3t"},
+                {"type": "message", "role": "user", "content": "Read it again"},
+            ],
+        )
+        request: Final = cast(ResponsesAPIOptionalRequestParams, {"tools": []})
+
+        if stream:
+            wrapper: Final = Mock(spec=litellm.CustomStreamWrapper)
+            wrapper.logging_obj = Mock()
+            iterator: Final = LiteLLMCompletionStreamingIterator(
+                model="bedrock/us.anthropic.claude-sonnet-5-5",
+                litellm_custom_stream_wrapper=wrapper,
+                request_input=history,
+                responses_api_request=request,
+            )
+            iterator._queue_tool_call_delta_events(
+                [{"index": 0, "id": "call_again", "function": {"name": chat_name, "arguments": "{}"}}]
+            )
+            item: Final = iterator._pending_tool_events[0].item
+            assert (item.name, item.namespace) == (_VAULT_TOOL, "mcp__vault")
+            return
+
+        try:
+            response: Final = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input=history,
+                    responses_api_request=request,
+                    chat_completion_response=_chat_tool_call_response("call_again", chat_name),
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key="call_again")
+        calls: Final = [item for item in response.output if item.type == "function_call"]
+        assert [(call.name, call.namespace) for call in calls] == [(_VAULT_TOOL, "mcp__vault")]
+
+    def test_two_namespaces_whose_shortened_names_collide_are_rejected(self) -> None:
+        colliding_namespaces: Final = (
+            "mcp__codex_apps__vault_connector_with_a_long_name_104655",
+            "mcp__codex_apps__vault_connector_with_a_long_name_119871",
+        )
+        tools: Final = [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "tools": [{"type": "function", "name": "read_secret", "parameters": {"type": "object"}}],
+            }
+            for namespace in colliding_namespaces
+        ]
+
+        with pytest.raises(ValueError, match="shorten to the same tool name") as raised:
+            self._chat_tool_names(tools)
+
+        assert all(f"{namespace}__read_secret" in str(raised.value) for namespace in colliding_namespaces)
