@@ -1,5 +1,4 @@
 import React, { useContext, useId } from "react";
-import { productNames } from "@/i18n/untranslated/productNames";
 import { useTranslation } from "react-i18next";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
