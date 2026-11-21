@@ -2545,11 +2545,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         model_response.choices = [choice]
 
-        usage: Final = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
+        usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
 
         setattr(model_response, "usage", usage)
 
@@ -2927,11 +2923,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         annotations: Final = chat_completion_message.get("annotations")
         provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
         finish_fields: Final = _candidate_finish_fields(candidate) if _names_its_finish(candidate) else None
-        # create a streaming choice object
+        native_finish_reason: Final = candidate.get("finishReason")
         choice: Final = StreamingChoices(
-            finish_reason=VertexGeminiConfig._check_finish_reason(
-                chat_completion_message, candidate.get("finishReason")
-            ),
+            finish_reason=VertexGeminiConfig._check_finish_reason(chat_completion_message, native_finish_reason)
+            if native_finish_reason
+            else None,
             index=candidate.get("index", idx),
             delta=Delta(
                 content=chat_completion_message.get("content"),
@@ -4250,8 +4246,8 @@ def _transform_long_decode_hops(
 def _provider_finish_reasons(
     candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"], blocked_indices: frozenset[int]
 ) -> tuple[tuple[int, str], ...]:
-    """Every streamed choice carries a finish_reason, "stop" when the candidate sent none or Google's
-    FINISH_REASON_UNSPECIFIED, so only a candidate that named how it ended, or a blocked prompt, is evidence of it."""
+    """A streamed choice also carries "stop" for Google's FINISH_REASON_UNSPECIFIED, so only a candidate that named how
+    it ended, or a blocked prompt, is evidence of it."""
     finished: Final = frozenset(
         candidate.get("index", position)
         for position, candidate in enumerate(candidates)

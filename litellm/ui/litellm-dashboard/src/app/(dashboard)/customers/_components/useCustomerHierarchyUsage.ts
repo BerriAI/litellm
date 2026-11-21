@@ -145,5 +145,6 @@ export default function useCustomerHierarchyUsage() {
     setSearch,
     setPage,
     setApp,
+    appOrganizationSpend: params.app_id ? null : data?.monthlyOrganizationSpend ?? null,
   };
 }

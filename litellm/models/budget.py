@@ -5,9 +5,9 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
 from pydantic import AfterValidator, ConfigDict, Field, model_validator
 
@@ -18,32 +18,67 @@ if TYPE_CHECKING:
     from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class BudgetLimit(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
-    budget_duration: Literal["1mo", "12mo"]
-    max_budget: float = Field(ge=0, allow_inf_nan=False)
+    budget_duration: str = Field(description="Positive duration such as '1h', '7d', '1mo' or '12mo'.")
+    max_budget: float
     reset_at: datetime | None = None
+    window_start: datetime | None = Field(
+        default=None,
+        description="Server-managed start of the current spend window.",
+        exclude_if=_is_none,
+    )
 
 
-def unique_budget_limits(limits: tuple[BudgetLimit, ...]) -> tuple[BudgetLimit, ...]:
+def validate_budget_limits(limits: Sequence[BudgetLimit]) -> Sequence[BudgetLimit]:
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+
     if len({limit.budget_duration for limit in limits}) != len(limits):
         raise ValueError("Each budget duration may appear only once")
+    for limit in limits:
+        if (error := budget_duration_error(limit.budget_duration)) is not None:
+            raise ValueError(error)
+        if not 0 <= limit.max_budget < float("inf"):
+            raise ValueError("Window max_budget must be finite and non-negative")
     return limits
 
 
-BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(unique_budget_limits)]
+BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(validate_budget_limits)]
+BudgetLimitList: TypeAlias = Annotated[list[BudgetLimit], AfterValidator(validate_budget_limits)]
+
+
+def carry_budget_limit_resets(
+    limits: tuple[BudgetLimit, ...], previous: tuple[BudgetLimit, ...]
+) -> tuple[BudgetLimit, ...]:
+    stored: Final = {limit.budget_duration: limit for limit in previous}
+    return tuple(_carried_schedule(limit, stored.get(limit.budget_duration)) for limit in limits)
+
+
+def _carried_schedule(limit: BudgetLimit, stored: BudgetLimit | None) -> BudgetLimit:
+    return limit.model_copy(
+        update={
+            "reset_at": stored.reset_at if stored is not None else limit.reset_at,
+            "window_start": stored.window_start if stored is not None else None,
+        }
+    )
 
 
 def initialize_budget_limits(
     limits: tuple[BudgetLimit, ...], settings: "BudgetResetSettings", now: datetime
 ) -> tuple[BudgetLimit, ...]:
-    from litellm.proxy.common_utils.timezone_utils import compute_budget_reset_at
+    from litellm.proxy.common_utils.timezone_utils import get_budget_window_reset_fields
 
     return tuple(
         limit
         if limit.reset_at is not None
-        else limit.model_copy(update={"reset_at": compute_budget_reset_at(limit.budget_duration, settings, now)})
+        else BudgetLimit.model_validate(
+            {**limit.model_dump(), **get_budget_window_reset_fields(limit.budget_duration, settings=settings, now=now)}
+        )
         for limit in limits
     )
 

@@ -819,17 +819,14 @@ def _with_team_deployment_attribution(
     }
 
 
-def _merge_router_settings_override(
-    data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
-) -> frozenset[str]:
-    data.pop("enable_tag_filtering", None)
+def router_settings_override_updates(data: Mapping[str, object]) -> Mapping[str, object]:
     drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True
     router_settings_override_adapter: Final = (
         _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
     )
     try:
         router_settings_override: Final = router_settings_override_adapter.validate_python(
-            data.pop("router_settings_override", None)
+            data.get("router_settings_override")
         )
     except ValidationError:
         raise ProxyException(
@@ -838,8 +835,6 @@ def _merge_router_settings_override(
             param="router_settings_override",
             code=status.HTTP_400_BAD_REQUEST,
         ) from None
-    if "user_config" in data and data["user_config"] is None:
-        data.pop("user_config")
     user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))
     router_settings_from_override: Final = MappingProxyType(
         {
@@ -852,8 +847,19 @@ def _merge_router_settings_override(
         if router_settings_override is not None
         else {}
     )
-    data.update(router_settings_from_override)
-    return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
+    return router_settings_from_override
+
+
+def _merge_router_settings_override(
+    data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
+) -> frozenset[str]:
+    data.pop("enable_tag_filtering", None)
+    updates: Final = router_settings_override_updates(data)
+    data.pop("router_settings_override", None)
+    if "user_config" in data and data["user_config"] is None:
+        data.pop("user_config")
+    data.update(updates)
+    return _ROUTER_ONLY_SETTINGS.intersection(updates)
 
 
 async def route_request(

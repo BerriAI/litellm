@@ -26,11 +26,13 @@ import respx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.testclient import WebSocketDenialResponse
 from starlette.types import Message
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException, UserAPIKeyAuth
@@ -711,6 +713,22 @@ async def test_otel_unhandled_exception_handler_returns_500_generic_payload():
             "type": "internal_server_error",
         }
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include", [True, False])
+async def test_otel_unhandled_exception_handler_honors_the_litellm_header_opt_out(
+    include: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "include_litellm_headers", include)
+    request: Final = _make_request()
+    request.state.litellm_call_id = "call-123"
+
+    response: Final = await otel_unhandled_exception_handler(request=request, exc=RuntimeError("kaboom"))
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert Headers(raw=response.raw_headers).get("x-litellm-call-id") == ("call-123" if include else None)
 
 
 _DB_OUTAGE_503_BODY: Final = {

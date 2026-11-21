@@ -67,6 +67,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.responses.additional_tools import additional_tools_in_input
+from litellm.responses.instructions_length import with_long_instructions_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
@@ -241,6 +242,10 @@ def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
 
 _HISTORY_REPLAY_PROVIDERS: Final = frozenset({"openai", "azure"})
 _SYSTEM_INPUT_PROVIDERS: Final = frozenset({"openai", "azure", "azure_ai", "bedrock_mantle"})
+_PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
+    "`previous_response_id` is only supported on the Responses API (`/v1/responses`). Continue the stored "
+    "response there, or send the earlier turns in `messages`."
+)
 
 
 def replays_responses_history(provider: str | None) -> bool:
@@ -1316,8 +1321,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     responses_api_request["stream_options"] = stream_options
             elif key in ResponsesAPIOptionalRequestParams.__annotations__:
                 responses_api_request[key] = value
-            elif key == "previous_response_id":
-                responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
                 responses_api_request["reasoning"] = self.map_reasoning_effort(value, model, custom_llm_provider)
             elif key == "web_search_options":
@@ -1384,15 +1387,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         client: object | None = None,
     ) -> dict:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
-        preserve_system_instructions: Final = any(
-            params.get("previous_response_id") or params.get("truncation") == "auto"
-            for params in (
-                request_params,
-                as_str_mapping(request_params.get("extra_body")) or {},
-                litellm_params,
-                as_str_mapping(litellm_params.get("extra_body")) or {},
-            )
+        sent_params: Final = (
+            request_params,
+            as_str_mapping(request_params.get("extra_body")) or {},
+            litellm_params,
+            as_str_mapping(litellm_params.get("extra_body")) or {},
         )
+        if any(params.get("previous_response_id") is not None for params in sent_params):
+            raise litellm.UnsupportedParamsError(
+                message=_PREVIOUS_RESPONSE_ID_UNSUPPORTED, model=model, llm_provider=_served_provider(litellm_params)
+            )
+        preserve_system_instructions: Final = any(params.get("truncation") == "auto" for params in sent_params)
         optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = _served_provider(litellm_params)
         base_model: Final = litellm_params.get("base_model")
@@ -1423,11 +1428,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             keep_system_order=marked_a_system_string,
-            preserve_system_instructions=(
-                preserve_system_instructions
-                or request_params.get("store") is not False
-                or provider not in _SYSTEM_INPUT_PROVIDERS
-            ),
+            preserve_system_instructions=preserve_system_instructions or provider not in _SYSTEM_INPUT_PROVIDERS,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
             replay_openai_history=replays_responses_history(provider),
@@ -1502,7 +1503,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if headers:
             request_data["extra_headers"] = headers
 
-        return request_data
+        return dict(with_long_instructions_in_input(request_data))
 
     @staticmethod
     def _convert_response_output_to_choices(
@@ -2097,12 +2098,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         supported_responses_api_params: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         # Also include params we handle specially
-        supported_responses_api_params.update(
-            {
-                "previous_response_id",
-                "reasoning_effort",  # We map this to "reasoning"
-            }
-        )
+        supported_responses_api_params.add("reasoning_effort")
 
         # Extract supported params from extra_body and merge into optional_params
         extra_body_copy: Final = extra_body.copy()

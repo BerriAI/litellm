@@ -43,7 +43,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.models.budget import BudgetLimits
+from litellm.models.budget import BudgetLimitList, BudgetLimits
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -105,6 +105,7 @@ from litellm.types.utils import (
     OTEL_DESTINATION_VARS,
     AzureSpillover,
     CallTypes,
+    ClaudeSubscriptionUsage,
     CostBreakdown,
     EmbeddingResponse,
     GenericBudgetConfigType,
@@ -133,8 +134,8 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.lens import TraceReceiver
     from litellm.repositories.database import Database
-    from litellm.tracing import TraceReceiver
 
     Span = _Span | Any
 else:
@@ -909,6 +910,15 @@ class LiteLLMRoutes(enum.Enum):
 
     self_managed_routes = [
         "/management/v1/customer_budget_increase_requests",
+        "/management/v1/apps",
+        "/management/v1/apps/definition",
+        "/management/v1/apps/{app_id}",
+        "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
+        "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
+        "/management/v1/customer_organizations/daily/activity/aggregated",
+        "/management/v1/customer_organizations/daily/activity",
+        "/management/v1/customer_teams/daily/activity",
+        "/management/v1/customer_members/daily/activity",
         *own_spend_log_routes,
         "/lens",
         "/lens/{path:path}",
@@ -2003,6 +2013,7 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    budget_limits: BudgetLimitList | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
@@ -2119,7 +2130,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     enforced_file_expires_after: dict | None = None
     router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
-    budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
+    budget_limits: BudgetLimitList | None = None
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
     model_max_budget: GenericBudgetConfigType | None = Field(
         default=None,
@@ -3663,10 +3674,21 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
         masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
 
+        def decoded(value: object) -> object:
+            if not isinstance(value, str):
+                return value
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+
+        def masked_json(value: object) -> str:
+            return json.dumps(mask_credentials_in_payload(decoded(value), masker), default=str)
+
         if self.before_value is not None:
-            self.before_value = json.dumps(mask_credentials_in_payload(self.before_value, masker), default=str)
+            self.before_value = masked_json(self.before_value)
         if self.updated_values is not None:
-            self.updated_values = json.dumps(mask_credentials_in_payload(self.updated_values, masker), default=str)
+            self.updated_values = masked_json(self.updated_values)
 
         return self
 
@@ -4011,6 +4033,7 @@ class SpendLogsMetadata(TypedDict):
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
     used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
+    claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
 
 
 class SpendLogsPayload(TypedDict):

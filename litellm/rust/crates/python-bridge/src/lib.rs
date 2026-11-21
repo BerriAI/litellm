@@ -1,4 +1,5 @@
 mod auth;
+mod budget_counters;
 mod budgets;
 mod cache;
 mod callable;
@@ -23,6 +24,9 @@ mod router;
 mod routes;
 mod s3_log;
 mod secrets;
+mod spend_log;
+mod spend_log_rows;
+mod spend_log_writer;
 mod tokenizer;
 
 #[pymodule(gil_used = true)]
@@ -54,9 +58,10 @@ mod _native {
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
-        RustAccessGroupRepository, RustBudgetRepository, RustEndUserRepository,
-        RustJwtKeyMappingRepository, RustKeyRepository, RustModelAccessGroupRepository,
-        RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
+        RustAccessGroupRepository, RustAgentIdentityRepository, RustAuditLogRepository,
+        RustBudgetRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
+        RustKeyRepository, RustModelAccessGroupRepository, RustObjectPermissionRepository,
+        RustOrganizationRepository, RustProjectRepository, RustSpendLogRepository,
         RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
@@ -87,7 +92,9 @@ mod _native {
     #[pymodule_export]
     use crate::redis::client::NativeRedisClient;
     #[pymodule_export]
-    use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
+    use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
+    #[pymodule_export]
+    use crate::redis::store::auth_cache::{NativeAuthCache, PyAuthObject, PyLocalSizes};
     #[pymodule_export]
     use crate::redis::store::deployment_health::NativeDeploymentHealth;
     #[pymodule_export]
@@ -96,7 +103,9 @@ mod _native {
         PyGuardedReply, PyWindowCount,
     };
     #[pymodule_export]
-    use crate::redis::store::request::{NativeRequestRedis, NativeSend};
+    use crate::redis::store::request::{
+        NativeRequestRedis, NativeSend, drain_post_call_redis_batches,
+    };
     #[pymodule_export]
     use crate::redis::store::router_session_pins::NativeRouterSessionPins;
     #[pymodule_export]
@@ -104,9 +113,7 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
     #[pymodule_export]
-    use crate::redis::store::spend_counters::{
-        NativeSpendCounters, PyPostCallSettlement, PySpendRead,
-    };
+    use crate::redis::store::spend_counters::{NativeSpendCounters, PySpendRead};
     #[pymodule_export]
     use crate::redis::store::{
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
@@ -124,7 +131,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
     #[pymodule_export]
-    use crate::routes::messages::{amessages, messages};
+    use crate::routes::messages::{amessages, messages, messages_optional_params};
     #[pymodule_export]
     use crate::routes::ocr::{aocr, ocr, ocr_health_check_document, ocr_passthrough_response};
     #[pymodule_export]
@@ -135,6 +142,12 @@ mod _native {
     use crate::routes::traces::trace_encode_error;
     #[pymodule_export]
     use crate::s3_log::NativeS3Log;
+    #[pymodule_export]
+    use crate::spend_log::RustSpendLog;
+    #[pymodule_export]
+    use crate::spend_log_rows::RustSpendLogRowBuilder;
+    #[pymodule_export]
+    use crate::spend_log_writer::RustSpendLogWriter;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -187,6 +200,7 @@ mod tests {
                 "atranscription",
                 "messages",
                 "amessages",
+                "messages_optional_params",
                 "completion",
                 "acompletion",
                 "responses",
@@ -194,14 +208,17 @@ mod tests {
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
                 "NativeTokenRedactor",
+                "RustSpendLogRowBuilder",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
                 "NativeRequestRedis",
                 "NativeSend",
+                "drain_post_call_redis_batches",
                 "NativeAuthCache",
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
+                "AuthObject",
                 "NativeRateLimits",
                 "WindowCount",
                 "AtomicApplied",
@@ -216,9 +233,10 @@ mod tests {
                 "NativeRouterUsage",
                 "NativeUsageRead",
                 "NativeSensitiveRoutePins",
+                "NativeActiveTeams",
+                "ActiveMember",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",
-                "PostCallSettlement",
                 "SpendRead",
                 "LocalSizes",
                 "native_redis_breaker_states",
@@ -237,9 +255,12 @@ mod tests {
                 "RustTeamMembershipRepository",
                 "RustTeamRepository",
                 "RustAccessGroupRepository",
+                "RustAgentIdentityRepository",
+                "RustAuditLogRepository",
                 "RustObjectPermissionRepository",
                 "RustProjectRepository",
                 "RustTagRepository",
+                "RustSpendLogRepository",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
@@ -267,6 +288,8 @@ mod tests {
                 "NativeModelCapacity",
                 "NativeModelCapacityState",
                 "NativeS3Log",
+                "RustSpendLog",
+                "RustSpendLogWriter",
                 "auth_allowed_routes_grant",
                 "auth_first_denied_route",
                 "auth_jwt_team_routes_grant",

@@ -41,7 +41,7 @@ _FULL_USAGE_REPLY_WITH_CACHED_TOKENS: Final[dict[str, JsonValue]] = {
 _COUNTS_ONLY_REPLY: Final[dict[str, JsonValue]] = {
     "total_tokens": 30,
     "input_tokens": 10,
-    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0, "cached_tokens": 0, "cached_tokens_details": None},
     "output_tokens": 20,
     "output_tokens_details": {},
 }
@@ -129,7 +129,7 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
 @pytest.mark.parametrize(
     ("usage", "include_usage", "expected"),
     (
-        pytest.param(_FULL_USAGE, True, _FULL_USAGE_REPLY, id="counts-and-modality-details"),
+        pytest.param(_FULL_USAGE, True, _FULL_USAGE_REPLY_WITH_CACHED_TOKENS, id="counts-and-modality-details"),
         pytest.param(
             {"promptTokenCount": 10, "candidatesTokenCount": 20, "totalTokenCount": 30},
             True,
@@ -162,7 +162,12 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
             {
                 "total_tokens": 35,
                 "input_tokens": 10,
-                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                    "cached_tokens": 0,
+                    "cached_tokens_details": None,
+                },
                 "output_tokens": 25,
                 "output_tokens_details": {"image_tokens": 20, "text_tokens": 5},
             },
@@ -174,7 +179,12 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
             {
                 "total_tokens": 0,
                 "input_tokens": 0,
-                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                    "cached_tokens": 0,
+                    "cached_tokens_details": None,
+                },
                 "output_tokens": 0,
                 "output_tokens_details": {},
             },
@@ -186,7 +196,12 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
             {
                 "total_tokens": 0,
                 "input_tokens": 0,
-                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                    "cached_tokens": 0,
+                    "cached_tokens_details": None,
+                },
                 "output_tokens": 0,
             },
             id="usage-absent",

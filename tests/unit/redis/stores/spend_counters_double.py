@@ -67,11 +67,6 @@ class DeclaredRead:
 
 
 @dataclass
-class FakeSettlement:
-    settled: bool = False
-
-
-@dataclass
 class FakeSpendCounters:
     """``redis`` is None for a worker without Redis, and ``redis_default`` answers reads of a key it lacks. ``fail``
     makes every Redis call fail with ``failure``, ``fail_pipelines`` only the increment pipelines and ``failing`` only
@@ -91,7 +86,7 @@ class FakeSpendCounters:
     read_hook: Callable[[str], Awaitable[None]] | None = None
     on_delete: Callable[[tuple[str, ...]], None] | None = None
     deletes: list[tuple[str, ...]] = field(default_factory=list)
-    post_call: list[tuple[object, tuple[SpendIncrement, ...], FakeSettlement]] = field(default_factory=list)
+    post_call: list[tuple[object, tuple[SpendIncrement, ...]]] = field(default_factory=list)
     declared: list[DeclaredRead] = field(default_factory=list)
 
     def store(self) -> SpendCounterStore:
@@ -161,19 +156,17 @@ class FakeSpendCounters:
         self.commands.append(f"PIPELINE {' '.join(counter for counter, _ in increments)}")
         return _done([self._incr(counter, amount) for counter, amount in increments])
 
-    def increment_many_post_call(self, request: object, increments: Sequence[SpendIncrement]) -> FakeSettlement | None:
+    def increment_many_post_call(self, request: object, increments: Sequence[SpendIncrement]) -> bool:
         if self.redis is None:
-            return None
-        settlement: Final = FakeSettlement()
-        self.post_call.append((request, tuple(increments), settlement))
-        return settlement
+            return False
+        self.post_call.append((request, tuple(increments)))
+        return True
 
     def settle_post_call(self) -> None:
         """What the native task does once the post-call batch goes out."""
         pending: Final = tuple(self.post_call)
         self.post_call.clear()
-        for _, increments, settlement in pending:
-            settlement.settled = True
+        for _, increments in pending:
             if self.fail:
                 for counter, _ in increments:
                     self.memory.pop(counter, None)
