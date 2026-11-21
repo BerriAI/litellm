@@ -15,6 +15,10 @@ from litellm.types.utils import LlmProviders
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
 
+def _is_claude(model: str) -> bool:
+    return "claude" in model.lower()
+
+
 class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     """
     Forwards Anthropic /v1/messages requests to an OpenAI-compatible server that
@@ -43,6 +47,29 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return False
+
+    @staticmethod
+    def _translate_adaptive_effort_for_non_adaptive_model(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: in-place out-param, as in the base signature
+        max_tokens: int | None,
+        custom_llm_provider: str,
+    ) -> None:
+        if _is_claude(model):
+            AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base takes a bare dict
+                model, optional_params, max_tokens, custom_llm_provider
+            )
+
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: in-place out-param, as in the base signature
+        custom_llm_provider: str,
+    ) -> None:
+        if _is_claude(model):
+            AnthropicMessagesConfig._drop_incompatible_temperature_for_thinking(  # pyright: ignore[reportUnknownMemberType]  # the base takes a bare dict
+                model, optional_params, custom_llm_provider
+            )
 
     def validate_anthropic_messages_environment(
         self,
