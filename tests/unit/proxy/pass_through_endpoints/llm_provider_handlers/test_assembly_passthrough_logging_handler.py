@@ -86,6 +86,53 @@ def test_poll_assembly_for_transcript_response(assembly_handler, mock_transcript
             assert transcript == AssemblyAITranscriptResponse(**mock_transcript_response)
 
 
+def test_get_assembly_region_from_url():
+    """
+    Test that get_assembly_region_from_url correctly identifies EU routes and hosts
+    """
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("http://localhost:4000/eu.assemblyai/v2/transcript") == "eu"
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/eu.assemblyai/v2/transcript") == "eu"
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("https://api.eu.assemblyai.com/v2/transcript") == "eu"
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("https://eu.assemblyai.com/v2/transcript") == "eu"
+
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("http://localhost:4000/assemblyai/v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/assemblyai/v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("https://api.assemblyai.com/v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/assemblyai/eu.assemblyai/%2e%2e/v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/assemblyai/eu.assemblyai/../v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/other/prefix/eu.assemblyai/v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url(None) is None
+
+
+def test_get_assembly_transcript_eu_region(assembly_handler, mock_transcript_response):
+    """
+    Test that _get_assembly_transcript uses the EU API base URL (api.eu.assemblyai.com)
+    and passes region_name='eu' to get_credentials.
+    """
+    with patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+        return_value="test-eu-key",
+    ) as mock_creds:
+        with patch("httpx.get") as mock_get:
+            mock_get.return_value.json.return_value = mock_transcript_response
+            mock_get.return_value.raise_for_status.return_value = None
+
+            transcript = assembly_handler._get_assembly_transcript("test-transcript-id", request_region="eu")
+            assert transcript == mock_transcript_response
+
+            mock_creds.assert_called_once_with(
+                custom_llm_provider="assemblyai",
+                region_name="eu",
+            )
+            mock_get.assert_called_once_with(
+                "https://api.eu.assemblyai.com/v2/transcript/test-transcript-id",
+                headers={
+                    "Authorization": "Bearer test-eu-key",
+                    "Content-Type": "application/json",
+                },
+            )
+
+
 def test_is_assemblyai_route():
     """
     Test that the is_assemblyai_route method correctly identifies AssemblyAI routes
@@ -96,6 +143,9 @@ def test_is_assemblyai_route():
     assert handler.is_assemblyai_route("https://api.assemblyai.com/v2/transcript") == True
     assert handler.is_assemblyai_route("https://api.assemblyai.com/other/path") == True
     assert handler.is_assemblyai_route("https://api.assemblyai.com/transcript") == True
+    assert handler.is_assemblyai_route("https://api.eu.assemblyai.com/v2/transcript") == True
+    assert handler.is_assemblyai_route("/eu.assemblyai/v2/transcript") == True
+    assert handler.is_assemblyai_route("/assemblyai/v2/transcript") == True
 
     # Test negative cases
     assert handler.is_assemblyai_route("https://example.com/other") == False

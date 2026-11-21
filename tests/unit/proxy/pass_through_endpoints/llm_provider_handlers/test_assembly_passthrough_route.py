@@ -18,6 +18,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 _KEY: Final = "synthetic-assemblyai-key"
 _UPSTREAM: Final = "https://api.assemblyai.com/v2/transcript"
+_EU_UPSTREAM: Final = "https://api.eu.assemblyai.com/v2/transcript"
 _AUDIO_URL: Final = "https://assembly.ai/wildfires.mp3"
 
 
@@ -170,3 +171,56 @@ async def test_assemblyai_transcribe_with_non_admin_key_logs_key_identity(
     assert logged["metadata"]["user_api_key_user_id"] == "non-admin-user"
     assert logged["metadata"]["user_api_key_team_id"] == "non-admin-team"
     assert logged["custom_llm_provider"] == "assemblyai"
+
+
+@pytest.mark.asyncio
+async def test_assemblyai_eu_transcribe_routes_to_eu_endpoint(
+    respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = _install_recorder(monkeypatch, "tr_eu_1")
+    eu_create_route: Final = respx_mock.post(_EU_UPSTREAM).mock(
+        return_value=httpx.Response(200, json={"id": "tr_eu_1", "status": "queued", "audio_url": _AUDIO_URL})
+    )
+    eu_poll_route: Final = respx_mock.get(f"{_EU_UPSTREAM}/tr_eu_1").mock(
+        return_value=httpx.Response(200, json={"id": "tr_eu_1", "status": "completed", "text": "fires near town"})
+    )
+    eu_delete_route: Final = respx_mock.delete(f"{_EU_UPSTREAM}/tr_eu_1").mock(
+        return_value=httpx.Response(200, json={"id": "tr_eu_1", "status": "deleted"})
+    )
+    admin: Final = UserAPIKeyAuth(api_key="sk-master", user_role=LitellmUserRoles.PROXY_ADMIN)
+    create_body: Final = {"audio_url": _AUDIO_URL, "speech_models": ["universal-2"]}
+
+    create: Final = await assemblyai_proxy_route(
+        endpoint="v2/transcript",
+        request=_request("POST", "/eu.assemblyai/v2/transcript", json.dumps(create_body).encode()),
+        fastapi_response=Response(),
+        user_api_key_dict=admin,
+    )
+    await _wait_for_success_log(recorder)
+    poll: Final = await assemblyai_proxy_route(
+        endpoint="v2/transcript/tr_eu_1",
+        request=_request("GET", "/eu.assemblyai/v2/transcript/tr_eu_1"),
+        fastapi_response=Response(),
+        user_api_key_dict=admin,
+    )
+    delete: Final = await assemblyai_proxy_route(
+        endpoint="v2/transcript/tr_eu_1",
+        request=_request("DELETE", "/eu.assemblyai/v2/transcript/tr_eu_1"),
+        fastapi_response=Response(),
+        user_api_key_dict=admin,
+    )
+
+    assert isinstance(create, Response) and isinstance(poll, Response) and isinstance(delete, Response)
+    assert create.status_code == 200
+    assert json.loads(create.body)["id"] == "tr_eu_1"
+    assert poll.status_code == 200
+    assert json.loads(poll.body)["status"] == "completed"
+    assert delete.status_code == 200
+    assert json.loads(delete.body)["status"] == "deleted"
+    assert eu_create_route.call_count == 1
+    assert json.loads(eu_create_route.calls[0].request.content) == create_body
+    assert eu_delete_route.call_count == 1
+    assert eu_create_route.calls[0].request.headers["authorization"] == _KEY
+    assert eu_delete_route.calls[0].request.headers["authorization"] == _KEY
+    client_poll: Final = eu_poll_route.calls[-1].request
+    assert client_poll.headers["authorization"] == _KEY
