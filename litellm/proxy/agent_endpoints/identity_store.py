@@ -1,9 +1,11 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
+from litellm.proxy.agent_endpoints.okta_identity import OktaIssuer, resolve_okta_claims
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
@@ -21,6 +23,16 @@ from litellm.types.proxy.agent_identity import (
 )
 
 _AGENT_IDENTITIES_TARGET: Final = "agent_identities"
+
+
+def identity_cache_key(provider: str, tenant_id: str, client_id: str) -> str:
+    return f"agent_identity:{json.dumps((provider, tenant_id, client_id))}"
+
+
+async def forget_bindings(cache: UserApiKeyCache, keys: Iterable[tuple[str, str, str]]) -> None:
+    for provider, tenant_id, client_id in keys:
+        await cache.async_delete_cache(key=identity_cache_key(provider, tenant_id, client_id))
+
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerifiedSubject
@@ -91,14 +103,16 @@ class AgentIdentityStore:
         return None
 
     @with_service_target(_AGENT_IDENTITIES_TARGET)
-    async def _bound_agent_id(self, tenant_id: str, client_id: str) -> str | AgentIdentityFailure | None:
-        cache_key: Final = f"agent_identity:{json.dumps((tenant_id, client_id))}"
+    async def _bound_agent_id(
+        self, provider: str, tenant_id: str, client_id: str, *, check_retired: bool = True
+    ) -> str | AgentIdentityFailure | None:
+        cache_key: Final = identity_cache_key(provider, tenant_id, client_id)
         cached: Final[object] = await self.cache.async_get_cache(key=cache_key) if self.cache is not None else None
         if isinstance(cached, str):
             return cached
         where: Final[LiteLLM_AgentIdentityWhereUniqueInput] = {
             "provider_tenant_id_client_id": {
-                "provider": "microsoft_entra",
+                "provider": provider,
                 "tenant_id": tenant_id,
                 "client_id": client_id,
             }
@@ -108,22 +122,35 @@ class AgentIdentityStore:
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent identity could not be loaded")
         if row is None:
-            return await self.unbound_client(where)
+            return await self.unbound_client(where) if check_retired else None
         if self.cache is not None:
             await self.cache.async_set_cache(
                 key=cache_key, value=row.agent_id, ttl=get_management_object_ttl(self.cache)
             )
         return row.agent_id
 
+    async def okta_agent(
+        self, org: str, client_id: str, /, *, check_retired: bool
+    ) -> AgentResponse | AgentIdentityFailure | None:
+        agent_id: Final = await self._bound_agent_id("okta", org, client_id, check_retired=check_retired)
+        if agent_id is None or isinstance(agent_id, AgentIdentityFailure):
+            return agent_id
+        agent: Final = await self.agent(agent_id)
+        if agent is None:
+            return AgentIdentityFailure(message="Agent is disabled or no longer bound to an identity")
+        return agent
+
     async def resolve_verified_claims(
-        self, claims: Mapping[str, object]
+        self, claims: Mapping[str, object], okta: Mapping[str, OktaIssuer] = MappingProxyType({})
     ) -> ManagedAgentContext | AgentIdentityFailure | None:
         issuer: Final = claims.get("iss")
+        if isinstance(issuer, str) and issuer in okta:
+            return await resolve_okta_claims(claims, okta[issuer], self.okta_agent)
         tenant: Final = claims.get("tid")
         client: Final = claims.get("azp")
         if not isinstance(issuer, str) or not isinstance(tenant, str) or not isinstance(client, str):
             return None
-        agent_id: Final = await self._bound_agent_id(tenant, client)
+        agent_id: Final = await self._bound_agent_id("microsoft_entra", tenant, client)
         if agent_id is None or isinstance(agent_id, AgentIdentityFailure):
             return agent_id
         agent: Final = await self.agent(agent_id)
@@ -232,12 +259,13 @@ async def resolve_managed_agent(
     client: object,
     *,
     cache: UserApiKeyCache | None = None,
+    okta: Mapping[str, OktaIssuer] = MappingProxyType({}),
 ) -> ManagedAgentContext | None:
     from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 
     if client is None:
         return None
-    result: Final = await AgentIdentityStore.from_client(client, cache=cache).resolve_verified_claims(claims)
+    result: Final = await AgentIdentityStore.from_client(client, cache=cache).resolve_verified_claims(claims, okta)
     if isinstance(result, AgentIdentityFailure):
         raise_identity_failure(result)
     return result

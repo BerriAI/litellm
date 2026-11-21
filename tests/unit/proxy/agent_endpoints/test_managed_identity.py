@@ -255,3 +255,56 @@ def test_empty_requirements_do_not_make_a_scope_less_human_token_valid(scope: ob
     binding: Final = BINDING.model_copy(update={"required_scopes": ()})
     result: Final = classify_agent_subject(binding, claims(oid=HUMAN, scp=scope), "both")
     assert isinstance(result, AgentIdentityFailure)
+
+
+OKTA_ISSUER: Final = "https://acme.okta.example/oauth2/aus1agents"
+OKTA_IDENTITY: Final = {"provider": "okta", "issuer": OKTA_ISSUER, "client_id": "0oa1agentapp"}
+
+
+def _okta_agent(tenant_id: str) -> AgentResponse:
+    binding: Final = AgentIdentityBinding(
+        agent_id="agent-one",
+        provider="okta",
+        issuer=OKTA_ISSUER,
+        tenant_id=tenant_id,
+        client_id="0oa1agentapp",
+        required_scopes=(),
+        revision="binding-one",
+    )
+    return AgentResponse(
+        agent_id="agent-one", agent_name="agent", agent_card_params={}, identity_managed=True, identity=binding
+    )
+
+
+def test_an_okta_binding_stores_the_org_named_by_its_issuer_as_its_tenant() -> None:
+    result: Final = managed_write_fields({"identity": OKTA_IDENTITY}, None, "admin", {OKTA_ISSUER: "acme"})
+
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["identity"]["create"]["tenant_id"] == "acme"
+    assert result["retired_identities"]["create"]["tenant_id"] == "acme"
+
+
+def test_an_okta_binding_on_an_issuer_that_has_not_opted_in_is_refused() -> None:
+    result: Final = managed_write_fields({"identity": OKTA_IDENTITY}, None, "admin", {})
+
+    assert isinstance(result, AgentIdentityFailure)
+    assert "not opted in" in result.message
+
+
+@pytest.mark.parametrize(("stored_org", "writes"), [("acme", False), ("acme-before-rename", True)])
+def test_saving_an_unchanged_okta_binding_rewrites_it_only_when_its_org_changed(stored_org: str, writes: bool) -> None:
+    result: Final = managed_write_fields(
+        {"identity": OKTA_IDENTITY}, _okta_agent(stored_org), "admin", {OKTA_ISSUER: "acme"}
+    )
+
+    assert not isinstance(result, AgentIdentityFailure)
+    assert ("identity" in result) is writes
+
+
+@pytest.mark.parametrize("mode", ["delegated", "both"])
+def test_okta_bindings_run_autonomous_only_until_delegation_ships(mode: AgentExecutionMode) -> None:
+    result: Final = managed_write_fields(
+        {"identity": OKTA_IDENTITY, "execution_mode": mode}, None, "admin", {OKTA_ISSUER: "acme"}
+    )
+
+    assert isinstance(result, AgentIdentityFailure)

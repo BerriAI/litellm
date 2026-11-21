@@ -15,8 +15,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy.agent_endpoints.identity_store import forget_bindings
 from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
 from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
+from litellm.proxy.agent_endpoints.okta_identity import okta_issuers
 from litellm.proxy.management_helpers.object_permission_utils import (
     prepare_object_permission_upsert,
 )
@@ -29,7 +31,7 @@ from litellm.repositories.table_repositories import (
     RetiredAgentIdentityRepository,
 )
 from litellm.types.agents import AgentConfig, AgentKillSwitchConfig, AgentResponse, PatchAgentRequest
-from litellm.types.proxy.agent_identity import AgentIdentityFailure
+from litellm.types.proxy.agent_identity import AgentIdentityFailure, OktaIdentityConfig
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -173,7 +175,10 @@ async def _managed_fields(
     updated_by: str,
     client: PrismaClient,
 ) -> Mapping[str, object]:
-    result: Final = managed_write_fields(incoming, existing, updated_by)
+    from litellm.proxy.proxy_server import litellm_jwtauth
+
+    okta_orgs: Final = MappingProxyType({issuer: okta.org for issuer, okta in okta_issuers(litellm_jwtauth).items()})
+    result: Final = managed_write_fields(incoming, existing, updated_by, okta_orgs)
     if isinstance(result, AgentIdentityFailure):
         raise_identity_failure(result, 400)
     history: Final = result.get("retired_identities")
@@ -191,8 +196,32 @@ async def _managed_fields(
     if prior is None:
         return result
     if existing is None or prior.agent_id != existing.agent_id:
-        raise HTTPException(409, "Entra application was already registered to another agent")
+        provider: Final = "Okta" if entry["provider"] == "okta" else "Entra"
+        raise HTTPException(409, f"{provider} application was already registered to another agent")
     return MappingProxyType({key: value for key, value in result.items() if key != "retired_identities"})
+
+
+def _registration_conflict(agent: Mapping[str, object]) -> HTTPException:
+    application: Final = "Okta" if isinstance(agent.get("identity"), OktaIdentityConfig) else "Entra"
+    return HTTPException(409, f"Agent name or {application} application is already registered")
+
+
+async def _forget_bindings(*agents: AgentResponse | None) -> None:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await forget_bindings(
+        user_api_key_cache,
+        tuple(
+            (agent.identity.provider, agent.identity.tenant_id, agent.identity.client_id)
+            for agent in agents
+            if agent is not None and agent.identity is not None
+        ),
+    )
+
+
+async def _forgetting_bindings(written: AgentResponse, previous: AgentResponse | None = None) -> AgentResponse:
+    await _forget_bindings(previous, written)
+    return written
 
 
 def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
@@ -426,7 +455,9 @@ def _readable_agent(db_agent: Mapping[str, object]) -> AgentResponse | None:
     try:
         return AgentResponse.model_validate(db_agent)
     except ValidationError as exc:
-        verbose_proxy_logger.warning("Skipping agent %s that this version cannot read: %s", db_agent.get("agent_id"), exc)
+        verbose_proxy_logger.warning(
+            "Skipping agent %s that this version cannot read: %s", db_agent.get("agent_id"), exc
+        )
         return None
 
 
@@ -664,13 +695,12 @@ class AgentRegistry:
                 data={**create_data, **await _managed_fields(agent, None, created_by, prisma_client)},
                 include={"object_permission": True, "identity": True},
             )
-
-            return AgentResponse.model_validate(created_agent.model_dump())
+            return await _forgetting_bindings(AgentResponse.model_validate(created_agent.model_dump()))
         except HTTPException:
             raise
         except Exception as e:
             if is_unique_violation(e):
-                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+                raise _registration_conflict(agent) from e
             raise
 
     async def delete_agent_from_db(self, agent_id: str, prisma_client: PrismaClient) -> Mapping[str, object]:
@@ -687,7 +717,7 @@ class AgentRegistry:
 
         where: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id}
         async with prisma_client.tx() as tx:
-            existing: Final = await tx.litellm_agentstable.find_unique(where=where)
+            existing: Final = await tx.litellm_agentstable.find_unique(where=where, include={"identity": True})
             if existing is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
             if existing.identity_managed:
@@ -700,7 +730,8 @@ class AgentRegistry:
             deleted_agent: Final = await tx.litellm_agentstable.delete(where=where)
             if deleted_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            return deleted_agent.model_dump()
+        await _forget_bindings(AgentResponse.model_validate(existing.model_dump()))
+        return deleted_agent.model_dump()
 
     async def patch_agent_in_db(
         self,
@@ -769,13 +800,12 @@ class AgentRegistry:
             if permission_write is not None:
                 update_data["object_permission"] = permission_write
             # Patch agent in DB
+            previous: Final = AgentResponse.model_validate(existing_record.model_dump())
             patched_agent: Final = await agents_table(prisma_client).update(
                 where={"agent_id": agent_id},
                 data={
                     **update_data,
-                    **await _managed_fields(
-                        agent, AgentResponse.model_validate(existing_record.model_dump()), updated_by, prisma_client
-                    ),
+                    **await _managed_fields(agent, previous, updated_by, prisma_client),
                     "updated_by": updated_by,
                     "updated_at": datetime.now(timezone.utc),
                 },
@@ -783,12 +813,12 @@ class AgentRegistry:
             )
             if patched_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            return AgentResponse.model_validate(patched_agent.model_dump())
+            return await _forgetting_bindings(AgentResponse.model_validate(patched_agent.model_dump()), previous)
         except HTTPException:
             raise
         except Exception as e:
             if is_unique_violation(e):
-                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+                raise _registration_conflict(agent) from e
             raise
 
     async def update_agent_in_db(
@@ -890,12 +920,15 @@ class AgentRegistry:
 
             if updated_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            return AgentResponse.model_validate(updated_agent.model_dump())
+            return await _forgetting_bindings(
+                AgentResponse.model_validate(updated_agent.model_dump()),
+                AgentResponse.model_validate(existing_row.model_dump()) if existing_row else None,
+            )
         except HTTPException:
             raise
         except Exception as e:
             if is_unique_violation(e):
-                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+                raise _registration_conflict(agent) from e
             raise
 
     @staticmethod

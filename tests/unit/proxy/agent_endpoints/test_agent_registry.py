@@ -18,7 +18,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
     _restore_redacted_litellm_params,
     redact_sensitive_agent_litellm_params,
 )
-from litellm.types.agents import PatchAgentRequest
+from litellm.types.agents import AgentCard, AgentConfig, PatchAgentRequest
 
 # Obviously-fake stand-ins for a real AWS credential pair (LIT-6736 regression
 # fixtures) -- never a real key shape, and must never appear in any response.
@@ -1260,7 +1260,8 @@ def _stored_agent_row(values: Mapping[str, object] | SimpleNamespace) -> LiteLLM
             "execution_mode": "autonomous",
             **{
                 key: json.dumps(value)
-                if key in ("litellm_params", "agent_card_params", "kill_switch", "static_headers") and not isinstance(value, str)
+                if key in ("litellm_params", "agent_card_params", "kill_switch", "static_headers")
+                and not isinstance(value, str)
                 else value
                 for key, value in fields.items()
             },
@@ -1655,3 +1656,106 @@ async def test_application_registration_preserves_its_existing_owner(operation: 
                 "issuer": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
             }
         }
+
+
+def _bound_row(client_id: str, provider: str = "microsoft_entra") -> LiteLLM_AgentsTable:
+    from prisma.models import LiteLLM_AgentIdentity
+
+    return _stored_agent_row(
+        {
+            "agent_id": "agent-123",
+            "identity_managed": True,
+            "identity": LiteLLM_AgentIdentity(
+                agent_id="agent-123",
+                provider=provider,
+                issuer="issuer",
+                tenant_id="tenant",
+                client_id=client_id,
+                service_principal_id="principal",
+                active=True,
+                required_roles=[],
+                required_scopes=[],
+                revision="revision",
+            ),
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "patch", "put", "delete"])
+async def test_every_binding_write_forgets_the_cached_old_and_new_bindings_on_this_pod(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.identity_store import identity_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    old_key: Final = identity_cache_key("microsoft_entra", "tenant", "old-client")
+    new_key: Final = identity_cache_key("microsoft_entra", "tenant", "new-client")
+    unrelated: Final = identity_cache_key("microsoft_entra", "tenant", "another-agent")
+    for key in (old_key, new_key, unrelated):
+        await cache.async_set_cache(key=key, value="agent-123")
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    client.db.litellm_agentstable.find_unique = AsyncMock(return_value=_bound_row("old-client"))
+    client.db.litellm_agentstable.create = AsyncMock(return_value=_bound_row("new-client"))
+    client.db.litellm_agentstable.update = AsyncMock(return_value=_bound_row("new-client"))
+    tx: Final = client.tx.return_value.__aenter__.return_value
+    tx.litellm_agentstable.find_unique = AsyncMock(return_value=_bound_row("old-client"))
+    tx.litellm_agentstable.delete = AsyncMock(return_value=_bound_row("old-client"))
+    tx.litellm_verificationtoken.delete_many = AsyncMock(return_value=0)
+    tx.litellm_retiredagent.upsert = AsyncMock()
+    incoming: Final[AgentConfig] = {"agent_name": "Agent", "agent_card_params": AgentCard()}
+    patch: Final[PatchAgentRequest] = {"agent_name": "Agent"}
+
+    if operation == "create":
+        await registry.add_agent_to_db(incoming, client, created_by="admin")
+    elif operation == "delete":
+        await registry.delete_agent_from_db("agent-123", client)
+    elif operation == "patch":
+        await registry.patch_agent_in_db("agent-123", patch, client, updated_by="admin")
+    else:
+        await registry.update_agent_in_db("agent-123", incoming, client, updated_by="admin")
+
+    forgotten: Final = {
+        "create": {new_key},
+        "patch": {old_key, new_key},
+        "put": {old_key, new_key},
+        "delete": {old_key},
+    }[operation]
+    for key in (old_key, new_key, unrelated):
+        cached: Final[object] = await cache.async_get_cache(key=key)
+        assert (cached is None) is (key in forgotten), key
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_okta_registration_names_okta_in_the_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+    from prisma.errors import UniqueViolationError
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+    from litellm.types.proxy.agent_identity import OktaIdentityConfig
+
+    issuer: Final = JWTIssuerConfig(
+        issuer="https://acme.okta.example/oauth2/aus1", audience="api", agent_identity_provider="okta", okta_org="acme"
+    )
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth(issuers=[issuer]))
+
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    client.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_agentstable.create = AsyncMock(
+        side_effect=UniqueViolationError(
+            {"user_facing_error": {"message": "Unique", "meta": {"target": ["client_id"]}, "error_code": "P2002"}}
+        )
+    )
+    okta: Final = OktaIdentityConfig(provider="okta", issuer="https://acme.okta.example/oauth2/aus1", client_id="0oa1")
+    incoming: Final[AgentConfig] = {"agent_name": "Agent", "agent_card_params": AgentCard(), "identity": okta}
+
+    with pytest.raises(HTTPException, match="Agent name or Okta application is already registered") as failure:
+        await registry.add_agent_to_db(incoming, client, created_by="admin")
+
+    assert failure.value.status_code == 409

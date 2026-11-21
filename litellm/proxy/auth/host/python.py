@@ -38,6 +38,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
+from litellm.proxy.agent_endpoints.okta_identity import okta_issuers
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     TeamNotFoundError,
@@ -793,7 +794,9 @@ class PythonAuthHost:
         )
 
     async def managed_agent(self, claims: Mapping[str, object]) -> ManagedAgentContext | None:
-        return await resolve_managed_agent(claims, self.prisma_client, cache=self.user_api_key_cache)
+        return await resolve_managed_agent(
+            claims, self.prisma_client, cache=self.user_api_key_cache, okta=okta_issuers(self.litellm_jwtauth)
+        )
 
     async def record_agent_authentication(self, agent: ManagedAgentContext) -> AgentIdentityFailure | None:
         return await AgentIdentityStore.from_client(self.prisma_client).record_authentication(agent)

@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final, NoReturn, TypedDict
 from uuid import uuid4
 
@@ -9,11 +10,13 @@ from typing_extensions import ReadOnly
 
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import (
+    AGENT_IDENTITY_CONFIG,
     AgentExecutionMode,
     AgentIdentityBinding,
     AgentIdentityFailure,
     AgentSubject,
     EntraIdentityConfig,
+    OktaIdentityConfig,
 )
 
 _MODE: Final = TypeAdapter(AgentExecutionMode)
@@ -69,12 +72,19 @@ def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403
     raise HTTPException(503 if failure.code == "policy_unavailable" else status_code, failure.message)
 
 
+def _service_principal(identity: EntraIdentityConfig | OktaIdentityConfig | AgentIdentityBinding | None) -> str | None:
+    return None if identity is None or isinstance(identity, OktaIdentityConfig) else identity.service_principal_id
+
+
 def _configuration_failure(
-    identity: EntraIdentityConfig | AgentIdentityBinding | None,
+    identity: EntraIdentityConfig | OktaIdentityConfig | AgentIdentityBinding | None,
     mode: AgentExecutionMode,
     enabling_without_binding: bool,
 ) -> AgentIdentityFailure | None:
-    if identity is not None and mode != "delegated" and not identity.service_principal_id:
+    provider: Final = identity.provider if identity is not None else None
+    if provider == "okta" and mode != "autonomous":
+        return AgentIdentityFailure(message="Okta agent identities support autonomous mode only")
+    if provider == "microsoft_entra" and mode != "delegated" and not _service_principal(identity):
         return AgentIdentityFailure(
             message="Autonomous mode requires the Enterprise application service-principal object ID"
         )
@@ -89,10 +99,13 @@ def managed_write_fields(
     incoming: Mapping[str, object],
     existing: AgentResponse | None,
     updated_by: str,
+    okta_orgs: Mapping[str, str] = MappingProxyType({}),
 ) -> ManagedWriteFields | AgentIdentityFailure:
     try:
         identity: Final = (
-            EntraIdentityConfig.model_validate(incoming["identity"]) if incoming.get("identity") is not None else None
+            AGENT_IDENTITY_CONFIG.validate_python(incoming["identity"])
+            if incoming.get("identity") is not None
+            else None
         )
         mode: Final = _MODE.validate_python(
             incoming.get("execution_mode", existing.execution_mode if existing else "autonomous")
@@ -108,7 +121,7 @@ def managed_write_fields(
         if failure is not None:
             return failure
         empty: Final[ManagedWriteFields] = {}
-        identity_fields: Final = _identity_write(identity, existing) if "identity" in incoming else empty
+        identity_fields: Final = _identity_write(identity, existing, okta_orgs) if "identity" in incoming else empty
         result: Final[ManagedWriteFields] = {
             **({"enabled": incoming["enabled"] is True} if "enabled" in incoming else {}),
             **({"execution_mode": mode} if "execution_mode" in incoming else {}),
@@ -119,11 +132,24 @@ def managed_write_fields(
         return AgentIdentityFailure(message=f"Invalid agent identity configuration: {exc}")
 
 
-def _identity_fields(identity: EntraIdentityConfig) -> Mapping[str, object]:
-    return identity.model_dump()
+def _identity_fields(identity: EntraIdentityConfig | OktaIdentityConfig, tenant: str) -> Mapping[str, object]:
+    return {**identity.model_dump(), "tenant_id": tenant}
 
 
-def _identity_write(identity: EntraIdentityConfig | None, existing: AgentResponse | None) -> ManagedWriteFields:
+def _tenant(identity: EntraIdentityConfig | OktaIdentityConfig, okta_orgs: Mapping[str, str]) -> str:
+    if isinstance(identity, EntraIdentityConfig):
+        return identity.tenant_id
+    org: Final = okta_orgs.get(identity.issuer)
+    if org is None:
+        raise ValueError(f"issuer {identity.issuer} is not opted in with agent_identity_provider: okta")
+    return org
+
+
+def _identity_write(
+    identity: EntraIdentityConfig | OktaIdentityConfig | None,
+    existing: AgentResponse | None,
+    okta_orgs: Mapping[str, str],
+) -> ManagedWriteFields:
     if identity is None:
         unbind: Final[ManagedWriteFields] = {
             **(
@@ -138,16 +164,21 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
         existing
         and existing.identity
         and existing.identity.active
-        and all(getattr(existing.identity, name) == value for name, value in _identity_fields(identity).items())
+        and all(
+            getattr(existing.identity, name) == value
+            for name, value in _identity_fields(identity, _tenant(identity, okta_orgs)).items()
+        )
     ):
         unchanged: Final[ManagedWriteFields] = {}
         return unchanged
+    tenant: Final = _tenant(identity, okta_orgs)
+    entra: Final = identity if isinstance(identity, EntraIdentityConfig) else None
     binding: Final[IdentityFields] = {
         "provider": identity.provider,
-        "tenant_id": identity.tenant_id,
+        "tenant_id": tenant,
         "client_id": identity.client_id,
-        "service_principal_id": identity.service_principal_id,
-        "required_roles": identity.required_roles,
+        "service_principal_id": entra.service_principal_id if entra else None,
+        "required_roles": entra.required_roles if entra else (),
         "required_scopes": identity.required_scopes,
         "issuer": identity.issuer,
         "active": True,
@@ -159,7 +190,7 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
             "create": {
                 "provider": identity.provider,
                 "issuer": identity.issuer,
-                "tenant_id": identity.tenant_id,
+                "tenant_id": tenant,
                 "client_id": identity.client_id,
             }
         },
