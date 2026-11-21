@@ -91,6 +91,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
+    provider_file_id_spellings,
     provider_upload_model_id,
     validate_file_list_limit,
     validate_managed_files_requirement,
@@ -445,7 +446,29 @@ async def _forget_recorded_owner(proxy_logging_obj: ProxyLogging, file_id: str) 
     managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
     if not has_attributes(managed_files_obj, _CarriesPrismaClient, "prisma_client"):
         return
-    await ManagedFileRepository(managed_files_obj.prisma_client).table.delete_many(where={"unified_file_id": file_id})
+    repository: Final = ManagedFileRepository(managed_files_obj.prisma_client)
+    spellings: Final = list(provider_file_id_spellings(file_id))
+    candidates: Final = await repository.table.find_many(
+        where={
+            "OR": [
+                {"unified_file_id": {"in": spellings}},
+                {"flat_model_file_ids": {"hasSome": spellings}},
+            ]
+        }
+    )
+    for candidate in candidates:
+        flat_model_file_ids = list(candidate.flat_model_file_ids)
+        if candidate.storage_backend is not None or any(
+            provider_id not in spellings for provider_id in flat_model_file_ids
+        ):
+            continue
+        await repository.table.delete_many(
+            where={
+                "unified_file_id": candidate.unified_file_id,
+                "flat_model_file_ids": {"equals": flat_model_file_ids},
+                "storage_backend": None,
+            }
+        )
 
 
 async def route_create_file(

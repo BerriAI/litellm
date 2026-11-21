@@ -5,11 +5,11 @@ import json
 import tempfile
 import tracemalloc
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from types import SimpleNamespace
 from dataclasses import dataclass
 from email.parser import BytesParser
-from typing import IO, Final, List, Optional
+from typing import IO, Final, List, Optional, cast
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -33,6 +33,7 @@ from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import 
     FileContentStreamingHandler,
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import route_create_file
+from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import (
     FileListPage,
@@ -5459,11 +5460,17 @@ def _managed_file_row(
     )
 
 
-def _field_matches(value, expected) -> bool:
-    if isinstance(expected, dict) and "in" in expected:
-        return value in expected["in"]
-    if isinstance(expected, dict) and "hasSome" in expected:
-        return not set(value).isdisjoint(expected["hasSome"])
+def _field_matches(value: object, expected: object) -> bool:
+    if isinstance(expected, dict):
+        expected_fields = cast(dict[str, object], expected)
+        if "in" in expected_fields:
+            return value in cast(Iterable[object], expected_fields["in"])
+        if "equals" in expected_fields:
+            return value == expected_fields["equals"]
+        if "hasSome" in expected_fields:
+            return not set(cast(Iterable[object], value)).isdisjoint(
+                cast(Iterable[object], expected_fields["hasSome"])
+            )
     return value == expected
 
 
@@ -5508,7 +5515,7 @@ class _ManagedFileTableOverRows:
         self.rows = [row, *(existing for existing in self.rows if existing.unified_file_id != row.unified_file_id)]
         return row
 
-    async def delete_many(self, where: dict[str, str]) -> int:
+    async def delete_many(self, where: dict[str, object]) -> int:
         remaining_rows: Final = [row for row in self.rows if not _row_matches_where(row, where)]
         deleted_count: Final = len(self.rows) - len(remaining_rows)
         self.rows = remaining_rows
@@ -6735,6 +6742,241 @@ def test_another_team_cannot_read_or_delete_a_model_routed_upload(
     assert owner_read.status_code == 200, owner_read.text
     assert owner_read.content == b'{"salary": 100}'
     assert shared_account["content"].call_count == 1
+
+
+_GEMINI_CLEANUP_FILE_ID: Final = "gemini-cleanup-file"
+_GEMINI_CLEANUP_URI: Final = f"https://generativelanguage.googleapis.com/v1beta/files/{_GEMINI_CLEANUP_FILE_ID}"
+_MODEL_CLEANUP_RAW_ID: Final = "file-model-cleanup"
+_MODEL_CLEANUP_ENCODED_ID: Final = encode_file_id_with_model(
+    file_id=_MODEL_CLEANUP_RAW_ID, model="gpt-3.5-turbo"
+)
+
+
+def _recorded_file_for_cleanup(
+    unified_file_id: str,
+    model_mappings: dict[str, str],
+    flat_model_file_ids: list[str],
+    storage_backend: str | None = None,
+) -> SimpleNamespace:
+    file_object = OpenAIFileObject(
+        id=unified_file_id,
+        object="file",
+        bytes=15,
+        created_at=1234567890,
+        filename="owner-file.jsonl",
+        purpose="user_data",
+        status="processed",
+    )
+    return SimpleNamespace(
+        unified_file_id=unified_file_id,
+        file_object=file_object.model_dump(),
+        model_mappings=model_mappings,
+        flat_model_file_ids=flat_model_file_ids,
+        created_by="user-a",
+        team_id="team-a",
+        storage_backend=storage_backend,
+        storage_url=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("unified_file_id", "model_mappings", "flat_ids", "request_file_id", "query", "provider"),
+    [
+        pytest.param(
+            "file-plain-cleanup",
+            {"gpt-3.5-turbo-id": "file-plain-cleanup"},
+            ["file-plain-cleanup"],
+            "file-plain-cleanup",
+            "provider=openai",
+            "openai",
+            id="plain-raw-provider-id",
+        ),
+        pytest.param(
+            _GEMINI_CLEANUP_URI,
+            {"gemini-2.0-flash-id": _GEMINI_CLEANUP_URI},
+            [_GEMINI_CLEANUP_FILE_ID],
+            _GEMINI_CLEANUP_FILE_ID,
+            "provider=gemini",
+            "gemini",
+            id="gemini-bare-id",
+        ),
+        pytest.param(
+            _GEMINI_CLEANUP_URI,
+            {"gemini-2.0-flash-id": _GEMINI_CLEANUP_URI},
+            [_GEMINI_CLEANUP_FILE_ID],
+            f"files/{_GEMINI_CLEANUP_FILE_ID}",
+            "provider=gemini",
+            "gemini",
+            id="gemini-files-path-id",
+        ),
+        pytest.param(
+            _MODEL_CLEANUP_ENCODED_ID,
+            {"gpt-3.5-turbo": _MODEL_CLEANUP_RAW_ID},
+            [_MODEL_CLEANUP_RAW_ID],
+            _MODEL_CLEANUP_ENCODED_ID,
+            "",
+            "openai",
+            id="model-encoded-id",
+        ),
+        pytest.param(
+            _MODEL_CLEANUP_ENCODED_ID,
+            {"gpt-3.5-turbo": _MODEL_CLEANUP_RAW_ID},
+            [_MODEL_CLEANUP_RAW_ID],
+            _MODEL_CLEANUP_RAW_ID,
+            "model=gpt-3.5-turbo",
+            "openai",
+            id="model-routed-raw-id",
+        ),
+        pytest.param(
+            "file-empty-flat-cleanup",
+            {"gpt-3.5-turbo-id": "file-empty-flat-cleanup"},
+            [],
+            "file-empty-flat-cleanup",
+            "provider=openai",
+            "openai",
+            id="exact-unified-id-with-empty-flat-list",
+        ),
+    ],
+)
+def test_successful_file_delete_removes_owner_listing_by_supported_id_spelling(
+    plain_upload_proxy: _ManagedFileTableOverRows,
+    monkeypatch: pytest.MonkeyPatch,
+    unified_file_id: str,
+    model_mappings: dict[str, str],
+    flat_ids: list[str],
+    request_file_id: str,
+    query: str,
+    provider: str,
+) -> None:
+    row = _recorded_file_for_cleanup(unified_file_id, model_mappings, flat_ids)
+    plain_upload_proxy.rows.append(row)
+    if provider == "gemini":
+        monkeypatch.setattr(
+            "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
+            [
+                {"custom_llm_provider": "openai", "api_key": "sk-shared-account"},
+                {"custom_llm_provider": "gemini", "api_key": "gemini-test-key"},
+            ],
+        )
+    provider_delete = AsyncMock(return_value={"id": request_file_id, "object": "file", "deleted": True})
+    monkeypatch.setattr(litellm, "afile_delete", provider_delete)
+
+    listed_before: Final = client.get(f"/v1/files?provider={provider}", headers=_as_team_member("user-a", "team-a"))
+    path_file_id: Final = quote(request_file_id, safe="")
+    query_string: Final = f"?{query}" if query else ""
+    deleted: Final = client.delete(
+        f"/v1/files/{path_file_id}{query_string}", headers=_as_team_member("user-a", "team-a")
+    )
+    listed_after: Final = client.get(f"/v1/files?provider={provider}", headers=_as_team_member("user-a", "team-a"))
+
+    assert _listed_ids(listed_before) == [unified_file_id]
+    assert deleted.status_code == 200, deleted.text
+    provider_delete.assert_awaited_once()
+    assert _listed_ids(listed_after) == []
+    assert plain_upload_proxy.rows == []
+
+
+def test_delete_one_model_copy_preserves_sibling_ownership_and_denies_cross_team_content(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_a = "file-model-copy-a"
+    file_b = "file-model-copy-b"
+    unified_file_id = encode_file_id_with_model(file_id=file_a, model="gpt-3.5-turbo")
+    row = _recorded_file_for_cleanup(
+        unified_file_id,
+        {"gpt-3.5-turbo": file_a, "gpt-4o": file_b},
+        [file_a, file_b],
+    )
+    plain_upload_proxy.rows.append(row)
+    provider_delete = AsyncMock(return_value={"id": file_a, "object": "file", "deleted": True})
+    monkeypatch.setattr(litellm, "afile_delete", provider_delete)
+
+    deleted: Final = client.delete(
+        f"/v1/files/{file_a}?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
+    )
+    listed_after: Final = client.get("/v1/files?provider=openai", headers=_as_team_member("user-a", "team-a"))
+    with respx.mock(assert_all_called=False) as upstream:
+        sibling_content: Final = upstream.get(f"https://api.openai.com/v1/files/{file_b}/content").mock(
+            return_value=httpx.Response(status_code=200, content=b"sibling content")
+        )
+        stranger_read: Final = client.get(
+            f"/v1/files/{file_b}/content?provider=openai", headers=_as_team_member("user-b", "team-b")
+        )
+
+    assert deleted.status_code == 200, deleted.text
+    provider_delete.assert_awaited_once()
+    assert plain_upload_proxy.rows == [row]
+    assert _listed_ids(listed_after) == [unified_file_id]
+    assert stranger_read.status_code == 403, stranger_read.text
+    assert sibling_content.call_count == 0
+
+
+def test_successful_provider_delete_keeps_a_storage_backed_owner_row(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_id = "file-storage-cleanup"
+    row = _recorded_file_for_cleanup(
+        file_id,
+        {"gpt-3.5-turbo-id": file_id},
+        [file_id],
+        storage_backend="s3",
+    )
+    plain_upload_proxy.rows.append(row)
+    monkeypatch.setattr(litellm, "afile_delete", AsyncMock(return_value={"id": file_id, "object": "file", "deleted": True}))
+
+    deleted: Final = client.delete(f"/v1/files/{file_id}?provider=openai", headers=_as_team_member("user-a", "team-a"))
+
+    assert deleted.status_code == 200, deleted.text
+    assert plain_upload_proxy.rows == [row]
+
+
+def test_failed_provider_delete_keeps_the_owner_row(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_id = "file-provider-delete-failure"
+    row = _recorded_file_for_cleanup(file_id, {"gpt-3.5-turbo-id": file_id}, [file_id])
+    plain_upload_proxy.rows.append(row)
+    monkeypatch.setattr(litellm, "afile_delete", AsyncMock(side_effect=RuntimeError("provider delete failed")))
+
+    deleted: Final = client.delete(f"/v1/files/{file_id}?provider=openai", headers=_as_team_member("user-a", "team-a"))
+
+    assert deleted.status_code == 500, deleted.text
+    assert plain_upload_proxy.rows == [row]
+
+
+def test_conditional_owner_delete_preserves_a_copy_added_after_candidate_lookup(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_id = "file-before-concurrent-copy"
+    concurrent_file_id = "file-added-concurrently"
+    row = _recorded_file_for_cleanup(file_id, {"gpt-3.5-turbo": file_id}, [file_id])
+    plain_upload_proxy.rows.append(row)
+    original_delete_many = plain_upload_proxy.delete_many
+
+    async def add_copy_before_delete(where: dict[str, object]) -> int:
+        row.model_mappings["gpt-4o"] = concurrent_file_id
+        row.flat_model_file_ids.append(concurrent_file_id)
+        return await original_delete_many(where)
+
+    monkeypatch.setattr(plain_upload_proxy, "delete_many", add_copy_before_delete)
+    monkeypatch.setattr(litellm, "afile_delete", AsyncMock(return_value={"id": file_id, "object": "file", "deleted": True}))
+
+    deleted: Final = client.delete(
+        f"/v1/files/{file_id}?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        concurrent_content: Final = upstream.get(
+            f"https://api.openai.com/v1/files/{concurrent_file_id}/content"
+        ).mock(return_value=httpx.Response(status_code=200, content=b"concurrent content"))
+        stranger_read: Final = client.get(
+            f"/v1/files/{concurrent_file_id}/content?provider=openai",
+            headers=_as_team_member("user-b", "team-b"),
+        )
+
+    assert deleted.status_code == 200, deleted.text
+    assert plain_upload_proxy.rows == [row]
+    assert stranger_read.status_code == 403, stranger_read.text
+    assert concurrent_content.call_count == 0
 
 
 @_retrieve_and_delete_provider_bodies(_unified_managed_file_id())
