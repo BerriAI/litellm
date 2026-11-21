@@ -20,12 +20,12 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     _merge_session_fields,
     client_sent_openai_beta_realtime_header,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
@@ -3396,9 +3396,6 @@ async def test_a_session_update_between_the_first_items_and_response_create_join
     )
 
     await streaming.client_ack_messages()
-    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
-    streaming._backend_setup_complete = True
-    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -3513,9 +3510,6 @@ async def test_deferred_setup_merges_session_updates_until_the_first_content(mon
     )
 
     await streaming.client_ack_messages()
-    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
-    streaming._backend_setup_complete = True
-    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -3548,9 +3542,6 @@ async def test_deferred_setup_sends_the_default_setup_before_text_content_that_c
     )
 
     await streaming.client_ack_messages()
-    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
-    streaming._backend_setup_complete = True
-    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -3591,13 +3582,11 @@ async def test_a_transcription_guardrail_refuses_gemini_audio_it_cannot_screen(m
     )
 
     await streaming.client_ack_messages()
-    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
-    streaming._backend_setup_complete = True
-    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
-    # the bare response.create is honored as a turnComplete, then the text item
+    # the explicit response.create hands the floor to the model (a bare turnComplete), then the text item
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent", "clientContent"]
+    assert frames[1] == {"clientContent": {"turnComplete": True}}
     refusals: Final = [
         event["error"]["event_id"]
         for event in _events_sent_to_client(streaming)
@@ -3620,9 +3609,6 @@ async def test_a_control_event_before_session_update_leaves_the_setup_open(monke
     )
 
     await streaming.client_ack_messages()
-    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
-    streaming._backend_setup_complete = True
-    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -6093,44 +6079,6 @@ async def test_blocked_transcript_is_removed_from_the_conversation_before_the_re
     sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [event["type"] for event in sent] == expected_frames
     assert all(event["item_id"] == "item_blocked" for event in sent if event["type"] == "conversation.item.delete")
-
-
-@pytest.mark.asyncio
-async def test_deferred_setup_holds_every_client_frame_until_backend_setup_complete(monkeypatch):
-    """A client frame that reaches Gemini Live between the setup and its setupComplete is
-    answered with the text "Error: Session is not set up yet" and dropped. Only the
-    session.update that triggers the setup may pass; items, triggers and audio wait."""
-    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
-    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-
-    client_ws = MagicMock()
-    client_ws.send_text = AsyncMock()
-    session_update: Final = json.dumps({"type": "session.update", "session": {"modalities": ["audio"]}})
-    item: Final = json.dumps(
-        {
-            "type": "conversation.item.create",
-            "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ctx"}]},
-        }
-    )
-    trigger: Final = json.dumps({"type": "response.create"})
-    audio: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
-    client_ws.receive_text = AsyncMock(side_effect=[session_update, item, trigger, audio, ConnectionClosed(None, None)])
-    backend_ws = MagicMock()
-    backend_ws.send = AsyncMock()
-
-    streaming: Final = RealTimeStreaming(
-        client_ws, backend_ws, MagicMock(), provider_config=GeminiRealtimeConfig(), model="gemini-3.8-live"
-    )
-    await streaming.client_ack_messages()
-
-    assert backend_ws.send.call_count == 1
-    assert "setup" in json.loads(backend_ws.send.call_args_list[0].args[0])
-    assert len(streaming._pending_messages_until_setup) == 3
-
-    streaming._backend_setup_complete = True
-    await streaming._flush_pending_messages_until_setup()
-    sent_after: Final = [json.loads(call.args[0]) for call in backend_ws.send.call_args_list[1:]]
-    assert [next(iter(frame)) for frame in sent_after] == ["clientContent", "realtimeInput"]
 
 
 @pytest.mark.asyncio
