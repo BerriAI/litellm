@@ -111,6 +111,7 @@ export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): To
             user_id: metrics.metadata.user_id,
             user_email: metrics.metadata.user_email,
             key_exists: metrics.metadata.key_exists,
+            key_info_available: metrics.metadata.key_info_available,
             tags: metrics.metadata.tags || [],
           },
         };
@@ -133,6 +134,7 @@ export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): To
       key_alias: keyActivityLabel(metrics.metadata),
       user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
+      key_info_available: metrics.metadata.key_info_available,
       tags: metrics.metadata.tags || [],
       spend: metrics.metrics.spend,
     }))
@@ -177,6 +179,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
             user_id: metrics.metadata.user_id,
             user_email: metrics.metadata.user_email,
             key_exists: metrics.metadata.key_exists,
+            key_info_available: metrics.metadata.key_info_available,
             tags: tagDictionary[key] || [],
           },
         };
@@ -199,6 +202,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
       key_alias: keyActivityLabel(metrics.metadata),
       user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
+      key_info_available: metrics.metadata.key_info_available,
       tags: metrics.metadata.tags || [],
       spend: metrics.metrics.spend,
     }))

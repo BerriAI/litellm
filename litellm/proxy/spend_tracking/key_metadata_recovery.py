@@ -105,6 +105,7 @@ class KeyMetadataDict(TypedDict, total=False):
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
     key_exists: ReadOnly[bool]
+    key_info_available: ReadOnly[bool | None]
 
 
 class _TokenDigestRow(LiteLLMBaseModel):

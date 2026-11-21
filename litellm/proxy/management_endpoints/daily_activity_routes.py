@@ -122,6 +122,7 @@ def _key_metadata(api_key: str, metadata: Mapping[str, KeyMetadataRow]) -> KeyMe
         user_id=row.user_id,
         user_email=row.user_email,
         key_exists=row.key_exists,
+        key_info_available=row.key_info_available,
     )
 
 

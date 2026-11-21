@@ -75,6 +75,7 @@ export const toKeyMetadata = (metadata: components["schemas"]["KeyMetadata"] | u
   user_id: metadata?.user_id,
   user_email: metadata?.user_email,
   key_exists: metadata?.key_exists,
+  key_info_available: metadata?.key_info_available,
 });
 
 const toMetric = (entry: SchemaMetricWithMetadata): MetricWithMetadata => ({

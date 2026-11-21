@@ -191,6 +191,7 @@ class _KeyMetadataDict(TypedDict, total=False):
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
     key_exists: ReadOnly[bool]
+    key_info_available: ReadOnly[bool | None]
 
 
 class _AggregatedSpendData(TypedDict):
@@ -210,6 +211,7 @@ def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow] | None, api_key
         user_id=meta.user_id if meta is not None else None,
         user_email=meta.user_email if meta is not None else None,
         key_exists=meta.key_exists if meta is not None else False,
+        key_info_available=meta.key_info_available if meta is not None else None,
     )
 
 
@@ -638,6 +640,7 @@ async def get_api_key_metadata(
             "user_id": value.user_id,
             "user_email": value.user_email,
             "key_exists": value.key_exists,
+            "key_info_available": value.key_info_available,
         }
         for key, value in rows.items()
     }

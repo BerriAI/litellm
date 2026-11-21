@@ -33,13 +33,14 @@ export interface TopKeyItem {
   key_alias: string | null;
   user?: string | null;
   key_exists?: boolean | null;
+  key_info_available?: boolean | null;
   tags?: TagUsage[] | null;
   spend: number;
 }
 
 const KEY_NOT_IN_DATABASE_TOOLTIP: ParseKeys = "usage.topKeys.keyNotInDatabase";
 
-const canOpenKeyInfo = (item: TopKeyItem) => item.key_exists !== false;
+const canOpenKeyInfo = (item: TopKeyItem) => item.key_info_available ?? item.key_exists !== false;
 
 interface TopKeyViewProps {
   topKeys: TopKeyItem[];

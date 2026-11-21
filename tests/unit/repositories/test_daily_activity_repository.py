@@ -522,6 +522,7 @@ async def test_key_metadata_prefers_active_rows_and_recovers_all_requested_keys(
     )
     assert result["deleted"].key_alias == "newer"
     assert result["deleted"].key_exists is False
+    assert result["deleted"].key_info_available is True
     assert result["deleted"].tags == ("archived",)
     assert result["malformed-non-list"].tags == ()
     assert result["malformed-list"].tags == ()
