@@ -16,7 +16,7 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
     PaginatedAuditLogResponse,
 )
 
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, masked_audit_log_value
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import AuditLogRepository
@@ -25,6 +25,21 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 router = APIRouter()
+
+
+def _stored_value(value: object) -> object:
+    return masked_audit_log_value(value) if isinstance(value, str) else value
+
+
+def _audit_log_response(audit_log: "prisma_models.LiteLLM_AuditLog") -> AuditLogResponse:
+    row: Final = audit_log.model_dump()
+    return AuditLogResponse.model_validate(
+        {
+            **row,
+            "before_value": _stored_value(row.get("before_value")),
+            "updated_values": _stored_value(row.get("updated_values")),
+        }
+    )
 
 
 def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, object]:
@@ -170,12 +185,7 @@ async def get_audit_logs(
 
     # Return paginated response
     return PaginatedAuditLogResponse(
-        audit_logs=[
-            AuditLogResponse.model_validate(audit_log.model_dump())
-            for audit_log in audit_logs
-        ]
-        if audit_logs
-        else [],
+        audit_logs=[_audit_log_response(audit_log) for audit_log in audit_logs],
         total=total_count,
         page=page,
         page_size=page_size,
@@ -227,4 +237,4 @@ async def get_audit_log_by_id(
         )
 
     # Convert to response model
-    return AuditLogResponse.model_validate(audit_log.model_dump())
+    return _audit_log_response(audit_log)
