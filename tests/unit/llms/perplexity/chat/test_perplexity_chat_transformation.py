@@ -13,10 +13,10 @@ import pytest
 
 # Add the project root to Python path
 
-from litellm import ModelResponse
+from litellm import ModelResponse, stream_chunk_builder
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelResponseStream, Usage
 
 
 class TestPerplexityChatTransformation:
@@ -917,3 +917,59 @@ def test_transform_response_keeps_body_values_of_every_json_type_as_the_provider
     assert response.search_results == search_results
     assert [type(result) for result in response.search_results] == [dict, str, int]
     assert repr(response.usage.citation_tokens) == "18"
+
+
+def _perplexity_stream_logging() -> Logging:
+    logging_obj = Logging(
+        model="sonar",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="perplexity-stream-test",
+        function_id="perplexity-stream-test",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="perplexity")
+    return logging_obj
+
+
+def _perplexity_stream_chunk(delta: dict, finish_reason: str | None, sources: dict) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="cmpl-1",
+        object="chat.completion.chunk",
+        created=1700000000,
+        model="sonar",
+        choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        **sources,
+    )
+
+
+@pytest.mark.parametrize("dumped", [False, True])
+def test_stream_chunk_builder_keeps_perplexity_citations_and_search_results(dumped: bool):
+    sources = {
+        "citations": ["https://a.example", "https://b.example"],
+        "search_results": [{"url": "https://a.example", "title": "A", "date": None}],
+    }
+    chunks = [
+        _perplexity_stream_chunk({"role": "assistant", "content": "Paris [1]"}, None, sources),
+        _perplexity_stream_chunk({"content": " is in France [2]."}, "stop", sources),
+    ]
+
+    response = stream_chunk_builder(
+        chunks=[chunk.model_dump() if dumped else chunk for chunk in chunks], logging_obj=_perplexity_stream_logging()
+    )
+
+    assert response.choices[0].message.content == "Paris [1] is in France [2]."
+    assert response.citations == sources["citations"]
+    assert response.search_results == sources["search_results"]
+
+
+def test_stream_chunk_builder_adds_no_perplexity_sources_when_the_stream_had_none():
+    response = stream_chunk_builder(
+        chunks=[_perplexity_stream_chunk({"role": "assistant", "content": "Hi"}, "stop", {})],
+        logging_obj=_perplexity_stream_logging(),
+    )
+
+    assert response.choices[0].message.content == "Hi"
+    assert not hasattr(response, "citations")
+    assert not hasattr(response, "search_results")
