@@ -483,7 +483,11 @@ def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
     canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
     stored before ids were canonicalized."""
     original: Final = get_original_file_id(file_id)
-    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    reductions: Final = (
+        canonical_provider_file_id(original),
+        _gemini_files_tail(unquote(original)),
+        _gemini_files_tail(original),
+    )
     bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
     return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
 

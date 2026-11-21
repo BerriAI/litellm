@@ -864,3 +864,30 @@ def test_go_messages_route_carries_prompt_cache_breakpoint_to_cache_control_only
     wire: Final = json.dumps(request)
     assert wire.count('"cache_control"') == cache_marks
     assert "prompt_cache_breakpoint" not in wire
+
+
+@pytest.mark.parametrize(
+    ("messages", "sent_system"),
+    [
+        ([{"role": "user", "content": "hello"}], "Answer in French"),
+        (
+            [{"role": "system", "content": "Answer in German"}, {"role": "user", "content": "hello"}],
+            [{"type": "text", "text": "Answer in German"}],
+        ),
+    ],
+)
+def test_messages_route_sends_a_system_kwarg_unless_a_system_message_sets_the_prompt(
+    go_catalog: None, messages: list[dict[str, str]], sent_system: object
+) -> None:
+    with respx.mock(using="httpx") as transport:
+        route: Final = transport.post().mock(
+            return_value=httpx.Response(200, json=upstream_reply("messages", "fixture-messages"))
+        )
+        litellm.completion(
+            model="opencode_go/fixture-messages",
+            api_key="fake-go-key",
+            messages=messages,
+            system="Answer in French",
+        )
+
+    assert json.loads(route.calls.last.request.content)["system"] == sent_system

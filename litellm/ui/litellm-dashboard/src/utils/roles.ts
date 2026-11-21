@@ -122,6 +122,21 @@ const USER_ROLE_LABELS: Record<string, ParseKeys> = {
 export const userRoleDisplayLabel = (formattedRole: string): string =>
   Object.hasOwn(USER_ROLE_LABELS, formattedRole) ? i18n.t(USER_ROLE_LABELS[formattedRole]) : formattedRole;
 
+const AVAILABLE_ROLE_LABELS: Record<string, ParseKeys> = {
+  proxy_admin: "utils.roles.admin",
+  proxy_admin_viewer: "utils.roles.adminViewer",
+  org_admin: "utils.roles.orgAdmin",
+  internal_user: "utils.roles.internalUser",
+  internal_user_viewer: "utils.roles.internalViewer",
+  internal_viewer: "utils.roles.internalViewer",
+  app_owner: "utils.roles.appOwner",
+  demo_app_owner: "utils.roles.appOwner",
+  app_user: "utils.roles.appUser",
+};
+
+export const availableRoleDisplayLabel = (role: string, backendLabel?: string): string =>
+  Object.hasOwn(AVAILABLE_ROLE_LABELS, role) ? i18n.t(AVAILABLE_ROLE_LABELS[role]) : backendLabel || role;
+
 export const isOrgAdminSessionRole = (userRole?: string | null): boolean =>
   userRole === ORG_ADMIN_MEMBERSHIP_ROLE || userRole === formatUserRole(ORG_ADMIN_MEMBERSHIP_ROLE);
 

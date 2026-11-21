@@ -134,8 +134,8 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.lens import TraceReceiver
     from litellm.repositories.database import Database
-    from litellm.tracing import TraceReceiver
 
     Span = _Span | Any
 else:
@@ -3673,10 +3673,21 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
         masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
 
+        def decoded(value: object) -> object:
+            if not isinstance(value, str):
+                return value
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+
+        def masked_json(value: object) -> str:
+            return json.dumps(mask_credentials_in_payload(decoded(value), masker), default=str)
+
         if self.before_value is not None:
-            self.before_value = json.dumps(mask_credentials_in_payload(self.before_value, masker), default=str)
+            self.before_value = masked_json(self.before_value)
         if self.updated_values is not None:
-            self.updated_values = json.dumps(mask_credentials_in_payload(self.updated_values, masker), default=str)
+            self.updated_values = masked_json(self.updated_values)
 
         return self
 

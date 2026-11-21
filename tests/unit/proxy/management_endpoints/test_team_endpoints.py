@@ -2642,8 +2642,9 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     from litellm.proxy._types import BlockTeamRequest
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.team_grants import team_model_aliases
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints import team_endpoints
+    from litellm.proxy.proxy_server import budget_windows_absent_cache_key
 
     team_id: Final = "team-kill-switch"
     columns: Final = {"team_id": team_id, "team_alias": "kill-switch", "blocked": not blocked}
@@ -3295,6 +3296,8 @@ async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_
     team_table = MagicMock(spec=LiteLLM_TeamTable)
     team_table.metadata = {"team_member_budget_id": "existing_budget_123"}
 
+    mock_db_client.tx.return_value.__aenter__.return_value = mock_db_client.db
+    mock_db_client.db.query_raw = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -10311,7 +10314,12 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     in-memory cache until the TTL, so both stay usable for auth cluster-wide.
     """
     from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        app_cache_key,
+        app_key_resource_cache_key,
+    )
 
     team = LiteLLM_TeamTable(
         team_id="team-doomed",
@@ -10344,10 +10352,24 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 
     redis = _BroadcastRecordingRedis()
+    cache: Final = UserApiKeyCache()
+    peer_cache: Final = UserApiKeyCache()
+    expected_keys: Final = (
+        "hashed-doomed-key",
+        app_key_resource_cache_key("hashed-doomed-key"),
+        "team_id:team-doomed",
+        "team_alias:doomed-team",
+        app_cache_key("team", "team-doomed"),
+    )
+    unrelated_key: Final = app_cache_key("team", "team-other")
+    for worker_cache in (cache, peer_cache):
+        for key in (*expected_keys, unrelated_key):
+            worker_cache.set_cache(key=key, value="cached")
+    peer_subscriber: Final = AuthCacheInvalidationSubscriber(redis_cache=redis, user_api_key_cache=peer_cache)
     monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
 
@@ -10364,9 +10386,14 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
 
     await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
-    # the deleted key first, then both keys `_cache_team_object` writes: miss the alias one and the
-    # JWT-by-alias path keeps resolving the team, miss the token and the key still authenticates
-    assert redis.broadcast_keys == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
+    assert tuple(redis.broadcast_keys) == expected_keys
+    for key in redis.broadcast_keys:
+        peer_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercise the cross-worker eviction handler
+            {"type": "message", "data": json.dumps({"cache_key": key})}
+        )
+    for worker_cache in (cache, peer_cache):
+        assert tuple(worker_cache.get_cache(key=key) for key in expected_keys) == (None,) * len(expected_keys)
+        assert worker_cache.get_cache(key=unrelated_key) == "cached"
 
 
 @pytest.mark.asyncio
@@ -12283,6 +12310,8 @@ async def test_upsert_team_member_model_max_budget_updates_default_budget_and_ev
     budget_cache: Final = MagicMock()
     budget_cache.async_delete_cache = AsyncMock()
     prisma: Final = MagicMock()
+    prisma.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -12309,7 +12338,10 @@ async def test_upsert_team_member_model_max_budget_updates_default_budget_and_ev
     assert result["metadata"]["team_member_budget_id"] == "member-budget-1"
     assert "team_member_model_max_budget" not in result
     cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:member-budget-1")
-    budget_cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:member-budget-1")
+    assert budget_cache.async_delete_cache.await_args_list == [
+        call(key="customer_app_budget:member-budget-1"),
+        call(key="team_member_default_budget:member-budget-1"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -12336,6 +12368,8 @@ async def test_update_team_clears_explicitly_null_member_model_budget_and_evicts
     updated.litellm_model_table = None
     update_budget_response: Final = MagicMock(budget_id="member-budget-1")
     prisma: Final = MagicMock()
+    prisma.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -12365,6 +12399,7 @@ async def test_update_team_clears_explicitly_null_member_model_budget_and_evicts
     assert "team_member_model_max_budget" in request_data.model_fields_set
     assert "model_max_budget" in budget_update["data"]
     assert cache.async_delete_cache.await_args_list == [
+        call(key="customer_app_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
     ]
@@ -12395,6 +12430,8 @@ async def test_update_team_persists_member_model_budget_to_default_budget_row(
     updated.litellm_model_table = None
     update_budget_response: Final = MagicMock(budget_id="member-budget-1")
     prisma: Final = MagicMock()
+    prisma.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
@@ -12436,6 +12473,7 @@ async def test_update_team_persists_member_model_budget_to_default_budget_row(
         }
     }
     assert cache.async_delete_cache.await_args_list == [
+        call(key="customer_app_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
         call(key="team_member_default_budget:member-budget-1"),
     ]
@@ -13569,6 +13607,35 @@ def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     assert "budget_reset_at" not in updated_kv
 
 
+@pytest.mark.parametrize("saved_start", (None, "2026-07-15T12:00:00+00:00"))
+def test_team_cap_edit_preserves_legacy_and_saved_window_boundaries(saved_start: str | None) -> None:
+    from litellm.proxy._types import BudgetLimitEntry, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+    from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+
+    stored: Final = BudgetLimitEntry(
+        budget_duration="30d", max_budget=10,
+        reset_at=datetime(2026, 8, 14, 12, tzinfo=timezone.utc),
+        window_start=datetime.fromisoformat(saved_start) if saved_start is not None else None,
+    )
+    request: Final = UpdateTeamRequest(
+        team_id="test-team",
+        budget_limits=[BudgetLimitEntry(
+            budget_duration="30d", max_budget=20,
+            reset_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+            window_start=datetime(2098, 12, 1, tzinfo=timezone.utc),
+        )],
+    )
+    updated: Final[dict[str, object]] = {}
+    _set_budget_reset_at(request, updated, LiteLLM_TeamTable(team_id="test-team", budget_limits=[stored]))
+    windows: Final = json.loads(str(updated["budget_limits"]))
+
+    assert windows[0]["max_budget"] == 20
+    assert windows[0]["reset_at"] == stored.reset_at.isoformat()
+    assert windows[0].get("window_start") == saved_start
+    assert get_budget_window_start(windows[0]) == get_budget_window_start(stored.model_dump())
+
+
 def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     """
     When budget_duration is set to a valid string, _set_budget_reset_at
@@ -13591,12 +13658,12 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     [
         ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
         ("30d", datetime(2020, 1, 1), False),
-        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), False),
         ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
         ("30d", None, True),
     ],
 )
-def test_set_budget_reset_at_keeps_a_due_reset_when_the_duration_is_resent(
+def test_set_budget_reset_at_keeps_existing_reset_when_the_duration_is_resent(
     stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
 ) -> None:
     from litellm.proxy._types import UpdateTeamRequest
@@ -19004,6 +19071,43 @@ async def test_update_team_team_admin_changes_tpm_limit_once_a_proxy_admin_enabl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reset_drift", [False, True])
+@pytest.mark.parametrize("guarded", [False, True])
+async def test_team_window_write_preserves_initialization_unless_a_reset_committed(
+    reset_drift: bool, guarded: bool,
+) -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _MaxBudgetGuard, _set_budget_reset_at, _write_team_update,
+    )
+
+    original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
+    reset: Final = "2030-01-03T00:00:00+00:00"
+    team: Final = LiteLLM_TeamTable(team_id="window-team", budget_limits=[original])
+    request: Final = UpdateTeamRequest(team_id=team.team_id, budget_limits=[{**original, "max_budget": 50.0}])
+    prepared: Final = {}
+    _set_budget_reset_at(request, prepared, team)
+    requested: Final = json.loads(prepared["budget_limits"])
+    database: Final = MagicMock()
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": [
+        {**original, "reset_at": reset if reset_drift else original["reset_at"]}
+    ]}])
+    transaction.litellm_teamtable.update = AsyncMock(return_value=team)
+    transaction.litellm_teamtable.update_many = AsyncMock(return_value=1)
+    transaction.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    await _write_team_update(
+        database, team.team_id, prepared, _MaxBudgetGuard(100.0, "org") if guarded else None, team.budget_limits,
+    )
+    write: Final = transaction.litellm_teamtable.update_many if guarded else transaction.litellm_teamtable.update
+    assert json.loads(write.call_args.kwargs["data"]["budget_limits"]) == [
+        {**requested[0], "reset_at": reset if reset_drift else requested[0]["reset_at"]},
+    ]
+    assert write.call_args.kwargs["where"] == (
+        {"team_id": team.team_id, "max_budget": 100.0, "organization_id": "org"} if guarded else {"team_id": team.team_id}
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_admin_resending_budget_settings_does_not_push_back_budget_resets(
     disable_audit_logging_for_mocked_team,
 ):
@@ -20139,3 +20243,30 @@ async def test_team_info_reports_current_spend_per_budget_window():
         window_duration="1d",
         window_start=datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_duration,stored_reset,expected", [
+    ("5h", "2026-07-15T15:00:00Z", "2026-07-15T10:45:00Z"),
+    ("45m", "2026-07-15T11:30:00Z", "2026-07-15T11:30:00Z"),
+    ("45m", "2026-07-15T10:00:00Z", "2026-07-15T10:00:00Z"),
+])
+async def test_team_duration_edits_use_the_writers_current_schedule(
+    stored_duration: str, stored_reset: str, expected: str,
+) -> None:
+    import time_machine
+    from litellm.proxy.management_endpoints.team_endpoints import _write_team_update
+    from litellm.proxy.utils import PrismaClient
+
+    stored: Final = {"budget_duration": stored_duration, "budget_reset_at": datetime.fromisoformat(stored_reset)}
+    database: Final = MagicMock()
+    database.jsonify_object = PrismaClient.jsonify_object.__get__(database)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[stored])
+    transaction.litellm_teamtable.update = AsyncMock(return_value=LiteLLM_TeamTable(team_id="scalar-team"))
+    payload: Final = {"budget_duration": "45m", "budget_reset_at": datetime(2026, 7, 15, 10, 45, tzinfo=timezone.utc)}
+    with time_machine.travel("2026-07-15T10:17:00Z", tick=False):
+        await _write_team_update(database, "scalar-team", payload, None, None)
+    persisted: Final = {**stored, **transaction.litellm_teamtable.update.call_args.kwargs["data"]}
+    assert persisted["budget_duration"] == "45m"
+    assert persisted["budget_reset_at"] == datetime.fromisoformat(expected)

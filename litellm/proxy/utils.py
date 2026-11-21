@@ -91,6 +91,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.password_policy import MIN_ALLOWED_LENGTH
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.fips import fips_mode_active
+from litellm.proxy.common_utils.hook_cache import HookCache
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -198,11 +199,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
-from litellm.litellm_core_utils.duration_parser import (
-    get_annual_budget_window_start,
-    get_budget_window_start,
-    is_annual_budget_duration,
-)
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
@@ -1533,8 +1530,18 @@ def _billed_earlier_attempts(
     ``base_model`` or model, which a fallback hop can make a different model than the final one).
     Only the exception class survives on the record, so an earlier connect timeout is billed too;
     any other failure class is not."""
-    final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
-    final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
+    retry_metadata: Final = _retry_metadata_bucket(litellm_params)
+    final_attempt: Final = retry_metadata.get("attempted_retries")
+    routed_model_info: Final = retry_metadata.get("model_info")
+    routed_id: Final = (
+        cast("Mapping[str, object]", routed_model_info).get("id")  # cast-ok: untyped router dict, read with .get
+        if isinstance(routed_model_info, dict)
+        else None
+    )
+    final_identity: Final = (
+        routed_id if isinstance(routed_id, str) else deployment_id,
+        final_attempt if isinstance(final_attempt, int) else None,
+    )
     return tuple(
         _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
@@ -2273,10 +2280,14 @@ class ProxyLogging:
         self,
         user_api_key_cache: UserApiKeyCache,
         premium_user: bool = False,
+        hook_cache: DualCache | None = None,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
+        self.hook_cache: Final = (
+            hook_cache if hook_cache is not None else HookCache(auth_cache=lambda: user_api_key_cache)
+        )
         self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
             dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
         )
@@ -2972,7 +2983,7 @@ class ProxyLogging:
         if hook_type == "pre_call":
             return await target.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
-                cache=self.call_details["user_api_key_cache"],
+                cache=self.hook_cache,
                 data=data,
                 call_type=call_type,
             )
@@ -3727,7 +3738,7 @@ class ProxyLogging:
                     return None
                 response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
                     user_api_key_dict=run.user_api_key_dict,
-                    cache=self.call_details["user_api_key_cache"],
+                    cache=self.hook_cache,
                     data=data,
                     call_type=run.call_type,
                 )
@@ -9707,11 +9718,10 @@ def _as_aware(moment: datetime) -> datetime:
 
 def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
     window_end: Final = _as_aware(budget_reset_at)
-    window_start: Final = (
-        get_annual_budget_window_start(window_end, get_budget_reset_settings().timezone)
-        if is_annual_budget_duration(budget_duration)
-        else get_budget_window_start(budget_duration, window_end)
-    )
+    settings: Final = get_budget_reset_settings()
+    window_start: Final = get_budget_window_start(
+        budget_duration, window_end, settings.timezone, settings.reset_time_of_day
+    ).astimezone(timezone.utc)
     return (window_start, window_end) if window_start < window_end else None
 
 

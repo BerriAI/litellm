@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -78,7 +79,12 @@ from ..common_utils import (
     refusal_params,
     stop_reason_provider_specific_fields,
 )
-from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
+from .transformation import (
+    ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY,
+    AnthropicConfig,
+    JsonModeRequest,
+    with_extra_body_fields,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -86,6 +92,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
@@ -498,7 +505,10 @@ class AnthropicChatCompletion(BaseLLM):
             headers=headers,
             model=model,
             messages=messages,
-            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            optional_params={
+                **with_extra_body_fields(_OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)),
+                "is_vertex_request": is_vertex_request,
+            },
             litellm_params=litellm_params,
             api_base=api_base,
         )

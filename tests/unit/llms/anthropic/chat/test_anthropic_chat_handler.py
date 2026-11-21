@@ -1,9 +1,10 @@
 import json
+import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -145,6 +146,285 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     request_body = json.loads(captured_requests[0].content)
     assert "default_api_key_rpm_limit" not in request_body
     assert "default_api_key_tpm_limit" not in request_body
+
+
+def test_anthropic_completion_sends_extra_body_fields_top_level_and_drops_guarded_keys_under_drop_params() -> None:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_extra_body",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            drop_params=True,
+            extra_body={
+                "stop_sequences": ["5"],
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "stream": True,
+            },
+        )
+    finally:
+        client.close()
+
+    request_body: Final = json.loads(captured_requests[0].content)
+    assert request_body == {
+        "model": "claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 16,
+        "stop_sequences": ["5"],
+    }, request_body
+
+
+@pytest.mark.parametrize(
+    ("max_tokens", "extra_body_max_tokens", "drop_params", "sent_max_tokens"),
+    [(16, 4096, True, 16), (16, 5, False, 5), (None, 5, False, 5)],
+)
+def test_anthropic_completion_lets_extra_body_lower_max_tokens_and_caps_a_raise_under_drop_params(
+    max_tokens: int | None,
+    extra_body_max_tokens: int,
+    drop_params: bool,
+    sent_max_tokens: int,
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_max_tokens",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
+        max_tokens=max_tokens,
+        drop_params=drop_params,
+        extra_body={"max_tokens": extra_body_max_tokens},
+    )
+
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == sent_max_tokens
+
+
+def test_anthropic_completion_answers_400_when_extra_body_raises_max_tokens_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
+
+    with pytest.raises(
+        litellm.BadRequestError, match=re.escape("extra_body can't raise max_tokens above the request's max_tokens (16)")
+    ):
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            max_tokens=16,
+            extra_body={"max_tokens": 4096},
+        )
+
+    assert not route.called
+
+
+def test_anthropic_completion_answers_400_for_guarded_extra_body_keys_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages, model, stream, system, tools"):
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            max_tokens=16,
+            extra_body={
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "stream": True,
+                "stop_sequences": ["5"],
+            },
+        )
+
+    assert not route.called
+
+
+def _anthropic_beta_header_sent(
+    respx_mock: respx.MockRouter, request_fields: Mapping[str, object]
+) -> tuple[str, Mapping[str, object]]:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_beta",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
+        max_tokens=16,
+        **request_fields,
+    )
+    sent: Final = route.calls.last.request
+    return sent.headers.get("anthropic-beta", ""), json.loads(sent.content)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("context_management", {"edits": [{"type": "clear_tool_uses_20250919"}]}),
+        ("mcp_servers", [{"type": "url", "url": "https://mcp.example.com/sse", "name": "example"}]),
+        ("container", {"skills": [{"type": "anthropic", "skill_id": "pptx", "version": "latest"}]}),
+    ],
+)
+def test_anthropic_completion_adds_the_same_beta_header_for_a_field_in_extra_body(
+    field: str, value: object, respx_mock: respx.MockRouter
+) -> None:
+    plain_beta, _ = _anthropic_beta_header_sent(respx_mock, {})
+    top_level_beta, top_level_body = _anthropic_beta_header_sent(respx_mock, {field: value})
+    extra_body_beta, extra_body_body = _anthropic_beta_header_sent(respx_mock, {"extra_body": {field: value}})
+
+    assert set(top_level_beta.split(",")) - set(plain_beta.split(","))
+    assert extra_body_beta == top_level_beta
+    assert extra_body_body[field] == top_level_body[field]
+
+
+def test_anthropic_completion_sends_the_extra_body_output_config_over_the_mapped_reasoning_effort(
+    respx_mock: respx.MockRouter,
+) -> None:
+    _, sent_body = _anthropic_beta_header_sent(
+        respx_mock, {"reasoning_effort": "low", "extra_body": {"output_config": {"effort": "high"}}}
+    )
+
+    assert sent_body["output_config"] == {"effort": "high"}
+
+
+def test_anthropic_completion_rejects_a_non_object_extra_body_before_calling_anthropic() -> None:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(500)
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        with pytest.raises(litellm.BadRequestError, match="Invalid type for 'extra_body': expected an object, got str"):
+            litellm.completion(
+                model="anthropic/claude-sonnet-5-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                client=client,
+                max_tokens=16,
+                extra_body='{"top_k": 5}',
+            )
+    finally:
+        client.close()
+
+    assert captured_requests == []
+
+
+def _anthropic_request_with_fallbacks(extra_headers: dict[str, str] | None, drop_params: bool) -> httpx.Request:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_fallbacks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            extra_body={"fallbacks": [{"model": "claude-opus-5-5"}]},
+            extra_headers=extra_headers,
+            drop_params=drop_params,
+        )
+    finally:
+        client.close()
+    return captured_requests[0]
+
+
+@pytest.mark.parametrize(
+    ("fallback_beta", "drop_params", "fallbacks_kept"),
+    [
+        ("server-side-fallback-2026-07-01", True, True),
+        ("server-side-fallback-2026-06-01", True, True),
+        (None, False, True),
+        (None, True, False),
+    ],
+)
+def test_anthropic_chat_drops_fallbacks_under_drop_params_only_when_the_request_lacks_a_fallback_beta(
+    fallback_beta: str | None,
+    drop_params: bool,
+    fallbacks_kept: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both betas unlock ``fallbacks`` per https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
+    (fetched 2026-11-03)"""
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_request_with_fallbacks(
+        None if fallback_beta is None else {"anthropic-beta": fallback_beta}, drop_params
+    )
+    sent_betas: Final = request.headers.get("anthropic-beta", "").split(",")
+    assert json.loads(request.content).get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)
+    assert fallback_beta is None or fallback_beta in sent_betas
 
 
 def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(

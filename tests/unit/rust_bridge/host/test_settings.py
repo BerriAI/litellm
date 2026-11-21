@@ -236,6 +236,8 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(litellm, "azure_key", "azure-module-key")
     monkeypatch.setattr(litellm, "drop_params", True)
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["team"])
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_team_id"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_user_id"])
     monkeypatch.setattr(litellm, "vertex_request_label_fields", ["user_api_key_team_id"])
 
     assert settings.provider_defaults() == settings.ProviderDefaults(
@@ -247,5 +249,7 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
         azure_key="azure-module-key",
         drop_params=True,
         bedrock_request_metadata_fields=["team"],
+        bedrock_session_tag_fields=["user_api_key_team_id"],
+        bedrock_session_name_fields=["user_api_key_user_id"],
         vertex_request_label_fields=["user_api_key_team_id"],
     )

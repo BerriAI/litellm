@@ -241,11 +241,11 @@ def _is_conversation_item(item: object) -> bool:
     if not isinstance(item, Mapping):
         return False
     block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
-    return block.get("type") != "file"
+    return block.get("type") not in ("file", "text")
 
 
 def _request_message_count(kwargs: Mapping[str, object]) -> int:
-    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and file blocks count as none"""
+    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and blocks count as none"""
     messages: Final = kwargs.get("messages")
     if isinstance(messages, list):
         return len(messages)

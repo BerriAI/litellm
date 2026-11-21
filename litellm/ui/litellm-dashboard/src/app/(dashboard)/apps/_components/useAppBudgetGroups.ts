@@ -2,6 +2,18 @@
 
 import { $api } from "@/lib/http/api";
 
+export function useOverallAppBudgetGroups(enabled = true) {
+  return $api.useQuery("get", "/management/v1/app_budget_groups", {}, { enabled });
+}
+
+export function useAppMemberBudgetGroups(enabled = true) {
+  const groups = $api.useQuery("get", "/management/v1/app_customer_member_budget_groups", {}, { enabled });
+  return {
+    ...groups,
+    data: groups.data && { ...groups.data, legacy_budgets: [] },
+  };
+}
+
 export function useAppBudgetGroups(existingIds: (string | null | undefined)[] = [], enabled = true) {
   const groups = $api.useQuery("get", "/management/v1/app_customer_organization_budget_groups", {}, { enabled });
   const missingIds = existingIds.filter(
@@ -14,7 +26,9 @@ export function useAppBudgetGroups(existingIds: (string | null | undefined)[] = 
     {},
     { enabled: enabled && needsLegacy },
   );
+  const legacyBudgets = (legacy.data?.default_budgets ?? []).filter((group) => missingIds.includes(group.budget_id));
   return {
+    displayBudgets: [...(groups.data?.default_budgets ?? []), ...legacyBudgets],
     isPending: groups.isPending || (needsLegacy && legacy.isPending),
     isError: groups.isError || (needsLegacy && legacy.isError),
     isSuccess: groups.isSuccess && (!needsLegacy || legacy.isSuccess),
@@ -24,10 +38,7 @@ export function useAppBudgetGroups(existingIds: (string | null | undefined)[] = 
       groups.data && (!needsLegacy || legacy.data)
         ? {
             ...groups.data,
-            default_budgets: [
-              ...groups.data.default_budgets,
-              ...(legacy.data?.default_budgets ?? []).filter((group) => missingIds.includes(group.budget_id)),
-            ],
+            legacy_budgets: legacyBudgets,
           }
         : undefined,
   };

@@ -1,4 +1,5 @@
 import base64
+import binascii
 import ctypes
 import os
 from collections.abc import Mapping
@@ -441,6 +442,13 @@ class SecretMapDecodeError(RuntimeError):
 _SECRET_MAP: Final = TypeAdapter(Mapping[str, str])
 _STORED_SECRET_MAP: Final = TypeAdapter(Mapping[str, str] | str)
 _SECRET_STRING: Final = TypeAdapter(str)
+
+
+def decode_legacy_mcp_user_credential(stored: str) -> str | None:
+    try:
+        return base64.urlsafe_b64decode(stored).decode()
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
+        return None
 
 
 def encrypt_secret_map(value: Mapping[str, str], new_encryption_key: str | None = None) -> str:
