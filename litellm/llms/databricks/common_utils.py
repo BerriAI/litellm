@@ -465,7 +465,7 @@ class DatabricksBase:
         if client_id and client_secret and api_base:
             # Use OAuth M2M flow (preferred for production)
             verbose_logger.debug("Using OAuth M2M authentication for Databricks")
-            access_token: Final = self.get_oauth_m2m_token(api_base, client_id, client_secret)
+            access_token: Final = self.get_cached_oauth_m2m_token(api_base, client_id, client_secret)
             headers = headers or {}
             headers["Authorization"] = f"Bearer {access_token}"
             headers["Content-Type"] = "application/json"
