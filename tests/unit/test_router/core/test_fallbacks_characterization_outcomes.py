@@ -186,14 +186,15 @@ async def test_router_debug_on_a_context_window_error_without_its_chain_names_th
 
     assert str(raised.value) == (
         "litellm.ContextWindowExceededError: litellm.BadRequestError: too long\n"
-        "model=a. context_window_fallbacks=None. fallbacks=None.\n\n"
-        "Set 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks\n\n"
+        "model=a. context_window_fallbacks is not set. fallbacks is not set. "
+        "To give context-window errors their own chain, set context_window_fallbacks - "
+        "https://docs.litellm.ai/docs/routing#fallbacks\n\n"
         "LiteLLM: model group 'a' failed with the error above. No fallback was attempted."
     )
 
 
 @pytest.mark.asyncio
-async def test_router_debug_on_a_context_window_error_that_also_fails_its_fallback_nests_the_hint(
+async def test_router_debug_on_a_context_window_error_that_also_fails_its_fallback_names_the_chain_once(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core = build(make_core, fallbacks=[{"a": ["b"]}])
@@ -203,11 +204,13 @@ async def test_router_debug_on_a_context_window_error_that_also_fails_its_fallba
     with pytest.raises(litellm.ContextWindowExceededError) as raised:
         await complete(core)
 
-    hint = "context_window_fallbacks=None. fallbacks=[{'a': ['b']}].\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"
     assert str(raised.value) == (
-        f"litellm.ContextWindowExceededError: litellm.BadRequestError: too long\nmodel=a. {hint}\n\n"
+        "litellm.ContextWindowExceededError: litellm.BadRequestError: too long\n"
+        "model=a. context_window_fallbacks is not set. fallbacks: 'a' -> ['b']. "
+        "To give context-window errors their own chain, set context_window_fallbacks - "
+        "https://docs.litellm.ai/docs/routing#fallbacks\n\n"
         "LiteLLM: model group 'a' failed with the error above. Fallback to b also failed: "
-        f"litellm.ContextWindowExceededError: litellm.BadRequestError: too long\nmodel=b. {hint}"
+        "litellm.ContextWindowExceededError: litellm.BadRequestError: too long"
     )
 
 

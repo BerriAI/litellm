@@ -47,7 +47,7 @@ from litellm import Router
 _RECEIVED_MODEL_GROUP_PHRASE = "failed with the error above"
 _AVAILABLE_FALLBACKS_PHRASE = "No fallback was attempted"
 _NO_FALLBACK_GROUP_PHRASE = "no fallback model group was found"
-_CONTEXT_WINDOW_HINT_PHRASE = "context_window_fallbacks="
+_CONTEXT_WINDOW_HINT_PHRASE = "context_window_fallbacks"
 _INTERNAL_MODEL_GROUP_NAME = "all-anthropic/claude-secret-internal"
 _FALLBACK_CREDENTIAL = "sk-INLINEFALLBACKSECRET1234567890"
 
@@ -360,7 +360,7 @@ async def test_flag_off_does_not_leak_content_policy_fallback_hint(monkeypatch: 
             mock_response=_content_policy_error(),
         )
     msg = excinfo.value.message
-    assert "content_policy_fallback=" not in msg, msg
+    assert "content_policy_fallbacks" not in msg, msg
     assert _INTERNAL_MODEL_GROUP_NAME not in msg, msg
 
 
@@ -375,7 +375,7 @@ async def test_flag_on_shows_content_policy_fallback_hint(monkeypatch: pytest.Mo
             mock_response=_content_policy_error(),
         )
     msg = excinfo.value.message
-    assert "content_policy_fallback=" in msg, msg
+    assert "content_policy_fallbacks" in msg, msg
     assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
 
 
