@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, TypeAlias
 
 import httpx
 from httpx import Headers
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
@@ -23,6 +23,9 @@ else:
     HttpxBinaryResponseContent: TypeAlias = object
 
 
+_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
 class _GradiumSpeechRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -36,11 +39,11 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
     VOICE_MAPPINGS: ClassVar[Mapping[str, str]] = {
         "alloy": "YTpq7expH9539ERJ",
-        "echo": "s0PhgjzOTRD5wo5L",
-        "fable": "1VAVLmmbQFDw7TMn",
-        "onyx": "QkmUhBH4hIV2_BkY",
-        "nova": "w9V1722uEmTkWqnR",
-        "shimmer": "BbLb4TxdlrldgpHI",
+        "echo": "3jUdJyOi9pgbxBTK",
+        "fable": "VY242dMI1GX0xZWO",
+        "onyx": "lHzCfu522Rotwndx",
+        "nova": "2H4HY2CBNyJHBCrP",
+        "shimmer": "Eu9iL_CYe8N-Gkx_",
         "ash": "_6Aslh2DxfmnRLmP",
         "ballad": "yk2FCQroF3f6O5Zg",
         "coral": "vjFyp2BcCyTlUmYb",
@@ -77,6 +80,8 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
     }
 
     UNSUPPORTED_OPENAI_PARAMS: ClassVar[frozenset[str]] = frozenset({"speed", "instructions"})
+    NO_OP_VALUES: ClassVar[Mapping[str, object]] = {"speed": 1.0}
+    CALLER_REQUEST_FIELDS: ClassVar[frozenset[str]] = frozenset({"json_config"})
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseTextToSpeechConfig declares list
         return ["voice", "response_format"]
@@ -85,7 +90,6 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         voice: str | dict[str, object] | None,  # mutable-ok: mirrors the dict|str the base class passes through
-        params: Mapping[str, object],
     ) -> str:
         sources: Final = (
             (voice,)
@@ -93,7 +97,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
             else ((voice.get("voice_id"), voice.get("id"), voice.get("name")) if isinstance(voice, dict) else ())
         )
         candidate: Final = next(
-            (value.strip() for value in (*sources, params.get("voice_id")) if isinstance(value, str) and value.strip()),
+            (value.strip() for value in sources if isinstance(value, str) and value.strip()),
             None,
         )
 
@@ -106,6 +110,13 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return self.VOICE_MAPPINGS.get(candidate.lower(), candidate)
 
+    def _caller_request_fields(
+        self, kwargs: Mapping[str, object]
+    ) -> dict[str, object]:  # mutable-ok: merged into dict_body
+        extra_body: Final = kwargs.get("extra_body")
+        sent: Final = {**kwargs, **(_REQUEST_FIELDS.validate_python(extra_body) if extra_body is not None else {})}
+        return {key: sent[key] for key in self.CALLER_REQUEST_FIELDS if sent.get(key) is not None}
+
     def map_openai_params(
         self,
         model: str,
@@ -114,30 +125,33 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         drop_params: bool = False,
         kwargs: dict[str, object] | None = None,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: callers mutate the returned params downstream
-        mapped_voice: Final = self._resolve_voice_id(model, voice, optional_params)
+        mapped_voice: Final = self._resolve_voice_id(model, voice)
         response_format: Final = optional_params.get("response_format")
         output_format: Final = self.FORMAT_MAPPINGS.get(response_format) if isinstance(response_format, str) else None
+        unsupported_format: Final = isinstance(response_format, str) and output_format is None
         unsupported: Final = tuple(
             f"{key}={value!r}"
             for key, value in optional_params.items()
-            if value is not None and key in self.UNSUPPORTED_OPENAI_PARAMS
-        ) + (
-            (f"response_format={response_format!r}",)
-            if isinstance(response_format, str) and output_format is None
-            else ()
-        )
+            if key in self.UNSUPPORTED_OPENAI_PARAMS and value not in (None, self.NO_OP_VALUES.get(key))
+        ) + ((f"response_format={response_format!r}",) if unsupported_format else ())
+        caller_kwargs: Final = kwargs or {}
 
-        if unsupported and not (drop_params or drops_unsupported_params((kwargs or {}).get("drop_params"))):
+        if unsupported and not (drop_params or drops_unsupported_params(caller_kwargs.get("drop_params"))):
+            format_hint: Final = (
+                f" Supported response_format values: {sorted(self.FORMAT_MAPPINGS)}." if unsupported_format else ""
+            )
             raise litellm.UnsupportedParamsError(
                 status_code=400,
                 message=(
-                    f"Gradium TTS does not support {', '.join(unsupported)}. "
-                    f"Supported response_format values: {sorted(self.FORMAT_MAPPINGS)}. "
+                    f"Gradium TTS does not support {', '.join(unsupported)}.{format_hint} "
                     "Set drop_params to true to drop them."
                 ),
             )
 
-        return mapped_voice, ({"output_format": output_format} if output_format is not None else {})
+        return mapped_voice, {
+            **self._caller_request_fields(caller_kwargs),
+            **({"output_format": output_format} if output_format is not None else {}),
+        }
 
     def validate_environment(
         self,
@@ -147,7 +161,11 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: signature fixed by BaseTextToSpeechConfig
         if not api_key:
-            raise ValueError("Gradium API key is required. Set `api_key` on the model.")
+            raise litellm.AuthenticationError(
+                message="Gradium API key is required. Set `api_key` on the model.",
+                llm_provider="gradium",
+                model=model,
+            )
 
         return {
             **headers,
@@ -170,8 +188,10 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         litellm_params: dict[str, object],  # mutable-ok: signature fixed by BaseTextToSpeechConfig
     ) -> str:
         if not api_base:
-            raise ValueError(
-                "Gradium API base is required. Set `api_base` on the model, e.g. https://eu.api.gradium.ai."
+            raise litellm.APIConnectionError(
+                message="Gradium API base is required. Set `api_base` on the model, e.g. https://eu.api.gradium.ai.",
+                llm_provider="gradium",
+                model=model,
             )
 
         root: Final = api_base.rstrip("/").removesuffix("/api")
@@ -189,6 +209,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         model_name: Final = {"model_name": model} if model and model != "default" else {}
 
         request_body: Final[dict[str, object]] = {  # mutable-ok: TextToSpeechRequestData.dict_body is dict
+            **optional_params,
             "text": input,
             "voice_id": voice,
             "output_format": optional_params.get("output_format", self.DEFAULT_OUTPUT_FORMAT),
