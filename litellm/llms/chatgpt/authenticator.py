@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import uuid
 from collections.abc import Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final
@@ -151,8 +152,8 @@ class Authenticator:
         return derived
 
     def _ensure_token_dir(self) -> None:
-        if not os.path.exists(self.token_dir):
-            os.makedirs(self.token_dir, exist_ok=True)
+        os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
+        os.chmod(self.token_dir, 0o700)
 
     def _read_auth_file(self) -> JsonObject | None:
         try:
@@ -165,10 +166,39 @@ class Authenticator:
             return None
 
     def _write_auth_file(self, data: JsonObject) -> None:
+        tmp_file: str | None = None
+        fd: int | None = None
         try:
             self._ensure_token_dir()
-            with open(self.auth_file, "w") as f:
-                json.dump(data, f)
+            tmp_file = os.path.join(
+                self.token_dir,
+                f".{os.path.basename(self.auth_file)}.{uuid.uuid4().hex}.tmp",
+            )
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(tmp_file, flags, 0o600)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    fd = None  # fdopen owns and closes the descriptor from here onward
+                    json.dump(data, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # token_dir is dirname(auth_file), so replacement stays on one filesystem.
+                os.replace(tmp_file, self.auth_file)
+                tmp_file = None
+            except Exception:
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                if tmp_file is not None:
+                    try:
+                        os.unlink(tmp_file)
+                    except OSError:
+                        pass
+                raise
         except OSError as exc:
             verbose_logger.error("Failed to write ChatGPT auth file: %s", exc)
 
