@@ -5147,3 +5147,111 @@ class TestToolPermissionGuardrailGenerateContentStream:
 
         with pytest.raises(GuardrailRaisedException, match="could not be verified"):
             await self._drain(guardrail, chunks)
+
+
+_VAULT_NAMESPACE: Final = "mcp__vault"
+_VAULT_TOOL: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+_VAULT_FULL_NAME: Final = f"{_VAULT_NAMESPACE}__{_VAULT_TOOL}"
+_VAULT_SENT_NAME: Final = "mcp__vault__read_the_current_secret_value_from_the_vaul_f96e7908"
+_DENY_VAULT_ALLOW_MCP: Final = [
+    {"id": "deny_vault_read", "tool_name": f"^{_VAULT_FULL_NAME}$", "decision": "deny"},
+    {"id": "allow_mcp", "tool_name": r"^mcp__.*$", "decision": "allow"},
+]
+
+
+def _bridged_vault_request(event_hook: GuardrailEventHooks) -> dict[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.tool_fields import BridgedTool
+
+    logging_obj: Final = Logging(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=1.0,
+        litellm_call_id="bridged-vault",
+        function_id="test",
+    )
+    logging_obj.record_bridged_tool_names({_VAULT_SENT_NAME: BridgedTool(_VAULT_NAMESPACE, _VAULT_TOOL)})
+    return {
+        "guardrails": [f"vault-{event_hook.value}"],
+        "tools": [{"type": "function", "function": {"name": _VAULT_SENT_NAME, "parameters": {"type": "object"}}}],
+        "litellm_logging_obj": logging_obj,
+    }
+
+
+class TestToolPermissionOnBridgedNamespaceTools:
+    """The Responses bridge sends a long namespace tool under a shortened name. Rules are written against the
+    name the caller sees, so the guardrail has to judge the shortened name as the caller's tool."""
+
+    @staticmethod
+    def _guardrail(event_hook: GuardrailEventHooks, action: Literal["block", "rewrite"]) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name=f"vault-{event_hook.value}",
+            rules=_DENY_VAULT_ALLOW_MCP,
+            default_action="deny",
+            on_disallowed_action=action,
+            event_hook=event_hook,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_returned_call_to_a_shortened_name_is_denied_by_the_rule_on_its_full_name(self) -> None:
+        guardrail: Final = self._guardrail(GuardrailEventHooks.post_call, "rewrite")
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={
+                        "tool_calls": [
+                            {
+                                "id": "call_vault",
+                                "type": "function",
+                                "function": Function(name=_VAULT_SENT_NAME, arguments="{}"),
+                            }
+                        ]
+                    },
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data=_bridged_vault_request(GuardrailEventHooks.post_call),
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+        message: Final = response.choices[0].message
+        assert [call.function.name for call in message.tool_calls or ()] == []
+        assert "deny_vault_read" in (message.content or "")
+
+    @pytest.mark.asyncio
+    async def test_a_sent_tool_under_a_shortened_name_is_denied_by_the_rule_on_its_full_name(self) -> None:
+        guardrail: Final = self._guardrail(GuardrailEventHooks.pre_call, "block")
+
+        with pytest.raises(HTTPException) as raised:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=_bridged_vault_request(GuardrailEventHooks.pre_call),
+                call_type="acompletion",
+            )
+
+        assert raised.value.status_code == 400
+        assert "deny_vault_read" in json.dumps(raised.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_a_name_map_sent_by_the_client_does_not_rename_a_denied_tool(self) -> None:
+        guardrail: Final = self._guardrail(GuardrailEventHooks.pre_call, "block")
+        forged: Final = {
+            "guardrails": ["vault-pre_call"],
+            "tools": [{"type": "function", "function": {"name": "drop_tables", "parameters": {"type": "object"}}}],
+            "litellm_logging_obj": {
+                "model_call_details": {"litellm_bridged_tool_names": {"drop_tables": "mcp__safe__read"}}
+            },
+            "litellm_bridged_tool_names": {"drop_tables": "mcp__safe__read"},
+        }
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=forged, call_type="acompletion"
+            )

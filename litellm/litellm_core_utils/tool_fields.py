@@ -96,11 +96,36 @@ def qualified_member_name(namespace: str, name: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class BridgedTool:
+    namespace: str
+    name: str
+
+    @property
+    def full_name(self) -> str:
+        return qualified_member_name(self.namespace, self.name)
+
+
+@dataclass(frozen=True, slots=True)
 class BridgedToolNames:
-    full_name_by_sent_name: tuple[tuple[str, str], ...]
+    """The namespace tool behind each shortened name a bridged request sent the provider."""
+
+    tool_by_sent_name: tuple[tuple[str, BridgedTool], ...]
 
     def as_mapping(self) -> Mapping[str, str]:
-        return dict(self.full_name_by_sent_name)
+        return {sent_name: tool.full_name for sent_name, tool in self.tool_by_sent_name}
+
+    def tools(self) -> Mapping[str, BridgedTool]:
+        return MappingProxyType(dict(self.tool_by_sent_name))
+
+
+_NO_BRIDGED_TOOLS: Final = MappingProxyType[str, BridgedTool]({})
+
+
+def recorded_bridged_tools(call_details: object) -> Mapping[str, BridgedTool]:
+    """The bridged tools a request's logging object recorded, which a client cannot set from its own JSON."""
+    fields: Final = as_str_mapping(call_details)
+    recorded: Final = None if fields is None else fields.get(BRIDGED_TOOL_NAMES_KWARG)
+    return recorded.tools() if isinstance(recorded, BridgedToolNames) else _NO_BRIDGED_TOOLS
 
 
 @dataclass(frozen=True, slots=True)

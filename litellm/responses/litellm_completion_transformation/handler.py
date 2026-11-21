@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allo
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
+from litellm.litellm_core_utils.tool_fields import BridgedTool, chat_member_name, qualified_member_name
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
@@ -137,13 +138,19 @@ def _with_the_tool_choice_sent(
 
 
 def _log_full_tool_names(
-    request_kwargs: Mapping[str, object], responses_api_request: ResponsesAPIOptionalRequestParams
+    request_kwargs: Mapping[str, object],
+    responses_api_request: ResponsesAPIOptionalRequestParams,
+    request_input: str | ResponseInputParam,
 ) -> None:
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
-    chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(
-        LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
+    names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+        LiteLLMCompletionResponsesConfig.request_tools(responses_api_request), request_input
     )
-    shortened: Final = {sent_name: full_name for full_name, sent_name in chat_names.items() if sent_name != full_name}
+    shortened: Final = {
+        sent_name: BridgedTool(namespace, name)
+        for sent_name, (namespace, name) in names.items()
+        if sent_name == chat_member_name(namespace, name) != qualified_member_name(namespace, name)
+    }
     if shortened and isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.record_bridged_tool_names(shortened)
 
@@ -220,7 +227,7 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
+        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request, bridged_input)
         with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):
             litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
                 **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
@@ -326,7 +333,7 @@ class LiteLLMCompletionTransformationHandler:
             **completion_request,
             "_skip_responses_api_bridge": True,
         }
-        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request)
+        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request, request_input)
         with error_param_named_as_a_responses_field(
             _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request
         ):

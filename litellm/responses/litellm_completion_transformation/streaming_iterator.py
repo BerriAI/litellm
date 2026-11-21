@@ -265,7 +265,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         request_tools: Final = self.responses_api_request.get("tools")
         self._custom_tool_names: set[str] = extract_custom_tool_names(request_tools)
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
-            LiteLLMCompletionResponsesConfig.request_tools(self.responses_api_request)
+            LiteLLMCompletionResponsesConfig.request_tools(self.responses_api_request), request_input
         )
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
