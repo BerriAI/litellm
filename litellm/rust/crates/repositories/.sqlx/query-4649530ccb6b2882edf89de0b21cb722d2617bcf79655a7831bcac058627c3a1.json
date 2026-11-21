@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.token,\n       v.key_name,\n       v.key_alias,\n       v.soft_budget_cooldown,\n       v.spend,\n       v.total_spend,\n       v.expires,\n       COALESCE(v.models, '{}') AS \"models!\",\n       v.aliases AS \"aliases: RawJson\",\n       v.config AS \"config: RawJson\",\n       v.router_settings AS \"router_settings: RawJson\",\n       v.user_id,\n       v.team_id,\n       v.agent_id,\n       v.project_id,\n       v.permissions AS \"permissions: RawJson\",\n       v.max_parallel_requests,\n       v.metadata AS \"metadata: RawJson\",\n       v.blocked,\n       COALESCE(v.tpm_limit, b.tpm_limit) AS tpm_limit,\n       COALESCE(v.rpm_limit, b.rpm_limit) AS rpm_limit,\n       COALESCE(v.tpd_limit, b.tpd_limit) AS tpd_limit,\n       COALESCE(v.max_budget, b.max_budget) AS max_budget,\n       b.soft_budget AS soft_budget,\n       v.budget_duration,\n       v.budget_reset_at,\n       v.allowed_cache_controls,\n       v.allowed_routes,\n       v.key_type,\n       v.access_group_ids,\n       v.model_spend AS \"model_spend: RawJson\",\n       CASE WHEN v.model_max_budget = '{}'::jsonb\n            THEN COALESCE(b.model_max_budget, v.model_max_budget)\n            ELSE v.model_max_budget END AS \"model_max_budget!: RawJson\",\n       v.budget_fallbacks AS \"budget_fallbacks: RawJson\",\n       v.budget_id,\n       COALESCE(v.organization_id, t.organization_id) AS org_id,\n       v.object_permission_id,\n       v.created_at,\n       v.created_by,\n       v.updated_at,\n       v.updated_by,\n       v.settings_updated_at,\n       v.last_active,\n       v.rotation_count,\n       v.auto_rotate,\n       v.rotation_interval,\n       v.last_rotation_at,\n       v.key_rotation_at,\n       v.budget_limits AS \"budget_limits: RawJson\",\n       t.spend AS \"team_spend?\",\n       t.max_budget AS team_max_budget,\n       t.soft_budget AS team_soft_budget,\n       t.model_max_budget AS \"team_model_max_budget?: RawJson\",\n       t.tpm_limit AS team_tpm_limit,\n       t.rpm_limit AS team_rpm_limit,\n       t.tpd_limit AS team_tpd_limit,\n       COALESCE(t.models, '{}') AS \"team_models!\",\n       t.metadata AS \"team_metadata?: RawJson\",\n       COALESCE(t.blocked, false) AS \"team_blocked!\",\n       t.team_alias,\n       (SELECT member.entry\n          FROM jsonb_array_elements(CASE WHEN jsonb_typeof(t.members_with_roles) = 'array'\n                                         THEN t.members_with_roles ELSE '[]'::jsonb END)\n               WITH ORDINALITY AS member(entry, position)\n         WHERE member.entry -> 'user_id' = to_jsonb(v.user_id)\n         ORDER BY member.position DESC\n         LIMIT 1) AS \"team_member?: RawJson\",\n       t.object_permission_id AS team_object_permission_id,\n       p.project_alias AS \"project_alias?\",\n       tm.spend AS \"team_member_spend?\",\n       b_tm.tpm_limit AS team_member_tpm_limit,\n       b_tm.rpm_limit AS team_member_rpm_limit,\n       m.aliases AS \"team_model_aliases?: RawJson\",\n       o.metadata AS \"organization_metadata?: RawJson\",\n       o.organization_alias AS \"organization_alias?\",\n       b2.max_budget AS organization_max_budget,\n       b2.tpm_limit AS organization_tpm_limit,\n       b2.rpm_limit AS organization_rpm_limit\nFROM \"LiteLLM_VerificationToken\" AS v\nLEFT JOIN \"LiteLLM_TeamTable\" AS t ON v.team_id = t.team_id\nLEFT JOIN \"LiteLLM_TeamMembership\" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b_tm ON tm.budget_id = b_tm.budget_id\nLEFT JOIN \"LiteLLM_ModelTable\" AS m ON t.model_id = m.id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON v.budget_id = b.budget_id\nLEFT JOIN \"LiteLLM_ProjectTable\" AS p ON v.project_id = p.project_id\nLEFT JOIN \"LiteLLM_OrganizationTable\" AS o ON v.organization_id = o.organization_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b2 ON o.budget_id = b2.budget_id\nWHERE v.token = $1\n",
+  "query": "SELECT v.token,\n       v.key_name,\n       v.key_alias,\n       v.soft_budget_cooldown,\n       v.spend,\n       v.total_spend,\n       v.expires,\n       COALESCE(v.models, '{}') AS \"models!\",\n       v.aliases AS \"aliases: RawJson\",\n       v.config AS \"config: RawJson\",\n       v.router_settings AS \"router_settings: RawJson\",\n       v.user_id,\n       v.team_id,\n       v.agent_id,\n       v.project_id,\n       v.permissions AS \"permissions: RawJson\",\n       v.max_parallel_requests,\n       v.metadata AS \"metadata: RawJson\",\n       v.blocked,\n       COALESCE(v.tpm_limit, b.tpm_limit) AS tpm_limit,\n       COALESCE(v.rpm_limit, b.rpm_limit) AS rpm_limit,\n       COALESCE(v.tpd_limit, b.tpd_limit) AS tpd_limit,\n       COALESCE(v.max_budget, b.max_budget) AS max_budget,\n       b.soft_budget AS soft_budget,\n       v.budget_duration,\n       v.budget_reset_at,\n       v.allowed_cache_controls,\n       v.allowed_routes,\n       v.key_type,\n       v.access_group_ids,\n       v.model_spend AS \"model_spend: RawJson\",\n       CASE WHEN v.model_max_budget = '{}'::jsonb\n            THEN COALESCE(b.model_max_budget, v.model_max_budget)\n            ELSE v.model_max_budget END AS \"model_max_budget!: RawJson\",\n       v.budget_fallbacks AS \"budget_fallbacks: RawJson\",\n       v.budget_id,\n       COALESCE(v.organization_id, t.organization_id) AS org_id,\n       v.object_permission_id,\n       v.created_at,\n       v.created_by,\n       v.updated_at,\n       v.updated_by,\n       v.settings_updated_at,\n       v.last_active,\n       v.rotation_count,\n       v.auto_rotate,\n       v.rotation_interval,\n       v.last_rotation_at,\n       v.key_rotation_at,\n       v.budget_limits AS \"budget_limits: RawJson\",\n       t.spend AS \"team_spend?\",\n       t.max_budget AS team_max_budget,\n       t.soft_budget AS team_soft_budget,\n       t.model_max_budget AS \"team_model_max_budget?: RawJson\",\n       t.tpm_limit AS team_tpm_limit,\n       t.rpm_limit AS team_rpm_limit,\n       t.max_parallel_requests AS team_max_parallel_requests,\n       t.tpd_limit AS team_tpd_limit,\n       COALESCE(t.models, '{}') AS \"team_models!\",\n       t.metadata AS \"team_metadata?: RawJson\",\n       COALESCE(t.blocked, false) AS \"team_blocked!\",\n       t.team_alias,\n       (SELECT member.entry\n          FROM jsonb_array_elements(CASE WHEN jsonb_typeof(t.members_with_roles) = 'array'\n                                         THEN t.members_with_roles ELSE '[]'::jsonb END)\n               WITH ORDINALITY AS member(entry, position)\n         WHERE member.entry -> 'user_id' = to_jsonb(v.user_id)\n         ORDER BY member.position DESC\n         LIMIT 1) AS \"team_member?: RawJson\",\n       t.object_permission_id AS team_object_permission_id,\n       p.project_alias AS \"project_alias?\",\n       tm.spend AS \"team_member_spend?\",\n       b_tm.tpm_limit AS team_member_tpm_limit,\n       b_tm.rpm_limit AS team_member_rpm_limit,\n       m.aliases AS \"team_model_aliases?: RawJson\",\n       o.metadata AS \"organization_metadata?: RawJson\",\n       o.organization_alias AS \"organization_alias?\",\n       b2.max_budget AS organization_max_budget,\n       b2.tpm_limit AS organization_tpm_limit,\n       b2.rpm_limit AS organization_rpm_limit\nFROM \"LiteLLM_VerificationToken\" AS v\nLEFT JOIN \"LiteLLM_TeamTable\" AS t ON v.team_id = t.team_id\nLEFT JOIN \"LiteLLM_TeamMembership\" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b_tm ON tm.budget_id = b_tm.budget_id\nLEFT JOIN \"LiteLLM_ModelTable\" AS m ON t.model_id = m.id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON v.budget_id = b.budget_id\nLEFT JOIN \"LiteLLM_ProjectTable\" AS p ON v.project_id = p.project_id\nLEFT JOIN \"LiteLLM_OrganizationTable\" AS o ON v.organization_id = o.organization_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b2 ON o.budget_id = b2.budget_id\nWHERE v.token = $1\n",
   "describe": {
     "columns": [
       {
@@ -564,6 +564,17 @@
       },
       {
         "ordinal": 54,
+        "name": "team_max_parallel_requests",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "max_parallel_requests"
+          }
+        }
+      },
+      {
+        "ordinal": 55,
         "name": "team_tpd_limit",
         "type_info": "Int8",
         "origin": {
@@ -574,13 +585,13 @@
         }
       },
       {
-        "ordinal": 55,
+        "ordinal": 56,
         "name": "team_models!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 56,
+        "ordinal": 57,
         "name": "team_metadata?: RawJson",
         "type_info": "Jsonb",
         "origin": {
@@ -591,13 +602,13 @@
         }
       },
       {
-        "ordinal": 57,
+        "ordinal": 58,
         "name": "team_blocked!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 58,
+        "ordinal": 59,
         "name": "team_alias",
         "type_info": "Text",
         "origin": {
@@ -608,13 +619,13 @@
         }
       },
       {
-        "ordinal": 59,
+        "ordinal": 60,
         "name": "team_member?: RawJson",
         "type_info": "Jsonb",
         "origin": "Expression"
       },
       {
-        "ordinal": 60,
+        "ordinal": 61,
         "name": "team_object_permission_id",
         "type_info": "Text",
         "origin": {
@@ -625,7 +636,7 @@
         }
       },
       {
-        "ordinal": 61,
+        "ordinal": 62,
         "name": "project_alias?",
         "type_info": "Text",
         "origin": {
@@ -636,7 +647,7 @@
         }
       },
       {
-        "ordinal": 62,
+        "ordinal": 63,
         "name": "team_member_spend?",
         "type_info": "Float8",
         "origin": {
@@ -647,7 +658,7 @@
         }
       },
       {
-        "ordinal": 63,
+        "ordinal": 64,
         "name": "team_member_tpm_limit",
         "type_info": "Int8",
         "origin": {
@@ -658,7 +669,7 @@
         }
       },
       {
-        "ordinal": 64,
+        "ordinal": 65,
         "name": "team_member_rpm_limit",
         "type_info": "Int8",
         "origin": {
@@ -669,7 +680,7 @@
         }
       },
       {
-        "ordinal": 65,
+        "ordinal": 66,
         "name": "team_model_aliases?: RawJson",
         "type_info": "Jsonb",
         "origin": {
@@ -680,7 +691,7 @@
         }
       },
       {
-        "ordinal": 66,
+        "ordinal": 67,
         "name": "organization_metadata?: RawJson",
         "type_info": "Jsonb",
         "origin": {
@@ -691,7 +702,7 @@
         }
       },
       {
-        "ordinal": 67,
+        "ordinal": 68,
         "name": "organization_alias?",
         "type_info": "Text",
         "origin": {
@@ -702,7 +713,7 @@
         }
       },
       {
-        "ordinal": 68,
+        "ordinal": 69,
         "name": "organization_max_budget",
         "type_info": "Float8",
         "origin": {
@@ -713,7 +724,7 @@
         }
       },
       {
-        "ordinal": 69,
+        "ordinal": 70,
         "name": "organization_tpm_limit",
         "type_info": "Int8",
         "origin": {
@@ -724,7 +735,7 @@
         }
       },
       {
-        "ordinal": 70,
+        "ordinal": 71,
         "name": "organization_rpm_limit",
         "type_info": "Int8",
         "origin": {
@@ -796,6 +807,7 @@
       true,
       true,
       true,
+      true,
       null,
       true,
       null,
@@ -814,5 +826,5 @@
       true
     ]
   },
-  "hash": "c993e96956a92ccfaeb17e6100d1d2bfd2b0a6d30abd524c6bd0f6abaf4d101b"
+  "hash": "4649530ccb6b2882edf89de0b21cb722d2617bcf79655a7831bcac058627c3a1"
 }

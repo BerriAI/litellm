@@ -565,7 +565,7 @@ impl ParallelRequestLimiter {
         };
         let deferred = in_logging_callback && self.engine.defer_release(&acquisition, ctx).await;
         if !deferred {
-            self.engine.release_slots(&acquisition).await;
+            self.engine.release_slots(&acquisition, ctx.policy).await;
         }
         state.stash().parallel_slot = None;
     }

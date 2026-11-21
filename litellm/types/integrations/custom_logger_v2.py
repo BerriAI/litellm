@@ -237,6 +237,7 @@ class KeyLimits(Record):
     user_tpm_limit: Scalar | None = None
     team_rpm_limit: Scalar | None = None
     team_tpm_limit: Scalar | None = None
+    team_max_parallel_requests: Scalar | None = None
     team_member_rpm_limit: Scalar | None = None
     team_member_tpm_limit: Scalar | None = None
     end_user_rpm_limit: Scalar | None = None

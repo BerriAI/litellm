@@ -743,15 +743,8 @@ impl Engine {
         let slot_ttl = Duration::from_secs(SLOT_TTL_SECONDS as u64);
         if read_only {
             let counts = if self.store.has_redis() {
-                let reply = match self.store.parallel_count(RedisSend::Now, &scopes, slot_ttl) {
-                    Some(pending) => self
-                        .labelled("parallel_count_script", pending)
-                        .await
-                        .map_err(Failure::from),
-                    None => Err(Failure::no_redis()),
-                };
-                match reply {
-                    Ok(values) => values.into_iter().map(|value| value.max(0)).collect(),
+                match self.count_in_redis(&scopes, slot_ttl, ctx.policy).await {
+                    Ok(values) => values,
                     Err(error) => {
                         self.unverifiable(ctx.policy, "parallel_count_script", &error)?;
                         tracing::warn!("parallel_count_script failed, using local mirror: {error}");
@@ -793,24 +786,10 @@ impl Engine {
             }
         }
         if self.store.has_redis() {
-            let specs: Vec<Gauge> = gauges
-                .iter()
-                .map(|gauge| Gauge {
-                    scope: gauge.scope.clone(),
-                    limit: gauge.limit,
-                })
-                .collect();
-            let reply = match self
-                .store
-                .parallel_acquire(RedisSend::Now, &specs, slot_ttl, slot_id)
+            return match self
+                .acquire_in_redis(gauges, slot_id, slot_ttl, ctx.policy)
+                .await
             {
-                Some(pending) => self
-                    .labelled("parallel_acquire_script", pending)
-                    .await
-                    .map_err(Failure::from),
-                None => Err(Failure::no_redis()),
-            };
-            return match reply {
                 Err(error) => {
                     self.unverifiable(ctx.policy, "parallel_acquire_script", &error)?;
                     tracing::warn!(
@@ -820,14 +799,8 @@ impl Engine {
                     let _guard = self.store.memory_guard();
                     Ok(self.acquire_in_memory(gauges, slot_id, now))
                 }
-                Ok(AcquireReply::OverLimit {
-                    index, in_flight, ..
-                }) => Ok(Response::over(gauge_status(
-                    &gauges[index],
-                    in_flight,
-                    Code::OverLimit,
-                ))),
-                Ok(AcquireReply::Acquired(counts)) => {
+                Ok(Err(refused)) => Ok(Response::over(refused)),
+                Ok(Ok(counts)) => {
                     let statuses = gauges
                         .iter()
                         .zip(counts)
@@ -847,6 +820,105 @@ impl Engine {
         let now = self.now();
         let _guard = self.store.memory_guard();
         Ok(self.acquire_in_memory(gauges, slot_id, now))
+    }
+
+    /// Every gauge's in-flight count, one script per cluster slot since a script may only touch
+    /// keys of one slot.
+    async fn count_in_redis(
+        &self,
+        scopes: &[Scope],
+        slot_ttl: Duration,
+        policy: Policy,
+    ) -> Result<Vec<i64>, Failure> {
+        let mut counts = vec![0; scopes.len()];
+        for group in self.slot_groups(scopes, policy) {
+            let members: Vec<Scope> = group.iter().map(|&index| scopes[index].clone()).collect();
+            let values = match self
+                .store
+                .parallel_count(RedisSend::Now, &members, slot_ttl)
+            {
+                Some(pending) => self
+                    .labelled("parallel_count_script", pending)
+                    .await
+                    .map_err(Failure::from)?,
+                None => return Err(Failure::no_redis()),
+            };
+            for (&index, value) in group.iter().zip(values) {
+                counts[index] = value.max(0);
+            }
+        }
+        Ok(counts)
+    }
+
+    /// Takes a slot on every gauge, one cluster slot at a time. When a later slot's gauge is full
+    /// or its script fails, the slots already taken are given back first, so a refused request
+    /// holds none. The outer error is a failed script, the inner one the gauge that was full.
+    async fn acquire_in_redis(
+        &self,
+        gauges: &[GaugeSpec],
+        slot_id: &str,
+        slot_ttl: Duration,
+        policy: Policy,
+    ) -> Result<Result<Vec<i64>, Status>, Failure> {
+        let scopes: Vec<Scope> = gauges.iter().map(|gauge| gauge.scope.clone()).collect();
+        let mut counts = vec![0; gauges.len()];
+        let mut taken: Vec<Scope> = Vec::new();
+        for group in self.slot_groups(&scopes, policy) {
+            let specs: Vec<Gauge> = group
+                .iter()
+                .map(|&index| Gauge {
+                    scope: gauges[index].scope.clone(),
+                    limit: gauges[index].limit,
+                })
+                .collect();
+            let reply = match self
+                .store
+                .parallel_acquire(RedisSend::Now, &specs, slot_ttl, slot_id)
+            {
+                Some(pending) => self
+                    .labelled("parallel_acquire_script", pending)
+                    .await
+                    .map_err(Failure::from),
+                None => Err(Failure::no_redis()),
+            };
+            match reply {
+                Ok(AcquireReply::Acquired(group_counts)) => {
+                    for (&index, in_flight) in group.iter().zip(group_counts) {
+                        counts[index] = in_flight;
+                    }
+                    taken.extend(specs.into_iter().map(|spec| spec.scope));
+                }
+                Ok(AcquireReply::OverLimit {
+                    index, in_flight, ..
+                }) => {
+                    self.give_back(taken, slot_id, policy).await;
+                    return Ok(Err(gauge_status(
+                        &gauges[group[index]],
+                        in_flight,
+                        Code::OverLimit,
+                    )));
+                }
+                Err(error) => {
+                    self.give_back(taken, slot_id, policy).await;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(Ok(counts))
+    }
+
+    async fn give_back(&self, gauges: Vec<Scope>, slot_id: &str, policy: Policy) {
+        if gauges.is_empty() {
+            return;
+        }
+        self.release_slots(
+            &SlotAcquisition {
+                slot_id: slot_id.to_owned(),
+                gauges,
+            },
+            policy,
+        )
+        .await;
     }
 
     fn acquire_in_memory(&self, gauges: &[GaugeSpec], slot_id: &str, now: f64) -> Response {
@@ -890,42 +962,60 @@ impl Engine {
         Response::ok(statuses)
     }
 
-    pub async fn release_slots(&self, acquisition: &SlotAcquisition) {
+    /// Gives back the slots one cluster slot at a time. A gauge whose script fails is released in
+    /// memory only, and Redis frees it when the slot expires.
+    pub async fn release_slots(&self, acquisition: &SlotAcquisition, policy: Policy) {
         if acquisition.gauges.is_empty() || acquisition.slot_id.is_empty() {
             return;
         }
-        if self.store.has_redis() {
-            let reply = match self.store.parallel_release(
-                RedisSend::Now,
-                &acquisition.gauges,
-                &acquisition.slot_id,
-            ) {
-                Some(pending) => self
-                    .labelled("parallel_release_script", pending)
-                    .await
-                    .map_err(Failure::from),
-                None => Err(Failure::no_redis()),
-            };
+        if !self.store.has_redis() {
+            self.release_in_memory(acquisition).await;
+            return;
+        }
+        let ttl = Some(Duration::from_secs(SLOT_TTL_SECONDS as u64));
+        let mut unreleased: Vec<Scope> = Vec::new();
+        for group in self.slot_groups(&acquisition.gauges, policy) {
+            let members: Vec<Scope> = group
+                .iter()
+                .map(|&index| acquisition.gauges[index].clone())
+                .collect();
+            let reply =
+                match self
+                    .store
+                    .parallel_release(RedisSend::Now, &members, &acquisition.slot_id)
+                {
+                    Some(pending) => self
+                        .labelled("parallel_release_script", pending)
+                        .await
+                        .map_err(Failure::from),
+                    None => Err(Failure::no_redis()),
+                };
             match reply {
                 Ok(remaining) => {
-                    let ttl = Some(Duration::from_secs(SLOT_TTL_SECONDS as u64));
-                    for (scope, remaining) in acquisition.gauges.iter().zip(remaining) {
+                    for (scope, remaining) in members.iter().zip(remaining) {
                         self.set_local(
                             Entry::Gauge(scope.clone()),
                             Local::Number(Number::Int(remaining.max(0))),
                             ttl,
                         );
                     }
-                    return;
                 }
                 Err(error) => {
                     tracing::warn!(
                         "parallel_release_script failed, falling back to in-memory release: {error}"
                     );
+                    unreleased.extend(members);
                 }
             }
         }
-        self.release_in_memory(acquisition).await;
+        if unreleased.is_empty() {
+            return;
+        }
+        self.release_in_memory(&SlotAcquisition {
+            slot_id: acquisition.slot_id.clone(),
+            gauges: unreleased,
+        })
+        .await;
     }
 
     pub async fn defer_release(&self, acquisition: &SlotAcquisition, ctx: Ctx<'_>) -> bool {
@@ -936,8 +1026,19 @@ impl Engine {
             return false;
         }
         self.release_in_memory(acquisition).await;
-        self.store
-            .parallel_release_post_call(request, &acquisition.gauges, &acquisition.slot_id)
+        let declared: Vec<bool> = self
+            .slot_groups(&acquisition.gauges, ctx.policy)
+            .into_iter()
+            .map(|group| {
+                let members: Vec<Scope> = group
+                    .iter()
+                    .map(|&index| acquisition.gauges[index].clone())
+                    .collect();
+                self.store
+                    .parallel_release_post_call(request, &members, &acquisition.slot_id)
+            })
+            .collect();
+        declared.into_iter().all(|declared| declared)
     }
 
     async fn release_in_memory(&self, acquisition: &SlotAcquisition) {

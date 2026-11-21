@@ -244,6 +244,7 @@ _LIMIT_ATTRIBUTES: Final = (
     "user_tpm_limit",
     "team_rpm_limit",
     "team_tpm_limit",
+    "team_max_parallel_requests",
     "team_member_rpm_limit",
     "team_member_tpm_limit",
     "end_user_rpm_limit",
