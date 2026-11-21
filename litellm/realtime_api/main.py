@@ -57,11 +57,12 @@ from ..litellm_core_utils.realtime_streaming import (
     translation_guardrails_apply,
 )
 from ..llms.azure.common_utils import get_azure_ad_token
+from ..llms.azure.live.handler import azure_live_upstream
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
 from ..llms.openai.common_utils import is_openai_backed_api_base
-from ..llms.openai.live.handler import OpenAILiveSessions
+from ..llms.openai.live.handler import LiveUpstream, OpenAILiveSessions
 from ..llms.openai.realtime.handler import (
     OpenAIRealtime,
     confirm_gateway_session_started,
@@ -780,7 +781,7 @@ _LiveSessionRejection = _LiveProviderUnsupported | _LiveGuardrailsUnsupported
 def _live_session_rejection(
     custom_llm_provider: str, litellm_metadata: Mapping[str, object]
 ) -> _LiveSessionRejection | None:
-    if custom_llm_provider != "openai":
+    if custom_llm_provider != "openai" and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS:
         return _LiveProviderUnsupported(provider=custom_llm_provider)
     if _realtime_guardrail_configured(litellm_metadata):
         return _LiveGuardrailsUnsupported()
@@ -790,11 +791,28 @@ def _live_session_rejection(
 def _raise_live_session_rejection(rejection: _LiveSessionRejection) -> NoReturn:
     match rejection:
         case _LiveProviderUnsupported(provider=provider):
-            raise ValueError(f"OpenAI Live sessions require the openai provider, got {provider}")
+            raise ValueError(f"Live sessions require the openai or azure provider, got {provider}")
         case _LiveGuardrailsUnsupported():
             raise ValueError("Guardrails are not supported on OpenAI Live sessions")
         case _:
             assert_never(rejection)
+
+
+async def _azure_live_upstream(
+    api_base: str | None, api_key: str | None, azure_ad_token: str | None, litellm_params: Mapping[str, object]
+) -> LiveUpstream:
+    resolved_api_key: Final = api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
+    return azure_live_upstream(
+        api_base=api_base or litellm.api_base or get_secret_str("AZURE_API_BASE") or "",
+        api_key=resolved_api_key,
+        azure_ad_token=(
+            None
+            if resolved_api_key
+            else await asyncio.to_thread(
+                get_azure_ad_token, GenericLiteLLMParams(**{**litellm_params, "azure_ad_token": azure_ad_token})
+            )
+        ),
+    )
 
 
 async def _alive_session(
@@ -805,12 +823,25 @@ async def _alive_session(
     session_start: Mapping[str, object],
     api_base: str | None,
     api_key: str | None,
+    azure_ad_token: str | None,
     litellm_metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
         _raise_live_session_rejection(rejection)
+    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
+        azure_upstream: Final = await _azure_live_upstream(api_base, api_key, azure_ad_token, litellm_params)
+        await openai_live_sessions.async_live_session(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            session_start=session_start,
+            api_base=azure_upstream.url,
+            api_key=api_key,
+            upstream=azure_upstream,
+        )
+        return
     resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
     await openai_live_sessions.async_live_session(
         model=model,
@@ -906,6 +937,7 @@ async def _arealtime(
             session_start=live_session_start,
             api_base=dynamic_api_base or litellm_params.api_base,
             api_key=dynamic_api_key,
+            azure_ad_token=azure_ad_token,
             litellm_metadata=session_litellm_metadata,
             litellm_params=deployment_params,
         )
