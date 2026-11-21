@@ -15455,7 +15455,11 @@ async def _shared_deployments_cooled_after(
             id="azure_text",
         ),
         pytest.param(
-            {"model": "azure_ai/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {
+                "model": "azure_ai/gpt-6.2-sol",
+                "api_base": "https://litellm-qa.services.ai.azure.com",
+                "azure_ad_token": "configured-token",
+            },
             {"azure_ad_token": "caller-token"},
             litellm.AuthenticationError,
             id="azure_ai",
@@ -15487,8 +15491,12 @@ async def _shared_deployments_cooled_after(
     ],
 )
 async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deployment_routable(
-    litellm_params, caller_fields, failure
-):
+    litellm_params: Mapping[str, object],
+    caller_fields: Mapping[str, object],
+    failure: _CallerFailure,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
     router: Final = _shared_pair_router(litellm_params)
 
     assert await _shared_deployments_cooled_after(router, failure, caller_fields) is False
@@ -15555,6 +15563,22 @@ async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deploym
             id="echoed_vertex_project_under_its_alias",
         ),
         pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5"},
+            {"aws_access_key_id": "environment-key-id"},
+            litellm.AuthenticationError,
+            None,
+            {"AWS_ACCESS_KEY_ID": "environment-key-id"},
+            id="echoed_aws_key_environment",
+        ),
+        pytest.param(
+            {"model": "azure_ai/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            None,
+            {},
+            id="azure_ai_token_ignored_next_to_an_api_key",
+        ),
+        pytest.param(
             {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
             {"organization": "org-caller"},
             litellm.AuthenticationError,
@@ -15573,9 +15597,22 @@ async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deploym
     ],
 )
 async def test_router_failure_a_caller_field_cannot_cause_cools_down_the_shared_deployment(
-    litellm_params, caller_fields, failure, default_litellm_params, environment, monkeypatch
-):
-    for name in ("AZURE_API_VERSION", "AZURE_AD_TOKEN", "OPENAI_ORGANIZATION", "AWS_REGION", "AWS_REGION_NAME"):
+    litellm_params: Mapping[str, object],
+    caller_fields: Mapping[str, object],
+    failure: _CallerFailure,
+    default_litellm_params: Mapping[str, object] | None,
+    environment: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "AZURE_API_VERSION",
+        "AZURE_AD_TOKEN",
+        "AZURE_AI_API_KEY",
+        "OPENAI_ORGANIZATION",
+        "AWS_REGION",
+        "AWS_REGION_NAME",
+        "AWS_ACCESS_KEY_ID",
+    ):
         monkeypatch.delenv(name, raising=False)
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
@@ -15590,8 +15627,8 @@ async def test_router_failure_a_caller_field_cannot_cause_cools_down_the_shared_
     [pytest.param("org-credential", True, id="echoed"), pytest.param("org-caller", False, id="caller_own")],
 )
 async def test_router_caller_organization_is_compared_with_the_deployment_credential(
-    caller_organization, cooled, monkeypatch
-):
+    caller_organization: str, cooled: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -15614,7 +15651,9 @@ async def test_router_caller_organization_is_compared_with_the_deployment_creden
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-async def test_router_vertex_stream_failing_on_a_caller_project_leaves_the_shared_deployment_routable(monkeypatch):
+async def test_router_vertex_stream_failing_on_a_caller_project_leaves_the_shared_deployment_routable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from tests.integration._support.vertex import service_account_json
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
