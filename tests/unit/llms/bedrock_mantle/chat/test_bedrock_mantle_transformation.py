@@ -11,9 +11,8 @@ Tests use a fake/mocked HTTP layer to verify the full request pipeline:
 import asyncio
 import importlib
 import json
-from unittest.mock import MagicMock, patch
-
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest

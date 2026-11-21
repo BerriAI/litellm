@@ -1507,29 +1507,44 @@ class TestMantleGeoInferenceProfile:
 
 
 class TestMantleOnABedrockRuntimeApiBase:
-    """bedrock-runtime's Responses endpoint rejects web_search, which the Mantle host accepts."""
+    """bedrock-runtime's Responses endpoint rejects web_search and background, which the Mantle host accepts."""
 
     TOOLS: Final = [
         {"type": "web_search"},
         {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
     ]
 
-    def _sent_tool_types(self, api_base):
-        request = BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+    def _sent(self, api_base: str | None) -> dict[str, object]:
+        return BedrockMantleResponsesAPIConfig().transform_responses_api_request(
             model="us.openai.gpt-6.1-sol",
             input="hi",
-            response_api_optional_request_params={"tools": self.TOOLS},
+            response_api_optional_request_params={"tools": self.TOOLS, "background": True},
             litellm_params=GenericLiteLLMParams(api_base=api_base),
             headers={},
         )
-        return [tool["type"] for tool in request.get("tools", [])]
 
-    def test_bedrock_runtime_gets_only_the_tools_it_accepts(self):
-        assert self._sent_tool_types("https://bedrock-runtime.us-east-1.amazonaws.com") == ["function"]
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime-fips.us-east-1.amazonaws.com",
+            "https://vpce-0abc-1234.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+        ],
+    )
+    def test_bedrock_runtime_gets_only_what_it_accepts(self, api_base: str) -> None:
+        sent: Final = self._sent(api_base)
+        assert [tool["type"] for tool in sent["tools"]] == ["function"]
+        assert "background" not in sent
+
+    def test_a_bedrock_runtime_base_from_the_environment_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", "https://bedrock-runtime.us-east-1.amazonaws.com")
+        assert [tool["type"] for tool in self._sent(None)["tools"]] == ["function"]
 
     @pytest.mark.parametrize("api_base", [None, "https://bedrock-mantle.us-east-1.api.aws"])
-    def test_the_mantle_host_keeps_web_search(self, api_base):
-        assert self._sent_tool_types(api_base) == ["web_search", "function"]
+    def test_the_mantle_host_keeps_web_search_and_background(self, api_base: str | None) -> None:
+        sent: Final = self._sent(api_base)
+        assert [tool["type"] for tool in sent["tools"]] == ["web_search", "function"]
+        assert sent["background"] is True
 
 
 class TestBedrockMantleEndpointHonoring:

@@ -96,8 +96,7 @@ def _mantle_responses_series_name(model: str) -> str | None:
 
 
 def _routing_lookup_model(model: str, custom_llm_provider: str) -> str:
-    """The id whose cost-map row decides routing. A Mantle geo profile id routes by its Mantle row, never by the
-    Converse row listed under the same profile id."""
+    """A Mantle geo profile id routes by its Mantle row, not the Converse row listed under the same id."""
     from litellm.llms.bedrock_mantle.common_utils import mantle_catalog_id
 
     return mantle_catalog_id(model) if custom_llm_provider == "bedrock_mantle" else model

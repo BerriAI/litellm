@@ -50,24 +50,20 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
 
 
 def mantle_catalog_id(model: str) -> str:
-    """The id a Mantle model is listed under in the cost map: no region path, no geo inference-profile prefix.
-
-    ``us-east-1/us.openai.gpt-6.1-sol`` -> ``openai.gpt-6.1-sol``. Only lookups use it, AWS still gets the profile id.
-    """
+    """``us-east-1/us.openai.gpt-6.1-sol`` -> ``openai.gpt-6.1-sol``, for cost-map lookups only."""
     model_id: Final = split_mantle_region_prefix(model)[1]
     geo, sep, profiled_id = model_id.partition(".")
     return profiled_id if sep and geo in BEDROCK_GEO_PROFILES else model_id
 
 
 def is_bedrock_runtime_host(api_base: str | None) -> bool:
-    """Whether a Mantle deployment points at bedrock-runtime, whose Responses endpoint takes fewer tool types."""
+    """bedrock-runtime, a VPC endpoint for it included, accepts fewer Responses tools and params than Mantle."""
     host: Final = urlparse(api_base).hostname if api_base else None
-    return host is not None and host.startswith("bedrock-runtime")
+    return host is not None and any(label.startswith("bedrock-runtime") for label in host.split("."))
 
 
 def aws_error_envelope_type(body: object) -> str | None:
-    """The error type in an AWS ``{"Output": {"__type": ...}}`` body, which bedrock-runtime sends with a 200
-    for a path it does not serve, so a caller would otherwise read it as an empty answer."""
+    """bedrock-runtime answers a path it does not serve with a 200 ``{"Output": {"__type": ...}}`` body."""
     output: Final = body.get("Output") if isinstance(body, Mapping) else None
     error_type: Final = output.get("__type") if isinstance(output, Mapping) else None
     return error_type if isinstance(error_type, str) else None

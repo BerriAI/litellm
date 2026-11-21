@@ -160,6 +160,29 @@ def inline_remote_image_urls(
     return items  # pyright: ignore[reportReturnType]  # items keep the caller's input union
 
 
+def without_what_bedrock_runtime_rejects(params: Mapping[str, object]) -> dict[str, object]:
+    unsupported: Final = tuple(sorted(BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS & params.keys()))
+    if unsupported:
+        verbose_logger.warning(
+            "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
+            unsupported,
+        )
+    supported: Final[dict[str, object]] = {key: value for key, value in params.items() if key not in unsupported}
+    tools: Final = supported.get("tools")
+    if not isinstance(tools, list):
+        return supported
+    kept, dropped_types = drop_unsupported_tools(tools, BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES)
+    if not dropped_types:
+        return supported
+    verbose_logger.warning(
+        "Bedrock Runtime Responses API: dropping unsupported tool type(s) %s (supported: %s).",
+        list(dropped_types),
+        sorted(BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES),
+    )
+    without_tools: Final = {key: value for key, value in supported.items() if key != "tools"}
+    return {**without_tools, "tools": list(kept)} if kept else without_tools
+
+
 def _without_disabled_reasoning_effort(
     params: Mapping[str, object], model: str, drop_params: bool
 ) -> dict[str, object]:  # mutable-ok: becomes the map_openai_params return value
@@ -292,29 +315,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         mapped: Final = super().map_openai_params(
             response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
         )
-        unsupported: Final = tuple(sorted(BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS & mapped.keys()))
-        if unsupported:
-            verbose_logger.warning(
-                "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
-                unsupported,
-            )
-        supported: Final[dict[str, object]] = {key: value for key, value in mapped.items() if key not in unsupported}
-        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params)
-        tools: Final = params.get("tools")
-        if not isinstance(tools, list):
-            return params
-        kept, dropped_types = drop_unsupported_tools(tools, BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES)
-        if not dropped_types:
-            return params
-        verbose_logger.warning(
-            "Bedrock Runtime Responses API: dropping unsupported tool type(s) %s (supported: %s).",
-            list(dropped_types),
-            sorted(BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES),
-        )
-        without_tools: Final = {key: value for key, value in params.items() if key != "tools"}
-        if not kept:
-            return without_tools
-        return {**without_tools, "tools": list(kept)}
+        return _without_disabled_reasoning_effort(without_what_bedrock_runtime_rejects(mapped), model, drop_params)
 
     def transform_responses_api_request(
         self,

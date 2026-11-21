@@ -34,7 +34,7 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.llms.bedrock.responses.transformation import BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES
+from litellm.llms.bedrock.responses.transformation import without_what_bedrock_runtime_rejects
 from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
@@ -70,19 +70,8 @@ _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
 
 
-def _without_tools_bedrock_runtime_rejects(params: Mapping[str, object]) -> dict[str, object]:
-    tools: Final = params.get("tools")
-    if not isinstance(tools, list):
-        return dict(params)
-    kept, dropped_types = drop_unsupported_tools(tools, BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES)
-    if not dropped_types:
-        return dict(params)
-    verbose_logger.warning(
-        "Bedrock Mantle Responses API on a bedrock-runtime api_base: dropping tool type(s) %s it rejects.",
-        list(dropped_types),
-    )
-    without_tools: Final = {key: value for key, value in params.items() if key != "tools"}
-    return {**without_tools, "tools": list(kept)} if kept else without_tools
+def _configured_api_base(api_base: str | None) -> str | None:
+    return api_base or get_secret_str("BEDROCK_MANTLE_API_BASE")
 
 
 def _prompt_cache_breakpoint_as_sent_or_none(marker: object) -> object:
@@ -122,7 +111,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         litellm_params: dict,
     ) -> str:
         region: Final = self._resolve_region({**litellm_params, "api_base": api_base})
-        base = api_base or get_secret_str("BEDROCK_MANTLE_API_BASE") or f"https://bedrock-mantle.{region}.api.aws"
+        base = _configured_api_base(api_base) or f"https://bedrock-mantle.{region}.api.aws"
         base = base.rstrip("/")
         for suffix in _BASE_SUFFIXES_TO_STRIP:
             if base.endswith(suffix):
@@ -284,8 +273,8 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             model=model,
             input=normalized_input,
             response_api_optional_request_params=(
-                _without_tools_bedrock_runtime_rejects(request_params)
-                if is_bedrock_runtime_host(litellm_params.api_base)
+                without_what_bedrock_runtime_rejects(request_params)
+                if is_bedrock_runtime_host(_configured_api_base(litellm_params.api_base))
                 else request_params
             ),
             litellm_params=litellm_params,
