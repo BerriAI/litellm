@@ -628,6 +628,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model_group/info",
         "/health",
         "/health/services",
+        "/health/license",
         "/key/list",
         "/user/filter/ui",
         *MODEL_LIST_ROUTES,
