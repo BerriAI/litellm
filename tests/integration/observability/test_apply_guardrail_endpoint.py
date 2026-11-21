@@ -1,5 +1,7 @@
 import json
+import os
 import uuid
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Final
@@ -8,7 +10,7 @@ import httpx
 import yaml
 from integration._support.client import Gateway, string_value
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -51,6 +53,10 @@ class _ApplyError(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     error: _ApplyErrorBody
+
+
+class _CreatedPolicy(BaseModel):
+    policy_id: str
 
 
 def _delete_guardrail(gateway: Gateway, guardrail_id: str) -> None:
@@ -311,3 +317,158 @@ async def apply_guardrail(inputs, request_data, input_type):
             },
             {"texts": [_METADATA_TEXT], "metadata": {}, "input_type": "request"},
         )
+
+
+def _delete_policy(gateway: Gateway, policy_id: str) -> None:
+    deleted: Final = gateway.request("DELETE", f"/policies/{policy_id}")
+    assert deleted.status_code == 200, deleted.text
+
+
+def _create_policy(gateway: Gateway, cleanups: ExitStack, body: dict[str, JsonValue]) -> str:
+    response: Final = gateway.request("POST", "/policies", body)
+    assert response.status_code == 200, response.text
+    cleanups.callback(_delete_policy, gateway, _CreatedPolicy.model_validate_json(response.content).policy_id)
+    return string_value(body["policy_name"])
+
+
+def _generic_guardrail(server: Wire) -> dict[str, JsonValue]:
+    return {
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "default_on": False,
+        "api_base": f"{server.url}/beta/litellm_basic_guardrail_api",
+        "api_key": "synthetic-apply-guardrail-key",
+    }
+
+
+def _tagging(tag: str) -> Callable[[Request], Reply]:
+    def reply(request: Request) -> Reply:
+        texts: Final = _JSON_OBJECT.validate_json(request.body)["texts"]
+        assert isinstance(texts, list) and len(texts) == 1, texts
+        tagged: Final = f"{string_value(texts[0])} [{tag}]"
+        return Reply(body=json.dumps({"action": "GUARDRAIL_INTERVENED", "texts": [tagged]}).encode())
+
+    return reply
+
+
+def _sent_texts(server: Wire) -> list[JsonValue]:
+    return [_JSON_OBJECT.validate_json(request.body)["texts"] for request in server.drain()]
+
+
+def _assert_licensed() -> None:
+    assert os.environ.get("LITELLM_LICENSE"), (
+        "LITELLM_LICENSE must be set: guardrail policies are an enterprise feature"
+    )
+
+
+def test_apply_guardrail_runs_an_inherited_policy_and_chains_each_guardrail_output(gateway: Gateway) -> None:
+    _assert_licensed()
+    prefix: Final = f"policy-apply-{uuid.uuid4().hex}"
+    text: Final = "policy apply prompt"
+    with (
+        wire_server(_tagging("first")) as first,
+        wire_server(_tagging("removed")) as removed,
+        wire_server(_tagging("second")) as second,
+        gateway.scenario() as scenario,
+    ):
+        first_name: Final = _create_guardrail(gateway, scenario.cleanups, f"{prefix}-1", _generic_guardrail(first))
+        removed_name: Final = _create_guardrail(gateway, scenario.cleanups, f"{prefix}-2", _generic_guardrail(removed))
+        second_name: Final = _create_guardrail(gateway, scenario.cleanups, f"{prefix}-3", _generic_guardrail(second))
+        parent: Final = _create_policy(
+            gateway,
+            scenario.cleanups,
+            {"policy_name": f"{prefix}-parent", "guardrails_add": [first_name, removed_name]},
+        )
+        child: Final = _create_policy(
+            gateway,
+            scenario.cleanups,
+            {
+                "policy_name": f"{prefix}-child",
+                "inherit": parent,
+                "guardrails_add": [second_name],
+                "guardrails_remove": [removed_name],
+                "condition": {"model": "no-model-is-named-this"},
+            },
+        )
+
+        response: Final = gateway.request(
+            "POST",
+            "/guardrails/apply_guardrail",
+            {"policy_name": child, "text": text},
+            key=scenario.key(allowed_routes=["/guardrails/apply_guardrail"]),
+        )
+
+        assert response.status_code == 200, response.text
+        assert _ApplyResponse.model_validate_json(response.content).model_dump() == {
+            "response_text": f"{text} [first] [second]"
+        }, response.text
+        assert _sent_texts(first) == [[text]]
+        assert _sent_texts(second) == [[f"{text} [first]"]]
+        assert removed.drain() == ()
+
+
+def test_apply_guardrail_policy_blocks_and_rejects_unknown_or_pipeline_policies(gateway: Gateway) -> None:
+    _assert_licensed()
+    prefix: Final = f"policy-block-{uuid.uuid4().hex}"
+    blocker_name: Final = f"{prefix}-2"
+    text: Final = "policy block prompt"
+
+    def block(_request: Request) -> Reply:
+        return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": f"blocked by {blocker_name}"}).encode())
+
+    with wire_server(_tagging("first")) as first, wire_server(block) as blocker, gateway.scenario() as scenario:
+        first_name: Final = _create_guardrail(gateway, scenario.cleanups, f"{prefix}-1", _generic_guardrail(first))
+        _create_guardrail(gateway, scenario.cleanups, blocker_name, _generic_guardrail(blocker))
+        blocking: Final = _create_policy(
+            gateway,
+            scenario.cleanups,
+            {"policy_name": f"{prefix}-blocking", "guardrails_add": [blocker_name, first_name]},
+        )
+        pipeline: Final = _create_policy(
+            gateway,
+            scenario.cleanups,
+            {
+                "policy_name": f"{prefix}-pipeline",
+                "guardrails_add": [first_name],
+                "pipeline": {"mode": "pre_call", "steps": [{"guardrail": first_name}]},
+            },
+        )
+
+        blocked: Final = gateway.request("POST", "/apply_guardrail", {"policy_name": blocking, "text": text})
+        assert blocked.status_code == 400, blocked.text
+        assert _ApplyError.model_validate_json(blocked.content).model_dump() == {
+            "error": {
+                "message": f"blocked by {blocker_name}",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": 400,
+            }
+        }, blocked.text
+        assert _sent_texts(first) == [[text]]
+        assert _sent_texts(blocker) == [[f"{text} [first]"]]
+
+        missing: Final = gateway.request(
+            "POST", "/guardrails/apply_guardrail", {"policy_name": f"{prefix}-missing", "text": text}
+        )
+        assert missing.status_code == 404, missing.text
+        assert _ApplyError.model_validate_json(missing.content).error.message == (
+            f"Policy '{prefix}-missing' not found."
+        ), missing.text
+
+        unsupported: Final = gateway.request(
+            "POST", "/guardrails/apply_guardrail", {"policy_name": pipeline, "text": text}
+        )
+        assert unsupported.status_code == 400, unsupported.text
+        assert _ApplyError.model_validate_json(unsupported.content).error.message == (
+            f"Policy '{pipeline}' defines a pipeline, which apply_guardrail does not support yet."
+        ), unsupported.text
+
+        single: Final = gateway.request(
+            "POST", "/guardrails/apply_guardrail", {"guardrail_name": first_name, "text": text}
+        )
+        assert single.status_code == 200, single.text
+        assert _ApplyResponse.model_validate_json(single.content).model_dump() == {
+            "response_text": f"{text} [first]"
+        }, single.text
+        assert _sent_texts(first) == [[text]]
+        assert blocker.drain() == ()

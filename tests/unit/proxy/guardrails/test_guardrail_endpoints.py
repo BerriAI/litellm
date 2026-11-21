@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -63,6 +63,7 @@ from litellm.proxy.guardrails.guardrail_registry import (
 )
 from litellm.types.guardrails import (
     ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
     BaseLitellmParams,
     Guardrail,
     GuardrailEventHooks,
@@ -4628,3 +4629,119 @@ async def test_apply_guardrail_still_accepts_an_explicitly_empty_text(mocker: Mo
 
     assert call.response.status_code == 200
     assert call.response.json() == {"response_text": ""}
+
+
+class _TaggingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str):
+        super().__init__(guardrail_name=guardrail_name, event_hook=GuardrailEventHooks.pre_call)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {"texts": [f"{inputs.get('texts', [''])[0]} {self.guardrail_name}"]}
+
+
+@pytest.fixture
+def ordering_policy() -> Iterator[str]:
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    name: Final = "ordering-policy"
+    registry: Final = get_policy_registry()
+    registry.add_policy(
+        name, Policy(guardrails=PolicyGuardrails(add=["alpha", "omega-db", "zeta", "beta-db"])), source="config"
+    )
+    yield name
+    registry.remove_policy(name)
+
+
+async def _apply_policy(mocker: MockerFixture, policy_name: str, premium: bool) -> object:
+    guardrails: Final = {name: _TaggingGuardrail(name) for name in ("alpha", "zeta", "beta-db", "omega-db")}
+    _patch_apply_guardrail_env(mocker, {})
+    registry: Final = mocker.Mock()
+
+    def initialized(guardrail_name: str) -> CustomGuardrail | None:
+        return guardrails.get(guardrail_name)
+
+    registry.get_initialized_guardrail_callback.side_effect = initialized
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
+    mocker.patch.object(litellm, "callbacks", [guardrails["zeta"], guardrails["alpha"]])
+    mocker.patch("litellm.proxy.proxy_server.premium_user", premium)
+    return await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=ApplyGuardrailRequest(policy_name=policy_name, text="hi"),
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_policy_runs_registered_guardrails_first_then_the_rest_by_name(
+    mocker: MockerFixture, ordering_policy: str
+) -> None:
+    response: Final = await _apply_policy(mocker, ordering_policy, premium=True)
+
+    assert response == ApplyGuardrailResponse(response_text="hi zeta alpha beta-db omega-db")
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_policy_requires_an_enterprise_license(
+    mocker: MockerFixture, ordering_policy: str
+) -> None:
+    with pytest.raises(ProxyException) as raised:
+        await _apply_policy(mocker, ordering_policy, premium=False)
+
+    assert str(raised.value.code) == "403"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        ({"text": "hi"}, "exactly one of 'guardrail_name' or 'policy_name'"),
+        ({"guardrail_name": "grounding", "policy_name": "p", "text": "hi"}, "exactly one of"),
+        ({"policy_name": "p", "text": "hi", "response_format": "native"}, "not supported with 'policy_name'"),
+    ],
+)
+async def test_apply_guardrail_rejects_requests_without_exactly_one_supported_target(
+    mocker: MockerFixture, body: dict[str, object], reason: str
+) -> None:
+    response: Final = await _apply_finding_guardrail_over_http(mocker, (), body)
+
+    assert response.status_code == 422
+    assert reason in response.text
+
+
+@pytest.fixture
+def bedrock_policy() -> Iterator[str]:
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    name: Final = "bedrock-policy"
+    registry: Final = get_policy_registry()
+    registry.add_policy(name, Policy(guardrails=PolicyGuardrails(add=["bedrock-guard"])), source="config")
+    yield name
+    registry.remove_policy(name)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_policy_names_the_guardrail_that_refuses_message_text(
+    mocker: MockerFixture, bedrock_policy: str
+) -> None:
+    mocker.patch("litellm.proxy.proxy_server.premium_user", True)
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker,
+        (),
+        {
+            "guardrail_name": None,
+            "policy_name": bedrock_policy,
+            "images": [_PNG],
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert call.response.status_code == 422
+    assert "Guardrail 'bedrock-guard' scans 'text' and ignores 'messages'" in call.response.text
