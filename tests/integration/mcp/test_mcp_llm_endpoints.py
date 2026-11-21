@@ -24,6 +24,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.mcp import (
+    JsonRpcFailure,
     McpPeer,
     ScriptedTool,
     mcp_peer,
@@ -648,6 +649,95 @@ def test_auto_approved_gateway_tool_is_listed_executed_once_and_fed_back(gateway
         assert len(requests) == 2, requests
         assert all(rig.tool in names for names in requests), requests
         assert rig.final_text(response.json()) == ANSWER, response.text
+
+
+URL_ELICITATION: Final = {
+    "code": -32042,
+    "message": "This request requires more information.",
+    "data": {"elicitations": [{"mode": "url", "elicitationId": "el-1", "url": "https://consent.example.invalid/a"}]},
+}
+
+
+@contextmanager
+def _elicitation_rig(gateway: Gateway, surface: Surface, error: Mapping[str, JsonValue]) -> Iterator[Rig]:
+    alias: Final = "llm" + uuid.uuid4().hex[:8]
+
+    def plan(body: Mapping[str, JsonValue]) -> Turn:
+        return Turn(f"{alias}-add", json.dumps(ADD), _tool_result_text(body) or "")
+
+    with (
+        scripted_peer(ScriptedTool("add", lambda _: JsonRpcFailure(error))) as peer,
+        wire_server(_model_double(plan)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        server_id: Final = register_mcp(scenario, peer, alias)
+        model: Final = scenario.model(model=_upstream_model(surface), api_base=wire.url + "/v1")
+        peer.drain()
+        yield Rig(gateway, scenario, peer, wire, alias, server_id, model, surface)
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_auto_executed_tool_asking_for_url_elicitation_still_hands_the_model_the_flattened_text_and_logs_a_success(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _elicitation_rig(gateway, surface, URL_ELICITATION) as rig:
+        key: Final = _granted_key(rig)
+        response: Final = rig.send(key, [AUTO])
+        assert response.status_code == 200, response.text
+        tool_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT status FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=%s',
+                (sha256(key.encode()).hexdigest(), "call_mcp_tool"),
+            ),
+            lambda found: len(found) >= 1,
+            seconds=70,
+            return_last_on_timeout=True,
+        )
+        assert (rig.final_text(response.json()), [row["status"] for row in tool_rows]) == (
+            "MCPError: This request requires more information.",
+            ["success"],
+        ), response.text
+        assert len(_peer_add_calls(rig.peer)) == 1
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_auto_executed_tool_asking_for_url_elicitation_hands_the_model_text_masked_by_the_output_guardrail(
+    gateway: Gateway, surface: Surface
+) -> None:
+    email: Final = f"john.doe.{uuid.uuid4().hex[:8]}@example.com"
+    created: Final = gateway.client.post(
+        "/guardrails",
+        headers={"x-litellm-api-key": gateway.key},
+        json={
+            "guardrail": {
+                "guardrail_name": "llmelicit" + uuid.uuid4().hex[:8],
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "post_mcp_call",
+                    "default_on": True,
+                    "blocked_words": [{"keyword": email, "action": "MASK"}],
+                },
+            }
+        },
+    )
+    assert created.status_code == 200, created.text
+    try:
+        with _elicitation_rig(
+            gateway, surface, {**URL_ELICITATION, "message": f"Authorize to continue for {email}."}
+        ) as rig:
+            key: Final = _granted_key(rig)
+            handed: Final = eventually(
+                lambda: rig.final_text(rig.send(key, [AUTO]).json()),
+                lambda text: email not in text,
+                seconds=40,
+                return_last_on_timeout=True,
+            )
+            assert handed == "MCPError: Authorize to continue for [KEYWORD_REDACTED].", handed
+    finally:
+        deleted: Final = gateway.client.delete(
+            f"/guardrails/{created.json()['guardrail_id']}", headers={"x-litellm-api-key": gateway.key}
+        )
+        assert deleted.status_code == 200, deleted.text
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))

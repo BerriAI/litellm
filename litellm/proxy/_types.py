@@ -43,7 +43,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.models.budget import BudgetLimits
+from litellm.models.budget import BudgetLimitList, BudgetLimits
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -105,6 +105,7 @@ from litellm.types.utils import (
     OTEL_DESTINATION_VARS,
     AzureSpillover,
     CallTypes,
+    ClaudeSubscriptionUsage,
     CostBreakdown,
     EmbeddingResponse,
     GenericBudgetConfigType,
@@ -133,10 +134,10 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.lens import TraceReceiver
     from litellm.repositories.database import Database
-    from litellm.tracing import TraceReceiver
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -736,6 +737,10 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
             "/management/v1/customer_organizations",
+            "/management/v1/apps",
+            "/management/v1/apps/{app_id}",
+            "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
+            "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
             "/management/v1/customer_organizations/daily/activity/aggregated",
             "/management/v1/customer_organizations/{customer_org_id}",
             "/management/v1/customer_organizations/daily/activity",
@@ -901,8 +906,20 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    own_spend_log_routes = ("/spend/logs", "/spend/logs/v2")
+
     self_managed_routes = [
         "/management/v1/customer_budget_increase_requests",
+        "/management/v1/apps",
+        "/management/v1/apps/definition",
+        "/management/v1/apps/{app_id}",
+        "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
+        "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
+        "/management/v1/customer_organizations/daily/activity/aggregated",
+        "/management/v1/customer_organizations/daily/activity",
+        "/management/v1/customer_teams/daily/activity",
+        "/management/v1/customer_members/daily/activity",
+        *own_spend_log_routes,
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",
@@ -1996,6 +2013,7 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    budget_limits: BudgetLimitList | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
@@ -2112,7 +2130,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     enforced_file_expires_after: dict | None = None
     router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
-    budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
+    budget_limits: BudgetLimitList | None = None
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
     model_max_budget: GenericBudgetConfigType | None = Field(
         default=None,
@@ -2593,6 +2611,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_spend_logs_ledger: bool = Field(
         True,
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
+    )
+
+    reject_unregistered_guardrails: bool = Field(
+        False,
+        description="Return 400 for a request whose merged guardrails (request, key, team, project, policy and model level) name a guardrail that is not registered on the proxy, instead of serving it without that guardrail.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
@@ -3403,6 +3426,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     model_max_budget: Mapping[str, object] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3631,6 +3655,20 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
 
 
+def masked_audit_log_value(value: object) -> object:
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
+
+    def decoded() -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+
+    return mask_credentials_in_payload(decoded(), SensitiveDataMasker(sensitive_patterns={"key"}))
+
+
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
@@ -3651,14 +3689,10 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
-
-        masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
-
         if self.before_value is not None:
-            self.before_value = json.dumps(mask_credentials_in_payload(self.before_value, masker), default=str)
+            self.before_value = json.dumps(masked_audit_log_value(self.before_value), default=str)
         if self.updated_values is not None:
-            self.updated_values = json.dumps(mask_credentials_in_payload(self.updated_values, masker), default=str)
+            self.updated_values = json.dumps(masked_audit_log_value(self.updated_values), default=str)
 
         return self
 
@@ -3745,7 +3779,7 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
-    field_value: Any
+    field_value: object
     source: Literal["config", "db", "env", "default", "unset"] = "unset"
     editable: bool = True
 
@@ -3936,6 +3970,8 @@ class SpendLogsRouterMetadata(TypedDict):
 
 class SpendLogsMetadata(TypedDict):
     user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
@@ -3973,6 +4009,7 @@ class SpendLogsMetadata(TypedDict):
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    route_call_type: ReadOnly[NotRequired[str | None]]
     upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool | None]]
@@ -4000,6 +4037,7 @@ class SpendLogsMetadata(TypedDict):
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
     used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
+    claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
 
 
 class SpendLogsPayload(TypedDict):
@@ -4631,6 +4669,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
     caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
@@ -4731,7 +4770,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # `x-litellm-timeout`/`x-litellm-stream-timeout` headers, or a `timeout`/`request_timeout`/
     # `stream_timeout` field in the request body) rather than deployment config, so a
     # deliberately tiny value isn't treated as a deployment health signal (see
-    # cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    # router_rust.surface.health.RustHealthCallbacks.blocked_failure_exempt).
     client_side_timeout: bool
     keepalive_seconds: float | None
 
@@ -5459,6 +5498,8 @@ class BaseDailySpendTransaction(TypedDict):
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
     customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    cache_cost: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    priced_cache_tokens: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float
@@ -5495,6 +5536,7 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
+    app_id: ReadOnly[NotRequired[str]]
     customer_member_id: ReadOnly[str]
     customer_team_id: ReadOnly[str]
     customer_org_id: ReadOnly[str]
@@ -5519,6 +5561,9 @@ class DBSpendUpdateTransactions(TypedDict):
     customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    app_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_customer_org_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_customer_member_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

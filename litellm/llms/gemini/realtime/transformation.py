@@ -5,7 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -70,9 +70,9 @@ from ..common_utils import encode_unserializable_types, get_api_key_from_env
 
 MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents]] = {
     "setupComplete": OpenAIRealtimeEventTypes.SESSION_CREATED,
-    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "serverContent.turnComplete": OpenAIRealtimeEventTypes.RESPONSE_DONE,
     "serverContent.interrupted": OpenAIRealtimeEventTypes.RESPONSE_DONE,
+    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "toolCall": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
 }
 
@@ -200,6 +200,7 @@ def _base64_decoded_byte_count(data: str) -> int:
 
 
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _chat_completion_tool(tool: object) -> dict[str, object]:
@@ -224,7 +225,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
-        self._pending_usage_metadata: dict | None = None
+        self._pending_usage_metadata: dict[str, object] | None = None
+        self._cancelled_response_id: str | None = None
+        self._closed_output_item_id: str | None = None
         self._unbilled_input_audio_bytes: int = 0
         self._manual_activity_open: bool = False
 
@@ -1072,6 +1075,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_response_id: str | None,
         delta_done_event: OpenAIRealtimeResponseTextDone | OpenAIRealtimeResponseAudioDone,
         delta_type: ALL_DELTA_TYPES,
+        item_status: Literal["completed", "incomplete"] = "completed",
     ) -> list[OpenAIRealtimeEvents]:
         """
         - return response.content_part.done
@@ -1112,7 +1116,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "id": current_output_item_id,
                 "object": "realtime.item",
                 "type": "message",
-                "status": "completed",
+                "status": item_status,
                 "role": "assistant",
                 "content": [
                     (
@@ -1255,6 +1259,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_conversation_id: str | None,
         output_items: list[OpenAIRealtimeOutputItemDone] | None,
         session_configuration_request: str | None = None,
+        cancelled: bool = False,
     ) -> OpenAIRealtimeDoneEvent:
         if current_conversation_id is None:
             current_conversation_id = f"conv_{uuid.uuid4()}"
@@ -1298,8 +1303,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             response=OpenAIRealtimeResponseDoneObject(
                 object="realtime.response",
                 id=current_response_id,
-                status="completed",
-                status_details=None,
+                status="cancelled" if cancelled else "completed",
+                status_details={"type": "cancelled", "reason": "turn_detected"} if cancelled else None,
                 output=([output_item["item"] for output_item in output_items] if output_items else []),
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
@@ -1376,6 +1381,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 delta_type=delta_type,
             )
             returned_message.extend(additional_items)
+            self._closed_output_item_id = resolved_item_id
 
         return {
             "returned_message": returned_message,
@@ -1394,7 +1400,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     ) -> OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents:
         if isinstance(value, dict):
             model_turn_event = value.get("modelTurn")
-            generation_complete_event = value.get("generationComplete")
+            generation_complete_event = value.get("generationComplete") if "turnComplete" not in value else None
         else:
             model_turn_event = None
             generation_complete_event = None
@@ -1448,6 +1454,19 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return self._consume_input_transcription_usage_estimate(model)
 
+    def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
+        cancelled_response_id: Final = self._cancelled_response_id
+        if self._pending_usage_metadata is None or cancelled_response_id is None:
+            return None
+        self._cancelled_response_id = None
+        return self.transform_response_done_event(
+            message=BidiGenerateContentServerMessage(),
+            current_response_id=cancelled_response_id,
+            current_conversation_id=None,
+            output_items=None,
+            cancelled=True,
+        )
+
     def transform_realtime_response(
         self,
         message: str | bytes,
@@ -1469,7 +1488,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         verbose_logger.debug(
             "Realtime Response Transform: Gemini frame keys=%s",
-            (sorted(json_message.keys()) if isinstance(json_message, dict) else type(json_message).__name__),
+            (
+                sorted(json_message.keys())
+                if isinstance(json_message, dict)
+                else type(_DECODED_JSON.validate_python(json_message)).__name__
+            ),
         )
 
         logging_session_id: Final = logging_obj.litellm_trace_id
@@ -1509,6 +1532,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if current_output_item_id is None:
                     current_output_item_id = f"item_{uuid.uuid4()}"
                     current_conversation_id = current_conversation_id or f"conv_{uuid.uuid4()}"
+                    current_delta_type = "audio"  # rebind-ok: a transcript-first response opens the audio item
                     returned_message.extend(
                         self.return_new_content_delta_events(
                             session_configuration_request=session_configuration_request,
@@ -1754,6 +1778,40 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 current_output_item_id = None
                 current_response_id = None
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
+                if "interrupted" in json_message["serverContent"]:
+                    self._cancelled_response_id = current_response_id
+                if (
+                    current_output_item_id not in (None, self._closed_output_item_id)
+                    and current_delta_type is not None
+                    and any(flag in json_message["serverContent"] for flag in ("interrupted", "generationComplete"))
+                ):
+                    closing_content_done_event = self.transform_content_done_event(
+                        delta_chunks=current_delta_chunks,
+                        current_output_item_id=current_output_item_id,
+                        current_response_id=current_response_id,
+                        delta_type=current_delta_type,
+                    )
+                    returned_message.append(closing_content_done_event)
+                    returned_message.extend(
+                        self.return_additional_content_done_events(
+                            current_output_item_id=current_output_item_id,
+                            current_response_id=current_response_id,
+                            delta_done_event=closing_content_done_event,
+                            delta_type=current_delta_type,
+                            item_status=(
+                                "incomplete" if "interrupted" in json_message["serverContent"] else "completed"
+                            ),
+                        )
+                    )
+                    self._closed_output_item_id = current_output_item_id
+                if (
+                    "interrupted" in json_message["serverContent"]
+                    and "turnComplete" not in json_message["serverContent"]
+                ):
+                    if "usageMetadata" in json_message:
+                        self._pending_usage_metadata = json_message["usageMetadata"]
+                    server_content_handled = True
+                    continue
                 _has_pending_function_call = current_item_chunks and any(
                     chunk.get("item", {}).get("type") == "function_call" for chunk in current_item_chunks
                 )
@@ -1773,7 +1831,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     current_conversation_id=current_conversation_id,
                     session_configuration_request=session_configuration_request,
                     output_items=None,
+                    cancelled=current_response_id is not None and current_response_id == self._cancelled_response_id,
                 )
+                self._cancelled_response_id = None
                 returned_message.append(transformed_response_done_event)
                 current_output_item_id = None
                 current_response_id = None

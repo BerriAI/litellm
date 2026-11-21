@@ -452,7 +452,7 @@ describe("CommandPalette integration", () => {
     const input = await screen.findByRole("combobox", { name: "Search" });
     await user.type(input, "keys");
 
-    expect(await screen.findByRole("option", { name: /Search virtual keys/ })).toBeVisible();
+    expect(await screen.findByRole("option", { name: /Search Virtual Keys/ })).toBeVisible();
     fireEvent.keyDown(input, { key: "Enter" });
 
     const keysInput = await screen.findByRole("combobox", { name: "Search" });
@@ -466,7 +466,7 @@ describe("CommandPalette integration", () => {
     renderPalette();
 
     await user.keyboard("{Control>}k{/Control}");
-    await user.click(await screen.findByRole("option", { name: /Search virtual keys/ }));
+    await user.click(await screen.findByRole("option", { name: /Search Virtual Keys/ }));
     await user.keyboard("staging");
 
     const input = screen.getByRole("combobox", { name: "Search" });

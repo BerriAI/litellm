@@ -1,4 +1,6 @@
+pub mod active_teams;
 pub mod auth_cache;
+pub mod cache_invalidation;
 mod codec;
 pub mod deployment_health;
 mod dual_cache;
@@ -24,5 +26,5 @@ pub use error::{Error, ErrorKind};
 pub use memory::{Clock, UpdateGuard, UpdateLock, system_clock};
 pub use number::Number;
 pub use remote::Remote;
-pub use request::{DeadlineTag, Pending, RequestRedis, Send};
+pub use request::{DeadlineTag, Pending, PostCallDrain, RequestRedis, Send};
 pub use value::{FromValue, IntoValue};

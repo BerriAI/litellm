@@ -22,6 +22,7 @@ import dataclasses
 import inspect
 import itertools
 import json
+import os
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import date, datetime, time
@@ -58,6 +59,7 @@ from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
+    lax_bool,
     without,
 )
 from litellm.litellm_core_utils.routing_common_utils import (
@@ -85,7 +87,6 @@ from litellm.router_api import (
     SETTING_FIELDS,
     ApplyResult,
     ChangeSet,
-    RouterHealth,
     RouterRegistry,
     RouterSettings,
     RoutingContext,
@@ -151,6 +152,7 @@ from litellm.router_rust.steps.precall import (
     declares_no_vision,
     refuses_decisions_media,
     request_carries_image,
+    request_carries_json_input,
     serves_route_capability,
 )
 from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies, picks_async
@@ -395,6 +397,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "enable_weighted_failover",
         "fallback_on_unsupported_params",
         "dynamic_queue",
+        "enable_cross_model_group_collision_check",
         # Built host-side as CustomLogger checks (litellm/router_rust/steps/callbacks.py); router-core runs
         # their deployment filters through its callback_filters stage.
         "optional_pre_call_checks",
@@ -710,6 +713,7 @@ class Resolved:
     retry_policy: object = None
     model_group_retry_policy: object = None
     health_routing: HealthRouting = dataclasses.field(default_factory=HealthRouting)
+    enable_cross_model_group_collision_check: bool = False
     dynamic_queue: "DynamicQueueSettings | None" = None
     # `_core_default_deployment`, as assigned (detached).
     default_deployment: object = None
@@ -836,6 +840,9 @@ class Resolved:
             retry_policy=resolved_retry_policy(get("retry_policy")),
             model_group_retry_policy=get("model_group_retry_policy"),
             health_routing=HealthRouting.of(config),
+            enable_cross_model_group_collision_check=_cross_model_group_collision_check(
+                get("enable_cross_model_group_collision_check")
+            ),
             dynamic_queue=_dynamic_queue(get("dynamic_queue"), get("default_priority")),
         )
 
@@ -935,6 +942,7 @@ class Resolved:
             if self.routing_group_members is not None
             else None,
             **self.health_routing.static_document(),
+            "enable_cross_model_group_collision_check": True if self.enable_cross_model_group_collision_check else None,
         }
         kept: Final = {name: value for name, value in values.items() if value is not None}
         # An explicit `routing_strategy=None` reaches the Rust core as "None": no strategy picks.
@@ -1023,6 +1031,16 @@ def _optional_bool(value: object) -> bool | None:
     return None if value is None else bool(value)
 
 
+CROSS_MODEL_GROUP_COLLISION_CHECK_ENV: Final = "LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK"
+
+
+def _cross_model_group_collision_check(given: object) -> bool:
+    explicit: Final = lax_bool(given)
+    if explicit is not None:
+        return explicit
+    return lax_bool(os.environ.get(CROSS_MODEL_GROUP_COLLISION_CHECK_ENV)) is True
+
+
 def unsupported_arguments(config: RouterConfig) -> frozenset[str]:
     """Arguments the Rust core does not serve."""
     unserved: Final = frozenset(
@@ -1033,12 +1051,14 @@ def unsupported_arguments(config: RouterConfig) -> frozenset[str]:
     return unserved
 
 
-def _listing_team_id(request: Mapping[str, object]) -> str | None:
-    """``(kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")``: the team
-    ``async_function_with_fallbacks_common_utils`` lists a group for reads this bucket alone."""
+def _listing_team_id(request: Mapping[str, object], team_id: str | None) -> str | None:
+    """The resolved team, else the ``metadata`` bucket's own string team id: an empty one keeps listing only
+    deployments no team owns."""
+    if team_id is not None:
+        return team_id
     metadata: Final = as_str_mapping(request.get("metadata"))
-    team_id: Final = metadata.get("user_api_key_team_id") if metadata is not None else None
-    return team_id if isinstance(team_id, str) else None
+    written: Final = metadata.get("user_api_key_team_id") if metadata is not None else None
+    return written if isinstance(written, str) else None
 
 
 def _strings(value: object) -> "tuple[str, ...]":
@@ -1097,10 +1117,11 @@ class RequestStartFields(BaseModel):
 def _request_start_fields(request: Mapping[str, object]) -> RequestStartFields:
     strategy: Final = request.get("routing_strategy")
     override: Final = normalize_strategy(strategy) if isinstance(strategy, str | RoutingStrategy) else None
+    team_id: Final = get_request_team_id(request)
     fields: Final = {
         **request,
-        "team_id": get_request_team_id(request),
-        "listing_team_id": _listing_team_id(request),
+        "team_id": team_id,
+        "listing_team_id": _listing_team_id(request, team_id),
         "routing_strategy": override,
     }
     try:
@@ -1167,13 +1188,13 @@ class _SettingsSource:
         raise NotImplementedError
 
 
-class RustHealth(RouterHealth):
+class RustHealth:
     """``health()``: cooldowns, fail counts and usage, read through the host's routing cache and
     written through the Rust core."""
 
     __slots__ = ("_core",)
 
-    def __init__(self, core: "RustCore") -> None:  # pyright: ignore[reportMissingSuperCall]  # reads the Rust core, not a Router
+    def __init__(self, core: "RustCore") -> None:
         self._core = core
 
     def __getattribute__(self, name: str) -> object:
@@ -1256,9 +1277,11 @@ class RustHealth(RouterHealth):
     ) -> tuple[int | None, int | None]: ...
 
     @overload
-    async def usage(self, model_group: str, *, kind: Literal["remaining"]) -> Mapping[str, int]: ...
+    async def usage(
+        self, model_group: str, *, kind: Literal["remaining"]
+    ) -> dict[str, int]: ...  # mutable-ok: the host's fresh usage dict
 
-    async def usage(  # pyright: ignore[reportIncompatibleMethodOverride]  # the same two kinds
+    async def usage(
         self, model_group: str, *, kind: Literal["current", "remaining"] = "current"
     ) -> tuple[int | None, int | None] | Mapping[str, int]:
         """The group's usage this minute, read from the routing cache over the host registry's
@@ -1495,6 +1518,9 @@ class RustCore(
     RustOptionalChecks,
 ):
     """A ``RouterCore`` served by the Rust router core over a ``PythonHost``. It holds no Python core."""
+
+    if TYPE_CHECKING:
+        explicit_allowed_fails: object
 
     def __init__(self, config: RouterConfig, host: PythonHost, resolved: Resolved) -> None:
         from litellm._service_logger import ServiceLogging
@@ -1764,7 +1790,10 @@ class RustCore(
             usage_selector: Final = self._prefetch_usage_selector(model, request_kwargs)
             deployments: Final = self._hosted._core_get_model_list(model_name=model)  # pyright: ignore[reportPrivateUsage]  # see __init__
             if deployments:
-                RoutingPrefetch.arm(RoutingContext(self), usage_selector, deployments)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the prefetch reads registry() and health(); its deployments list is untyped
+                candidates: Final = self.registry().names(
+                    model, kind="route_candidates", team_id=get_request_team_id(request_kwargs)
+                )
+                RoutingPrefetch.arm(RoutingContext(self), usage_selector, deployments, candidates)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the prefetch reads registry() and health(); its deployments list is untyped
         except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request
             from litellm._logging import verbose_router_logger
 
@@ -2867,7 +2896,7 @@ class RustCore(
         # drops the others, and a Decisions call carrying media skips the deployments refusing it.
         handler: Final = plan.handler
         decisions_media: Final = handler in DECISIONS_MEDIA_CALL_TYPES and bool(
-            request.get("audio") or request.get("videos")
+            request.get("audio") or request.get("videos") or request_carries_json_input(request.get("input"))
         )
         return {
             **_request_narrowing(request),
@@ -3481,17 +3510,25 @@ class RustCore(
     def _media_refusing(
         self, step: Mapping[str, object], request: Mapping[str, object]
     ) -> list[str]:  # mutable-ok: the step's answer
-        """The candidates that refuse the audio or videos a Decisions call carries."""
+        """The candidates that refuse the audio, videos or JSON input a Decisions call carries."""
+        from litellm.decisions.call import routed_decision_input
+
         group: Final = str(step.get("model_group"))
         defaults: Final = {k: v for k, v in self._resolved.default_litellm_params.items() if v is not None}
         sent: Final = {**defaults, **request}
         audio: Final = bool(request.get("audio"))
         videos: Final = bool(request.get("videos"))
+        decision_input: Final = routed_decision_input(request.get("input"))
         return [
             str(id)
             for id in _as_list(step.get("candidates"))
             if refuses_decisions_media(
-                as_str_mapping(self._handle.deployment(str(id))) or {}, group, sent, audio=audio, videos=videos
+                as_str_mapping(self._handle.deployment(str(id))) or {},
+                group,
+                sent,
+                audio=audio,
+                videos=videos,
+                decision_input=decision_input,
             )
         ]
 
@@ -4365,6 +4402,20 @@ def _with_live_params(core: "RustCore", deployment: Mapping[str, object]) -> Map
         **({"litellm_params": {**(as_str_mapping(deployment.get("litellm_params")) or {}), **live}} if live else {}),
         **({"model_info": {**(info or {}), **live_info}} if live_info else {}),
     }
+
+
+def _validate_deployment_guardrails(deployment: Mapping[str, object]) -> None:
+    params: Final = as_str_mapping(deployment.get("litellm_params"))
+    guardrails: Final = params.get("guardrails") if params is not None else None
+    if not guardrails:
+        return
+
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    if REQUEST_AUTH.get() is not None:
+        from litellm.proxy.guardrails.guardrail_helpers import reject_unregistered_deployment_guardrails
+
+        reject_unregistered_deployment_guardrails(guardrails)
 
 
 def _custom_pick(picked: object) -> Mapping[str, object]:
@@ -5428,6 +5479,8 @@ class _Driver:
     async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:
         step = await self._resolve_pods(step)  # rebind-ok: the picked deployment, resolved to a pod
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: the picked one
+        # A guardrail configuration error is terminal and never a provider attempt failure.
+        _validate_deployment_guardrails(deployment)
         call: AttemptCall | None = None  # rebind-ok: built inside the try
         # Whether a failure raised now runs the failure callbacks: none raised before the litellm
         # call or after it answered does, nor any but the first on a shared logging object.
@@ -5530,6 +5583,8 @@ class _Driver:
     def attempt_sync(self, step: Mapping[str, object]) -> Mapping[str, object]:
         step = self._resolve_pods_sync(step)  # rebind-ok: see attempt
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: see attempt
+        # A guardrail configuration error is terminal and never a provider attempt failure.
+        _validate_deployment_guardrails(deployment)
         call: AttemptCall | None = None  # rebind-ok: see attempt
         logs_failure: bool = False  # rebind-ok: see attempt
         in_call: bool = False  # rebind-ok: see attempt

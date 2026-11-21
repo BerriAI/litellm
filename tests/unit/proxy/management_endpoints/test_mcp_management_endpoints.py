@@ -39,13 +39,16 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.repositories import rust_database
 from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServerManager
 from litellm.proxy.utils import ProxyLogging
+from litellm.rust_bridge._native import RustOrganizationRepository, RustTeamRepository, RustUserRepository
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
 
 
 def generate_mock_mcp_server_db_record(
@@ -9009,7 +9012,10 @@ class TestPinMCPServerTools:
                 sys.modules,
                 {
                     "litellm.proxy.proxy_server": types.SimpleNamespace(
-                        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()), general_settings={}, llm_router=None
+                        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+                        general_settings={},
+                        current_general_settings=dict,
+                        llm_router=None,
                     )
                 },
             ),
@@ -9230,6 +9236,21 @@ class _ResolutionEffects:
         self.env_invalidate.assert_not_called()
 
 
+_RESOLUTION_STORES: Final[list[RustAuthStores]] = []
+
+
+@pytest.fixture
+def mcp_resolution_auth_stores(monkeypatch: pytest.MonkeyPatch) -> Iterator[RustAuthStores]:
+    """Team and organization rows for the resolution fixtures, which _mock_mcp_resolution_prisma_client fills."""
+    stores: Final = RustAuthStores()
+    fakes: Final = {RustTeamRepository: stores.team, RustOrganizationRepository: stores.organization}
+    other_stores: Final = rust_database.repository
+    monkeypatch.setattr(rust_database, "repository", lambda kind: fakes.get(kind) or other_stores(kind))
+    _RESOLUTION_STORES.append(stores)
+    yield stores
+    _RESOLUTION_STORES.remove(stores)
+
+
 def _mock_mcp_resolution_prisma_client(
     server: LiteLLM_MCPServerTable,
     key_permission: LiteLLM_ObjectPermissionTable,
@@ -9273,9 +9294,15 @@ def _mock_mcp_resolution_prisma_client(
 
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=find_many_side_effect)
     prisma.db.litellm_mcpservertable.find_unique = unique_lookup(server, "server_id")
-    prisma.db.litellm_teamtable.find_unique = unique_lookup(team, "team_id")
-    prisma.db.litellm_usertable.find_unique = unique_lookup(user, "user_id")
-    prisma.db.litellm_organizationtable.find_unique = unique_lookup(organization, "organization_id")
+    [stores] = _RESOLUTION_STORES
+    stores.team.rows.clear()
+    stores.team.rows[team.team_id] = team
+    stores.organization.rows.clear()
+    if organization is not None:
+        stores.organization.rows[organization.organization_id] = organization
+    users: Final = rust_database.repository(RustUserRepository)
+    if isinstance(users, FakeUserStore) and user is not None:
+        users.rows[user.user_id] = user.model_dump(mode="json")
     prisma.db.litellm_accessgrouptable.find_unique = unique_lookup(access_group, "access_group_id")
     prisma.db.litellm_objectpermissiontable.find_unique = unique_lookup(object_permission, "object_permission_id")
     return prisma
@@ -9288,6 +9315,7 @@ def _mock_mcp_resolution_cache() -> MagicMock:
     return cache
 
 
+@pytest.mark.usefixtures("rust_auth_stores", "mcp_resolution_auth_stores")
 class TestMCPServerResolutionRegressions:
     @pytest.mark.asyncio
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
@@ -9790,6 +9818,7 @@ class TestMCPServerResolutionRegressions:
         health_check.assert_awaited_once()
 
 
+@pytest.mark.usefixtures("rust_auth_stores", "mcp_resolution_auth_stores")
 class TestMCPServerResolutionCharacterization:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("caller", ["denied", "admin"])
@@ -10110,6 +10139,7 @@ class TestMCPServerResolutionCharacterization:
 
     async def _detail_grant_case(
         self,
+        stores: RustAuthStores,
         source: str,
         grant_route: str,
         server_id: str,
@@ -10177,6 +10207,10 @@ class TestMCPServerResolutionCharacterization:
             access_group=access_group,
             object_permission=route_permission if user is not None or organization is not None else None,
         )
+        if access_group is not None:
+            stores.access_group.seed(access_group.access_group_id, access_group)
+        if user is not None or organization is not None:
+            stores.object_permission.seed(route_permission.object_permission_id, route_permission)
         if source != "db_runtime":
             prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
             prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
@@ -10215,10 +10249,14 @@ class TestMCPServerResolutionCharacterization:
         ],
     )
     async def test_grants_do_not_cross_caller_identities(
-        self, grant_route: str, identity_field: str, foreign_identity: str | list[str]
+        self,
+        rust_auth_stores: RustAuthStores,
+        grant_route: str,
+        identity_field: str,
+        foreign_identity: str | list[str],
     ) -> None:
         server_id: Final = "lit3974_identity_isolation"
-        prisma, manager, auth = await self._detail_grant_case("config", grant_route, server_id)
+        prisma, manager, auth = await self._detail_grant_case(rust_auth_stores, "config", grant_route, server_id)
         foreign_auth: Final = auth.model_copy(update={identity_field: foreign_identity})
         with (
             patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
@@ -11295,10 +11333,12 @@ class TestMCPServerResolutionCharacterization:
             pytest.param("config", "access-group", id="config-access-group"),
         ],
     )
-    async def test_fetch_mcp_server_widening_grant_routes(self, source: str, grant_route: str) -> None:
+    async def test_fetch_mcp_server_widening_grant_routes(
+        self, rust_auth_stores: RustAuthStores, source: str, grant_route: str
+    ) -> None:
         effects: Final = _ResolutionEffects()
         server_id: Final = f"lit3974_{source}_{grant_route.replace(' ', '_')}"
-        prisma, manager, auth = await self._detail_grant_case(source, grant_route, server_id)
+        prisma, manager, auth = await self._detail_grant_case(rust_auth_stores, source, grant_route, server_id)
         add_server: Final = AsyncMock()
         health_check: Final = AsyncMock(
             return_value=generate_mock_mcp_server_db_record(server_id=server_id, alias="lit3974_grant")
