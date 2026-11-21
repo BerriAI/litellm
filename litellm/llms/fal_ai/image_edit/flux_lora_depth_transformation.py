@@ -4,6 +4,7 @@ from typing import Final
 
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.images.utils import image_to_data_url
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
@@ -61,7 +62,11 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
     ) -> tuple[dict, RequestFiles]:  # mutable-ok: base class contract returns a dict
         images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
         if not images:
-            raise ValueError("Fal AI image edit requires at least one input image")
+            raise litellm.BadRequestError(
+                message="Fal AI image edit requires at least one input image.",
+                model=model,
+                llm_provider="fal_ai",
+            )
         if len(images) > 1:
             raise ValueError(f"{FLUX_LORA_DEPTH_ENDPOINT} accepts exactly one control image")
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
