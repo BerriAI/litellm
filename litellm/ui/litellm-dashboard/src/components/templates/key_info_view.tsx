@@ -833,7 +833,7 @@ export default function KeyInfoView({
                 </div>
               </Card>
 
-              <AppliedBudgetsCard budgets={budgetsThatApply} className="sm:col-span-1 lg:col-span-2" />
+              <AppliedBudgetsCard budgets={budgetsThatApply} className="sm:col-span-2" />
 
               <Card className="block p-6">
                 <p className="text-sm">{t("keyDetail.keyInfoView.overview.rateLimits")}</p>

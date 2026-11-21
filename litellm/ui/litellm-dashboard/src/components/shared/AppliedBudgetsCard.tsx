@@ -28,7 +28,7 @@ export function AppliedBudgetsCard({ budgets, className }: { budgets: readonly A
             const limit = formatNumberWithCommas(budget.maxBudget, 2);
             return (
               <li key={budget.scope} className="py-3 first:pt-0 last:pb-0">
-                <div className="flex items-center justify-between gap-4 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="shrink-0 text-muted-foreground">{t(SCOPE_LABELS[budget.scope])}</span>
                     <span className="truncate font-medium">{budget.name}</span>
