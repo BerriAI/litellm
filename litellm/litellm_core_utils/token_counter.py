@@ -1914,20 +1914,25 @@ def _count_anthropic_content(
                     use_default_image_token_count,
                     default_token_count,
                     pdf_pricing,
+                    _content_depth=_content_depth + 1,
                 )
             elif isinstance(field_value, dict):
                 if (
-                    server_fields is not None
-                    and field_name == "content"
-                    and (field_mapping := as_str_mapping(content[field_name])) is not None
+                    field_name == "content"
+                    and (field_mapping := as_str_mapping(field_value)) is not None
+                    and "type" in field_mapping
                 ):
-                    tokens += _count_anthropic_content(
-                        field_mapping,
+                    tokens += _count_content_list(
                         count_function,
+                        [field_mapping],
                         use_default_image_token_count,
                         default_token_count,
                         pdf_pricing,
                         _content_depth=_content_depth + 1,
+                    )
+                elif server_fields is not None and field_name == "content":
+                    raise UnsupportedContentTypeError(
+                        f"Invalid content item type: {type(field_value).__name__}. Expected dict with 'type' field."
                     )
                 else:
                     tokens += count_function(str(field_value))
@@ -1982,10 +1987,13 @@ def _count_content_list(
         | AnthropicMessagesDocumentParam
         | AnthropicSearchResultParam
         | CompactionBlock
+        | Mapping[str, object]
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
     pdf_pricing: PdfPagePricing = "claude",
+    *,
+    _content_depth: int = 0,
 ) -> int:
     """Recursively count tokens from a list of content blocks."""
     try:
@@ -2030,6 +2038,7 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                     pdf_pricing,
+                    _content_depth=_content_depth + 1,
                 )
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
