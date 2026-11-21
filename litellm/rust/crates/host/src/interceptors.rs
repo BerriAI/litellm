@@ -36,6 +36,8 @@ pub struct RequestContext {
     pub secret_fields: Vec<String>,
     /// The credential the route resolved for the provider call.
     pub api_key: Option<litellm_secret_value::SecretValue>,
+    /// Whether the host's own HTTP client sends the request, timing the exchange itself.
+    pub host_transport: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,6 +225,7 @@ mod tests {
             optional_params: json!({}),
             secret_fields: Vec::new(),
             api_key: None,
+            host_transport: false,
         }
     }
 
