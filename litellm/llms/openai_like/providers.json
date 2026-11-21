@@ -246,6 +246,11 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "berget": {
+    "base_url": "https://api.berget.ai/v1",
+    "api_key_env": "BERGET_API_KEY",
+    "api_base_env": "BERGET_API_BASE"
+  },
   "prism": {
     "base_url": "https://api.prisminference.com/v1",
     "api_key_env": "PRISM_API_KEY",
