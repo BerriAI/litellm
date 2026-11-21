@@ -227,18 +227,22 @@ class LensExporter(CustomLogger):
 
     def _deliver(self, kwargs: Mapping[str, object], response_obj: object, row: SpendLogRecord, record: bytes) -> None:
         if self.ledger is None or self.ledger_key is None:
-            self.enqueue(record)
+            self._unconfirmed("the spend logs ledger is not connected")
             return
         try:
             key: Final = self.ledger_key(kwargs, response_obj)
         except Exception as error:  # noqa: BLE001  # an unknown ledger state never exports a record early
-            self._drop(1)
-            self._log_failure(f"ledger state unknown: {type(error).__name__}")
+            self._unconfirmed(f"ledger state unknown: {type(error).__name__}")
             return
         if key is None:
-            self.enqueue(record)
+            self._unconfirmed("no ledger commit will confirm the request")
             return
         self._release(self.ledger.hold(key, row, len(record)))
+
+    def _unconfirmed(self, reason: str) -> None:
+        """Lens only receives requests a committed ledger delivery confirms; others are counted, never sent."""
+        self._drop(1)
+        self._log_failure(reason)
 
     def ledger_committed(self, rows: Sequence[Mapping[str, object]]) -> None:
         """Admits confirmed deliveries for the export task; the ledger writer that reports them never waits."""

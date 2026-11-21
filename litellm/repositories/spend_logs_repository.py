@@ -61,7 +61,7 @@ def _committed_summaries(
     if not accepted:
         return ()
     return tuple(
-        committed_summary(_delivery_id(row), _accounting_payload(row["accounting_payload"]), row)
+        committed_summary(_delivery_id(row), _accounting_payload(row["accounting_payload"]), row.get("request_id"))
         for row in rows
         if _delivery_id(row) in accepted
     )

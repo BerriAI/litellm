@@ -1,9 +1,9 @@
 """
 Reports of committed ledger deliveries, for observers that act only once accounting is final.
 
-Each report is a bounded summary projected from the accepted delivery's accounting payload, with a
-few non-accounting log fields filling in what the payload lacks. Reports leave the ledger path only
-after its transaction committed, and an observer failure never reaches the write that triggered it.
+Each report is a bounded summary projected from the accepted delivery's accounting payload. Reports
+leave the ledger path only after its transaction committed, and an observer failure never reaches the
+write that triggered it.
 """
 
 import asyncio
@@ -37,7 +37,6 @@ ACCOUNTING_FIELDS: Final = (
     "status",
     "request_duration_ms",
 )
-SUPPLEMENT_FIELDS: Final = ("endTime", "model_id", "api_base", "session_id", "cache_hit", "litellm_call_id")
 _SUMMARY: Final = TypeAdapter(dict[str, object])
 
 
@@ -61,21 +60,13 @@ def unreportable(delivery_id: str, request_id: object) -> Mapping[str, object]:
     }
 
 
-def committed_summary(
-    delivery_id: str, accounting: Mapping[str, object], log: Mapping[str, object]
-) -> Mapping[str, object]:
-    """Canonical accounting fields of an accepted delivery; log fields only fill non-accounting gaps."""
-    request_id: Final = accounting.get("request_id", log.get("request_id"))
-    accounting_values: Final = tuple(accounting.get(field) for field in ACCOUNTING_FIELDS)
-    supplement_values: Final = tuple(log.get(field) for field in SUPPLEMENT_FIELDS)
-    if len(delivery_id) > MAX_FIELD_BYTES or not all(_fits(value) for value in accounting_values + supplement_values):
-        return unreportable(delivery_id, request_id)
-    return {
-        **{field: value for field, value in zip(SUPPLEMENT_FIELDS, supplement_values) if value is not None},
-        **dict(zip(ACCOUNTING_FIELDS, accounting_values)),
-        "request_id": request_id,
-        "delivery_id": delivery_id,
-    }
+def committed_summary(delivery_id: str, accounting: Mapping[str, object], request_id: object) -> Mapping[str, object]:
+    """The canonical accounting fields of an accepted delivery, keyed by its delivery and request ids."""
+    canonical_request: Final = accounting.get("request_id", request_id)
+    values: Final = tuple(accounting.get(field) for field in ACCOUNTING_FIELDS)
+    if len(delivery_id) > MAX_FIELD_BYTES or not all(_fits(value) for value in (*values, canonical_request)):
+        return unreportable(delivery_id, canonical_request)
+    return {**dict(zip(ACCOUNTING_FIELDS, values)), "request_id": canonical_request, "delivery_id": delivery_id}
 
 
 def _observers() -> tuple[LedgerCommitObserver, ...]:

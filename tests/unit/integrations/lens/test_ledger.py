@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import Final
 
 from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
@@ -100,39 +99,30 @@ def test_a_commit_without_accounting_cost_is_dropped_not_filled_from_the_callbac
     assert handoff.commit(({"request_id": "request-a", "delivery_id": "d"},)) == Release(dropped=1)
 
 
-def test_an_uncommitted_record_expires_without_export_and_an_orphan_commit_exports_its_cost() -> None:
+def test_unmatched_records_and_commits_expire_as_counted_drops_without_export() -> None:
     clock: Final = _Clock()
     handoff: Final = LedgerHandoff(clock=clock, wait_seconds=10)
     handoff.hold("uncommitted", _companion("uncommitted"), 100)
-    handoff.commit((_COMMITTED, {"request_id": "no-start", "delivery_id": "delivery-no-start", "spend": 1.0}))
+    assert (
+        handoff.commit((_COMMITTED, {**_COMMITTED, "request_id": "other-pod", "delivery_id": "d-other"})) == Release()
+    )
     clock.now = 10
     released: Final = handoff.hold("later", _companion("later"), 100)
-    assert released.dropped == 2
-    assert len(released.ready) == 1
-    orphan: Final = released.ready[0]
-    assert (orphan["request_id"], orphan["spend"], orphan["total_tokens"], orphan["messages"]) == (
-        "request-a",
-        0.25,
-        7,
-        "",
-    )
-    start: Final = int(datetime(2026, 11, 20, 10, tzinfo=timezone.utc).timestamp() * 1000)
-    assert (orphan["start_time"], orphan["end_time"]) == (start, start + 1500)
-    assert set(handoff.held) == {"later"}
+    assert released == Release(dropped=3)
+    assert (set(handoff.held), len(handoff.committed), handoff.waiting) == ({"later"}, 0, {})
 
 
-def test_bounds_evict_the_oldest_records_and_drain_exports_only_committed_cost() -> None:
+def test_bounds_evict_the_oldest_records_and_drain_drops_everything_unmatched() -> None:
     handoff: Final = LedgerHandoff(clock=_Clock(), max_rows=2, max_bytes=250)
     assert handoff.hold("a", _companion("a"), 100).dropped == 0
     assert handoff.hold("b", _companion("b"), 100).dropped == 0
     assert handoff.hold("c", _companion("c"), 100).dropped == 1
     assert handoff.hold("huge", _companion("huge"), 251).dropped == 1
     assert (tuple(handoff.held), handoff.held_bytes) == (("b", "c"), 200)
-    handoff.commit((_COMMITTED,))
-    drained: Final = handoff.drain()
-    assert drained.dropped == 2
-    assert tuple(row["request_id"] for row in drained.ready) == ("request-a",)
-    assert (len(handoff.held), handoff.held_bytes, len(handoff.committed)) == (0, 0, 0)
+    overflow: Final = handoff.commit(tuple({**_COMMITTED, "delivery_id": f"d{index}"} for index in range(3)))
+    assert (overflow.ready, overflow.dropped, len(handoff.committed)) == ((), 1, 2)
+    assert handoff.drain() == Release(dropped=4)
+    assert (len(handoff.held), handoff.held_bytes, len(handoff.committed), handoff.waiting) == (0, 0, 0, {})
 
 
 def test_missing_canonical_usage_and_identity_never_fall_back_to_the_callback_values() -> None:
@@ -154,23 +144,22 @@ def _delivery(delivery_id: str, spend: float) -> dict[str, object]:
     return {**_COMMITTED, "delivery_id": delivery_id, "spend": spend}
 
 
-def test_each_confirmed_delivery_of_one_request_is_exported_when_the_callback_comes_first() -> None:
+def test_only_the_delivery_that_meets_the_callback_record_is_exported_when_the_callback_comes_first() -> None:
     clock: Final = _Clock()
     handoff: Final = LedgerHandoff(clock=clock, wait_seconds=10)
     handoff.hold("request-a", _companion("request-a"), 100)
     first: Final = handoff.commit((_delivery("d1", 0.25), _delivery("d2", 0.75), _delivery("d1", 0.25)))
     assert [(row["spend"], row["messages"]) for row in first.ready] == [(0.25, "prompt")]
     clock.now = 10
-    second: Final = handoff.hold("other", _companion("other"), 100)
-    assert [(row["spend"], row["messages"]) for row in second.ready] == [(0.75, "")]
+    assert handoff.hold("other", _companion("other"), 100) == Release(dropped=1)
     assert handoff.commit((_delivery("d2", 0.75),)) == Release()
 
 
-def test_each_confirmed_delivery_of_one_request_is_exported_when_the_commits_come_first() -> None:
+def test_only_the_delivery_that_meets_the_callback_record_is_exported_when_the_commits_come_first() -> None:
     handoff: Final = LedgerHandoff(clock=_Clock())
     assert handoff.commit((_delivery("d1", 0.25), _delivery("d2", 0.75))) == Release()
     assert [row["spend"] for row in handoff.hold("request-a", _companion("request-a"), 100).ready] == [0.25]
-    assert [(row["spend"], row["messages"]) for row in handoff.drain().ready] == [(0.75, "")]
+    assert handoff.drain() == Release(dropped=1)
 
 
 def test_an_unreportable_delivery_is_counted_and_drops_its_waiting_record() -> None:

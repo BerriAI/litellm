@@ -495,8 +495,11 @@ mod tests {
                 (serde_json::json!("rejected-d"), serde_json::json!(1.0)),
             ]
         );
-        assert!(reported[0].get("endTime").is_some());
-        assert!(reported[1].get("endTime").is_none());
+        assert!(
+            reported
+                .iter()
+                .all(|row| row.get("endTime").is_none() && row.get("model_id").is_none())
+        );
         assert!(reported.iter().all(|row| row.get("messages").is_none()));
     }
 

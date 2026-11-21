@@ -27,32 +27,31 @@ class _Observer:
             raise RuntimeError("observer failed")
 
 
-def test_summaries_project_canonical_accounting_and_fill_only_non_accounting_log_fields() -> None:
+def test_summaries_carry_only_the_canonical_accounting_projection() -> None:
     summary: Final = committed_summary(
         "delivery-a",
         {"request_id": "request-a", "spend": 0.5, "model": "billed-model", "metadata": {"windows": []}},
-        {"request_id": "request-a", "spend": 7.0, "model": "logged-model", "endTime": "t", "messages": "secret"},
+        "logged-request",
     )
     assert summary == {
         **dict.fromkeys(ACCOUNTING_FIELDS),
         "request_id": "request-a",
         "spend": 0.5,
         "model": "billed-model",
-        "endTime": "t",
         "delivery_id": "delivery-a",
     }
+    assert committed_summary("delivery-b", {"spend": 1.0}, "logged-request")["request_id"] == "logged-request"
 
 
 @pytest.mark.parametrize(
-    ("accounting", "log"),
+    "accounting",
     (
-        pytest.param({"user": "u" * (MAX_FIELD_BYTES + 1)}, {}, id="accounting-field"),
-        pytest.param({"team_id": ["nested"]}, {}, id="non-scalar"),
-        pytest.param({}, {"api_base": "x" * (MAX_FIELD_BYTES + 1)}, id="supplement-field"),
+        pytest.param({"user": "u" * (MAX_FIELD_BYTES + 1)}, id="accounting-field"),
+        pytest.param({"team_id": ["nested"]}, id="non-scalar"),
     ),
 )
-def test_oversized_summaries_become_countable_markers(accounting: dict[str, object], log: dict[str, object]) -> None:
-    assert committed_summary("delivery-a", {"request_id": "request-a", **accounting}, log) == {
+def test_oversized_summaries_become_countable_markers(accounting: dict[str, object]) -> None:
+    assert committed_summary("delivery-a", {"request_id": "request-a", **accounting}, "request-a") == {
         "delivery_id": "delivery-a",
         "request_id": "request-a",
         "unreportable": True,

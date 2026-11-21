@@ -1,9 +1,7 @@
-import json
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from math import isfinite
 from typing import Final
 
@@ -28,17 +26,6 @@ def _count(value: object) -> int | None:
 
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
-
-
-def _milliseconds(value: object) -> int | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed: Final = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    aware: Final = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
-    return int(aware.timestamp() * 1000)
 
 
 def _accounting(committed: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -68,64 +55,6 @@ def merged_row(companion: SpendLogRecord, committed: Mapping[str, object]) -> Ma
     """The callback's record carrying the committed accounting in place of its own billing values."""
     accounting: Final = _accounting(committed)
     return None if accounting is None else {**companion, **accounting}
-
-
-def _end_time(committed: Mapping[str, object], start: int) -> int | None:
-    end: Final = _milliseconds(committed.get("endTime"))
-    if end is not None:
-        return end
-    duration: Final = _count(committed.get("request_duration_ms"))
-    return None if duration is None else start + duration
-
-
-def minimal_row(committed: Mapping[str, object]) -> Mapping[str, object] | None:
-    """A cost record built from the committed accounting alone, when no callback record reached this pod."""
-    request_id: Final = _text(committed.get("request_id"))
-    start: Final = _milliseconds(committed.get("startTime"))
-    accounting: Final = _accounting(committed)
-    if not request_id or start is None or accounting is None:
-        return None
-    end: Final = _end_time(committed, start)
-    if end is None:
-        return None
-    return {
-        "request_id": request_id,
-        "response_id": request_id,
-        "provider_request_id": "",
-        "litellm_call_id": _text(committed.get("litellm_call_id")) or "",
-        "call_type": _text(committed.get("call_type")) or "",
-        "api_key": "",
-        "key_alias": "",
-        "team_id": "",
-        "team_alias": "",
-        "organization_id": "",
-        "user": "",
-        "end_user": "",
-        "model": _text(committed.get("model")) or "",
-        "model_group": _text(committed.get("model_group")) or "",
-        "model_id": _text(committed.get("model_id")) or "",
-        "custom_llm_provider": _text(committed.get("custom_llm_provider")) or "",
-        "api_base": _text(committed.get("api_base")) or "",
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-        "start_time": start,
-        "end_time": end,
-        "completion_start_time": None,
-        "status": _text(committed.get("status")) or "",
-        "error_str": "",
-        "cache_hit": committed.get("cache_hit") in (True, "True", "true"),
-        "session_id": _text(committed.get("session_id")) or "",
-        "trace_id": "",
-        "span_id": "",
-        "request_tags": [],
-        "metadata": json.dumps({}),
-        "messages": "",
-        "response": "",
-        **accounting,
-    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,10 +92,11 @@ def _ready(rows: Sequence[Mapping[str, object] | None]) -> Release:
 class LedgerHandoff:
     """Pairs ledger-backed callback records with their confirmed deliveries, whichever arrives first.
 
-    A record is exported only once a delivery for its request is confirmed, never before. Each
-    confirmed delivery is kept by its own id: the first one for a request takes the callback
-    record, and any further delivery for that request is exported from its accounting alone.
-    Both maps stay in arrival order, so expiry pops only the stale prefix.
+    A record is exported only once a delivery for its request is confirmed and its callback
+    record is here, never before. Each confirmed delivery is kept by its own id and the first one
+    for a request takes the callback record. A record or delivery still unmatched after the wait,
+    past the bounds, or at shutdown is dropped and counted. Both maps stay in arrival order, so
+    expiry pops only the stale prefix.
     """
 
     def __init__(
@@ -218,9 +148,8 @@ class LedgerHandoff:
 
     def _expire(self) -> Release:
         now: Final = self.clock()
-        dropped: Final = sum(1 for _ in self._stale_held(now))
-        orphans: Final = _ready(tuple(minimal_row(committed.row) for committed in self._stale_commits(now)))
-        return _joined(Release(dropped=dropped), orphans)
+        dropped: Final = sum(1 for _ in self._stale_held(now)) + sum(1 for _ in self._stale_commits(now))
+        return Release(dropped=dropped)
 
     def hold(self, key: str, row: SpendLogRecord, size: int) -> Release:
         expired: Final = self._expire()
@@ -272,12 +201,14 @@ class LedgerHandoff:
         now: Final = self.clock()
         accepted: Final = _joined(*(self._accept(row, now) for row in rows))
         excess: Final = tuple(self.committed)[: max(len(self.committed) - self.max_rows, 0)]
-        overflow: Final = _ready(tuple(minimal_row(self._pop_committed(delivery).row) for delivery in excess))
-        return _joined(expired, accepted, overflow)
+        for delivery in excess:
+            self._pop_committed(delivery)
+        return _joined(expired, accepted, Release(dropped=len(excess)))
 
     def drain(self) -> Release:
-        dropped: Final = len(self.held)
+        dropped: Final = len(self.held) + len(self.committed)
         self.held.clear()
         self.held_bytes = 0
-        orphans: Final = tuple(minimal_row(self._pop_committed(delivery).row) for delivery in tuple(self.committed))
-        return _joined(Release(dropped=dropped), _ready(orphans))
+        self.committed.clear()
+        self.waiting.clear()
+        return Release(dropped=dropped)

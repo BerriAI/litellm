@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from functools import partial
 from itertools import chain
 from typing import Final
@@ -12,6 +13,7 @@ from prometheus_client import CollectorRegistry, Counter
 from pydantic import TypeAdapter
 
 from litellm.integrations.lens import exporter as exporter_module
+from litellm.integrations.lens.ledger import LedgerHandoff
 from litellm.integrations.lens.exporter import (
     MAX_BUFFER_EVENTS,
     MAX_EVENT_BYTES,
@@ -20,6 +22,20 @@ from litellm.integrations.lens.exporter import (
     encode_record,
     lens_export_counters,
 )
+
+
+def _confirmed(client: httpx.AsyncClient, request_id: str) -> LensExporter:
+    return LensExporter(client, ledger=LedgerHandoff(), ledger_key=lambda kwargs, response: request_id)
+
+
+def _commit(request_id: str, spend: float, api_key: str = "", team_id: str = "") -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "delivery_id": f"delivery-{request_id}",
+        "spend": spend,
+        "api_key": api_key,
+        "team_id": team_id,
+    }
 
 
 @pytest.mark.asyncio
@@ -42,24 +58,27 @@ async def test_request_tags_are_normalized_without_dropping_the_record(
         return httpx.Response(204)
 
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
-        exporter: Final = LensExporter(client)
+        exporter: Final = _confirmed(client, "tagged-request")
         exporter.start()
         callback: Final = exporter.async_log_failure_event if failed else exporter.async_log_success_event
-        await callback(
-            {
-                "response_cost": 0.12,
-                "standard_logging_object": {
-                    "id": "tagged-request",
-                    "status": "failure" if failed else "success",
+        try:
+            await callback(
+                {
                     "response_cost": 0.12,
-                    "request_tags": list(tags),
+                    "standard_logging_object": {
+                        "id": "tagged-request",
+                        "status": "failure" if failed else "success",
+                        "response_cost": 0.12,
+                        "request_tags": list(tags),
+                    },
                 },
-            },
-            None,
-            None,
-            None,
-        )
-        await exporter.aclose()
+                None,
+                None,
+                None,
+            )
+            exporter.ledger_committed((_commit("tagged-request", 0.12),))
+        finally:
+            await exporter.aclose()
     assert exporter.rows_written == 1
     assert exporter.rows_dropped == 0
     assert requests.qsize() == 1
@@ -82,7 +101,7 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
         return httpx.Response(204)
 
     async with httpx.AsyncClient(base_url="http://lens.test/prefix/", transport=httpx.MockTransport(accept)) as client:
-        exporter: Final = LensExporter(client)
+        exporter: Final = _confirmed(client, "response-test")
         exporter.start()
         await exporter.async_log_success_event(
             {
@@ -103,8 +122,11 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
             None,
             None,
         )
-        request: Final = await asyncio.wait_for(received, timeout=1)
-        await exporter.aclose()
+        try:
+            exporter.ledger_committed((_commit("response-test", 0.12, api_key="hash-test", team_id="team-test"),))
+            request: Final = await asyncio.wait_for(received, timeout=5)
+        finally:
+            await exporter.aclose()
     rows: Final = json.loads(request.content)
     assert request.url.path == "/prefix/internal/spend"
     assert len(rows) == 1
@@ -321,11 +343,6 @@ def test_serialization_returns_a_failure_for_invalid_payloads(value: object) -> 
     assert encode_record({"value": value}) is ExportFailure.INVALID
 
 
-async def _drained(exporter: LensExporter) -> None:
-    while exporter.buffered_events:
-        await asyncio.sleep(0)
-
-
 @pytest.mark.asyncio
 async def test_written_and_dropped_rows_are_exported_as_prometheus_counters(
     monkeypatch: pytest.MonkeyPatch,
@@ -335,19 +352,30 @@ async def test_written_and_dropped_rows_are_exported_as_prometheus_counters(
     monkeypatch.setattr(prometheus_client, "Counter", partial(Counter, registry=registry))
     monkeypatch.setattr(exporter_module, "lens_export_counters", lens_export_counters.__wrapped__)
     statuses: Final = iter((204, 500))
+    answered: Final = asyncio.Queue[int]()
 
     def answer(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(next(statuses))
+        status: Final = next(statuses)
+        answered.put_nowait(status)
+        return httpx.Response(status)
 
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(answer)) as client:
-        exporter: Final = LensExporter(client)
+        exporter: Final = LensExporter(
+            client, ledger=LedgerHandoff(), ledger_key=lambda kwargs, response: str(kwargs["call"])
+        )
         exporter.start()
-        for request_id in ("accepted", "rejected"):
-            await exporter.async_log_success_event(
-                {"standard_logging_object": {"id": request_id, "response_cost": 0.1}}, None, None, None
-            )
-            await _drained(exporter)
-        await exporter.aclose()
+        try:
+            for request_id in ("accepted", "rejected"):
+                await exporter.async_log_success_event(
+                    {"call": request_id, "standard_logging_object": {"id": request_id, "response_cost": 0.1}},
+                    None,
+                    None,
+                    None,
+                )
+                exporter.ledger_committed((_commit(request_id, 0.1),))
+                await asyncio.wait_for(answered.get(), timeout=5)
+        finally:
+            await exporter.aclose()
     assert (exporter.rows_written, exporter.rows_dropped) == (1, 1)
     assert registry.get_sample_value("litellm_lens_export_rows_written_total") == exporter.rows_written
     assert registry.get_sample_value("litellm_lens_export_rows_dropped_total") == exporter.rows_dropped
@@ -427,22 +455,24 @@ async def test_confirmed_deliveries_beyond_the_pending_budget_are_counted_as_dro
 
 
 @pytest.mark.asyncio
-async def test_records_outside_the_ledger_and_unknown_ledger_states_never_wait() -> None:
+async def test_records_without_a_confirmed_ledger_commit_are_counted_and_never_sent() -> None:
     from litellm.integrations.lens.ledger import LedgerHandoff
 
     def unknown(kwargs: object, response: object) -> str | None:
         raise RuntimeError("settings unavailable")
 
     async with httpx.AsyncClient(base_url="http://lens") as client:
-        direct: Final = LensExporter(client, ledger=LedgerHandoff(), ledger_key=lambda kwargs, response: None)
-        failing: Final = LensExporter(client, ledger=LedgerHandoff(), ledger_key=unknown)
-        await direct.async_log_success_event(_ledger_event("direct"), None, None, None)
-        await failing.async_log_success_event(_ledger_event("unknown"), None, None, None)
-        assert (direct.buffered_events, failing.buffered_events, failing.rows_dropped) == (1, 0, 1)
-        failing.ledger_committed(
-            ({"request_id": "unknown", "delivery_id": "d", "spend": 0.5, "startTime": "2026-11-20T10:00:00"},)
+        exporters: Final = (
+            LensExporter(client),
+            LensExporter(client, ledger=LedgerHandoff(), ledger_key=lambda kwargs, response: None),
+            LensExporter(client, ledger=LedgerHandoff(), ledger_key=unknown),
         )
-        assert failing.buffered_events == 0
-        await direct.aclose()
-        await failing.aclose()
-    assert (failing.rows_written, failing.rows_dropped) == (0, 2)
+        try:
+            for exporter in exporters:
+                await exporter.async_log_success_event(_ledger_event("unconfirmed"), None, None, None)
+                exporter.ledger_committed((_commit("unconfirmed", 0.5),))
+        finally:
+            for exporter in exporters:
+                await exporter.aclose()
+    assert [(exporter.rows_written, exporter.buffered_events) for exporter in exporters] == [(0, 0)] * 3
+    assert [exporter.rows_dropped for exporter in exporters] == [1, 2, 2]

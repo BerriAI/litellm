@@ -4,7 +4,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use litellm_repositories::{SpendLogDelivery, SpendLogRecord, SpendLogWrite};
+use litellm_repositories::{SpendLogDelivery, SpendLogWrite};
 use serde_json::{Map, Value, json};
 
 /// Called with one JSON object per accepted delivery after each committed statement. It runs on
@@ -14,8 +14,6 @@ pub type CommitObserver = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 /// A string field longer than this makes its delivery unreportable; the observer still hears
 /// the delivery as an `unreportable` marker so it can count it.
 pub const MAX_FIELD_BYTES: usize = 512;
-
-const TIMESTAMP: &str = "%Y-%m-%dT%H:%M:%S%.6f";
 
 /// The accounting payload fields that decide cost, usage and identity. A field the payload
 /// lacks is reported as null, never filled from anywhere else.
@@ -46,39 +44,6 @@ fn fits(value: &Value) -> bool {
     }
 }
 
-fn fits_text(value: Option<&str>) -> bool {
-    value.is_none_or(|text| text.len() <= MAX_FIELD_BYTES)
-}
-
-fn supplement_fits(log: &SpendLogRecord) -> bool {
-    [
-        log.model_id.as_deref(),
-        log.api_base.as_deref(),
-        log.session_id.as_deref(),
-        log.cache_hit.as_deref(),
-        log.litellm_call_id.as_deref(),
-    ]
-    .into_iter()
-    .all(fits_text)
-}
-
-fn supplement(log: &SpendLogRecord) -> [(&'static str, Option<Value>); 6] {
-    [
-        (
-            "endTime",
-            Some(Value::from(log.end_time.format(TIMESTAMP).to_string())),
-        ),
-        ("model_id", log.model_id.clone().map(Value::from)),
-        ("api_base", log.api_base.clone().map(Value::from)),
-        ("session_id", log.session_id.clone().map(Value::from)),
-        ("cache_hit", log.cache_hit.clone().map(Value::from)),
-        (
-            "litellm_call_id",
-            log.litellm_call_id.clone().map(Value::from),
-        ),
-    ]
-}
-
 fn unreportable(delivery: &SpendLogDelivery) -> Value {
     let request_id = (delivery.request_id.len() <= MAX_FIELD_BYTES)
         .then(|| Value::from(delivery.request_id.clone()))
@@ -97,17 +62,11 @@ fn summary(write: &SpendLogWrite) -> Option<String> {
         && delivery.request_id.len() <= MAX_FIELD_BYTES
         && ACCOUNTING_FIELDS
             .iter()
-            .all(|name| payload.get(*name).is_none_or(fits))
-        && write.log.as_ref().is_none_or(supplement_fits);
+            .all(|name| payload.get(*name).is_none_or(fits));
     if !reportable {
         return serde_json::to_string(&unreportable(delivery)).ok();
     }
     let mut fields: Map<String, Value> = Map::new();
-    for (name, value) in write.log.as_ref().map(supplement).into_iter().flatten() {
-        if let Some(value) = value {
-            fields.insert(name.into(), value);
-        }
-    }
     for name in ACCOUNTING_FIELDS {
         fields.insert(
             name.into(),

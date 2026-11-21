@@ -105,8 +105,6 @@ async def test_observers_hear_only_accepted_deliveries_after_the_transaction_com
             "prompt_tokens": 3,
             "completion_tokens": 4,
             "api_key": "hash-a",
-            "endTime": "2026-11-20T10:00:01",
-            "model_id": "model-a",
             "delivery_id": "delivery-a",
         },
     )
