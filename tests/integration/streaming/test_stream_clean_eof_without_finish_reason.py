@@ -475,7 +475,7 @@ def _spend_statuses(database_url: str | None) -> Counter[tuple[str, str]]:
 
 
 def _database_status_on_a_worker(gateway: Gateway) -> tuple[str, JsonValue]:
-    response: Final = gateway.request("GET", "/health/integration-readiness", headers={"connection": "close"})
+    response: Final = gateway.request("GET", "/health/integration-database", headers={"connection": "close"})
     body: Final = response.json()
     return response.headers.get("x-integration-worker-pid", ""), body.get("db") if isinstance(body, dict) else None
 
