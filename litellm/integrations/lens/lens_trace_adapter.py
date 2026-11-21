@@ -13,9 +13,9 @@ launched it. A gateway trace of the same agent is given that shape, so Lens show
 
 import asyncio
 import hashlib
-import time
 import json
 import re
+import time
 from collections import OrderedDict
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
