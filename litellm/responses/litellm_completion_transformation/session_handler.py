@@ -11,7 +11,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_attributes,
+)
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -196,10 +201,33 @@ def _is_model_output(item: object) -> bool:
     return not (isinstance(item, Mapping) and item.get("type") in _MCP_AUTO_EXECUTE_OUTPUT_TYPES)
 
 
+def _is_redacted_mcp_call(item: object) -> bool:
+    mapping: Final = as_str_mapping(item)
+    return mapping is not None and mapping.get("type") == "mcp_call" and mapping.get("arguments") == REDACTED_BY_LITELLM
+
+
+def _is_replayable_output(item: object) -> bool:
+    return _is_model_output(item) and not _is_redacted_mcp_call(item)
+
+
+def _has_redacted_arguments(server_tool_call: object) -> bool:
+    function: Final = as_str_mapping((as_str_mapping(server_tool_call) or {}).get("function"))
+    return function is not None and function.get("arguments") == REDACTED_BY_LITELLM
+
+
+def _without_redacted_server_tool_calls(message: Message) -> Message:
+    fields: Final = message.provider_specific_fields or {}
+    calls: Final = as_object_list(fields.get("server_tool_calls"))
+    if calls is None or not any(_has_redacted_arguments(call) for call in calls):
+        return message
+    kept: Final = [call for call in calls if not _has_redacted_arguments(call)]
+    return message.model_copy(update={"provider_specific_fields": {**fields, "server_tool_calls": kept}})
+
+
 def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
     match stored_response:
         case {"object": "response", "output": list() as output}:
-            return [item for item in output if _is_model_output(item)]
+            return [item for item in output if _is_replayable_output(item)]
         case {"object": "response"}:
             return []
         case _:
@@ -575,7 +603,9 @@ class ResponsesSessionHandler:
         if not isinstance(stored_response, dict) or not stored_response:
             return ()
         chat_completion_messages: Final = tuple(
-            choice.message for choice in ModelResponse(**stored_response).choices if hasattr(choice, "message")
+            _without_redacted_server_tool_calls(choice.message)
+            for choice in ModelResponse(**stored_response).choices
+            if hasattr(choice, "message")
         )
         for message in chat_completion_messages:
             _normalize_redacted_tool_call_arguments(message)
