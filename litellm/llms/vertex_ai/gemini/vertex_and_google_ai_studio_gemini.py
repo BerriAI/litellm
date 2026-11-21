@@ -6,8 +6,9 @@ import re
 import threading
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import lru_cache, partial
 from itertools import chain, repeat
 from types import MappingProxyType
@@ -257,6 +258,33 @@ def _warn_gemini_sampling_params_deprecated(model: str) -> None:
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
+
+
+@dataclass(frozen=True, slots=True)
+class GeminiImageParts:
+    answer: int = 0
+    thought: int = 0
+
+    def __add__(self, other: "GeminiImageParts") -> "GeminiImageParts":
+        return GeminiImageParts(answer=self.answer + other.answer, thought=self.thought + other.thought)
+
+
+NO_IMAGE_PARTS: Final = GeminiImageParts()
+
+
+def _candidate_parts(candidates: Sequence[Candidates]) -> Iterator[HttpxPartType]:
+    for candidate in candidates:
+        yield from candidate.get("content", {}).get("parts", [])
+
+
+def ai_studio_image_parts(logging_obj: LoggingClass, candidates: Sequence[Candidates]) -> GeminiImageParts:
+    """AI Studio leaves one image per thought image out of candidatesTokenCount and totalTokenCount, Vertex does not."""
+    if logging_obj.model_call_details.get("custom_llm_provider") != "gemini":
+        return NO_IMAGE_PARTS
+    is_thought_flags: Final = tuple(
+        bool(part.get("thought")) for part in _candidate_parts(candidates) if "inlineData" in part
+    )
+    return GeminiImageParts(answer=is_thought_flags.count(False), thought=is_thought_flags.count(True))
 
 
 def _prompt_block_fields(feedback: PromptFeedback) -> Mapping[str, str]:
@@ -2603,6 +2631,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _calculate_usage(
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
+        ai_studio_image_parts: GeminiImageParts = NO_IMAGE_PARTS,
     ) -> Usage:
         if completion_response is not None and "usageMetadata" not in completion_response:
             raise ValueError(f"usageMetadata not found in completion_response. Got={completion_response}")
@@ -2660,20 +2689,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif modality == "DOCUMENT":
                     response_tokens_details.text_tokens = (response_tokens_details.text_tokens or 0) + token_count
 
-        # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
+        uncounted_image_tokens: Final = (
+            (response_tokens_details.image_tokens or 0) // ai_studio_image_parts.answer * ai_studio_image_parts.thought
+            if response_tokens_details is not None and ai_studio_image_parts.answer > 0
+            else 0
+        )
         # candidatesTokenCount includes all modalities, so: text = total - (image + audio + video)
-        candidates_token_count: Final = usage_metadata.get("candidatesTokenCount", 0)
+        candidates_token_count: Final = usage_metadata.get("candidatesTokenCount", 0) + uncounted_image_tokens
         if candidates_token_count > 0:
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
             if response_tokens_details.text_tokens is None:
-                completion_image_tokens: Final = response_tokens_details.image_tokens or 0
-                completion_audio_tokens: Final = response_tokens_details.audio_tokens or 0
-                completion_video_tokens: Final = response_tokens_details.video_tokens or 0
-                calculated_text_tokens: Final = (
-                    candidates_token_count - completion_image_tokens - completion_audio_tokens - completion_video_tokens
+                response_tokens_details.text_tokens = (
+                    candidates_token_count
+                    - (response_tokens_details.image_tokens or 0)
+                    - (response_tokens_details.audio_tokens or 0)
+                    - (response_tokens_details.video_tokens or 0)
                 )
-                response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
 
         ## Parse promptTokensDetails (total tokens by modality, includes cached + non-cached)
@@ -2774,8 +2806,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             prompt_tokens=usage_metadata.get("promptTokenCount", 0)
             + billable_tool_use_prompt_tokens
             + cache_creation_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=usage_metadata.get("totalTokenCount", 0) + cache_creation_tokens,
+            completion_tokens=completion_tokens + uncounted_image_tokens,
+            total_tokens=usage_metadata.get("totalTokenCount", 0) + cache_creation_tokens + uncounted_image_tokens,
             prompt_tokens_details=prompt_tokens_details,
             cache_read_input_tokens=cached_tokens,
             cache_creation_input_tokens=cache_creation_tokens or None,
@@ -2790,8 +2822,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
+        ai_studio_image_parts: GeminiImageParts = NO_IMAGE_PARTS,
     ) -> Usage:
-        return cls._calculate_usage(completion_response, cache_creation_tokens)
+        return cls._calculate_usage(completion_response, cache_creation_tokens, ai_studio_image_parts)
 
     @staticmethod
     def _check_finish_reason(
@@ -3419,6 +3452,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             usage: Final = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response,
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
+                ai_studio_image_parts=ai_studio_image_parts(logging_obj, _candidates or ()),
             )
 
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
@@ -4300,6 +4334,7 @@ class ModelResponseIterator:
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
+        self._ai_studio_image_parts: GeminiImageParts = NO_IMAGE_PARTS
 
     @property
     def accumulated_json(self) -> str:
@@ -4438,6 +4473,7 @@ class ModelResponseIterator:
         usage: Final = VertexGeminiConfig.calculate_usage(
             completion_response=processed_chunk,
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
+            ai_studio_image_parts=self._ai_studio_image_parts,
         )
 
         VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
@@ -4493,6 +4529,7 @@ class ModelResponseIterator:
 
             _candidates: Final[list[Candidates] | None] = processed_chunk.get("candidates")
             if _candidates:
+                self._ai_studio_image_parts += ai_studio_image_parts(self.logging_obj, _candidates)
                 (
                     grounding_metadata,
                     url_context_metadata,

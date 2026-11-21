@@ -30,6 +30,7 @@ from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, Vert
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
+    ModelResponseIterator,
     VertexGeminiConfig,
     _log_gemini_sampling_params_deprecated,
     normalize_gemini_speech_config,
@@ -1466,6 +1467,136 @@ def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
     assert result.completion_tokens_details.reasoning_tokens == 158
 
 
+_IMAGE_PART: Final[Mapping[str, object]] = {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}
+_THOUGHT_IMAGE_PART: Final[Mapping[str, object]] = {**_IMAGE_PART, "thought": True}
+_CAPTION_PART: Final[Mapping[str, object]] = {"text": "A lighthouse on a cliff."}
+_THOUGHT_TEXT_PART: Final[Mapping[str, object]] = {"text": "Planning the scene.", "thought": True}
+_NANO_LONG_CAPTION_WITH_THOUGHT_IMAGE: Final[Mapping[str, object]] = {
+    "promptTokenCount": 24,
+    "candidatesTokenCount": 1277,
+    "totalTokenCount": 1301,
+    "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}],
+}
+
+
+def _gemini_reply(parts: Sequence[Mapping[str, object]], usage_metadata: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "candidates": [{"content": {"role": "model", "parts": list(parts)}, "finishReason": "STOP"}],
+        "usageMetadata": dict(usage_metadata),
+    }
+
+
+def _logging_for(provider: str) -> MagicMock:
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {"custom_llm_provider": provider}
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("provider", "parts", "usage_metadata", "expected"),
+    [
+        pytest.param(
+            "gemini",
+            (_THOUGHT_TEXT_PART, _THOUGHT_IMAGE_PART, _THOUGHT_TEXT_PART, _IMAGE_PART),
+            {
+                "promptTokenCount": 9,
+                "candidatesTokenCount": 45,
+                "thoughtsTokenCount": 70,
+                "totalTokenCount": 124,
+                "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}],
+            },
+            (45, 1120, 70, 1235, 1244),
+            id="studio_one_image_short_caption",
+        ),
+        pytest.param(
+            "gemini",
+            (_THOUGHT_IMAGE_PART, _CAPTION_PART, _IMAGE_PART),
+            _NANO_LONG_CAPTION_WITH_THOUGHT_IMAGE,
+            (1277, 1120, None, 2397, 2421),
+            id="studio_one_image_long_caption",
+        ),
+        pytest.param(
+            "gemini",
+            (_THOUGHT_TEXT_PART, _THOUGHT_IMAGE_PART, *(_CAPTION_PART, _IMAGE_PART) * 4),
+            {
+                "promptTokenCount": 24,
+                "candidatesTokenCount": 4433,
+                "thoughtsTokenCount": 224,
+                "totalTokenCount": 4681,
+                "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 4480}],
+            },
+            (1073, 4480, 224, 5777, 5801),
+            id="studio_four_images",
+        ),
+        pytest.param(
+            "gemini",
+            (_CAPTION_PART, _IMAGE_PART),
+            {
+                "promptTokenCount": 24,
+                "candidatesTokenCount": 2577,
+                "totalTokenCount": 2601,
+                "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}],
+            },
+            (1457, 1120, None, 2577, 2601),
+            id="studio_without_thought_image",
+        ),
+        pytest.param(
+            "vertex_ai",
+            (_THOUGHT_IMAGE_PART, _CAPTION_PART, _IMAGE_PART),
+            _NANO_LONG_CAPTION_WITH_THOUGHT_IMAGE,
+            (157, 1120, None, 1277, 1301),
+            id="vertex_counts_thought_images_itself",
+        ),
+    ],
+)
+def test_gemini_image_reply_usage_counts_every_image_once(
+    provider: str,
+    parts: Sequence[Mapping[str, object]],
+    usage_metadata: Mapping[str, object],
+    expected: tuple[int, int, int | None, int, int],
+) -> None:
+    result: Final = VertexGeminiConfig().transform_response(
+        model="gemini-nano-banana-2.1",
+        raw_response=httpx.Response(200, json=_gemini_reply(parts, usage_metadata)),
+        model_response=ModelResponse(),
+        logging_obj=_logging_for(provider),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    usage: Final = result.usage
+    details: Final = usage.completion_tokens_details
+    assert (
+        details.text_tokens,
+        details.image_tokens,
+        details.reasoning_tokens,
+        usage.completion_tokens,
+        usage.total_tokens,
+    ) == expected
+    assert details.text_tokens + details.image_tokens + (details.reasoning_tokens or 0) == usage.completion_tokens
+    assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+
+
+def test_gemini_streamed_image_reply_counts_thought_images_from_earlier_chunks() -> None:
+    iterator: Final = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=_logging_for("gemini"))
+    chunks: Final = (
+        {"candidates": [{"content": {"role": "model", "parts": [_THOUGHT_IMAGE_PART]}}]},
+        {"candidates": [{"content": {"role": "model", "parts": [_IMAGE_PART]}}]},
+        _gemini_reply((_CAPTION_PART,), _NANO_LONG_CAPTION_WITH_THOUGHT_IMAGE),
+    )
+
+    usage: Final = tuple(iterator.chunk_parser(deepcopy(chunk)) for chunk in chunks)[-1].usage
+
+    assert (usage.completion_tokens_details.text_tokens, usage.completion_tokens, usage.total_tokens) == (
+        1277,
+        2397,
+        2421,
+    )
+
+
 def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
     """Test promptTokensDetails with IMAGE modality for multimodal inputs
 
@@ -2177,7 +2308,9 @@ def test_vertex_ai_streaming_usage_calculation():
         iterator.chunk_parser(chunk)
 
         # Verify calculate_usage was called with correct parameters
-        mock_calculate_usage.assert_called_once_with(completion_response=chunk, cache_creation_tokens=0)
+        mock_calculate_usage.assert_called_once()
+        assert mock_calculate_usage.call_args.kwargs["completion_response"] == chunk
+        assert mock_calculate_usage.call_args.kwargs["cache_creation_tokens"] == 0
 
     # Test non-streaming response parsing
     with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
@@ -2201,10 +2334,9 @@ def test_vertex_ai_streaming_usage_calculation():
         )
 
         # Verify _calculate_usage was called with correct parameters
-        mock_calculate_usage.assert_called_once_with(
-            completion_response=completion_response,
-            cache_creation_tokens=0,
-        )
+        mock_calculate_usage.assert_called_once()
+        assert mock_calculate_usage.call_args.kwargs["completion_response"] == completion_response
+        assert mock_calculate_usage.call_args.kwargs["cache_creation_tokens"] == 0
 
 
 def test_vertex_ai_streaming_usage_web_search_calculation():
