@@ -1352,6 +1352,7 @@ async def test_ensure_spend_counter_initialized_cold_seed_raises_when_redis_fail
         )
 
     assert spend.redis == {}
+    assert spend.memory == {}
 
 
 @pytest.mark.asyncio
