@@ -13,6 +13,7 @@ Pattern Overview:
 """
 
 import json
+from collections import Counter
 from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -425,6 +426,15 @@ def _is_openai_format_tool(tool: object) -> bool:
     return fields is not None and fields.get("type") == "function" and "function" in fields
 
 
+def _occurrences(fingerprints: Iterable[str]) -> tuple[int, ...]:
+    seen: Final[Counter[str]] = Counter()  # mutable-ok: running count local to this call
+    occurrences: Final[list[int]] = []  # mutable-ok: built here, returned as a tuple
+    for fingerprint in fingerprints:
+        seen[fingerprint] += 1
+        occurrences.append(seen[fingerprint])
+    return tuple(occurrences)
+
+
 def _tools_after_guardrail(
     request_tools: Sequence[object],
     shown_fingerprints: Sequence[str],
@@ -437,20 +447,34 @@ def _tools_after_guardrail(
     shown: Final = (
         tuple(zip(shown_positions, shown_fingerprints)) if len(shown_positions) == len(shown_fingerprints) else ()
     )
-    returned: Final = tuple((stream_item_fingerprint(tool), tool) for tool in returned_tools)
-    returned_fingerprints: Final = frozenset(fingerprint for fingerprint, _ in returned)
+    returned_fingerprints: Final = tuple(map(stream_item_fingerprint, returned_tools))
+    returned_counts: Final = Counter(returned_fingerprints)
+    as_sent_candidates: Final = tuple(
+        (position, fingerprint)
+        for position, fingerprint in reversed(shown)
+        if not _is_openai_format_tool(request_tools[position])
+    )
     as_sent: Final = tuple(
         (position, fingerprint)
-        for position, fingerprint in shown
-        if fingerprint in returned_fingerprints and not _is_openai_format_tool(request_tools[position])
+        for (position, fingerprint), occurrence in zip(
+            as_sent_candidates, _occurrences(fingerprint for _, fingerprint in as_sent_candidates)
+        )
+        if occurrence <= returned_counts[fingerprint]
     )
     as_sent_positions: Final = frozenset(position for position, _ in as_sent)
-    as_sent_fingerprints: Final = frozenset(fingerprint for _, fingerprint in as_sent)
+    as_sent_counts: Final = Counter(fingerprint for _, fingerprint in as_sent)
     removed_or_rewritten: Final = frozenset(shown_positions) - as_sent_positions
     return [
         *(tool for position, tool in enumerate(request_tools) if position not in removed_or_rewritten),
         *_converted_tools(
-            tuple(tool for fingerprint, tool in returned if fingerprint not in as_sent_fingerprints), original_names
+            tuple(
+                tool
+                for tool, fingerprint, occurrence in zip(
+                    returned_tools, returned_fingerprints, _occurrences(returned_fingerprints)
+                )
+                if occurrence > as_sent_counts[fingerprint]
+            ),
+            original_names,
         ),
     ]
 

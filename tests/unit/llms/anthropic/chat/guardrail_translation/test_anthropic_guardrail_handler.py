@@ -3318,6 +3318,21 @@ class AllToolsRemovingGuardrail(CustomGuardrail):
         return {**inputs, "tools": []}
 
 
+class ReturnedToolsRewritingGuardrail(CustomGuardrail):
+    def __init__(self, rewrite: Callable[[list], list]):
+        super().__init__(guardrail_name="test")
+        self._rewrite: Final = rewrite
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "tools": self._rewrite(list(inputs.get("tools") or []))}
+
+
 class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
     _WEB_SEARCH: Final = {"type": "web_search_20250305", "name": "web_search", "max_uses": 1}
     _MCP_TOOLSET: Final = {"type": "mcp_toolset", "mcp_server_name": "github"}
@@ -3899,3 +3914,25 @@ def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
         anthropic_message_request=FAILED_TOOL_RESULT_REQUEST  # pyright: ignore[reportArgumentType]  # a JSON request in the Anthropic shape
     )
     assert "is_error" not in json.dumps(request["messages"], default=str)
+
+    async def test_one_returned_tool_keeps_only_the_last_of_two_tools_the_guardrail_cannot_tell_apart(self):
+        first, last = (
+            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb"},
+            {**self._READ, "name": "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034"},
+        )
+        assert truncate_tool_name(first["name"]) == truncate_tool_name(last["name"])
+
+        tools = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: returned[-1:]),
+            json.loads(json.dumps([first, self._WEB_SEARCH, last])),
+        )
+
+        assert tools == [self._WEB_SEARCH, last]
+
+    async def test_a_tool_the_guardrail_returns_twice_reaches_the_provider_twice(self):
+        tools = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: [*returned, returned[0]]),
+            json.loads(json.dumps([self._READ, self._DEFERRED])),
+        )
+
+        assert tools == [self._READ, self._DEFERRED, {**self._READ, "type": "custom"}]
