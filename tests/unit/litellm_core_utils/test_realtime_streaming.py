@@ -6286,3 +6286,39 @@ async def test_unbridged_backend_receives_session_update_and_response_create_as_
     await streaming.client_ack_messages()
 
     assert tuple(json.loads(call.args[0]) for call in backend_ws.send.call_args_list) == client_events
+
+
+@pytest.mark.asyncio
+async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatch):
+    """Vertex answers content sent before an avatar setupComplete with
+    "Session is not set up yet" and never replies to it."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    avatar_update: Final = json.dumps(
+        {"type": "session.update", "session": {"output_modalities": ["video"], "avatar": "Ben"}}
+    )
+    client_ws: Final = MagicMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[avatar_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, ConnectionClosed(None, None)]
+    )
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=[json.dumps({"setupComplete": {}}).encode(), ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1"),
+        model="gemini-3.8-live",
+    )
+
+    await streaming.client_ack_messages()
+    sent_before_setup_complete: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    await streaming.backend_to_client_send_messages()
+    sent_after_setup_complete: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+
+    assert [next(iter(frame)) for frame in sent_before_setup_complete] == ["setup"]
+    assert sent_before_setup_complete[0]["setup"]["avatarConfig"] == {"avatarName": "Ben"}
+    assert [next(iter(frame)) for frame in sent_after_setup_complete] == ["setup", "clientContent"]

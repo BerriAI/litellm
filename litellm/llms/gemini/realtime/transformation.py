@@ -82,6 +82,7 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
 _GEMINI_LIVE_RESPONSE_MODALITIES: Final = frozenset({"TEXT", "AUDIO"})
+_GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES: Final = _GEMINI_LIVE_RESPONSE_MODALITIES | {"VIDEO"}
 
 
 OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
@@ -128,6 +129,7 @@ _AVATAR_CONFIG_KEYS: Final[Mapping[str, str]] = {
     "avatar": "avatarName",
     "avatar_video_bitrate_bps": "videoBitrateBps",
 }
+
 
 def _is_undocumented_live_voice(voice: object) -> bool:
     return (
@@ -248,6 +250,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def _rejects_vad_tuning_with_detection_off(self) -> bool:
         """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
         return True
+
+    def _supports_avatars(self) -> bool:
+        return False
+
+    def setup_must_complete_before_content(self, setup_message: Mapping[str, object]) -> bool:
+        """An avatar setup takes seconds, and Vertex answers content sent before
+        setupComplete with "Session is not set up yet" instead of queueing it."""
+        return "avatarConfig" in (as_str_mapping(setup_message.get("setup")) or {})
 
     def _rejects_undocumented_voices(self, model: str) -> bool:
         """Google AI Studio closes the socket (1007) on an unknown voice only for its native-audio Live models."""
@@ -459,11 +469,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
-            elif key in _AVATAR_CONFIG_KEYS and value:
-                optional_params.setdefault("avatarConfig", {})[_AVATAR_CONFIG_KEYS[key]] = value
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
-        return optional_params
+        session: Final = cast(object, non_default_params)  # cast-ok: the inherited signature takes an untyped dict
+        avatar_config: Final = self._avatar_config(as_str_mapping(session) or {})
+        return {**optional_params, "avatarConfig": dict(avatar_config)} if avatar_config else optional_params
+
+    def _avatar_config(self, session: Mapping[str, object]) -> Mapping[str, object]:
+        if not self._supports_avatars():
+            return {}
+        return {_AVATAR_CONFIG_KEYS[key]: session[key] for key in _AVATAR_CONFIG_KEYS if session.get(key)}
 
     def _realtime_input_config(self, turn_detection: object) -> BidiGenerateContentRealtimeInputConfig | None:
         if turn_detection is None:
@@ -573,8 +588,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return tuple(str(modality).upper() for modality in _JSON_ARRAY.validate_python(value))
 
     @staticmethod
-    def _unsupported_response_modalities(model: str, requested: tuple[str, ...]) -> tuple[str, ...]:
-        unknown: Final = tuple(modality for modality in requested if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES)
+    def _unsupported_response_modalities(
+        model: str, requested: tuple[str, ...], *, avatar_video: bool = False
+    ) -> tuple[str, ...]:
+        producible: Final = (
+            _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES if avatar_video else _GEMINI_LIVE_RESPONSE_MODALITIES
+        )
+        unknown: Final = tuple(modality for modality in requested if modality not in producible)
         if unknown:
             return unknown
         if GeminiRealtimeConfig._is_audio_only_live_model(model) and frozenset(requested) == frozenset(("TEXT",)):
@@ -598,13 +618,31 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 ),
                 param="session",
             )
-        return self._modality_rejection(model, session) or self._voice_rejection(model, session)
+        return (
+            self._avatar_rejection(session)
+            or self._modality_rejection(model, session)
+            or self._voice_rejection(model, session)
+        )
 
-    @staticmethod
-    def _modality_rejection(model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
+    def _avatar_rejection(self, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
+        param: Final = next((key for key in _AVATAR_CONFIG_KEYS if session.get(key)), None)
+        if param is None or self._supports_avatars():
+            return None
+        return RealtimeSessionUpdateRejection(
+            code="invalid_value",
+            message=(
+                f"Invalid value for 'session.{param}': Gemini Live avatars are only served through Vertex AI, "
+                "so use a vertex_ai/ model. Set drop_params to drop it instead"
+            ),
+            param=f"session.{param}",
+        )
+
+    def _modality_rejection(self, model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
         param: Final = "output_modalities" if "output_modalities" in session else "modalities"
         unsupported: Final = GeminiRealtimeConfig._unsupported_response_modalities(
-            model, GeminiRealtimeConfig._requested_response_modalities(session.get(param))
+            model,
+            GeminiRealtimeConfig._requested_response_modalities(session.get(param)),
+            avatar_video=self._supports_avatars() and bool(session.get("avatar")),
         )
         if not unsupported:
             return None
@@ -634,26 +672,33 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
 
     @staticmethod
-    def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+    def _coerce_response_modalities(
+        model: str, modalities: Sequence[object], *, avatar_video: bool = False
+    ) -> tuple[str, ...]:
         """Drop modalities Gemini Live cannot produce at all, swap the ones this
         model cannot (TEXT to AUDIO for audio-only models, AUDIO to TEXT for
         text-only ones such as transcribe-live), then keep a single modality
         because Gemini Live rejects a setup naming two."""
         return GeminiRealtimeConfig._single_response_modality(
             GeminiRealtimeConfig._swap_unsupported_response_modalities(
-                model, GeminiRealtimeConfig._known_response_modalities(model, modalities)
+                model, GeminiRealtimeConfig._known_response_modalities(model, modalities, avatar_video=avatar_video)
             )
         )
 
     @staticmethod
-    def _known_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+    def _known_response_modalities(
+        model: str, modalities: Sequence[object], *, avatar_video: bool = False
+    ) -> tuple[str, ...]:
         normalized: Final = tuple(str(modality).upper() for modality in modalities)
-        known: Final = tuple(modality for modality in normalized if modality in _GEMINI_LIVE_RESPONSE_MODALITIES)
+        producible: Final = (
+            _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES if avatar_video else _GEMINI_LIVE_RESPONSE_MODALITIES
+        )
+        known: Final = tuple(modality for modality in normalized if modality in producible)
         if len(known) < len(normalized):
             verbose_logger.warning(
                 "Gemini Live: %s only produces TEXT or AUDIO; ignoring the requested %s",
                 model,
-                ", ".join(modality for modality in normalized if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES),
+                ", ".join(modality for modality in normalized if modality not in producible),
             )
         return known or (GeminiRealtimeConfig._default_response_modality(model),)
 
@@ -687,8 +732,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if isinstance(generation_config, dict):
             modalities: Final = generation_config.get("responseModalities")
             if isinstance(modalities, list):
+                avatar_config: Final = as_str_mapping(setup.get("avatarConfig")) or {}
                 generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
-                    model, modalities
+                    model, modalities, avatar_video="avatarName" in avatar_config
                 )
         return setup
 
@@ -1559,12 +1605,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     self.transform_video_delta_events(_avatar_parts, current_output_item_id, current_response_id)
                 )
                 del server_content["modelTurn"]
-            if (
-                "inputTranscription" in server_content
-                and isinstance(input_tx := server_content["inputTranscription"], dict)
-                and "text" in input_tx
-                and input_tx["text"]
-            ):
+            input_tx: Final = server_content.get("inputTranscription")
+            if isinstance(input_tx, dict) and input_tx.get("text"):
                 transcription_usage: Final = self._consume_input_transcription_usage_estimate(model)
                 returned_message.append(
                     cast(

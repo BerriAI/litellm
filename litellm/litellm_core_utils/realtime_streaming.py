@@ -515,6 +515,7 @@ class RealTimeStreaming:
         self._held_client_content: tuple[str, ...] = ()
         self._held_client_content_bytes: int = 0
         self._held_client_content_deadline: float | None = None
+        self._awaiting_setup_complete: bool = False
         self._replay_scope: Final = client_websocket_scope(self.websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
@@ -1037,6 +1038,7 @@ class RealTimeStreaming:
                     msg = self.maybe_inject_guardrail_auto_response_disable(msg)
                     await self.backend_ws.send(msg)
                     self._cache_session_configuration_request(msg)
+                    self._awaiting_setup_complete = self.provider_config.setup_must_complete_before_content(msg_obj)
                     sent = True
                 else:
                     is_content_message = isinstance(msg_obj, dict) and self.provider_config.is_content_message(msg_obj)
@@ -1248,6 +1250,21 @@ class RealTimeStreaming:
             and self._held_client_content_bytes + len(message.encode("utf-8")) <= RealTimeStreaming._MAX_BUFFERED_BYTES
         )
 
+    async def _hold_client_content_until_setup_complete(self, message: str) -> None:
+        if (
+            len(self._held_client_content) >= RealTimeStreaming._MAX_BUFFERED_MESSAGES
+            or self._held_client_content_bytes + len(message.encode("utf-8")) > RealTimeStreaming._MAX_BUFFERED_BYTES
+        ):
+            await self.websocket.send_text(
+                realtime_error_event(
+                    "The session is still being set up and its buffer is full, so this message was not sent. "
+                    "Retry after session.updated",
+                    error_type="invalid_request_error",
+                )
+            )
+            return
+        self._hold_client_content(message)
+
     def _hold_client_content(self, message: str) -> None:
         if self._held_client_content_deadline is None:
             self._held_client_content_deadline = self._clock() + self._lazy_setup_content_grace_seconds
@@ -1255,6 +1272,8 @@ class RealTimeStreaming:
         self._held_client_content_bytes += len(message.encode("utf-8"))
 
     async def _send_held_client_content(self) -> None:
+        if self._awaiting_setup_complete:
+            return
         held: Final = self._held_client_content
         self._held_client_content = ()
         self._held_client_content_bytes = 0
@@ -1804,6 +1823,9 @@ class RealTimeStreaming:
                 self._capture_translation_output_audio(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
+                if self._awaiting_setup_complete:
+                    self._awaiting_setup_complete = False
+                    await self._send_held_client_content()
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
                     self._backend_setup_complete = True
                     self._flushing_pending_messages_until_setup = True
@@ -2381,6 +2403,9 @@ class RealTimeStreaming:
                 # actually forward to the backend.
                 self.store_input(message=message)
 
+                if self._awaiting_setup_complete and msg_type != "session.update":
+                    await self._hold_client_content_until_setup_complete(message)
+                    continue
                 if self._holds_client_content(msg_type, message):
                     self._hold_client_content(message)
                     continue

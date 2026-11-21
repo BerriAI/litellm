@@ -2527,27 +2527,29 @@ def _transform_input(**overrides: object) -> dict:
     return {**base, **overrides}
 
 
-@pytest.mark.parametrize("audio_only", [False, True])
-def test_gemini_avatar_session_update_emits_video_modality_and_avatar_config(
-    monkeypatch: pytest.MonkeyPatch, audio_only: bool
-):
-    """`avatar` + output_modalities ["video"] -> VIDEO modality + avatarConfig, even
-    when the cost map flags the model audio-only (coercion must leave VIDEO alone)."""
-    if audio_only:
-        monkeypatch.setattr(
-            litellm, "model_cost", {"gemini-3.8-live": {"mode": "realtime", "gemini_audio_only_live": True}}
-        )
-    config = GeminiRealtimeConfig()
-    session_update = {
-        "type": "session.update",
-        "session": {"output_modalities": ["video"], "avatar": "Ben", "instructions": "Sois bref."},
-    }
-    messages = config.transform_realtime_request(
-        json.dumps(session_update), "gemini-3.8-live", session_configuration_request=None
+_AVATAR_SESSION: Final = {"output_modalities": ["video"], "avatar": "Ben", "avatar_video_bitrate_bps": 1_500_000}
+
+
+def test_ai_studio_rejects_avatar_because_only_vertex_serves_it():
+    rejection: Final = GeminiRealtimeConfig().setup_session_update_rejection(
+        "gemini-3.8-live", _AVATAR_SESSION, setup_sent=False
     )
-    setup = json.loads(messages[0])["setup"]
-    assert setup["generationConfig"]["responseModalities"] == ["VIDEO"]
-    assert setup["avatarConfig"] == {"avatarName": "Ben"}
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", "session.avatar")
+    assert "vertex_ai/" in rejection.message
+
+
+def test_ai_studio_drops_avatar_and_video_under_drop_params():
+    config: Final = GeminiRealtimeConfig(drop_params=True)
+    assert config.setup_session_update_rejection("gemini-3.8-live", _AVATAR_SESSION, setup_sent=False) is None
+    messages: Final = config.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": _AVATAR_SESSION}),
+        "gemini-3.8-live",
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert "avatarConfig" not in setup
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
 def test_gemini_session_update_without_avatar_has_no_avatar_config():
@@ -2650,19 +2652,6 @@ def test_gemini_video_only_frame_never_opens_a_response():
     assert result["current_response_id"] is None
     assert result["current_output_item_id"] is None
     assert result["current_delta_type"] is None
-
-
-def test_gemini_avatar_video_bitrate_is_mapped():
-    """The default avatar stream is about 8 Mbit/s; the caller can cap it."""
-    config = GeminiRealtimeConfig()
-    session_update = {
-        "type": "session.update",
-        "session": {"output_modalities": ["video"], "avatar": "Ben", "avatar_video_bitrate_bps": 1_500_000},
-    }
-    messages = config.transform_realtime_request(
-        json.dumps(session_update), "gemini-3.8-live", session_configuration_request=None
-    )
-    assert json.loads(messages[0])["setup"]["avatarConfig"] == {"avatarName": "Ben", "videoBitrateBps": 1_500_000}
 
 
 def test_gemini_transcript_opened_response_is_closed_by_generation_complete():
