@@ -11,7 +11,7 @@ use axum::{
     response::Response,
 };
 use http_body_util::BodyExt;
-use litellm_gateway_forward::PEER_HEADER;
+use litellm_gateway_forward::{ANSWERED_BY_HEADER, PEER_HEADER};
 use proptest::{prelude::*, test_runner::TestRunner};
 use support::{Gateway, client, recording, within};
 
@@ -158,7 +158,7 @@ fn assert_carried(headers: &HeaderMap, message: &Message, framing_and_hop: &[&st
 }
 
 /// Any request a client can send and any response Python can give cross the forwarder unchanged,
-/// apart from the framing and peer headers the forwarder owns.
+/// apart from the framing, peer and answered-by headers the forwarder owns.
 #[test]
 fn every_exchange_crosses_the_forwarder_unchanged() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -208,7 +208,12 @@ fn every_exchange_crosses_the_forwarder_unchanged() {
                 assert_carried(
                     &headers,
                     &exchange.response,
-                    &["date", "content-length", "transfer-encoding"],
+                    &[
+                        "date",
+                        "content-length",
+                        "transfer-encoding",
+                        ANSWERED_BY_HEADER,
+                    ],
                 );
                 let body = support::within(response.into_body().collect())
                     .await

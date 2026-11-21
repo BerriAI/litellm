@@ -322,6 +322,7 @@ class Guardrails:
     output_scope: str
     default_scope: str
     card_output_scope: str
+    logging_only: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,6 +330,7 @@ class Rig:
     gateway: Gateway
     model: Wire
     guardrails: Guardrails
+    logged_messages: Wire
 
 
 @pytest.fixture(scope="module")
@@ -341,6 +343,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         output_scope=f"presidio-output-{suffix}",
         default_scope=f"presidio-default-{suffix}",
         card_output_scope=f"presidio-card-output-{suffix}",
+        logging_only=f"presidio-logging-only-{suffix}",
     )
     contact_entities: Final[dict[str, JsonValue]] = {"EMAIL_ADDRESS": "MASK", "PHONE_NUMBER": "MASK"}
     card_entities: Final[dict[str, JsonValue]] = {"CREDIT_CARD": "MASK"}
@@ -348,8 +351,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         model: Final = stack.enter_context(wire_server(_model))
         analyzer: Final = stack.enter_context(wire_server(_analyze))
         anonymizer: Final = stack.enter_context(wire_server(_anonymize))
+        logged_messages: Final = stack.enter_context(wire_server(lambda _request: Reply()))
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["general_settings"]["store_prompts_in_spend_logs"] = True
+        config["litellm_settings"]["callbacks"] = ["integration._support.logged_messages_probe.probe"]
         config["guardrails"] = [
             _presidio_guardrail(names.input_scope, analyzer, anonymizer, mode="pre_call", scope="input", entities=None),
             _presidio_guardrail(
@@ -369,12 +374,17 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             _presidio_guardrail(
                 names.card_output_scope, analyzer, anonymizer, mode="post_call", scope="output", entities=card_entities
             ),
+            _presidio_guardrail(
+                names.logging_only, analyzer, anonymizer, mode="logging_only", scope="input", entities=contact_entities
+            ),
         ]
         path: Final = directory / "presidio-masking.yaml"
         path.write_text(yaml.safe_dump(config))
         shared: Final = stack.enter_context(gateway_from_environment())
-        owned: Final = stack.enter_context(owned_proxy_process(shared, directory, {}, config=path))
-        yield Rig(owned.gateway, model, names)
+        owned: Final = stack.enter_context(
+            owned_proxy_process(shared, directory, {"LOGGED_MESSAGES_URL": logged_messages.url}, config=path)
+        )
+        yield Rig(owned.gateway, model, names, logged_messages)
 
 
 @pytest.fixture
@@ -591,3 +601,32 @@ def test_masking_run_is_recorded_on_the_spend_log_with_the_detected_entities(rig
         ("EMAIL_ADDRESS", email_start, email_start + len(email), 1.0),
         ("PHONE_NUMBER", phone_start, phone_start + len(PHONE), 0.4),
     ], record["guardrail_response"]
+
+
+def _logged_prompts(rig: Rig, marker: str) -> tuple[str, ...]:
+    return tuple(
+        _ModelRequest.model_validate_json(request.body).prompt
+        for request in rig.logged_messages.drain()
+        if marker.encode() in request.body
+    )
+
+
+def test_logging_only_masking_on_generate_content_reaches_the_log_and_not_the_provider(rig: Rig, model: str) -> None:
+    marker: Final = _marker()
+    email: Final = f"jane.doe.{marker}@example.com"
+    prompt: Final = _repeat_prompt(marker, email)
+    rig.model.drain()
+
+    response: Final = rig.gateway.request(
+        "POST",
+        f"/v1beta/models/{model}:generateContent",
+        {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "guardrails": [rig.guardrails.logging_only]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert email in response.text, response.text
+    sent: Final = tuple(_ModelRequest.model_validate_json(request.body).prompt for request in rig.model.drain())
+    assert sent == (prompt,), sent
+    logged: Final = eventually(lambda: _logged_prompts(rig, marker), bool, seconds=70)
+    masked_sentence: Final = f"My email address is {MASKED_EMAIL} and my phone number is {MASKED_PHONE}."
+    assert logged == (f"{marker} {REPEAT_REQUEST}{masked_sentence}",), logged

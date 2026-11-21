@@ -13,9 +13,16 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.db.budget_window_spend_writer import CommittedWindowSpend
+from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import PrismaRecord
 from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.types.integrations.customer_budget import CustomerBudgetEvent, CustomerBudgetScope
+from litellm.types.proxy.management_endpoints.apps import App
+from tests.unit.proxy.management_helpers import test_apps
+from tests.unit.proxy.management_helpers.test_apps import AppDatabase
+
+app_store: Final = test_apps.app_store
 
 _NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _PAYLOAD: Final = TypeAdapter(Mapping[str, object])
@@ -34,6 +41,188 @@ _ROWS: Final[Mapping[CustomerBudgetScope, Mapping[str, object]]] = {
         "parent_team_ids": ["team-1", "team-2"],
     },
 }
+
+
+@pytest.mark.parametrize("scope", ("app", "app_customer_org", "app_customer_member"))
+@pytest.mark.parametrize(
+    "duration,reset_at,charged_reset",
+    (
+        (None, None, None),
+        ("1mo", None, None),
+        ("12mo", None, None),
+        ("7d", None, None),
+        ("1mo", _NOW.replace(year=2028), None),
+        ("12mo", _NOW.replace(year=2028), None),
+        ("1mo", _NOW.replace(year=2028), _NOW.replace(month=3, day=31)),
+        ("12mo", _NOW.replace(year=2028), _NOW.replace(year=2028, month=2, day=29)),
+    ),
+)
+@pytest.mark.parametrize("hard_limit", (None, 10.0))
+@pytest.mark.parametrize("delayed", (False, True))
+@pytest.mark.parametrize("legacy", (False, True))
+@pytest.mark.asyncio
+async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeating(
+    app_store: tuple[AppDatabase, AppStore, App],
+    alerts: DualCache,
+    respx_mock: respx.MockRouter,
+    scope: CustomerBudgetScope,
+    duration: str | None,
+    reset_at: datetime | None,
+    charged_reset: datetime | None,
+    hard_limit: float | None,
+    delayed: bool,
+    legacy: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database, store, app = app_store
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    await database.litellm_budgettable.create(
+        {
+            "budget_id": "policy",
+            "max_budget": hard_limit,
+            "soft_budget": 5,
+            "budget_duration": duration,
+            "budget_limits": [{"max_budget": hard_limit, "budget_duration": duration, "reset_at": reset_at.isoformat()}]
+            if hard_limit is not None and reset_at is not None
+            else [],
+        }
+    )
+    await database.litellm_apptable.update(
+        {"app_id": app.app_id},
+        {"budget_id": "policy", "default_tier_budget_id": "policy", "default_customer_member_budget_id": "policy"},
+    )
+    await database.litellm_appcustomerorgtable.create({"app_id": app.app_id, "customer_org_id": "org", "spend": 1000})
+    await database.litellm_appcustomermembertable.create(
+        {"app_id": app.app_id, "customer_member_id": "member", "spend": 1000}
+    )
+    entity_id: Final = app.app_id + (
+        ":org" if scope == "app_customer_org" else ":member" if scope == "app_customer_member" else ""
+    )
+    charged_start: Final = (
+        _NOW.replace(year=2027 if duration == "12mo" else 2026, month=2, day=28)
+        if charged_reset is not None
+        else _NOW - timedelta(days=3)
+        if duration == "7d"
+        else _NOW
+    )
+    for spend in (4, 6, 11, 12):
+        if duration is None:
+            for table in (
+                database.litellm_apptable,
+                database.litellm_appcustomerorgtable,
+                database.litellm_appcustomermembertable,
+            ):
+                await table.update_many({}, {"spend": spend})
+        windows: Final = (
+            (
+                CommittedWindowSpend(
+                    entity_type=scope,
+                    entity_id=entity_id,
+                    window_duration=duration,
+                    window_start=charged_start,
+                    spend=spend,
+                    reset_at=charged_reset,
+                ),
+            )
+            if duration is not None
+            else ()
+        )
+        instant: Final = _NOW + timedelta(days=400 if delayed else 0, seconds=spend)
+        monkeypatch.setattr("time.time", instant.timestamp)
+        if legacy and duration is not None:
+            await CustomerBudgetAlerting.detect_committed_windows(
+                windows, _RoutedClient(_database({}), database), alerts, now=instant
+            )
+        else:
+            await CustomerBudgetAlerting.detect_committed_batch(
+                {f"{scope}_list_transactions": {entity_id: 1}},
+                _RoutedClient(_database({}), database),
+                alerts,
+                now=instant,
+                windows=windows,
+            )
+    payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
+    expected: Final = (("soft_budget_crossed", 6, 5),) + (
+        (("budget_crossed", 11, 10),) if hard_limit is not None else ()
+    )
+    assert tuple((item["event"], item["spend"], item["budget"]) for item in payloads) == expected
+    assert {(item["scope"], item["app_id"], item["app_alias"], item["budget_duration"]) for item in payloads} == {
+        (scope, app.app_id, "Chat", duration)
+    }
+    assert {item["customer_org_id"] for item in payloads} == ({"org"} if scope == "app_customer_org" else {None})
+    assert {item["customer_member_id"] for item in payloads} == (
+        {"member"} if scope == "app_customer_member" else {None}
+    )
+    assert {item["period"] for item in payloads} == {
+        charged_reset.isoformat()
+        if charged_reset is not None
+        else {
+            "1mo": "2026-02-01T00:00:00+00:00",
+            "12mo": "2027-01-01T00:00:00+00:00",
+            "7d": "2026-01-05T00:00:00+00:00",
+        }.get(duration, "lifetime")
+    }
+    if duration is not None:
+        await CustomerBudgetAlerting.detect_committed_batch(
+            {f"{scope}_list_transactions": {entity_id: 1}}, database, alerts, now=_NOW + timedelta(days=400)
+        )
+        assert len(receiver.calls) == len(expected)
+    if duration is not None and delayed:
+        rolled: Final = windows[0].model_copy(
+            update={
+                "window_start": _NOW.replace(year=2030 if charged_reset else 2027, day=4 if duration == "7d" else 1),
+                "reset_at": None,
+            }
+        )
+        for seconds in (15, 18):
+            delivered_at: Final = _NOW + timedelta(days=400, seconds=seconds)
+            monkeypatch.setattr("time.time", delivered_at.timestamp)
+            await CustomerBudgetAlerting.detect_committed_windows(
+                (windows[0], rolled), database, alerts, now=delivered_at
+            )
+        latest: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
+        assert len(latest) == len(expected) * 2
+        assert len({(item["event"], item["period"]) for item in latest}) == len(expected) * 2
+
+
+@pytest.mark.parametrize("scope", ("app_customer_org", "app_customer_member"))
+@pytest.mark.parametrize("expired", (False, True))
+@pytest.mark.asyncio
+async def test_app_alerts_respect_custom_budgets_and_temporary_increase_expiry(
+    app_store: tuple[AppDatabase, AppStore, App],
+    alerts: DualCache,
+    respx_mock: respx.MockRouter,
+    scope: CustomerBudgetScope,
+    expired: bool,
+) -> None:
+    database, store, app = app_store
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    for identity, maximum in (("default", 1), ("custom", 10), ("increase", 20)):
+        await database.litellm_budgettable.create(
+            {"budget_id": identity, "max_budget": maximum, "soft_budget": maximum / 2}
+        )
+    await database.litellm_apptable.update(
+        {"app_id": app.app_id}, {"default_tier_budget_id": "default", "default_customer_member_budget_id": "default"}
+    )
+    fields: Final = {
+        "app_id": app.app_id,
+        "spend": 12,
+        "budget_id": "custom",
+        "budget_override_id": "increase",
+        "budget_override_expires_at": _NOW + timedelta(seconds=-1 if expired else 1),
+    }
+    await database.litellm_appcustomerorgtable.create({**fields, "customer_org_id": "org"})
+    await database.litellm_appcustomermembertable.create({**fields, "customer_member_id": "member"})
+    await CustomerBudgetAlerting.detect_committed_batch(
+        {f"{scope}_list_transactions": {app.app_id + (":org" if scope == "app_customer_org" else ":member"): 1}},
+        database,
+        alerts,
+        now=_NOW,
+    )
+    payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
+    assert {(item["event"], item["budget"]) for item in payloads} == (
+        {("soft_budget_crossed", 5), ("budget_crossed", 10)} if expired else {("soft_budget_crossed", 10)}
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +259,8 @@ class _Database:
 
 @dataclass(frozen=True, slots=True)
 class _RoutedClient:
-    db: _Database
-    writer_db: _Database
+    db: _Database | AppDatabase
+    writer_db: _Database | AppDatabase
 
 
 def _database(records: Mapping[str, PrismaRecord | Exception | None]) -> _Database:
@@ -327,6 +516,31 @@ async def test_crossings_do_not_repeat_after_a_day_or_near_the_end_of_the_budget
 class _BrokenCallback(CustomLogger):
     async def async_on_customer_budget_event(self, event: CustomerBudgetEvent) -> None:
         raise RuntimeError("callback unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("app", "app_customer_org", "app_customer_member"))
+async def test_app_warning_claim_survives_reset_after_an_early_period_warning(
+    scope: CustomerBudgetScope, alerts: DualCache, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    reset: Final = _NOW.replace(month=2)
+    for instant in (_NOW, reset + timedelta(seconds=2), reset + timedelta(hours=2)):
+        monkeypatch.setattr("time.time", instant.timestamp)
+        await CustomerBudgetAlerting.emit(
+            CustomerBudgetEvent(
+                event="soft_budget_crossed",
+                scope=scope,
+                entity_id="app:member",
+                spend=6,
+                budget=5,
+                budget_duration="1mo",
+                period=reset.isoformat(),
+                timestamp=instant,
+            ),
+            alerts,
+        )
+    assert receiver.call_count == 1
 
 
 @pytest.mark.asyncio

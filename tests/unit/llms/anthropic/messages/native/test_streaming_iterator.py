@@ -581,7 +581,7 @@ class _DetachedFailureRecorder:
     def __init__(self):
         self.exceptions = []
 
-    async def __call__(self, exc: Exception) -> None:
+    async def __call__(self, _logging_obj: object, exc: Exception) -> None:
         self.exceptions.append(exc)
 
 
@@ -1372,15 +1372,25 @@ def test_anthropic_messages_response_as_sse_events_thinking_block_emits_signatur
     ]
 
 
-def test_anthropic_messages_response_as_sse_events_thinking_block_without_signature_omits_delta():
-    response = {
-        "id": "msg_6",
-        "content": [{"type": "thinking", "thinking": "let me think", "signature": None}],
-        "stop_reason": "end_turn",
-    }
+@pytest.mark.parametrize(
+    "thinking_block",
+    [
+        {"type": "thinking", "thinking": "let me think", "signature": None},
+        {"type": "thinking", "thinking": "let me think", "signature": ""},
+        {"type": "thinking", "thinking": "let me think"},
+    ],
+    ids=["null", "empty", "missing"],
+)
+def test_anthropic_messages_response_as_sse_events_unsigned_thinking_block_closes_with_an_empty_signature(
+    thinking_block,
+):
+    response = {"id": "msg_6", "content": [thinking_block], "stop_reason": "end_turn"}
     decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
     deltas = [payload["delta"] for event_type, payload in decoded if event_type == "content_block_delta"]
-    assert deltas == [{"type": "thinking_delta", "thinking": "let me think"}]
+    assert deltas == [
+        {"type": "thinking_delta", "thinking": "let me think"},
+        {"type": "signature_delta", "signature": ""},
+    ]
 
 
 def test_anthropic_messages_response_as_sse_events_multiple_blocks_are_indexed():

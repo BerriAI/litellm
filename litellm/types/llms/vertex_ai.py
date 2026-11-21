@@ -10,13 +10,13 @@ from typing_extensions import (
     TypedDict,
 )
 
-from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput, OpenAIChatCompletionTextObject
 from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
 # opt-in for combined embeddings — a provider-specific extension of the
 # OpenAI-faithful EmbeddingInput shape.
-GeminiEmbeddingElement = str | ChatCompletionFileObject
+GeminiEmbeddingElement = str | ChatCompletionFileObject | OpenAIChatCompletionTextObject
 GeminiEmbeddingInput = (
     EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
 )
@@ -219,7 +219,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["minimal", "low", "medium", "high"]
+    thinkingLevel: ReadOnly[Literal["minimal", "low", "medium", "high", "xhigh"]]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]

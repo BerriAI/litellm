@@ -10,9 +10,13 @@ from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlparse
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.otel.model.config import OTEL_V2_ENV, is_otel_v2_enabled
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
@@ -50,14 +54,86 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     host: Final = tenant_host or LangfuseOtelLogger._get_langfuse_otel_host()  # pyright: ignore[reportPrivateUsage]  # reuse the backend's own env host resolver rather than duplicating it
     if not host:
         return (LANGFUSE_CLOUD_US_ENDPOINT, None)
-    normalized: Final = host if host.startswith("http") else f"https://{host}"
-    endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel"
+    endpoint: Final = _langfuse_otel_endpoint(host)
     if tenant_host is None:
         return (endpoint, None)
-    if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
+    if not _tenant_url_is_allowlisted(endpoint):
         _warn_host_not_allowlisted(host)
         return None
     return (endpoint, None)
+
+
+def _allowlist_entry_parses(entry: str) -> bool:
+    stripped: Final = entry.strip()
+    try:
+        urlparse(stripped if "://" in stripped else f"//{stripped}")
+    except ValueError:
+        return False
+    return True
+
+
+@lru_cache(maxsize=256)
+def _allowlist_allows(url: str, entries: tuple[str, ...]) -> bool:
+    try:
+        urlparse(url)
+    except ValueError:
+        return False
+    return is_url_destination_allowed_by_host(url, [entry for entry in entries if _allowlist_entry_parses(entry)])
+
+
+def _str_entries(entries: tuple[object, ...]) -> tuple[str, ...]:
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
+def _tenant_url_is_allowlisted(url: str) -> bool:
+    configured: Final = litellm.provider_url_destination_allowed_hosts
+    entries: Final = (configured,) if isinstance(configured, str) else tuple(configured or ())
+    return _allowlist_allows(url, _str_entries(entries))
+
+
+_FLAG_VALUE: Final = TypeAdapter(bool)
+
+
+@lru_cache(maxsize=8)
+def _otel_v2_flag_value_parses(raw_flag: str | None) -> bool:
+    if raw_flag is None:
+        return True
+    try:
+        _FLAG_VALUE.validate_python(raw_flag)
+    except ValidationError:
+        return False
+    return True
+
+
+def _otel_v2_enabled_or_off() -> bool:
+    if not _otel_v2_flag_value_parses(os.environ.get(OTEL_V2_ENV)):
+        return False
+    try:
+        return is_otel_v2_enabled()
+    except ValidationError:
+        return False
+
+
+def _tenant_host_refused_by_otel_v2(tenant_host: object, url_called: Callable[[str], str]) -> bool:
+    if not tenant_host or not _otel_v2_enabled_or_off() or _tenant_url_is_allowlisted(url_called(str(tenant_host))):
+        return False
+    _warn_host_not_allowlisted(str(tenant_host))
+    return True
+
+
+def _langfuse_otel_endpoint(host: str) -> str:
+    normalized: Final = host if host.startswith("http") else f"https://{host}"
+    return f"{normalized.rstrip('/')}/api/public/otel"
+
+
+def langfuse_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    return _tenant_host_refused_by_otel_v2(params.get("langfuse_host"), _langfuse_otel_endpoint)
+
+
+def langfuse_sdk_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.langfuse.langfuse import resolve_langfuse_host
+
+    return _tenant_host_refused_by_otel_v2(params.get("langfuse_host"), resolve_langfuse_host)
 
 
 def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":

@@ -1,15 +1,14 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use litellm_redis_store::{
-    Clock,
     router_session_pins::{Eligible, PinKey, RouterSessionPins},
     system_clock,
 };
 use pyo3::prelude::*;
 
 use super::{
-    NativePending, duration, kind_error, pending, policy::router_tier_policies, redis_async,
-    remote, request::NativeSend, unwrap_values, value::PyValue,
+    NativePending, duration, kind_error, pending, policy::router_tier_policies, python_clock,
+    redis_async, remote, request::NativeSend, unwrap_values, value::PyValue,
 };
 use crate::redis::client::NativeRedisClient;
 
@@ -90,16 +89,6 @@ impl From<PyPinKey> for PinKey {
             },
         }
     }
-}
-
-/// `InMemoryCache(clock=...)`: a callable returning epoch seconds, which tests use to move time.
-fn python_clock(clock: Py<PyAny>) -> Clock {
-    Arc::new(move || {
-        Python::attach(|py| clock.call0(py)?.extract::<f64>(py))
-            .ok()
-            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-            .unwrap_or_default()
-    })
 }
 
 /// The router's session affinity pins, behind `RouterSessionPinStore`.

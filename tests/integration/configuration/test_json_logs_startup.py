@@ -15,10 +15,14 @@ config cannot be loaded still prints it before failing.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
@@ -27,7 +31,7 @@ import yaml
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from tests.integration._support.client import Gateway
-from tests.integration._support.process import owned_proxy_process, refused_boot_log
+from tests.integration._support.process import OwnedProxy, owned_proxy_process, private_state, refused_boot_log
 
 JSON_RECORD: Final = TypeAdapter(dict[str, JsonValue])
 PLAIN_LOG_LINE: Final = re.compile(r"^\d\d:\d\d:\d\d - LiteLLM")
@@ -109,6 +113,7 @@ def _write_config(
                     for model in models
                 ],
                 "litellm_settings": dict(litellm_settings),
+                "router_settings": {"num_retries": 0},
                 "general_settings": {
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
                     "database_url": "os.environ/DATABASE_URL",
@@ -145,6 +150,46 @@ def _non_json_lines(log: str) -> tuple[str, ...]:
     return tuple(line for line in _lines(log) if _record(line) is None)
 
 
+@contextmanager
+def _initialized_proxy(
+    gateway: Gateway,
+    directory: Path,
+    config: Path,
+    overrides: Mapping[str, str],
+    workers: int,
+    extra_arguments: tuple[str, ...] = (),
+) -> Iterator[OwnedProxy]:
+    with private_state(directory, os.environ) as state:
+        prepared: Final = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-m",
+                "prisma",
+                "db",
+                "push",
+                "--schema",
+                "litellm/proxy/schema.prisma",
+                "--skip-generate",
+            ],
+            env={**os.environ, **state.environment},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+        with owned_proxy_process(
+            gateway,
+            directory,
+            {**state.environment, **overrides},
+            config=config,
+            workers=workers,
+            database_setup=(),
+            extra_arguments=extra_arguments,
+        ) as owned:
+            yield owned
+
+
 def _boot_serve_and_stop(
     gateway: Gateway,
     directory: Path,
@@ -154,15 +199,7 @@ def _boot_serve_and_stop(
     models: tuple[str, ...],
     extra_arguments: tuple[str, ...] = (),
 ) -> str:
-    with owned_proxy_process(
-        gateway,
-        directory,
-        overrides,
-        config=config,
-        workers=workers,
-        database_setup=(),
-        extra_arguments=extra_arguments,
-    ) as owned:
+    with _initialized_proxy(gateway, directory, config, overrides, workers, extra_arguments) as owned:
         _serve(owned.gateway, models)
         log: Final = owned.log
     return log.read_text()
@@ -340,9 +377,7 @@ def test_json_logs_burst_on_two_workers_keeps_every_line_json(gateway: Gateway, 
     one complete JSON record."""
     models: Final = _models()
     config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
-    with owned_proxy_process(
-        gateway, tmp_path, {"LITELLM_LOG": "INFO"}, config=config, workers=2, database_setup=()
-    ) as owned:
+    with _initialized_proxy(gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, 2) as owned:
         with ThreadPoolExecutor(max_workers=BURST_SIZE) as pool:
             replies: Final = tuple(
                 pool.map(lambda index: owned.gateway.chat(models[index % 2], text=f"burst {index}"), range(BURST_SIZE))
