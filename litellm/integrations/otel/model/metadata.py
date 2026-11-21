@@ -154,8 +154,9 @@ class RequestIdentity:
             )
             if (value := get(attr))
         )
+        key_meta: Final = flatten_metadata({"user_api_key_auth_metadata": get("metadata")})
         request_meta: Final = flatten_metadata(request_metadata) if request_metadata is not None else ()
-        metadata: Final = MappingProxyType(dict((*request_meta, *auth_meta)))
+        metadata: Final = MappingProxyType(dict((*request_meta, *auth_meta, *key_meta)))
         return cls(
             team_id=as_str(get("team_id")),
             team_alias=as_str(get("team_alias")),
