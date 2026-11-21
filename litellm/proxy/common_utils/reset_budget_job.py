@@ -47,20 +47,13 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    AUTH_OBJECTS_TARGET,
-    end_user_cache_key,
-    model_access_group_cache_key,
-    project_cache_key,
-    tag_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.budget_window_spend_writer import (
     roll_window_spend_row,
     roll_window_spend_rows,
@@ -70,6 +63,7 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARG
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
@@ -268,7 +262,7 @@ def _team_membership_counter_key(row: _TeamMembershipRow) -> str:
 
 
 def _team_membership_cache_keys(row: _TeamMembershipRow) -> tuple[str, ...]:
-    return (f"{row.team_id}_{row.user_id}",)
+    return (AuthObject.team_membership(team_id=row.team_id, user_id=row.user_id).key,)
 
 
 def _key_counter_key(row: _KeyRow) -> str:
@@ -276,7 +270,7 @@ def _key_counter_key(row: _KeyRow) -> str:
 
 
 def _key_cache_keys(row: _KeyRow) -> tuple[str, ...]:
-    return (row.token,)
+    return (AuthObject.virtual_key(row.token).key,)
 
 
 def _org_counter_key(row: _OrgRow) -> str:
@@ -285,8 +279,8 @@ def _org_counter_key(row: _OrgRow) -> str:
 
 def _org_cache_keys(row: _OrgRow) -> tuple[str, ...]:
     return (
-        f"org_id:{row.organization_id}",
-        f"org_id:{row.organization_id}:with_budget",
+        AuthObject.org(row.organization_id).key,
+        AuthObject.org_with_budget(row.organization_id).key,
     )
 
 
@@ -295,7 +289,7 @@ def _tag_counter_key(row: _TagRow) -> str:
 
 
 def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
-    return (tag_cache_key(row.tag_name),)
+    return (AuthObject.tag(row.tag_name).key,)
 
 
 def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
@@ -303,7 +297,7 @@ def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
 
 
 def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]:
-    return (model_access_group_cache_key(row.access_group_name),)
+    return (AuthObject.model_access_group(row.access_group_name).key,)
 
 
 def _project_counter_key(row: _ProjectRow) -> str:
@@ -311,7 +305,7 @@ def _project_counter_key(row: _ProjectRow) -> str:
 
 
 def _project_cache_keys(row: _ProjectRow) -> tuple[str, ...]:
-    return (project_cache_key(row.project_id),)
+    return (AuthObject.project(row.project_id).key,)
 
 
 def _enduser_counter_key(row: _EndUserRow) -> str:
@@ -319,7 +313,7 @@ def _enduser_counter_key(row: _EndUserRow) -> str:
 
 
 def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
-    return (end_user_cache_key(row.user_id),)
+    return (AuthObject.end_user(row.user_id).key,)
 
 
 def _budget_link_where(
@@ -826,7 +820,9 @@ class ResetBudgetJob:
 
     async def _invalidate_customer_budget_caches(self, entity: CustomerSpendEntity, identities: Sequence[str]) -> None:
         if entity == "member":
-            await self._evict_on_every_worker(tuple(customer_member_cache_key(identity) for identity in identities))
+            await self._evict_on_every_worker(
+                tuple(AuthObject.customer_member(identity).key for identity in identities)
+            )
             return
         table: Final = CustomerMemberRepository(self.prisma_client, use_writer=True).table
         parents: Final = (
@@ -1139,7 +1135,7 @@ class ResetBudgetJob:
             windows=windows,
             customer_ids=MappingProxyType({"org": tuple(row.customer_org_id for row in customer_orgs)}),
             customer_org_alias_keys=tuple(
-                customer_org_alias_cache_key(row.alias) for row in customer_orgs if row.alias
+                AuthObject.customer_org_alias(row.alias).key for row in customer_orgs if row.alias
             ),
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),

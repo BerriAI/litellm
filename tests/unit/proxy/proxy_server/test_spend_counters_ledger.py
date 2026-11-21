@@ -9,6 +9,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import user_window_counter
 from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
@@ -86,7 +87,7 @@ async def test_user_spend_increments_both_windows(monkeypatch: pytest.MonkeyPatc
     )
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="u",
+        key=AuthObject.user("u"),
         value=LiteLLM_UserTable.model_validate(
             {
                 "user_id": "u",
@@ -321,7 +322,7 @@ async def test_a_charge_outside_the_committed_scope_keeps_no_twin_and_reads_no_s
     store: Final = rust_memory_store(monkeypatch, {"spend:key:hashed": 10.0})
     tokens: Final = _VerificationTokenTable(10.0)
     key_cache: Final = UserApiKeyCache()
-    key_cache.set_cache(key="hashed", value=UserAPIKeyAuth(token="hashed"))
+    key_cache.set_cache(key=AuthObject.virtual_key("hashed"), value=UserAPIKeyAuth(token="hashed"))
     monkeypatch.setattr(ps, "user_api_key_cache", key_cache)
     monkeypatch.setattr(ps, "prisma_client", _prisma_with_tokens(tokens))
 

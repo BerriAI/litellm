@@ -447,6 +447,7 @@ async def test_keyless_user_fallback_requires_personal_grants_in_strict_mode(
 ):
     from litellm.proxy._types import LiteLLM_UserTable, ProxyException
     from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.redis.stores.auth_cache import AuthObject
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
     from tests.unit.proxy.vector_store_access_group_state import ProxyState, own_permission
 
@@ -454,7 +455,7 @@ async def test_keyless_user_fallback_requires_personal_grants_in_strict_mode(
     user: Final = LiteLLM_UserTable(
         user_id="caller", object_permission_id="own", object_permission=own_permission(user_stores)
     )
-    await proxy.cache.async_set_cache(key="caller", value=user)
+    await proxy.cache.async_set_cache(key=AuthObject.user("caller"), value=user)
     caller: Final = UserAPIKeyAuth(user_id="caller", user_role="internal_user", is_session_token=True)
     primary: Final = LiteLLM_ManagedVectorStore(
         is_config=True,

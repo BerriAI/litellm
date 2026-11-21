@@ -31,7 +31,6 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
@@ -177,12 +176,7 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy 
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-    model_access_group_registry_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import (
@@ -211,6 +205,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SpendCounterStore,
 )
@@ -1475,7 +1470,7 @@ _global_spend_coordinator: Final = EventDrivenCacheCoordinator(log_prefix="[GLOB
 
 
 async def fetch_global_spend_with_event_coordination(
-    cache_key: str,
+    cache_key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
 ) -> float | None:
@@ -1496,7 +1491,7 @@ async def fetch_global_spend_with_event_coordination(
 
     return await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
-        cache=user_api_key_cache,  # pyright: ignore[reportArgumentType]
+        cache=user_api_key_cache,
         load_fn=_load_global_spend,
     )
 
@@ -1514,7 +1509,7 @@ async def get_global_proxy_spend(
     global_proxy_spend = None
     if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
-        cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
+        cache_key: Final = AuthObject.global_proxy_spend()
         global_proxy_spend = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await fetch_global_spend_with_event_coordination(
                 cache_key=cache_key,
@@ -1825,7 +1820,7 @@ async def _cached_team_fields_for_key(
         return MappingProxyType({})
     try:
         team: Final = await get_team_object_from_cache(
-            key=f"team_id:{key.team_id}", user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
+            key=AuthObject.team(key.team_id), user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
         )
         return None if team is None else _team_fields_newer_than_key(key, team)
     except Exception:  # noqa: BLE001  # an unreadable team entry is treated like a team cache miss
@@ -3390,16 +3385,16 @@ def _spend_counter_store() -> SpendCounterStore:
     return spend_counter_store
 
 
-def identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[str, ...]:
+def identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[AuthObject, ...]:
     """Cache keys auth reads before it knows the key's owners, all known from the request alone. A key object is
     cached under the hash of the bearer, so the bearer itself never reaches Redis."""
     return tuple(
         key
         for key in (
-            None if key_is_resolved else hash_token(api_key),
-            None if not end_user_id else end_user_cache_key(end_user_id),
-            None if not end_user_id else end_user_restricted_registry_cache_key(),
-            model_access_group_registry_cache_key(),
+            None if key_is_resolved else AuthObject.virtual_key(hash_token(api_key)),
+            None if not end_user_id else AuthObject.end_user(end_user_id),
+            None if not end_user_id else AuthObject.end_user_restricted_registry(),
+            AuthObject.model_access_group_registry(),
         )
         if key is not None
     )

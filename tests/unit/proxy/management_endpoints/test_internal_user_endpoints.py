@@ -44,6 +44,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
@@ -2531,7 +2532,7 @@ async def test_user_model_budget_update_by_email_refreshes_cached_user(mocker: M
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user(saved_user.user_id), value=saved_user, model_type=LiteLLM_UserTable)
     mocker.patch(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
@@ -2547,7 +2548,7 @@ async def test_user_model_budget_update_by_email_refreshes_cached_user(mocker: M
 
     assert prisma_client.update_data.call_args.kwargs["data"]["model_max_budget"] == {}
     assert "max_budget" not in prisma_client.update_data.call_args.kwargs["data"]
-    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    assert await cache.async_get_cache(key=AuthObject.user(saved_user.user_id), model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
 
 
@@ -2574,7 +2575,7 @@ async def test_user_status_update_refreshes_cached_user(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user(saved_user.user_id), value=saved_user, model_type=LiteLLM_UserTable)
     mocker.patch(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
@@ -2596,7 +2597,7 @@ async def test_user_status_update_refreshes_cached_user(
     assert prisma_client.update_data.call_args.kwargs["data"]["metadata"] == (
         {"department": "engineering"} if active is None else {"scim_active": active}
     )
-    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    assert await cache.async_get_cache(key=AuthObject.user(saved_user.user_id), model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
 
 
@@ -2911,7 +2912,7 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user(saved_user.user_id), value=saved_user, model_type=LiteLLM_UserTable)
     mocker.patch(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
@@ -2928,7 +2929,9 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
         )
     assert exc.value.status_code == 400
     prisma_client.db.litellm_usertable.update_many.assert_not_called()
-    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) == saved_user
+    assert (
+        await cache.async_get_cache(key=AuthObject.user(saved_user.user_id), model_type=LiteLLM_UserTable) == saved_user
+    )
 
     response: Final = await bulk_user_update(
         data=BulkUpdateUserRequest(all_users=True, user_updates={"model_max_budget": None}),
@@ -2940,7 +2943,7 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
     prisma_client.update_data.assert_not_called()
     assert response.successful_updates == 1
     assert response.results[0].updated_user["model_max_budget"] == {}
-    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    assert await cache.async_get_cache(key=AuthObject.user(saved_user.user_id), model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
 
 
@@ -2966,7 +2969,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user(saved_user.user_id), value=saved_user, model_type=LiteLLM_UserTable)
     mocker.patch(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
@@ -2990,7 +2993,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
         )
         assert prisma_client.update_data.call_args.kwargs["data"]["max_budget"] == 50.0
 
-    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    assert await cache.async_get_cache(key=AuthObject.user(saved_user.user_id), model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
 
 
@@ -3111,12 +3114,12 @@ async def test_user_update_reaches_cached_user_on_every_worker(
     handling_worker_cache: Final = UserApiKeyCache()
     other_worker_cache: Final = UserApiKeyCache()
     await handling_worker_cache.async_set_cache(
-        key=saved_user.user_id,
+        key=AuthObject.user(saved_user.user_id),
         value=saved_user,
         model_type=LiteLLM_UserTable,
     )
     await other_worker_cache.async_set_cache(
-        key=saved_user.user_id,
+        key=AuthObject.user(saved_user.user_id),
         value=saved_user,
         model_type=LiteLLM_UserTable,
     )
@@ -3427,13 +3430,12 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker, rust
     before the delete: reading them afterwards finds nothing to evict.
     """
     from litellm.proxy._types import DeleteUserRequest, UserAPIKeyAuth
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
 
-    global_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", None)
-    issuer_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", "https://issuer.example")
-    unrelated_cache_key: Final = jwt_key_mapping_cache_key("sub", "other-user", None)
+    global_cache_key: Final = AuthObject.jwt_key_mapping("sub", "jwt-user", None)
+    issuer_cache_key: Final = AuthObject.jwt_key_mapping("sub", "jwt-user", "https://issuer.example")
+    unrelated_cache_key: Final = AuthObject.jwt_key_mapping("sub", "other-user", None)
     jwt_table: Final = CascadingJWTMappingTable(
         rust_auth_stores.jwt_key_mapping,
         [
@@ -3449,7 +3451,7 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker, rust
         (unrelated_cache_key, "hashed-unrelated-key"),
     ):
         cache.set_cache(key=cache_key, value=hashed_token)
-        cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token))
+        cache.set_cache(key=AuthObject.virtual_key(hashed_token), value=UserAPIKeyAuth(token=hashed_token))
 
     user_row: Final = mocker.MagicMock()
     user_row.user_id = "jwt-user"
@@ -3493,10 +3495,10 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker, rust
 
     assert cache.get_cache(key=global_cache_key) is None
     assert cache.get_cache(key=issuer_cache_key) is None
-    assert cache.get_cache(key="hashed-jwt-key") is None
-    assert cache.get_cache(key="hashed-issuer-key") is None
+    assert cache.get_cache(key=AuthObject.virtual_key("hashed-jwt-key")) is None
+    assert cache.get_cache(key=AuthObject.virtual_key("hashed-issuer-key")) is None
     assert cache.get_cache(key=unrelated_cache_key) == "hashed-unrelated-key"
-    assert cache.get_cache(key="hashed-unrelated-key") is not None
+    assert cache.get_cache(key=AuthObject.virtual_key("hashed-unrelated-key")) is not None
     assert [row.token for row in jwt_table.rows] == ["hashed-unrelated-key"]
 
 
@@ -5721,7 +5723,7 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
     )  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
     for row in (deleted, survivor):
-        await cache.async_set_cache(key=row.user_id, value=row, model_type=LiteLLM_UserTable)
+        await cache.async_set_cache(key=AuthObject.user(row.user_id), value=row, model_type=LiteLLM_UserTable)
     mocker.patch(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
@@ -5738,8 +5740,8 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
         user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
-    assert await cache.async_get_cache(key=deleted.user_id, model_type=LiteLLM_UserTable) is None
-    assert await cache.async_get_cache(key=survivor.user_id, model_type=LiteLLM_UserTable) == survivor
+    assert await cache.async_get_cache(key=AuthObject.user(deleted.user_id), model_type=LiteLLM_UserTable) is None
+    assert await cache.async_get_cache(key=AuthObject.user(survivor.user_id), model_type=LiteLLM_UserTable) == survivor
     broadcast.assert_awaited_once_with(cache_key=deleted.user_id)
 
 

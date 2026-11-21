@@ -39,8 +39,7 @@ mod _native {
     use crate::auth::{
         AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
         KeyContextView, MappedClaimsView, MappingView, PlanView, TeamGrantView, jwt_claims,
-        jwt_is_allowed_domain, jwt_is_jwt, jwt_key_mapping_cache_key, jwt_presents_claims,
-        jwt_unverified_claims,
+        jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims, jwt_unverified_claims,
     };
     #[pymodule_export]
     use crate::auth::{
@@ -314,7 +313,6 @@ mod tests {
                 "jwt_claims",
                 "jwt_is_allowed_domain",
                 "jwt_is_jwt",
-                "jwt_key_mapping_cache_key",
                 "jwt_presents_claims",
                 "jwt_unverified_claims",
             ];

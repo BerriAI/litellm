@@ -4857,6 +4857,7 @@ dependencies = [
  "litellm-tracing",
  "parking_lot",
  "rstest",
+ "serde",
  "sha2 0.10.9",
  "strum",
  "thiserror 2.0.21",
