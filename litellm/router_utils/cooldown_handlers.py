@@ -8,7 +8,6 @@ Router cooldown handlers
 
 import asyncio
 import math
-import os
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -77,58 +76,26 @@ class _OnlyStatuses:
 class _CallerField:
     name: str
     blamed_for: _AnyFailure | _OnlyStatuses
-    env_names: tuple[str, ...] = ()
     configured_as: tuple[str, ...] = ()
-    ignored_when_set: tuple[str, ...] = ()
-    ignored_when_env: tuple[str, ...] = ()
 
 
 _ANY_FAILURE: Final = _AnyFailure()
 _NOT_FOUND: Final = _OnlyStatuses(frozenset({404}))
 _AUTH_REJECTED: Final = _OnlyStatuses(frozenset({401, 403}))
-_AWS_ENV_NAMES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
-    {
-        "aws_access_key_id": ("AWS_ACCESS_KEY_ID",),
-        "aws_secret_access_key": ("AWS_SECRET_ACCESS_KEY",),
-        "aws_session_token": ("AWS_SESSION_TOKEN",),
-        "aws_session_name": ("AWS_SESSION_NAME",),
-        "aws_profile_name": ("AWS_PROFILE_NAME",),
-        "aws_role_name": ("AWS_ROLE_NAME",),
-        "aws_web_identity_token": ("AWS_WEB_IDENTITY_TOKEN",),
-        "aws_sts_endpoint": ("AWS_STS_ENDPOINT",),
-        "aws_external_id": ("AWS_EXTERNAL_ID",),
-    }
-)
 _AWS_FIELDS: Final = (
-    *(
-        _CallerField(name, _ANY_FAILURE, _AWS_ENV_NAMES.get(name, ()))
-        for name in sorted(AWS_CREDENTIAL_KWARGS_KEYS - {"aws_region_name"})
-    ),
-    _CallerField("aws_region_name", _NOT_FOUND, ("AWS_REGION_NAME", "AWS_REGION")),
+    *(_CallerField(name, _ANY_FAILURE) for name in sorted(AWS_CREDENTIAL_KWARGS_KEYS - {"aws_region_name"})),
+    _CallerField("aws_region_name", _NOT_FOUND),
 )
 _VERTEX_FIELDS: Final = (
-    _CallerField("vertex_credentials", _ANY_FAILURE, configured_as=("vertex_ai_credentials",)),
-    _CallerField("vertex_ai_credentials", _ANY_FAILURE, configured_as=("vertex_credentials",)),
-    _CallerField("vertex_project", _NOT_FOUND, ("VERTEXAI_PROJECT",), ("vertex_ai_project",)),
-    _CallerField("vertex_ai_project", _NOT_FOUND, ("VERTEXAI_PROJECT",), ("vertex_project",)),
-    _CallerField("vertex_location", _NOT_FOUND, ("VERTEXAI_LOCATION",), ("vertex_ai_location",)),
-    _CallerField("vertex_ai_location", _NOT_FOUND, ("VERTEXAI_LOCATION",), ("vertex_location",)),
+    _CallerField("vertex_credentials", _ANY_FAILURE, ("vertex_ai_credentials",)),
+    _CallerField("vertex_ai_credentials", _ANY_FAILURE, ("vertex_credentials",)),
+    _CallerField("vertex_project", _NOT_FOUND, ("vertex_ai_project",)),
+    _CallerField("vertex_ai_project", _NOT_FOUND, ("vertex_project",)),
+    _CallerField("vertex_location", _NOT_FOUND, ("vertex_ai_location",)),
+    _CallerField("vertex_ai_location", _NOT_FOUND, ("vertex_location",)),
 )
-_AZURE_FIELDS: Final = (
-    _CallerField("azure_ad_token", _ANY_FAILURE, ("AZURE_AD_TOKEN",)),
-    _CallerField("api_version", _NOT_FOUND, ("AZURE_API_VERSION",)),
-)
-_AZURE_AI_FIELDS: Final = (
-    _CallerField(
-        "azure_ad_token",
-        _ANY_FAILURE,
-        ("AZURE_AD_TOKEN",),
-        ignored_when_set=("api_key",),
-        ignored_when_env=("AZURE_AI_API_KEY",),
-    ),
-    _CallerField("api_version", _NOT_FOUND, ("AZURE_API_VERSION",)),
-)
-_OPENAI_FIELDS: Final = (_CallerField("organization", _AUTH_REJECTED, ("OPENAI_ORGANIZATION",)),)
+_AZURE_FIELDS: Final = (_CallerField("azure_ad_token", _ANY_FAILURE), _CallerField("api_version", _NOT_FOUND))
+_OPENAI_FIELDS: Final = (_CallerField("organization", _AUTH_REJECTED),)
 _CALLER_FIELDS_BY_PROVIDER: Final[Mapping[str, tuple[_CallerField, ...]]] = MappingProxyType(
     {
         "bedrock": _AWS_FIELDS,
@@ -140,7 +107,7 @@ _CALLER_FIELDS_BY_PROVIDER: Final[Mapping[str, tuple[_CallerField, ...]]] = Mapp
         "vertex_ai_beta": _VERTEX_FIELDS,
         "azure": _AZURE_FIELDS,
         "azure_text": _AZURE_FIELDS,
-        "azure_ai": _AZURE_AI_FIELDS,
+        "azure_ai": _AZURE_FIELDS,
         "openai": _OPENAI_FIELDS,
         "text-completion-openai": _OPENAI_FIELDS,
     }
@@ -997,25 +964,12 @@ def is_caller_credential_failure(
     sent: Final = tuple(
         field
         for field in _CALLER_FIELDS_BY_PROVIDER.get(provider or "", ())
-        if _blamed(field.blamed_for, status) and call_params.get(field.name) is not None
+        if _blamed(field.blamed_for, status) and call_params.get(field.name)
     )
     if not sent:
         return False
     configured_by_precedence: Final = _configured_by_precedence(deployment, router_defaults)
-    return any(
-        call_params.get(field.name) != _effective_value(configured_by_precedence, field)
-        and not _ignored_by_the_provider(configured_by_precedence, call_params, field)
-        for field in sent
-    )
-
-
-def _ignored_by_the_provider(
-    sources: tuple[Mapping[str, object], ...], call_params: Mapping[str, object], field: _CallerField
-) -> bool:
-    return any(
-        call_params.get(name) is not None or _first_configured(sources, name) is not None
-        for name in field.ignored_when_set
-    ) or any(os.getenv(name) for name in field.ignored_when_env)
+    return any(call_params.get(field.name) != _configured_value(configured_by_precedence, field) for field in sent)
 
 
 def _blamed(blamed_for: _AnyFailure | _OnlyStatuses, status: int) -> bool:
@@ -1026,8 +980,8 @@ def _blamed(blamed_for: _AnyFailure | _OnlyStatuses, status: int) -> bool:
             return status in statuses
 
 
-def _effective_value(sources: tuple[Mapping[str, object], ...], field: _CallerField) -> object:
-    configured: Final = next(
+def _configured_value(sources: tuple[Mapping[str, object], ...], field: _CallerField) -> object:
+    return next(
         (
             value
             for name in (field.name, *field.configured_as)
@@ -1035,9 +989,6 @@ def _effective_value(sources: tuple[Mapping[str, object], ...], field: _CallerFi
         ),
         None,
     )
-    if configured is not None:
-        return configured
-    return next((value for name in field.env_names if (value := os.getenv(name))), None)
 
 
 def _call_credential_values(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
