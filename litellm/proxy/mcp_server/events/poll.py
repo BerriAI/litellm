@@ -4,17 +4,23 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
-from litellm.proxy.mcp_server.events.admission import admit, binding_for, screen_all
+from litellm.proxy.mcp_server.events.admission import Admitted, admit, binding_for, screen_all
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import open_cursor, seal_cursor
 from litellm.proxy.mcp_server.events.errors import EventsFailure, internal_error
-from litellm.proxy.mcp_server.events.observability import EventActivity
+from litellm.proxy.mcp_server.events.observability import EventActivity, EventOutcome
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import routing_headers
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import PollEventsParams, PollEventsResult
 
 _JSON_OBJECT: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
+
+
+def _outcome(admitted: Admitted) -> EventOutcome:
+    if admitted.blocked:
+        return "blocked"
+    return "throttled" if admitted.throttled else "delivered"
 
 
 async def poll(
@@ -60,7 +66,7 @@ async def poll(
                 mode="poll",
                 server_id=resolved.target.server.server_id,
                 event_name=resolved.gateway_name,
-                outcome="throttled" if admitted.dropped else "delivered",
+                outcome=_outcome(admitted),
                 caller=context.user_api_key_auth,
                 event_ids=tuple(item.event_id for item in admitted.events),
             )

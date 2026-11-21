@@ -22560,7 +22560,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Send Test Event */
+        /**
+         * Send Test Event
+         * @description Send one signed test event to an active webhook subscription's callback URL.
+         *
+         *     The event carries `data` from the body, or `{"test": true}` when the body is empty, and is signed with
+         *     the subscription's secret like a real delivery. The response reports whether the callback answered 2xx.
+         */
         post: operations["send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post"];
         delete?: never;
         options?: never;
@@ -22575,7 +22581,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Event Types */
+        /**
+         * List Event Types
+         * @description List the event types one events-enabled MCP server publishes to this caller, with gateway-prefixed names.
+         */
         get: operations["list_event_types_v1_mcp_events_types_get"];
         put?: never;
         post?: never;
@@ -52355,6 +52364,13 @@ export interface components {
             error?: ("connection_refused" | "timeout" | "tls_error" | "http_4xx" | "http_5xx" | "challenge_failed") | null;
             /** Status */
             status?: number | null;
+        };
+        /** TestEventRequest */
+        TestEventRequest: {
+            /** Data */
+            data?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /**
          * TestPoliciesAndGuardrailsRequest
@@ -89448,7 +89464,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TestEventRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

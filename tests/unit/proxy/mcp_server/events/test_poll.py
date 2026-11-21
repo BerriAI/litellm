@@ -77,27 +77,31 @@ async def test_next_poll_is_raised_to_the_server_floor(upstream_ms: int, floor_m
 
 @pytest.mark.asyncio
 async def test_events_over_the_per_caller_budget_are_dropped_and_flagged_truncated() -> None:
+    records: Final[list[EventActivity]] = []  # mutable-ok: collects recorded activity
     result: Final = await poll(
         context(),
         PollEventsParams(name="ci-build.failed", arguments=ARGS),
         None,
         EventsSettings(enabled=True, max_events_per_minute=1),
-        runtime((server(),), upstream=_upstream((occurrence("evt_1"), occurrence("evt_2")))),
+        runtime((server(),), upstream=_upstream((occurrence("evt_1"), occurrence("evt_2"))), records=records),
     )
     assert isinstance(result, Ok)
     assert ([item.event_id for item in result.ok.events], result.ok.truncated) == (["evt_1"], True)
+    assert [item.outcome for item in records] == ["throttled"]
 
 
 @pytest.mark.asyncio
 async def test_a_guardrail_block_drops_the_event_and_flags_truncated() -> None:
+    records: Final[list[EventActivity]] = []  # mutable-ok: collects recorded activity
     result: Final = await poll(
         context(),
         PollEventsParams(name="ci-build.failed", arguments=ARGS),
         None,
         SETTINGS,
-        runtime((server(),), upstream=_upstream((occurrence(),)), screen=screen_blocking()),
+        runtime((server(),), upstream=_upstream((occurrence(),)), screen=screen_blocking(), records=records),
     )
     assert isinstance(result, Ok) and (result.ok.events, result.ok.truncated) == ((), True)
+    assert [item.outcome for item in records] == ["blocked"]
 
 
 @pytest.mark.asyncio

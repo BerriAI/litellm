@@ -9,6 +9,7 @@ from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.events.catalog import prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import CursorBinding, arguments_digest, open_cursor
+from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.push import PushRelay, granted_heartbeat, push
 from litellm.proxy.mcp_server.events.upstream import Overflow, StreamFrame
 from litellm.proxy.mcp_server.outbound_credentials.result import Ok
@@ -44,7 +45,9 @@ async def _revoked() -> OperationContext:
     raise PermissionError("key deleted")
 
 
-async def _run(frames: tuple[object, ...], authorize=_authorized, screen=None, settings: EventsSettings = SETTINGS):  # noqa: ANN001, ANN202  # test helper
+async def _run(
+    frames: tuple[object, ...], authorize=_authorized, screen=None, settings: EventsSettings = SETTINGS, records=None
+):  # noqa: ANN001, ANN202  # test helper
     sent: Final[list[tuple[str, JsonObject]]] = []  # mutable-ok: collects downstream notifications
 
     async def send(method: str, params: JsonObject) -> None:
@@ -59,7 +62,7 @@ async def _run(frames: tuple[object, ...], authorize=_authorized, screen=None, s
         None,
         settings,
         authorize,
-        runtime((server(),), upstream=upstream, screen=screen),
+        runtime((server(),), upstream=upstream, screen=screen, records=records),
     )
     return sent, upstream
 
@@ -107,11 +110,14 @@ async def test_an_upstream_terminated_is_forwarded_and_ends_the_stream() -> None
 
 @pytest.mark.asyncio
 async def test_a_blocked_event_becomes_a_truncated_active() -> None:
-    sent, _ = await _run((_active("1"), _event("evt_1", "2")), screen=screen_blocking())
+    records: Final[list[EventActivity]] = []  # mutable-ok: collects recorded activity
+    sent, _ = await _run((_active("1"), _event("evt_1", "2")), screen=screen_blocking(), records=records)
     assert [(method, params.get("truncated"), _opened(params.get("cursor"))) for method, params in sent] == [
         ("notifications/events/active", False, "1"),
         ("notifications/events/active", True, "2"),
     ]
+    assert "blocked" in [item.outcome for item in records]
+    assert "throttled" not in [item.outcome for item in records]
 
 
 @pytest.mark.parametrize(("requested", "granted"), ((None, 30000), (1, 5000), (15000, 15000), (600000, 60000)))

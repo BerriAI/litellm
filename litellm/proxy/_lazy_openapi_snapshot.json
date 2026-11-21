@@ -46681,6 +46681,19 @@
           "title": "TestDeliveryResult",
           "type": "object"
         },
+        "TestEventRequest": {
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "title": "TestEventRequest",
+          "type": "object"
+        },
         "UpdateMCPServerRequest": {
           "properties": {
             "alias": {
@@ -47481,6 +47494,7 @@
       },
       "/v1/mcp/events/subscriptions/{subscription_id}/test": {
         "post": {
+          "description": "Send one signed test event to an active webhook subscription's callback URL.\n\nThe event carries `data` from the body, or `{\"test\": true}` when the body is empty, and is signed with\nthe subscription's secret like a real delivery. The response reports whether the callback answered 2xx.",
           "operationId": "send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post",
           "parameters": [
             {
@@ -47493,6 +47507,23 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TestEventRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Request"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
@@ -47528,6 +47559,7 @@
       },
       "/v1/mcp/events/types": {
         "get": {
+          "description": "List the event types one events-enabled MCP server publishes to this caller, with gateway-prefixed names.",
           "operationId": "list_event_types_v1_mcp_events_types_get",
           "parameters": [
             {

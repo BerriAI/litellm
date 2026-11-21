@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from mcp.shared.inbound import MCP_NAME_HEADER, decode_header_value, validate_mcp_param_headers
 
@@ -19,7 +19,12 @@ from litellm.types.mcp_server.events import DeliveryMode, EventOccurrence, JsonO
 @dataclass(frozen=True, slots=True)
 class Admitted:
     events: tuple[EventOccurrence, ...]
-    dropped: int
+    throttled: int
+    blocked: int
+
+    @property
+    def dropped(self) -> int:
+        return self.throttled + self.blocked
 
 
 def caller_key(context: OperationContext) -> str:
@@ -89,9 +94,9 @@ async def screen_all(
     subscription_id: str | None,
     runtime: EventsRuntime,
 ) -> Admitted:
-    async def one(occurrence: EventOccurrence) -> EventOccurrence | None:
+    async def one(occurrence: EventOccurrence) -> EventOccurrence | Literal["throttled", "blocked"]:
         if not runtime.budget.take(caller_key(context), settings.max_events_per_minute):
-            return None
+            return "throttled"
         outcome: Final = await runtime.screen(
             occurrence,
             prepared.resolved.target.server.name,
@@ -100,11 +105,14 @@ async def screen_all(
             context.user_api_key_auth,
         )
         if isinstance(outcome, Blocked):
-            return None
+            return "blocked"
         return occurrence.model_copy(
             update={"name": prepared.resolved.gateway_name, "data": outcome.data, "cursor": None, "meta": None}
         )
 
     screened: Final = tuple([await one(occurrence) for occurrence in occurrences])
-    kept: Final = tuple(item for item in screened if item is not None)
-    return Admitted(events=kept, dropped=len(screened) - len(kept))
+    return Admitted(
+        events=tuple(item for item in screened if isinstance(item, EventOccurrence)),
+        throttled=screened.count("throttled"),
+        blocked=screened.count("blocked"),
+    )

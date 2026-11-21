@@ -158,7 +158,7 @@ class PushRelay:
         )
         if not admitted.events:
             await self._announce(occurrence.cursor, True)
-            await self._record("throttled")
+            await self._record("blocked" if admitted.blocked else "throttled")
             return
         self._cursor = self._seal(occurrence.cursor) or self._cursor
         delivered: Final = admitted.events[0].model_copy(update={"cursor": self._cursor})
