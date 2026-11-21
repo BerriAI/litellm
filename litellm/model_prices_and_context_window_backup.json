@@ -61172,7 +61172,7 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
-    "scaleway/thinkingmachines/inkling-2-mini": {
+    "scaleway/qwen/qwen3.6-35b-a3b": {
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "scaleway",
         "max_input_tokens": 256000,
@@ -61207,7 +61207,7 @@
         "output_cost_per_token": 8e-07,
         "supports_function_calling": true,
         "deprecation_source": "https://www.scaleway.com/en/docs/generative-apis/reference-content/supported-models/",
-        "successor_model": "scaleway/thinkingmachines/inkling-2-mini",
+        "successor_model": "scaleway/qwen/qwen3.6-35b-a3b",
         "deprecation_date": "2026-10-01"
     },
     "scaleway/openai/gpt-oss-120b": {
@@ -69954,7 +69954,7 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "novita/thinkingmachines/inkling-2-mini": {
+    "novita/qwen/qwen3.6-35b-a3b": {
         "input_cost_per_token": 2.48e-07,
         "litellm_provider": "novita",
         "max_input_tokens": 262144,
