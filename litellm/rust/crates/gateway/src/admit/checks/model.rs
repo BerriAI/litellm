@@ -25,8 +25,9 @@ const MESSAGES_PROVIDERS: [LlmProviders; 2] = [LlmProviders::Anthropic, LlmProvi
 const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
 
 /// The `model_info` keys the router reads as Python's does. `access_groups` only decides which
-/// models a caller other than the master key may call.
-const HONORED_MODEL_INFO: [&str; 2] = ["id", "access_groups"];
+/// models a caller other than the master key may call, and `max_input_tokens` is the context
+/// window the pre-call checks hold a prompt to.
+const HONORED_MODEL_INFO: [&str; 3] = ["id", "access_groups", "max_input_tokens"];
 
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
@@ -57,8 +58,7 @@ fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
             reached
                 .steps
                 .iter()
-                .find(|step| !crate::host::answers(step))
-                .map(|step| format!("router_settings.{}", step.setting()).into())
+                .find_map(|step| crate::host::unanswered(step, group, &admit.windows))
         })
         .or_else(|| {
             admit
@@ -336,11 +336,6 @@ mod tests {
         "  routing_strategy: least-busy\n",
         "other",
         "router_settings.routing_strategy"
-    )]
-    #[case::pre_call_checks(
-        "  enable_pre_call_checks: true\n",
-        "other",
-        "router_settings.enable_pre_call_checks"
     )]
     #[case::health_check_routing(
         "  enable_health_check_routing: true\n",

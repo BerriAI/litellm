@@ -8,19 +8,26 @@ use litellm_gateway_inference::{
 use litellm_router_core::HostStep;
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, ConfigError, Deployment, RouterEvent, RouterHost,
-    RoutingContext, SelectStage, Served,
+    RoutingContext, SelectStage, Served, precall::PreCallFacts,
 };
+use tokio::sync::OnceCell;
 
+use super::precall::{self, Windows};
 use crate::{Gateway, host::NativeRows};
 
-/// Whether [`NativeRouterHost`] answers `step` as the proxy does. `admit` leaves to Python every
-/// call that would make a step it does not.
-pub fn answers(step: &HostStep) -> bool {
+/// What a call served by `group` is over when [`NativeRouterHost`] does not answer its `step` as
+/// the proxy does, and `None` when it does. `admit` leaves every such call to Python.
+///
+/// The pre-call facts are answered for a group whose every deployment has a window in `windows`,
+/// since the proxy's own cost map may hold a window the native host reads none for.
+pub fn unanswered(step: &HostStep, group: &str, windows: &Windows) -> Option<Box<str>> {
     match step {
-        HostStep::Pick(..)
-        | HostStep::PreCallFacts
-        | HostStep::HealthStates
-        | HostStep::FallbackParams(_) => false,
+        HostStep::PreCallFacts => {
+            (!windows.cover(group)).then(|| "model_list.model_info.max_input_tokens".into())
+        }
+        HostStep::Pick(..) | HostStep::HealthStates | HostStep::FallbackParams(_) => {
+            Some(format!("router_settings.{}", step.setting()).into())
+        }
     }
 }
 
@@ -30,6 +37,8 @@ pub struct NativeRouterHost<'a, A> {
     pub(super) gateway: &'a Gateway,
     pub(super) identity: &'a Authenticated<NativeRows>,
     pub(super) route: &'a A,
+    pub(super) windows: &'a Windows,
+    pub(super) prompt_tokens: OnceCell<Option<i64>>,
 }
 
 impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
@@ -54,6 +63,15 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
             step: "a selection stage",
         }
         .into())
+    }
+
+    async fn pre_call_facts(
+        &self,
+        _ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+    ) -> Result<PreCallFacts, litellm_router_core::Error> {
+        let prompt = self.route.prompt();
+        Ok(precall::facts(self.windows, prompt, &self.prompt_tokens, candidates).await)
     }
 
     async fn allow_fallback(&self, target: &str) -> Result<bool, AttemptError> {

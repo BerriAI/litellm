@@ -87,9 +87,7 @@ pub fn app_with_callbacks(
         test_params(model, api_base),
         Value::Object(Map::new()),
         None,
-        NativeHost::new(Arc::new(
-            Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap(),
-        )),
+        host(Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap()),
     )
 }
 
@@ -117,7 +115,11 @@ fn deployment_app(
     shaping: Value,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 ) -> Router {
-    hosted_app(litellm_params, shaping, cache, NativeHost::default())
+    hosted_app(litellm_params, shaping, cache, host(Callbacks::default()))
+}
+
+fn host(callbacks: Callbacks) -> NativeHost {
+    NativeHost::new(Arc::new(callbacks), Arc::default())
 }
 
 fn hosted_app(

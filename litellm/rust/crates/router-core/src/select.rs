@@ -16,7 +16,7 @@ use crate::{
     error::Error,
     health_routing::WhenAllUnhealthy,
     host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
-    registry::{Deployment, Registry, ResolveKind},
+    registry::{Deployment, Registry, Resolution, ResolveKind},
     resolve::{Caller, resolve_request},
     strategy::{StrategyScope, request_override, routing_context},
 };
@@ -253,6 +253,208 @@ fn without_deployments_that_cannot_batch(
         .collect()
 }
 
+/// A kind of pass a stage of the filter chain sits out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Except {
+    /// A deployment the request names by its id.
+    ById,
+    /// A listed pass-through pick ([`PassThrough::Listed`]).
+    Listed,
+    /// The count a retry decision reads ([`SelectInputs::count_only`]).
+    Count,
+}
+
+/// One filter of the chain. [`Stage::skipped_on`] says which passes it sits out, and
+/// `Call::keep` what it keeps on the others.
+#[derive(Clone, Copy, Debug)]
+enum Stage {
+    /// `filter_web_search_deployments`: runs before `request_deployments` is read, so every later
+    /// stage sees the group without the deployments it dropped.
+    WebSearch,
+    /// `_without_deployments_that_cannot_serve_route`: the deployments whose provider cannot
+    /// serve the call, unless that leaves nothing (`_route_capability_pin`).
+    RouteCapable,
+    /// A listed pass-through request keeps only the pass-through deployments, in the count too.
+    ListedPassThrough,
+    /// `_core_async_get_healthy_deployments`: a deployment named by id is checked alone, and
+    /// refused when it is paused or serves no pass-through.
+    NamedById,
+    Blocked,
+    /// `continuation_deployments`: a mid-stream continuation never lands on a deployment the host
+    /// named as unable to take its prefill.
+    Continuation,
+    /// `async_callback_filter_deployments`, which also names the deployment it prefers.
+    CallbackFilters,
+    Plugins,
+    /// `_pre_call_checks`, with the host's facts.
+    PreCallChecks,
+    /// Only a priority group narrows a listed pass-through pick by order.
+    ListedPriority,
+    Tags,
+    /// The models the routing plugins left on the request.
+    RoutingPlugins,
+    /// `_without_declared_text_only_deployments`: an image request skips the deployments that
+    /// declare no vision, unless that leaves nothing.
+    Vision,
+    /// `_without_decisions_deployments_refusing_media`: a Decisions call carrying audio or videos
+    /// skips the deployments that refuse them, unless that leaves nothing.
+    DecisionsMedia,
+    /// `deployments_admitting_embedding_batch`: an embedding pick keeps the deployments whose
+    /// input limit admits the batch; when none does, the host keeps what the pick waits for or
+    /// the 400 names.
+    EmbeddingBatch,
+    /// [`without_deployments_that_cannot_batch`].
+    Batch,
+    /// The deployment the request pins, else the one the callback filters prefer, when healthy.
+    Pinned,
+    /// The hop's order, the request's, else the lowest order among the healthy.
+    Order,
+    Excluded,
+    /// The deployments a retry skips, unless that leaves nothing.
+    RetrySkips,
+    /// `async_get_available_deployment_for_pass_through`: the pass-through filter after the full
+    /// healthy chain.
+    HealthyPassThrough,
+}
+
+/// The stages over every deployment the caller may use, in order.
+const POOL: &[Stage] = &[
+    Stage::WebSearch,
+    Stage::RouteCapable,
+    Stage::ListedPassThrough,
+];
+
+/// The stages over the pool's deployments that are not cooling down, in order. The count a retry
+/// decision reads ends at [`Stage::Batch`], and a listed pass-through pick at
+/// [`Stage::ListedPriority`], by what the later stages sit out.
+const HEALTHY: &[Stage] = &[
+    Stage::NamedById,
+    Stage::Blocked,
+    Stage::Continuation,
+    Stage::CallbackFilters,
+    Stage::Plugins,
+    Stage::PreCallChecks,
+    Stage::ListedPriority,
+    Stage::Tags,
+    Stage::RoutingPlugins,
+    Stage::Vision,
+    Stage::DecisionsMedia,
+    Stage::EmbeddingBatch,
+    Stage::Batch,
+    Stage::Pinned,
+    Stage::Order,
+    Stage::Excluded,
+    Stage::RetrySkips,
+    Stage::HealthyPassThrough,
+];
+
+impl Stage {
+    /// The passes the stage sits out.
+    const fn skipped_on(self) -> &'static [Except] {
+        use Except::{ById, Count, Listed};
+        match self {
+            Self::ListedPassThrough
+            | Self::NamedById
+            | Self::Blocked
+            | Self::Continuation
+            | Self::ListedPriority => &[],
+            Self::WebSearch | Self::RouteCapable | Self::PreCallChecks => &[ById, Count],
+            Self::Batch => &[ById, Listed],
+            Self::Plugins
+            | Self::Tags
+            | Self::Pinned
+            | Self::Order
+            | Self::Excluded
+            | Self::RetrySkips => &[Listed, Count],
+            Self::CallbackFilters
+            | Self::RoutingPlugins
+            | Self::Vision
+            | Self::DecisionsMedia
+            | Self::EmbeddingBatch
+            | Self::HealthyPassThrough => &[ById, Listed, Count],
+        }
+    }
+}
+
+/// One run of the filter chain: the request, the name it resolved to and what the stages share.
+struct Pass<'a> {
+    snapshot: &'a RouterStateSnapshot,
+    op: &'a Op,
+    request: &'a RouterRequest,
+    name: &'a str,
+    inputs: &'a SelectInputs,
+    /// The model group the name resolved to.
+    group: &'a str,
+    kind: &'a ResolveKind,
+    /// What the routing plugins left on the request.
+    plugin_models: Option<Vec<String>>,
+    /// Every deployment the caller may use, once [`POOL`] ran.
+    pool: &'a [Arc<Deployment>],
+    /// The deployment the callback filters prefer.
+    preferred: Option<String>,
+}
+
+impl Pass<'_> {
+    fn is(&self, except: Except) -> bool {
+        match except {
+            Except::ById => self.kind.is_single(),
+            Except::Listed => self.lists_pass_through() && !self.inputs.count_only,
+            Except::Count => self.inputs.count_only,
+        }
+    }
+
+    /// A listed pass-through request for a group, whether it picks or counts.
+    fn lists_pass_through(&self) -> bool {
+        self.request.pass_through == Some(PassThrough::Listed) && !self.kind.is_single()
+    }
+
+    /// The request's `_target_order`, which `run_async_fallback` pops for a fallback hop.
+    fn request_order(&self) -> Option<i64> {
+        self.request
+            .target_order
+            .filter(|_| !self.inputs.fallback_hop)
+    }
+}
+
+/// `resolution`'s deployments the caller may use: the team filter, then
+/// `_filter_reserved_deployments`, where PTU shares keep holders to their share and everyone
+/// else to the deployments split into none.
+fn usable_by_caller(
+    resolution: &Resolution,
+    request: &RouterRequest,
+    name: &str,
+) -> Result<Vec<Arc<Deployment>>, Error> {
+    let usable = filter_team_based(resolution.deployments.clone(), request)?;
+    let (all, withheld) = crate::ptu::filter_shared(usable, request.team_id.as_deref());
+    if withheld && all.is_empty() {
+        let first_model = resolution
+            .deployments
+            .first()
+            .map(|d| d.params.model.clone());
+        return Err(Error::PtuReserved {
+            model: match resolution.kind {
+                ResolveKind::Id => first_model.unwrap_or_else(|| name.to_owned()),
+                ResolveKind::Wildcard | ResolveKind::SpecificDeployment => name.to_owned(),
+                _ => resolution.group.clone(),
+            },
+        });
+    }
+    Ok(all)
+}
+
+/// `list` without `dropped`, unless that leaves nothing.
+fn without_unless_none_left(
+    list: Vec<Arc<Deployment>>,
+    dropped: &[Arc<Deployment>],
+) -> Vec<Arc<Deployment>> {
+    let kept: Vec<Arc<Deployment>> = list
+        .iter()
+        .filter(|d| !dropped.iter().any(|gone| gone.id == d.id))
+        .cloned()
+        .collect();
+    if kept.is_empty() { list } else { kept }
+}
+
 impl<H: RouterHost> Call<'_, H> {
     fn context<'a>(
         &'a self,
@@ -278,7 +480,8 @@ impl<H: RouterHost> Call<'_, H> {
         }
     }
 
-    /// The eligible deployments for `name`, in filter-chain order.
+    /// The eligible deployments for `name`: the name resolved for the caller, then [`POOL`] over
+    /// every deployment the caller may use and [`HEALTHY`] over those not cooling down.
     pub(crate) async fn candidates(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -287,20 +490,72 @@ impl<H: RouterHost> Call<'_, H> {
         name: &str,
         inputs: &SelectInputs,
     ) -> Result<Candidates, Error> {
-        let registry = &snapshot.registry;
-        // The async pick's pre-routing hook runs the routing plugins before anything resolves;
-        // every pick but a listed pass-through one reads what they left on the request.
-        let plugin_models = if snapshot.settings.routing_plugins
-            && !inputs.count_only
-            && request.pass_through != Some(PassThrough::Listed)
-        {
-            let ctx = self.context(snapshot, op, request, name, name, StrategyScope::Default);
-            self.host
-                .routing_plugin_models(&ctx, request.pre_routes)
-                .await?
-        } else {
-            None
+        let plugin_models = self
+            .plugin_models(snapshot, op, request, name, inputs)
+            .await?;
+        let (resolution, wildcard_request) =
+            self.resolution(snapshot, op, request, name, inputs).await?;
+        let usable = usable_by_caller(&resolution, request, name)?;
+        let mut pass = Pass {
+            snapshot,
+            op,
+            request,
+            name,
+            inputs,
+            group: &resolution.group,
+            kind: &resolution.kind,
+            plugin_models,
+            pool: &[],
+            preferred: None,
         };
+        let all = self.filtered(POOL, &mut pass, usable).await?;
+        let mut pass = Pass { pool: &all, ..pass };
+        let healthy = self.not_cooling(&pass).await?;
+        let healthy = self.filtered(HEALTHY, &mut pass, healthy).await?;
+        Ok(Candidates {
+            name: name.to_owned(),
+            model_group: resolution.group,
+            kind: resolution.kind,
+            all,
+            healthy,
+            wildcard_request,
+            served_as: None,
+        })
+    }
+
+    /// What the routing plugins left on the request. The async pick's pre-routing hook runs them
+    /// before anything resolves, and every pick but a listed pass-through one reads the result.
+    async fn plugin_models(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        op: &Op,
+        request: &RouterRequest,
+        name: &str,
+        inputs: &SelectInputs,
+    ) -> Result<Option<Vec<String>>, Error> {
+        if !snapshot.settings.routing_plugins
+            || inputs.count_only
+            || request.pass_through == Some(PassThrough::Listed)
+        {
+            return Ok(None);
+        }
+        let ctx = self.context(snapshot, op, request, name, name, StrategyScope::Default);
+        self.host
+            .routing_plugin_models(&ctx, request.pre_routes)
+            .await
+    }
+
+    /// `name` resolved for the caller, with the provider-prefixed spelling it resolved under when
+    /// the host was asked for one.
+    async fn resolution(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        op: &Op,
+        request: &RouterRequest,
+        name: &str,
+        inputs: &SelectInputs,
+    ) -> Result<(Resolution, Option<String>), Error> {
+        let registry = &snapshot.registry;
         // No deployment for the name: route to the first default fallback.
         let default_target = crate::resolve::default_target(&snapshot.settings.dynamic);
         // `get_pattern`: a name no pattern matches is tried again under its inferred provider.
@@ -343,100 +598,52 @@ impl<H: RouterHost> Call<'_, H> {
             // The name `_common_checks_available_deployment` looked for, past the alias.
             model: registry.alias_of(name).unwrap_or(name).to_owned(),
         })?;
-        let first_model = resolution
-            .deployments
-            .first()
-            .map(|d| d.params.model.clone());
-        let team_id = request.team_id.as_deref();
-        let usable = filter_team_based(resolution.deployments.clone(), request)?;
-        // `_filter_reserved_deployments`: PTU shares keep holders to their share and everyone
-        // else to the deployments split into none.
-        let (mut all, withheld) = crate::ptu::filter_shared(usable, team_id);
-        if withheld && all.is_empty() {
-            return Err(Error::PtuReserved {
-                model: match resolution.kind {
-                    ResolveKind::Id => first_model.unwrap_or_else(|| name.to_owned()),
-                    ResolveKind::Wildcard | ResolveKind::SpecificDeployment => name.to_owned(),
-                    _ => resolution.group.clone(),
-                },
-            });
-        }
-        // `filter_web_search_deployments` runs before `request_deployments` is read, so every later
-        // stage sees the group without the deployments it dropped.
-        if request.web_search && !inputs.count_only && !resolution.kind.is_single() {
-            all.retain(|d| d.supports_web_search());
-        }
-        // `_without_deployments_that_cannot_serve_route`, right after the web search filter: the
-        // deployments whose provider cannot serve the call, unless that leaves nothing. Only a pick
-        // runs it (`_route_capability_pin`): the retry count reads the whole group.
-        if let Some(handler) = request.route_handler.as_deref()
-            && !inputs.count_only
-            && !resolution.kind.is_single()
-            && !all.is_empty()
-        {
-            let ctx = self.context(
-                snapshot,
-                op,
-                request,
-                &resolution.group,
-                name,
-                StrategyScope::Default,
-            );
-            let stage = SelectStage::RouteIncapable {
-                handler: handler.to_owned(),
-            };
-            let incapable = self.host.select(&stage, &ctx, all.clone()).await?;
-            let capable: Vec<Arc<Deployment>> = all
-                .iter()
-                .filter(|d| !incapable.iter().any(|i| i.id == d.id))
-                .cloned()
-                .collect();
-            if !capable.is_empty() {
-                all = capable;
-            }
-        }
-        let listed =
-            request.pass_through == Some(PassThrough::Listed) && !resolution.kind.is_single();
-        if listed {
-            all.retain(|d| uses_pass_through(d));
-            if all.is_empty() {
-                // The name `_common_checks_available_deployment` resolved: an alias's target, a
-                // routing group's name, the alias-resolved name a wildcard serves.
-                let model = match resolution.kind {
-                    ResolveKind::Wildcard => registry.alias_of(name).unwrap_or(name),
-                    ResolveKind::SpecificDeployment => name,
-                    _ => resolution.group.as_str(),
-                };
-                return Err(Error::NoPassThroughDeployments {
-                    model: model.to_owned(),
-                });
-            }
-        }
+        Ok((resolution, wildcard_request))
+    }
 
+    /// `deployments` after every stage of `stages` the pass does not sit out, in order.
+    async fn filtered(
+        &self,
+        stages: &[Stage],
+        pass: &mut Pass<'_>,
+        deployments: Vec<Arc<Deployment>>,
+    ) -> Result<Vec<Arc<Deployment>>, Error> {
+        let mut kept = deployments;
+        for stage in stages {
+            if stage.skipped_on().iter().any(|except| pass.is(*except)) {
+                continue;
+            }
+            kept = self.keep(*stage, pass, kept).await?;
+        }
+        Ok(kept)
+    }
+
+    /// The pool's deployments that are not cooling down, past the health-check filter.
+    async fn not_cooling(&self, pass: &Pass<'_>) -> Result<Vec<Arc<Deployment>>, Error> {
+        let settings = &pass.snapshot.settings;
         // A deployment named by its id is served even while it cools down
         // (`get_deployment_by_model_id` returns before the cooldown filter).
-        let settings = &snapshot.settings;
-        let cooling = if resolution.kind.is_single() || all.is_empty() {
+        let cooling = if pass.is(Except::ById) || pass.pool.is_empty() {
             Vec::new()
         } else {
-            let ids: Vec<String> = all.iter().map(|d| d.id.clone()).collect();
+            let ids: Vec<String> = pass.pool.iter().map(|d| d.id.clone()).collect();
             self.health().active_cooldowns(&ids).await?
         };
         // Health-check filtering runs before the cooldown filter, except for a deployment named
         // by its id and the healthy count a retry decision reads.
-        let checked = if resolution.kind.is_single() || inputs.count_only {
-            all.clone()
+        let checked = if pass.is(Except::ById) || pass.is(Except::Count) {
+            pass.pool.to_vec()
         } else {
-            let when_all_unhealthy = if request.health_check_probe {
+            let when_all_unhealthy = if pass.request.health_check_probe {
                 WhenAllUnhealthy::Nothing
             } else {
                 WhenAllUnhealthy::KeepAll
             };
             self.health()
-                .health_check_filter(settings, all.clone(), when_all_unhealthy)
+                .health_check_filter(settings, pass.pool.to_vec(), when_all_unhealthy)
                 .await
         };
-        let mut healthy: Vec<Arc<Deployment>> = checked
+        let healthy: Vec<Arc<Deployment>> = checked
             .iter()
             .filter(|d| !cooling.iter().any(|(id, _)| *id == d.id))
             .cloned()
@@ -444,320 +651,231 @@ impl<H: RouterHost> Call<'_, H> {
         // The safety net when health-check routing drives cooldowns (an allowed_fails_policy):
         // never on a listed pass-through pick or the healthy count.
         if healthy.is_empty()
-            && !listed
-            && !inputs.count_only
+            && !pass.is(Except::Listed)
+            && !pass.is(Except::Count)
             && settings.enable_health_check_routing
             && settings.allowed_fails_policy.is_some()
         {
-            healthy = checked;
+            return Ok(checked);
         }
-        if resolution.kind.is_single()
-            && let Some(deployment) = all.first()
-        {
-            // `_core_async_get_healthy_deployments`: a deployment named by id is checked alone.
-            if deployment.model_info.blocked {
-                return Err(Error::Paused {
-                    model: deployment.params.model.clone(),
-                });
-            }
-            if request.pass_through.is_some() && !uses_pass_through(deployment) {
-                return Err(Error::NotPassThrough {
-                    id: deployment.id.clone(),
-                });
-            }
-        }
-        healthy.retain(|d| !d.model_info.blocked);
-        // `continuation_deployments`: a mid-stream continuation never lands on a deployment the host
-        // named as unable to take its prefill.
-        if let Some(excluded) = request
-            .body
-            .get("continuation_excluded_ids")
-            .and_then(serde_json::Value::as_array)
-        {
-            healthy.retain(|d| !excluded.iter().any(|id| id.as_str() == Some(d.id.as_str())));
-        }
-        let request_order = request.target_order.filter(|_| !inputs.fallback_hop);
-        // `async_callback_filter_deployments` runs after the cooldown and blocked filters on every
-        // async candidate list but a deployment named by id and a listed pass-through pick.
-        let preferred = if settings.callback_filters
-            && !inputs.count_only
-            && !resolution.kind.is_single()
-            && request.pass_through != Some(PassThrough::Listed)
-        {
-            let mut ctx = self.context(
-                snapshot,
-                op,
-                request,
-                &resolution.group,
-                name,
-                StrategyScope::Default,
-            );
-            ctx.excluded_ids = &inputs.excluded_ids;
-            ctx.skipped_ids = &inputs.failed_ids;
-            ctx.target_order = inputs.target_order.or(request_order);
-            let filtered = self.host.callback_filters(&ctx, healthy).await?;
-            healthy = filtered.kept;
-            filtered.preferred
-        } else {
-            None
-        };
-        if inputs.count_only {
-            let healthy = if resolution.kind.is_single() {
-                healthy
-            } else {
-                without_deployments_that_cannot_batch(request, &all, healthy)
-            };
-            return Ok(Candidates {
-                name: name.to_owned(),
-                model_group: resolution.group,
-                kind: resolution.kind,
-                all,
-                healthy,
-                wildcard_request,
-                served_as: None,
-            });
-        }
-
-        if listed {
-            if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-                healthy = self
-                    .pre_call_checks(
-                        snapshot,
-                        op,
-                        request,
-                        &resolution.group,
-                        name,
-                        &all,
-                        healthy,
-                    )
-                    .await?;
-            }
-            // Only a priority group narrows a listed pass-through pick by order.
-            let priority = resolution.kind == ResolveKind::RoutingGroup
-                && registry.routing_groups().iter().any(|g| {
-                    g.group_name == resolution.group && crate::routing_groups::is_priority(g)
-                });
-            if priority {
-                let order = request
-                    .target_order
-                    .or_else(|| healthy.iter().filter_map(|d| d.order()).min());
-                if let Some(order) = order {
-                    healthy.retain(|d| d.order() == Some(order));
-                }
-            }
-            return Ok(Candidates {
-                name: name.to_owned(),
-                model_group: resolution.group,
-                kind: resolution.kind,
-                all,
-                healthy,
-                wildcard_request,
-                served_as: None,
-            });
-        }
-
-        if !settings.plugins.is_empty() && !healthy.is_empty() {
-            let ctx = self.context(
-                snapshot,
-                op,
-                request,
-                &resolution.group,
-                name,
-                StrategyScope::Default,
-            );
-            healthy = self
-                .host
-                .select(&SelectStage::Plugins, &ctx, healthy)
-                .await?;
-        }
-
-        if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-            healthy = self
-                .pre_call_checks(
-                    snapshot,
-                    op,
-                    request,
-                    &resolution.group,
-                    name,
-                    &all,
-                    healthy,
-                )
-                .await?;
-        }
-
-        if request.filter_tags && !healthy.is_empty() {
-            let mut ctx = self.context(
-                snapshot,
-                op,
-                request,
-                &resolution.group,
-                name,
-                StrategyScope::Default,
-            );
-            ctx.pool = &all;
-            healthy = self.host.select(&SelectStage::Tags, &ctx, healthy).await?;
-        }
-
-        if !resolution.kind.is_single() {
-            healthy = crate::routing_plugins::narrow(healthy, plugin_models.as_deref())?;
-        }
-
-        // `_without_declared_text_only_deployments`: an image request skips the deployments that
-        // declare no vision, unless that leaves nothing.
-        if request.has_image && !resolution.kind.is_single() && !healthy.is_empty() {
-            let ctx = self.context(
-                snapshot,
-                op,
-                request,
-                &resolution.group,
-                name,
-                StrategyScope::Default,
-            );
-            let text_only = self
-                .host
-                .select(&SelectStage::TextOnly, &ctx, healthy.clone())
-                .await?;
-            let vision: Vec<Arc<Deployment>> = healthy
-                .iter()
-                .filter(|d| !text_only.iter().any(|t| t.id == d.id))
-                .cloned()
-                .collect();
-            if !vision.is_empty() {
-                healthy = vision;
-            }
-        }
-
-        // `_without_decisions_deployments_refusing_media`: a Decisions call carrying audio or
-        // videos skips the deployments that refuse them, unless that leaves nothing.
-        if request.decisions_media && !resolution.kind.is_single() && !healthy.is_empty() {
-            let ctx = self.context(
-                snapshot,
-                op,
-                request,
-                &resolution.group,
-                name,
-                StrategyScope::Default,
-            );
-            let refusing = self
-                .host
-                .select(&SelectStage::MediaRefusing, &ctx, healthy.clone())
-                .await?;
-            let taking: Vec<Arc<Deployment>> = healthy
-                .iter()
-                .filter(|d| !refusing.iter().any(|r| r.id == d.id))
-                .cloned()
-                .collect();
-            if !taking.is_empty() {
-                healthy = taking;
-            }
-        }
-
-        // `deployments_admitting_embedding_batch`: an embedding pick keeps the deployments whose
-        // input limit admits the batch; when none does, the host keeps what the pick waits for or
-        // the 400 names.
-        if request.embedding_batch && !resolution.kind.is_single() && !healthy.is_empty() {
-            let mut ctx = self.context(
-                snapshot,
-                op,
-                request,
-                &resolution.group,
-                name,
-                StrategyScope::Default,
-            );
-            ctx.pool = &all;
-            healthy = self
-                .host
-                .select(&SelectStage::EmbeddingBatch, &ctx, healthy)
-                .await?;
-        }
-
-        if !resolution.kind.is_single() {
-            healthy = without_deployments_that_cannot_batch(request, &all, healthy);
-        }
-
-        if let Some(pinned) = [
-            request.pinned_deployment_id.as_deref(),
-            preferred.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|id| healthy.iter().any(|d| d.id == *id))
-        {
-            healthy.retain(|d| d.id == pinned);
-        }
-
-        let order = inputs
-            .target_order
-            .or(request_order)
-            .or_else(|| healthy.iter().filter_map(|d| d.order()).min());
-        if let Some(order) = order {
-            healthy.retain(|d| d.order() == Some(order));
-        }
-
-        healthy.retain(|d| {
-            !request.excluded_ids.contains(&d.id) && !inputs.excluded_ids.contains(&d.id)
-        });
-
-        if !inputs.skipped_ids.is_empty() || !request.retry_skipped_ids.is_empty() {
-            let kept: Vec<Arc<Deployment>> = healthy
-                .iter()
-                .filter(|d| {
-                    !inputs.skipped_ids.contains(&d.id)
-                        && !request.retry_skipped_ids.contains(&d.id)
-                })
-                .cloned()
-                .collect();
-            if !kept.is_empty() {
-                healthy = kept;
-            }
-        }
-
-        if request.pass_through == Some(PassThrough::Healthy)
-            && !resolution.kind.is_single()
-            && !healthy.is_empty()
-        {
-            healthy.retain(|d| uses_pass_through(d));
-            if healthy.is_empty() {
-                return Err(Error::NoPassThroughDeployments {
-                    model: name.to_owned(),
-                });
-            }
-        }
-
-        Ok(Candidates {
-            name: name.to_owned(),
-            model_group: resolution.group,
-            kind: resolution.kind,
-            all,
-            healthy,
-            wildcard_request,
-            served_as: None,
-        })
+        Ok(healthy)
     }
 
-    /// `_pre_call_checks` over `healthy`, with the host's facts.
-    #[allow(clippy::too_many_arguments)]
-    async fn pre_call_checks(
-        &self,
-        snapshot: &RouterStateSnapshot,
-        op: &Op,
-        request: &RouterRequest,
-        model_group: &str,
-        name: &str,
-        pool: &[Arc<Deployment>],
-        healthy: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error> {
-        let mut ctx = self.context(
-            snapshot,
-            op,
-            request,
-            model_group,
-            name,
+    /// The host's view of the pass: the group and the name, with no pool, ids or order.
+    fn pass_context<'a>(&'a self, pass: &'a Pass<'_>) -> RoutingContext<'a> {
+        self.context(
+            pass.snapshot,
+            pass.op,
+            pass.request,
+            pass.group,
+            pass.name,
             StrategyScope::Default,
-        );
-        ctx.pool = pool;
-        let facts = self.host.pre_call_facts(&ctx, &healthy).await?;
-        crate::precall::filter(model_group, healthy, pool, &facts)
+        )
+    }
+
+    /// What `stage` keeps of `list`.
+    async fn keep(
+        &self,
+        stage: Stage,
+        pass: &mut Pass<'_>,
+        mut list: Vec<Arc<Deployment>>,
+    ) -> Result<Vec<Arc<Deployment>>, Error> {
+        let (request, inputs, name) = (pass.request, pass.inputs, pass.name);
+        let (registry, settings) = (&pass.snapshot.registry, &pass.snapshot.settings);
+        match stage {
+            Stage::WebSearch => {
+                if request.web_search {
+                    list.retain(|d| d.supports_web_search());
+                }
+            }
+            Stage::RouteCapable => {
+                if let Some(handler) = request.route_handler.as_deref()
+                    && !list.is_empty()
+                {
+                    let incapable = SelectStage::RouteIncapable {
+                        handler: handler.to_owned(),
+                    };
+                    let ctx = self.pass_context(pass);
+                    let incapable = self.host.select(&incapable, &ctx, list.clone()).await?;
+                    list = without_unless_none_left(list, &incapable);
+                }
+            }
+            Stage::ListedPassThrough => {
+                if pass.lists_pass_through() {
+                    list.retain(|d| uses_pass_through(d));
+                    if list.is_empty() {
+                        // The name `_common_checks_available_deployment` resolved: an alias's
+                        // target, a routing group's name, the alias-resolved name a wildcard
+                        // serves.
+                        let model = match pass.kind {
+                            ResolveKind::Wildcard => registry.alias_of(name).unwrap_or(name),
+                            ResolveKind::SpecificDeployment => name,
+                            _ => pass.group,
+                        };
+                        return Err(Error::NoPassThroughDeployments {
+                            model: model.to_owned(),
+                        });
+                    }
+                }
+            }
+            Stage::NamedById => {
+                if pass.is(Except::ById)
+                    && let Some(deployment) = pass.pool.first()
+                {
+                    if deployment.model_info.blocked {
+                        return Err(Error::Paused {
+                            model: deployment.params.model.clone(),
+                        });
+                    }
+                    if request.pass_through.is_some() && !uses_pass_through(deployment) {
+                        return Err(Error::NotPassThrough {
+                            id: deployment.id.clone(),
+                        });
+                    }
+                }
+            }
+            Stage::Blocked => list.retain(|d| !d.model_info.blocked),
+            Stage::Continuation => {
+                if let Some(excluded) = request
+                    .body
+                    .get("continuation_excluded_ids")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    list.retain(|d| !excluded.iter().any(|id| id.as_str() == Some(d.id.as_str())));
+                }
+            }
+            Stage::CallbackFilters => {
+                if settings.callback_filters {
+                    let mut ctx = self.pass_context(pass);
+                    ctx.excluded_ids = &inputs.excluded_ids;
+                    ctx.skipped_ids = &inputs.failed_ids;
+                    ctx.target_order = inputs.target_order.or(pass.request_order());
+                    let filtered = self.host.callback_filters(&ctx, list).await?;
+                    pass.preferred = filtered.preferred;
+                    list = filtered.kept;
+                }
+            }
+            Stage::Plugins => {
+                if !settings.plugins.is_empty() && !list.is_empty() {
+                    let ctx = self.pass_context(pass);
+                    list = self.host.select(&SelectStage::Plugins, &ctx, list).await?;
+                }
+            }
+            Stage::PreCallChecks => {
+                if settings.enable_pre_call_checks {
+                    let mut ctx = self.pass_context(pass);
+                    ctx.pool = pass.pool;
+                    let facts = self.host.pre_call_facts(&ctx, &list).await?;
+                    list = crate::precall::filter(pass.group, list, pass.pool, &facts)?;
+                }
+            }
+            Stage::ListedPriority => {
+                let priority = pass.is(Except::Listed)
+                    && *pass.kind == ResolveKind::RoutingGroup
+                    && registry.routing_groups().iter().any(|g| {
+                        g.group_name == pass.group && crate::routing_groups::is_priority(g)
+                    });
+                if priority {
+                    let order = request
+                        .target_order
+                        .or_else(|| list.iter().filter_map(|d| d.order()).min());
+                    if let Some(order) = order {
+                        list.retain(|d| d.order() == Some(order));
+                    }
+                }
+            }
+            Stage::Tags => {
+                if request.filter_tags && !list.is_empty() {
+                    let mut ctx = self.pass_context(pass);
+                    ctx.pool = pass.pool;
+                    list = self.host.select(&SelectStage::Tags, &ctx, list).await?;
+                }
+            }
+            Stage::RoutingPlugins => {
+                list = crate::routing_plugins::narrow(list, pass.plugin_models.as_deref())?;
+            }
+            Stage::Vision => {
+                if request.has_image && !list.is_empty() {
+                    let ctx = self.pass_context(pass);
+                    let text_only = self
+                        .host
+                        .select(&SelectStage::TextOnly, &ctx, list.clone())
+                        .await?;
+                    list = without_unless_none_left(list, &text_only);
+                }
+            }
+            Stage::DecisionsMedia => {
+                if request.decisions_media && !list.is_empty() {
+                    let ctx = self.pass_context(pass);
+                    let refusing = self
+                        .host
+                        .select(&SelectStage::MediaRefusing, &ctx, list.clone())
+                        .await?;
+                    list = without_unless_none_left(list, &refusing);
+                }
+            }
+            Stage::EmbeddingBatch => {
+                if request.embedding_batch && !list.is_empty() {
+                    let mut ctx = self.pass_context(pass);
+                    ctx.pool = pass.pool;
+                    list = self
+                        .host
+                        .select(&SelectStage::EmbeddingBatch, &ctx, list)
+                        .await?;
+                }
+            }
+            Stage::Batch => list = without_deployments_that_cannot_batch(request, pass.pool, list),
+            Stage::Pinned => {
+                if let Some(pinned) = [
+                    request.pinned_deployment_id.as_deref(),
+                    pass.preferred.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .find(|id| list.iter().any(|d| d.id == *id))
+                {
+                    list.retain(|d| d.id == pinned);
+                }
+            }
+            Stage::Order => {
+                let order = inputs
+                    .target_order
+                    .or(pass.request_order())
+                    .or_else(|| list.iter().filter_map(|d| d.order()).min());
+                if let Some(order) = order {
+                    list.retain(|d| d.order() == Some(order));
+                }
+            }
+            Stage::Excluded => list.retain(|d| {
+                !request.excluded_ids.contains(&d.id) && !inputs.excluded_ids.contains(&d.id)
+            }),
+            Stage::RetrySkips => {
+                if !inputs.skipped_ids.is_empty() || !request.retry_skipped_ids.is_empty() {
+                    let kept: Vec<Arc<Deployment>> = list
+                        .iter()
+                        .filter(|d| {
+                            !inputs.skipped_ids.contains(&d.id)
+                                && !request.retry_skipped_ids.contains(&d.id)
+                        })
+                        .cloned()
+                        .collect();
+                    if !kept.is_empty() {
+                        list = kept;
+                    }
+                }
+            }
+            Stage::HealthyPassThrough => {
+                if request.pass_through == Some(PassThrough::Healthy) && !list.is_empty() {
+                    list.retain(|d| uses_pass_through(d));
+                    if list.is_empty() {
+                        return Err(Error::NoPassThroughDeployments {
+                            model: name.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(list)
     }
 
     /// Pick one of `candidates.healthy` with the group's strategy.
@@ -856,8 +974,21 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
+    use std::{collections::HashMap, time::Duration};
+
     use super::*;
-    use crate::registry::DeploymentSpec;
+    use crate::{
+        Router,
+        cache::{
+            HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow,
+        },
+        config::{RouterConfig, RouterDynamicConfig},
+        error::{AttemptError, FailureKind},
+        health::CooldownValue,
+        host::{Attempt, AttemptFailure, CallbackFiltered, RouterEvent, Served},
+        precall::PreCallFacts,
+        registry::DeploymentSpec,
+    };
 
     struct Fixed(f64);
 
@@ -887,6 +1018,489 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(picked.id, expected);
+    }
+
+    type Calls = Arc<Mutex<Vec<String>>>;
+
+    fn listing(deployments: &[Arc<Deployment>]) -> String {
+        let ids: Vec<&str> = deployments.iter().map(|d| d.id.as_str()).collect();
+        ids.join(",")
+    }
+
+    /// An [`InMemoryRouterCache`] that keeps the reads the filter chain makes, among the host's
+    /// calls.
+    #[derive(Default)]
+    struct AskedCache {
+        inner: InMemoryRouterCache,
+        calls: Calls,
+    }
+
+    impl RouterCache for AskedCache {
+        async fn cooldowns(
+            &self,
+            ids: &[String],
+        ) -> Result<Vec<Option<CooldownValue>>, litellm_cache::Error> {
+            self.calls
+                .lock()
+                .push(format!("cooldowns {}", ids.join(",")));
+            self.inner.cooldowns(ids).await
+        }
+
+        async fn put_cooldown(
+            &self,
+            id: &str,
+            cooldown: &CooldownValue,
+            ttl: Duration,
+        ) -> Result<(), litellm_cache::Error> {
+            self.inner.put_cooldown(id, cooldown, ttl).await
+        }
+
+        async fn increment_allowed_fails(
+            &self,
+            id: &str,
+            suffix: Option<&str>,
+            ttl: Duration,
+        ) -> Result<f64, litellm_cache::Error> {
+            self.inner.increment_allowed_fails(id, suffix, ttl).await
+        }
+
+        async fn add_usage(
+            &self,
+            window: &UsageWindow,
+            tokens: f64,
+            requests: f64,
+        ) -> Result<(), litellm_cache::Error> {
+            self.inner.add_usage(window, tokens, requests).await
+        }
+
+        async fn add_request(&self, window: &UsageWindow) -> Result<(), litellm_cache::Error> {
+            self.inner.add_request(window).await
+        }
+
+        async fn usage(&self, window: &UsageWindow) -> Result<UsageCounts, litellm_cache::Error> {
+            self.inner.usage(window).await
+        }
+
+        async fn health_states(
+            &self,
+        ) -> Result<HashMap<String, HealthState>, litellm_cache::Error> {
+            self.calls.lock().push("health_states".to_owned());
+            self.inner.health_states().await
+        }
+
+        async fn outcomes(&self, id: &str) -> Result<Outcomes, litellm_cache::Error> {
+            self.inner.outcomes(id).await
+        }
+
+        async fn count_success(&self, id: &str) -> Result<(), litellm_cache::Error> {
+            self.inner.count_success(id).await
+        }
+
+        async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
+            self.inner.count_failure(id).await
+        }
+    }
+
+    /// Keeps every call the filter chain makes, in order. A stage answers with the candidates it
+    /// was given, unless the test names the ones it answers with.
+    #[derive(Default)]
+    struct Asked {
+        calls: Calls,
+        cache: AskedCache,
+        text_only: Option<&'static [&'static str]>,
+        preferred: Option<&'static str>,
+    }
+
+    impl Asked {
+        fn new() -> Self {
+            let calls = Calls::default();
+            Self {
+                cache: AskedCache {
+                    calls: calls.clone(),
+                    ..AskedCache::default()
+                },
+                calls,
+                ..Self::default()
+            }
+        }
+
+        fn asked(&self, call: &str, candidates: &[Arc<Deployment>], pool: &[Arc<Deployment>]) {
+            let of = match pool {
+                [] => String::new(),
+                pool => format!(" of {}", listing(pool)),
+            };
+            self.calls
+                .lock()
+                .push(format!("{call} {}{of}", listing(candidates)));
+        }
+    }
+
+    impl RouterHost for Asked {
+        type Response = ();
+        type Failure = ();
+        type Cache = AskedCache;
+
+        async fn attempt(&self, _attempt: &Attempt) -> Result<Served<()>, AttemptFailure<()>> {
+            Err(AttemptFailure::Refused(()))
+        }
+
+        async fn select(
+            &self,
+            stage: &SelectStage,
+            ctx: &RoutingContext<'_>,
+            candidates: Vec<Arc<Deployment>>,
+        ) -> Result<Vec<Arc<Deployment>>, Error> {
+            let (name, answer) = match stage {
+                SelectStage::Plugins => ("plugins", None),
+                SelectStage::Tags => ("tags", None),
+                SelectStage::TextOnly => ("text_only", self.text_only),
+                SelectStage::RouteIncapable { .. } => ("route_incapable", None),
+                SelectStage::MediaRefusing => ("media_refusing", None),
+                SelectStage::EmbeddingBatch => ("embedding_batch", None),
+                SelectStage::Strategy(_) | SelectStage::OverrideCheck(_) => ("strategy", None),
+            };
+            self.asked(name, &candidates, ctx.pool);
+            Ok(match answer {
+                Some(ids) => candidates
+                    .into_iter()
+                    .filter(|d| ids.contains(&d.id.as_str()))
+                    .collect(),
+                None => candidates,
+            })
+        }
+
+        async fn routing_plugin_models(
+            &self,
+            _ctx: &RoutingContext<'_>,
+            _run: bool,
+        ) -> Result<Option<Vec<String>>, Error> {
+            self.calls.lock().push("plugin_models".to_owned());
+            Ok(None)
+        }
+
+        async fn pre_call_facts(
+            &self,
+            ctx: &RoutingContext<'_>,
+            candidates: &[Arc<Deployment>],
+        ) -> Result<PreCallFacts, Error> {
+            self.asked("pre_call_facts", candidates, ctx.pool);
+            Ok(PreCallFacts::default())
+        }
+
+        async fn callback_filters(
+            &self,
+            ctx: &RoutingContext<'_>,
+            candidates: Vec<Arc<Deployment>>,
+        ) -> Result<CallbackFiltered, Error> {
+            self.asked("callback_filters", &candidates, ctx.pool);
+            Ok(CallbackFiltered {
+                kept: candidates,
+                preferred: self.preferred.map(str::to_owned),
+            })
+        }
+
+        async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
+            Ok(true)
+        }
+
+        async fn sleep(&self, _duration: Duration) {}
+
+        fn observe(&self, _event: &RouterEvent) {}
+
+        fn cache(&self) -> &AskedCache {
+            &self.cache
+        }
+    }
+
+    /// `g`: `d1` at order 1, and two Azure pass-through deployments, `d2` at order 2 and the
+    /// batch deployment `d3` at order 1. `solo`: the pass-through `s1`. The priority group `rg`
+    /// serves `g` before `solo`.
+    fn groups(settings: serde_json::Value) -> Router {
+        let mut config = json!({
+            "model_list": [
+                {"model_name": "g", "litellm_params": {"model": "openai/a", "order": 1}, "model_info": {"id": "d1"}},
+                {"model_name": "g", "litellm_params": {"model": "azure/b", "order": 2, "use_in_pass_through": true}, "model_info": {"id": "d2"}},
+                {"model_name": "g", "litellm_params": {"model": "azure/c", "order": 1, "use_in_pass_through": true}, "model_info": {"id": "d3", "mode": "batch"}},
+                {"model_name": "solo", "litellm_params": {"model": "anthropic/s", "use_in_pass_through": true}, "model_info": {"id": "s1"}},
+            ],
+            "routing_groups": [
+                {"group_name": "rg", "models": ["g", "solo"], "routing_strategy": "priority", "model_priorities": {"g": 1, "solo": 2}},
+            ],
+        });
+        config
+            .as_object_mut()
+            .unwrap()
+            .extend(settings.as_object().unwrap().clone());
+        let config: RouterConfig = serde_json::from_value(config).unwrap();
+        Router::new(config, RouterDynamicConfig::default()).unwrap()
+    }
+
+    /// Every stage that asks the host is switched on.
+    fn every_host_stage() -> serde_json::Value {
+        json!({
+            "routing_plugins": true,
+            "callback_filters": true,
+            "enable_pre_call_checks": true,
+            "enable_health_check_routing": true,
+            "plugins": [{"kind": "auto", "name": "p"}],
+        })
+    }
+
+    /// A request that gives every stage of the chain something to filter on.
+    fn asking_every_stage(name: &str, pass_through: Option<PassThrough>) -> RouterRequest {
+        RouterRequest {
+            model: name.to_owned(),
+            pass_through,
+            route_handler: Some("decisions".to_owned()),
+            filter_tags: true,
+            has_image: true,
+            decisions_media: true,
+            embedding_batch: true,
+            ..RouterRequest::default()
+        }
+    }
+
+    fn asking(name: &str) -> RouterRequest {
+        RouterRequest {
+            model: name.to_owned(),
+            ..RouterRequest::default()
+        }
+    }
+
+    fn counting(count_only: bool) -> SelectInputs {
+        SelectInputs {
+            count_only,
+            ..SelectInputs::default()
+        }
+    }
+
+    /// The ids the chain leaves healthy for `request`.
+    async fn healthy(
+        router: &Router,
+        host: &Asked,
+        request: &RouterRequest,
+        inputs: &SelectInputs,
+    ) -> Vec<String> {
+        let snapshot = router.core.snapshot.load_full();
+        let candidates = Call::new(&router.core, host)
+            .candidates(
+                &snapshot,
+                &Op::from("acompletion"),
+                request,
+                &request.model,
+                inputs,
+            )
+            .await
+            .unwrap();
+        candidates.healthy.iter().map(|d| d.id.clone()).collect()
+    }
+
+    const LISTED: Option<PassThrough> = Some(PassThrough::Listed);
+
+    /// What each kind of pass asks the host and the cache, in order, with the candidates each
+    /// stage was handed and the pool it could see.
+    #[rstest]
+    #[case::a_pick_of_a_group("g", None, false, &[
+        "plugin_models",
+        "route_incapable d1,d2,d3",
+        "cooldowns d1,d2,d3",
+        "health_states",
+        "callback_filters d1,d2,d3",
+        "plugins d1,d2,d3",
+        "pre_call_facts d1,d2,d3 of d1,d2,d3",
+        "tags d1,d2,d3 of d1,d2,d3",
+        "text_only d1,d2,d3",
+        "media_refusing d1,d2,d3",
+        "embedding_batch d1,d2,d3 of d1,d2,d3",
+    ], &["d1", "d3"])]
+    #[case::the_count_of_a_group("g", None, true, &["cooldowns d1,d2,d3"], &["d1", "d2", "d3"])]
+    #[case::a_pick_by_id("d1", None, false, &["plugin_models", "plugins d1", "tags d1 of d1"], &["d1"])]
+    #[case::the_count_by_id("d1", None, true, &[], &["d1"])]
+    #[case::a_listed_pass_through_pick("g", LISTED, false, &[
+        "route_incapable d1,d2,d3",
+        "cooldowns d2,d3",
+        "health_states",
+        "pre_call_facts d2,d3 of d2,d3",
+    ], &["d2", "d3"])]
+    #[case::the_count_of_a_listed_pass_through("g", LISTED, true, &["cooldowns d2,d3"], &["d2", "d3"])]
+    #[tokio::test]
+    async fn each_kind_of_pass_runs_its_stages_in_the_chains_order(
+        #[case] name: &str,
+        #[case] pass_through: Option<PassThrough>,
+        #[case] count_only: bool,
+        #[case] asked: &[&str],
+        #[case] left: &[&str],
+    ) {
+        let host = Asked::new();
+        let request = asking_every_stage(name, pass_through);
+        let healthy = healthy(
+            &groups(every_host_stage()),
+            &host,
+            &request,
+            &counting(count_only),
+        )
+        .await;
+        assert_eq!(*host.calls.lock(), asked);
+        assert_eq!(healthy, left);
+    }
+
+    /// With health-check routing driving cooldowns, a group whose deployments all cool down is
+    /// still served by a pick, but not counted and not listed.
+    #[rstest]
+    #[case::a_pick(None, false, &["d1", "d3"])]
+    #[case::the_count(None, true, &[])]
+    #[case::a_listed_pass_through_pick(LISTED, false, &[])]
+    #[tokio::test]
+    async fn only_a_pick_keeps_a_group_that_cools_down_whole(
+        #[case] pass_through: Option<PassThrough>,
+        #[case] count_only: bool,
+        #[case] left: &[&str],
+    ) {
+        let router = groups(json!({
+            "enable_health_check_routing": true,
+            "allowed_fails_policy": {"RateLimitErrorAllowedFails": 1},
+        }));
+        let host = Asked::new();
+        let rate_limited = AttemptError::new(FailureKind::RateLimit, Some(429));
+        let health = router.health(host.cache());
+        let minute = Duration::from_secs(60);
+        health
+            .add_cooldown("d1", &rate_limited, minute)
+            .await
+            .unwrap();
+        health
+            .add_cooldown("d2", &rate_limited, minute)
+            .await
+            .unwrap();
+        health
+            .add_cooldown("d3", &rate_limited, minute)
+            .await
+            .unwrap();
+        let request = RouterRequest {
+            pass_through,
+            ..asking("g")
+        };
+        let healthy = healthy(&router, &host, &request, &counting(count_only)).await;
+        assert_eq!(healthy, left);
+    }
+
+    /// A priority group narrows a listed pass-through pick to its first priority. Any other pick
+    /// is narrowed by the hop's order before the request's.
+    #[rstest]
+    #[case::a_listed_pick_of_a_priority_group("rg", LISTED, None, None, &["d2", "d3"])]
+    #[case::a_listed_pick_of_a_plain_group("g", LISTED, None, None, &["d2", "d3"])]
+    #[case::a_listed_pick_at_the_order_the_request_names("rg", LISTED, Some(2), None, &["s1"])]
+    #[case::a_pick_at_the_hops_order("rg", None, Some(1), Some(2), &["s1"])]
+    #[case::a_pick_at_the_order_the_request_names("g", None, Some(2), None, &["d2"])]
+    #[tokio::test]
+    async fn a_pass_is_narrowed_to_one_order(
+        #[case] name: &str,
+        #[case] pass_through: Option<PassThrough>,
+        #[case] request_order: Option<i64>,
+        #[case] hop_order: Option<i64>,
+        #[case] left: &[&str],
+    ) {
+        let request = RouterRequest {
+            pass_through,
+            target_order: request_order,
+            ..asking(name)
+        };
+        let inputs = SelectInputs {
+            target_order: hop_order,
+            ..SelectInputs::default()
+        };
+        let healthy = healthy(&groups(json!({})), &Asked::new(), &request, &inputs).await;
+        assert_eq!(healthy, left);
+    }
+
+    #[rstest]
+    #[case::a_healthy_deployment(Some("d2"), &["d2"])]
+    #[case::a_deployment_outside_the_group(Some("s1"), &["d1", "d3"])]
+    #[case::none(None, &["d1", "d3"])]
+    #[tokio::test]
+    async fn a_pick_goes_to_the_deployment_the_callback_filters_prefer(
+        #[case] preferred: Option<&'static str>,
+        #[case] left: &[&str],
+    ) {
+        let host = Asked {
+            preferred,
+            ..Asked::new()
+        };
+        let router = groups(json!({"callback_filters": true}));
+        let healthy = healthy(&router, &host, &asking("g"), &counting(false)).await;
+        assert_eq!(healthy, left);
+    }
+
+    /// An image request skips the deployments the host names as text only, unless that leaves
+    /// nothing.
+    #[rstest]
+    #[case::some_declare_no_vision(&["d1"], &["d3"])]
+    #[case::all_declare_no_vision(&["d1", "d2", "d3"], &["d1", "d3"])]
+    #[tokio::test]
+    async fn a_stage_drops_what_the_host_names_unless_nothing_is_left(
+        #[case] text_only: &'static [&'static str],
+        #[case] left: &[&str],
+    ) {
+        let host = Asked {
+            text_only: Some(text_only),
+            ..Asked::new()
+        };
+        let request = RouterRequest {
+            has_image: true,
+            ..asking("g")
+        };
+        let healthy = healthy(&groups(json!({})), &host, &request, &counting(false)).await;
+        assert_eq!(healthy, left);
+    }
+
+    /// A batch create drops the Azure deployments that cannot run batches from a pick and from
+    /// the count, a listed pass-through count among them, but not from a listed pass-through
+    /// pick or a deployment named by id.
+    #[rstest]
+    #[case::the_count_of_a_group("g", None, true, &["d1", "d3"])]
+    #[case::the_count_of_a_listed_pass_through("g", LISTED, true, &["d3"])]
+    #[case::a_listed_pass_through_pick("g", LISTED, false, &["d2", "d3"])]
+    #[case::the_count_by_id("d2", None, true, &["d2"])]
+    #[case::a_pick_by_id("d2", None, false, &["d2"])]
+    #[tokio::test]
+    async fn a_batch_create_drops_what_cannot_batch_where_the_pass_filters_by_it(
+        #[case] name: &str,
+        #[case] pass_through: Option<PassThrough>,
+        #[case] count_only: bool,
+        #[case] left: &[&str],
+    ) {
+        let request = RouterRequest {
+            pass_through,
+            batch_create: true,
+            ..asking(name)
+        };
+        let inputs = counting(count_only);
+        let healthy = healthy(&groups(json!({})), &Asked::new(), &request, &inputs).await;
+        assert_eq!(healthy, left);
+    }
+
+    /// A deployment named by id still passes the filters every pick runs last.
+    #[rstest]
+    #[case::excluded(RouterRequest { excluded_ids: vec!["d1".to_owned()], ..asking("d1") }, &[])]
+    #[case::at_another_order(RouterRequest { target_order: Some(2), ..asking("d1") }, &[])]
+    #[case::pinned_elsewhere(RouterRequest { pinned_deployment_id: Some("d2".to_owned()), ..asking("d1") }, &["d1"])]
+    #[case::skipped_by_a_retry_with_nothing_else_left(
+        RouterRequest { retry_skipped_ids: vec!["d1".to_owned()], ..asking("d1") },
+        &["d1"]
+    )]
+    #[tokio::test]
+    async fn a_deployment_named_by_id_passes_the_last_filters_of_a_pick(
+        #[case] request: RouterRequest,
+        #[case] left: &[&str],
+    ) {
+        let healthy = healthy(
+            &groups(json!({})),
+            &Asked::new(),
+            &request,
+            &counting(false),
+        )
+        .await;
+        assert_eq!(healthy, left);
     }
 
     #[rstest]

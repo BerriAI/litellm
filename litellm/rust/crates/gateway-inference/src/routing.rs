@@ -84,6 +84,17 @@ pub trait RouteAttempt: Send + Sync {
         let _ = outcome;
         None
     }
+
+    /// The request's prompt, which the host counts for the pre-call checks. `None` holds the
+    /// route's calls to no context window, so each route says so itself.
+    fn prompt(&self) -> Option<Prompt<'_>>;
+}
+
+/// The prompt a request carries, in the format its route reads it in. A route only hands it over,
+/// and the host decides how it is counted.
+pub enum Prompt<'a> {
+    /// A Messages body: its `system`, its `messages` and its `tools`.
+    Messages(&'a Map<String, Value>),
 }
 
 /// One attempt of `route` as router-core hears it. A complete outcome is served with the tokens
@@ -574,6 +585,10 @@ mod tests {
 
     impl RouteAttempt for Failing {
         type Outcome = RouteChunks;
+
+        fn prompt(&self) -> Option<Prompt<'_>> {
+            None
+        }
 
         async fn run(&self, _attempt: &Attempt) -> Result<RouteChunks, Error> {
             self.open_at_each_run
