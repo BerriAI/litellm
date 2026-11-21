@@ -2,10 +2,8 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-# Captured from the Anthropic Messages API (claude-haiku-5-5, mcp-client-2025-04-04, DeepWiki MCP server) on 2026-11-18,
-# with the long result and answer text shortened. Turn one calls an MCP tool and a client tool together, so Anthropic
-# defers the MCP result to turn two. Anthropic accepted turn two with [mcp_tool_use, tool_use] replayed and turn three
-# with [mcp_tool_result, text] replayed, and rejected turn three with 400 once that mcp_tool_result was removed.
+# Captured from the Anthropic Messages API (claude-haiku-5-5, mcp-client-2025-04-04, DeepWiki) on 2026-11-18, shortened.
+# Anthropic deferred the MCP result to turn two and answered 400 to turn three once that mcp_tool_result was dropped.
 
 DEFERRED_MCP_PROMPT: Final = "Use read_wiki_structure for repo facebook/react and also call get_local_time, then stop."
 DEFERRED_MCP_FOLLOW_UP: Final = (

@@ -335,10 +335,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._queue_deferred_mcp_call(call, result)
 
     def _queue_deferred_mcp_call(self, call: McpToolUse, result: McpToolResult) -> None:
-        output_index: Final = self._get_or_assign_tool_output_index(call.id)
-        self._queue_output_item_added(
-            output_index, BaseLiteLLMOpenAIResponseObject(**build_deferred_mcp_call(call, None).model_dump())
-        )
+        self._queue_mcp_call_opened(call.id, build_deferred_mcp_call(call, None))
         self._queue_mcp_call_done(call.id, build_deferred_mcp_call(call, result))
 
     def _queue_new_mcp_calls(self, holder: object) -> None:
@@ -348,8 +345,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _queue_mcp_call_added(self, call: McpToolUse) -> None:
         self._mcp_calls = MappingProxyType({**self._mcp_calls, call.id: call})
-        output_index: Final = self._get_or_assign_tool_output_index(call.id)
-        item: Final = build_mcp_call(call, None)
+        self._queue_mcp_call_opened(call.id, build_mcp_call(call, None))
+
+    def _queue_mcp_call_opened(self, call_id: str, item: McpCall) -> None:
+        output_index: Final = self._get_or_assign_tool_output_index(call_id)
         self._queue_output_item_added(
             output_index, BaseLiteLLMOpenAIResponseObject(**item.model_copy(update={"arguments": ""}).model_dump())
         )
