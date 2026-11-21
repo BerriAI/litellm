@@ -609,6 +609,57 @@ class TestTranslateMessagesToResponsesInput:
         result = _translate_messages(messages)
         assert result[0]["output"] == ""
 
+    def test_user_tool_result_search_result_content(self):
+        """search_result blocks inside tool_result must reach Responses as rendered text."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_search",
+                        "content": [
+                            {
+                                "type": "search_result",
+                                "title": "Product Configuration Guide",
+                                "source": "https://docs.company.com/product-guide",
+                                "content": [{"type": "text", "text": "The default timeout is 30 seconds."}],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "function_call_output",
+                "call_id": "call_search",
+                "output": (
+                    "Title: Product Configuration Guide\n"
+                    "Source: https://docs.company.com/product-guide\n"
+                    "The default timeout is 30 seconds."
+                ),
+            }
+        ]
+
+    def test_user_tool_result_empty_search_result_is_empty_output(self):
+        """Negative: a search_result with no title, source or text stays an empty output."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_empty",
+                        "content": [{"type": "search_result", "content": []}],
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result[0]["output"] == ""
+
     def test_assistant_string_content(self):
         """Plain string assistant message becomes a message with output_text."""
         messages = [{"role": "assistant", "content": "I can help with that."}]
