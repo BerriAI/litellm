@@ -1176,3 +1176,14 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
             model_params={"model": "openai/gpt-realtime", **federated_deployment},
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_health_check_validates_the_deployment_options_before_connecting():
+    with pytest.raises(ValueError, match="Invalid ElevenLabs realtime options"):
+        await realtime_main.realtime_health_check(
+            model="scribe_v2_realtime",
+            custom_llm_provider="elevenlabs",
+            api_key="elevenlabs-key",
+            model_params={"model": "elevenlabs/scribe_v2_realtime", "vad_threshold": -1},
+        )

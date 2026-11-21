@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.realtime_streaming import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.llms.elevenlabs.common_utils import ElevenLabsException
 from litellm.llms.elevenlabs.realtime.transformation import ElevenLabsRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
@@ -3488,6 +3489,30 @@ async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
     await session.run()
 
     assert session.logging.logged_failures == (upstream_close,)
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_an_elevenlabs_error_before_session_started_logs_a_failure_and_no_success():
+    provider_config: Final = ElevenLabsRealtimeConfig()
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "auth_error", "error": "Invalid API key"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    (failure,) = session.logging.logged_failures
+    assert isinstance(failure, ElevenLabsException)
+    assert (failure.status_code, failure.message) == (401, "ElevenLabs realtime transcription failed: auth_error")
     assert session.logging.logged_sessions == ()
 
 
