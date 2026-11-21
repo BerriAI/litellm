@@ -120,7 +120,9 @@ async def test_discovery_preserves_model_info_fallbacks(
     publish(litellm.model_cost)
 
 
+@pytest.mark.parametrize("provider", ("hosted_vllm", "lm_studio"))
 async def test_upstream_limits_reach_model_info_routes(
+    provider: str,
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
     monkeypatch: pytest.MonkeyPatch,
@@ -132,7 +134,7 @@ async def test_upstream_limits_reach_model_info_routes(
             {
                 "model_name": "local",
                 "litellm_params": {
-                    "model": "hosted_vllm/org/local-model",
+                    "model": f"{provider}/org/local-model",
                     "api_base": "https://backend.test/v1",
                     "api_key": "local-key",
                 },
@@ -145,8 +147,23 @@ async def test_upstream_limits_reach_model_info_routes(
     monkeypatch.setattr(proxy_server, "user_model", None)
 
     def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/models"
-        return httpx.Response(200, json={"data": [{"id": "org/local-model", "max_model_len": 4096}]})
+        assert request.url.path == ("/api/v1/models" if provider == "lm_studio" else "/v1/models")
+        return httpx.Response(
+            200,
+            json=(
+                {
+                    "models": [
+                        {
+                            "key": "org/local-model",
+                            "max_context_length": 32768,
+                            "loaded_instances": [{"id": "org/local-model", "config": {"context_length": 4096}}],
+                        }
+                    ]
+                }
+                if provider == "lm_studio"
+                else {"data": [{"id": "org/local-model", "max_model_len": 4096}]}
+            ),
+        )
 
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -164,6 +181,88 @@ async def test_upstream_limits_reach_model_info_routes(
             assert group_response.status_code == 200, group_response.text
             assert group_response.json()["data"][0]["max_input_tokens"] == 4096
     publish(litellm.model_cost)
+
+
+@pytest.mark.parametrize("provider", ("hosted_vllm", "lm_studio"))
+async def test_editor_view_save_never_pins_discovered_limits(
+    provider: str,
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    stored_params: Final = {
+        "model": f"{provider}/org/local-model",
+        "api_base": "https://backend.test/v1",
+        "api_key": "local-key",
+    }
+    stored_info: Final = {"id": "local-deployment", "db_model": True, "max_output_tokens": 512}
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "local", "litellm_params": stored_params, "model_info": stored_info}]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    mock_prisma.db.litellm_proxymodeltable.find_unique.return_value = LiteLLM_ProxyModelTable(
+        model_id="local-deployment", model_name="local", litellm_params=stored_params, model_info=stored_info
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=(
+                {
+                    "models": [
+                        {
+                            "key": "org/local-model",
+                            "max_context_length": 32768,
+                            "loaded_instances": [{"id": "org/local-model", "config": {"context_length": 4096}}],
+                        }
+                    ]
+                }
+                if provider == "lm_studio"
+                else {"data": [{"id": "org/local-model", "max_model_len": 4096}]}
+            ),
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        handler.client = upstream
+        litellm.in_memory_llm_clients_cache.set_cache("async_httpx_clientopenai", handler)
+        await proxy_server.ProxyStartupEvent.refresh_model_info()
+        with auth_as():
+            shown: Final = client.get("/v2/model/info", params={"modelId": "local-deployment"})
+            editor: Final = client.get(
+                "/v2/model/info", params={"modelId": "local-deployment", "use_stored_params": "true"}
+            )
+    publish(litellm.model_cost)
+
+    assert shown.status_code == editor.status_code == 200, editor.text
+    discovered: Final = router.registry().discovered_model_info("local-deployment")
+    assert discovered.get("max_input_tokens") == 4096
+    assert shown.json()["data"][0]["model_info"]["max_input_tokens"] == 4096
+    editor_info: Final = editor.json()["data"][0]["model_info"]
+    assert editor_info["max_output_tokens"] == 512
+    assert all(editor_info.get(key) is None for key in discovered)
+    saved_on_a_worker_without_discovery: Final = update_db_model(
+        db_model=Deployment(
+            model_name="local",
+            litellm_params=LiteLLM_Params.model_validate(stored_params),
+            model_info=ModelInfo.model_validate(stored_info),
+        ),
+        updated_patch=PatchModelRequest(model_info=ModelInfo.model_validate(editor_info)),
+    )
+    saved_info: Final = json.loads(saved_on_a_worker_without_discovery["model_info"])
+    assert saved_info["max_output_tokens"] == 512
+    assert discovered.keys().isdisjoint(saved_info)
 
 
 # ---------------------------------------------------------------------------
