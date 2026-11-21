@@ -1343,7 +1343,7 @@ def test_a_mantle_credential_source_outage_stays_a_retryable_500(monkeypatch: py
         side_effect=CredentialRetrievalError(provider="container-role", error_msg="connection refused")
     )
 
-    with pytest.raises(ValueError) as signing:
+    with pytest.raises(ValueError, match="Bedrock Mantle auth failed") as signing:
         BedrockMantleChatConfig(aws_signer=signer).sign_request(
             headers={},
             optional_params={"aws_region_name": "us-east-1"},
