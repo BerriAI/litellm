@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import Enum
 from typing import Literal
 
-from pydantic import SerializeAsAny
+from pydantic import Field, SerializeAsAny
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -313,6 +314,10 @@ class CohereChatRequest(LiteLLMBaseModel):
     stopSequences: list[str] | None = None
     seed: int | None = None
     tools: list[CohereTool] | None = None
+    # Top-level results of the tool calls in the last assistant turn. OCI
+    # requires these here (with ``message`` empty) for a tool-result turn;
+    # trailing tool results must not stay in ``chatHistory``.
+    toolResults: Sequence[CohereToolResult] | None = None
     # NOTE: OCI's Cohere chat endpoint does not accept ``toolChoice`` — see
     # ``OCIChatConfig.openai_to_oci_cohere_param_map`` which marks
     # ``tool_choice`` as unsupported. The field is intentionally absent here
@@ -349,12 +354,16 @@ class CohereUsage(LiteLLMBaseModel):
 
 
 class CohereCitation(LiteLLMBaseModel):
-    """Citation in Cohere response."""
+    """Citation in Cohere response.
+
+    OCI writes the referenced document ids as ``documentIds`` (camelCase), so
+    the field accepts that wire name as an alias.
+    """
 
     start: int
     end: int
     text: str
-    document_ids: list[str]
+    document_ids: Sequence[str] = Field(alias="documentIds")
 
 
 class CohereSearchQuery(LiteLLMBaseModel):
