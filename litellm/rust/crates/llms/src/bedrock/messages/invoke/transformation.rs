@@ -1,8 +1,7 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_host::interceptors::RetriedRequest;
 
 use crate::{
-    anthropic::messages::handler::shape_anthropic_messages_request,
+    anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::context::{
         MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext,
         NativeOutputSupport,
@@ -333,7 +332,7 @@ impl MessagesDialect for BedrockInvokeMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
     }
 
     fn clamp_requested_effort(
@@ -412,7 +411,7 @@ impl MessagesReply for BedrockInvokeMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
     }
 }
 

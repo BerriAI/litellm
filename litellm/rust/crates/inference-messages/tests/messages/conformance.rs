@@ -201,6 +201,18 @@ fn case_fields(case: &str) -> (Value, Option<Map<String, Value>>) {
                 ("x-request-source", "conformance"),
             ]),
         ),
+        "host_edits" => (
+            json!({
+                "system": [
+                    {"type": "text", "text": "x-anthropic-billing-header: cc_version=1"},
+                    {"type": "text", "text": "be terse"}
+                ],
+                "output_format": {"type": "json_schema", "schema": {"type": "object"}},
+                "output_config": {"effort": "low", "format": {"type": "replaced"}}
+            }),
+            headers([("anthropic-version", "2023-06-01")]),
+        ),
+        "non_object_output_format" => (json!({"output_format": "text"}), None),
         other => panic!("no conformance case {other}"),
     }
 }
@@ -386,7 +398,9 @@ async fn every_provider_sends_and_decodes_each_case_as_main_does(
         "thinking_effort",
         "droppable_params",
         "anthropic_beta",
-        "extra_headers"
+        "extra_headers",
+        "host_edits",
+        "non_object_output_format"
     )]
     case: &str,
 ) {

@@ -10,7 +10,7 @@ use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
-    providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::{BetaProvider, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
 use serde::de::Error as _;
@@ -18,23 +18,19 @@ use serde_json::Value;
 
 use crate::{
     Error, ErrorDetail,
-    anthropic::messages::{
-        handler::shape_anthropic_messages_request,
-        transformation::{
-            retry_anthropic_messages_after_http_error, transform_messages_request,
-            update_headers_with_safeguards_beta,
-        },
+    anthropic::messages::transformation::{
+        ANTHROPIC_MESSAGES_CONFIG, transform_messages_request, update_headers_with_safeguards_beta,
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
+            tools::ToolCustomField,
             transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
-    bedrock::{
-        common_utils::is_valid_region, messages::mantle::transformation::bearer_environment,
-    },
+    bedrock::common_utils::is_valid_region,
+    bedrock_mantle::messages::transformation::bearer_environment,
 };
 
 const SERVICE: &str = "aws-external-anthropic";
@@ -157,13 +153,11 @@ impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
     }
 
-    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
-        }
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ANTHROPIC_MESSAGES_CONFIG.tool_custom_field(model)
     }
 
     /// Python's `filter_claude_platform_request_body`: `context_management` by default, or the
@@ -192,19 +186,14 @@ impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let model = request
-            .model
-            .strip_prefix(ROUTE)
-            .unwrap_or(&request.model)
-            .to_string();
         transform_messages_request(
-            MessagesRequest { model, ..request },
+            without_route_prefix(request),
             &context.warning_dropped_disabled_thinking(),
         )
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
+        ANTHROPIC_MESSAGES_CONFIG.default_headers()
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
@@ -228,7 +217,7 @@ impl MessagesReply for BedrockClaudePlatformMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
     }
 }
 
@@ -247,6 +236,15 @@ pub fn is_missing_region(error: &litellm_auth::Error) -> bool {
 pub fn logged_model(model: &str) -> &str {
     let routed = model.strip_prefix("bedrock/").unwrap_or(model);
     routed.strip_prefix(ROUTE).unwrap_or(routed)
+}
+
+fn without_route_prefix(request: MessagesRequest) -> MessagesRequest {
+    let model = request
+        .model
+        .strip_prefix(ROUTE)
+        .unwrap_or(&request.model)
+        .to_string();
+    MessagesRequest { model, ..request }
 }
 
 /// Python's `ensure_api_route(base, "v1/messages")`.

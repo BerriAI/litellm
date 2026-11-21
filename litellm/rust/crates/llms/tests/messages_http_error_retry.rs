@@ -6,9 +6,10 @@ use litellm_llms::{
     bedrock::{
         messages::claude_platform::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
         messages::invoke::transformation::BEDROCK_INVOKE_MESSAGES_CONFIG,
-        messages::mantle::transformation::BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
     },
-    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::{
+        BEDROCK_MANTLE_MESSAGES_CONFIG, BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
+    },
     deepseek::messages::transformation::DEEPSEEK_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,

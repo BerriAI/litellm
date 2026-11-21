@@ -1,4 +1,3 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::CredentialPlacement;
 use litellm_host::interceptors::RetriedRequest;
 use litellm_secret_value::SecretValue;
@@ -6,7 +5,7 @@ use litellm_secret_value::SecretValue;
 use litellm_env::resolve_non_empty;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool},
-    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::MESSAGES_PATH,
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
@@ -16,15 +15,16 @@ use crate::{
     Error,
     anthropic::{
         common_utils::{has_anthropic_credential, strip_billing_metadata_from_system},
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_anthropic_beta},
+        messages::transformation::{
+            ANTHROPIC_MESSAGES_CONFIG, transform_messages_request,
+            update_headers_with_anthropic_beta,
         },
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
+            tools::ToolCustomField,
             transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
@@ -106,11 +106,11 @@ impl MessagesDialect for DeepSeekMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
     }
 
-    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Rewrite {
             hoist_defer_loading: false,
         }
     }
@@ -120,33 +120,12 @@ impl MessagesDialect for DeepSeekMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(
-            MessagesRequest {
-                params: MessagesOptionalParams {
-                    system: request
-                        .params
-                        .system
-                        .and_then(strip_billing_metadata_from_system),
-                    ..request.params
-                },
-                ..request
-            },
-            context,
-        )?;
-        Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                tools: request
-                    .params
-                    .tools
-                    .map(|tools| tools.into_iter().map(sanitize_tool).collect()),
-                ..request.params
-            },
-            ..request
-        })
+        let request = transform_messages_request(without_billing_system_blocks(request), context)?;
+        Ok(without_custom_tool_type(request))
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
+        ANTHROPIC_MESSAGES_CONFIG.default_headers()
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
@@ -162,7 +141,7 @@ impl MessagesReply for DeepSeekMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
     }
 }
 
@@ -203,6 +182,32 @@ pub fn complete_deepseek_anthropic_url(
         return format!("{api_base}{MESSAGES_PATH}");
     }
     format!("{api_base}{ANTHROPIC_PATH_SEGMENT}{MESSAGES_PATH}")
+}
+
+fn without_billing_system_blocks(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            system: request
+                .params
+                .system
+                .and_then(strip_billing_metadata_from_system),
+            ..request.params
+        },
+        ..request
+    }
+}
+
+fn without_custom_tool_type(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            tools: request
+                .params
+                .tools
+                .map(|tools| tools.into_iter().map(sanitize_tool).collect()),
+            ..request.params
+        },
+        ..request
+    }
 }
 
 /// DeepSeek rejects Anthropic's explicit `{"type": "custom"}` tool discriminator, so it is
