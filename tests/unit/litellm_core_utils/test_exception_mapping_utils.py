@@ -26,6 +26,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_CLIENT_ID
+from litellm.llms.github_copilot.github_host import github_host_endpoints
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -3591,8 +3592,10 @@ def test_openai_compatible_error_without_a_relayed_error_object_keeps_its_messag
     assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {message}"
 
 
-_PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", api_base="https://api.githubcopilot.com")
-_APP_SESSION: Final = GithubCopilotUserSession(token="ghs-app", api_base="https://api.githubcopilot.com", is_app=True)
+_PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", endpoints=github_host_endpoints("github.com"))
+_APP_SESSION: Final = GithubCopilotUserSession(
+    token="ghs-app", endpoints=github_host_endpoints("github.com"), is_app=True
+)
 
 
 def _copilot_model_not_supported_message(request_kwargs: dict[str, object]) -> str:

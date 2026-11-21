@@ -25,8 +25,10 @@ from litellm.exceptions import AuthenticationError, BadRequestError, RateLimitEr
 from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 from litellm.llms.github_copilot import app_auth
 from litellm.llms.github_copilot.app_auth import APP_FIELDS, AppConfig, AppTokenManager, app_config
+from litellm.llms.github_copilot.github_host import github_host_endpoints
 from litellm.llms.github_copilot.per_user_auth import (
     GithubCopilotUserSession,
+    copilot_session_api_base,
     is_github_copilot_per_user_request,
     require_github_copilot_user_session,
 )
@@ -104,7 +106,7 @@ def test_jwt_signature_and_minimum_permissions(private_key: str) -> None:
     assert str(request.url) == _CONFIG.token_url
     assert json.loads(request.content) == {"permissions": {"organization_copilot_requests": "read"}}
     assert session.token == "installation-token"
-    assert session.api_base == _CONFIG.api_base
+    assert copilot_session_api_base(session) == _CONFIG.api_base
     assert "installation-token" not in repr(session)
 
 
@@ -532,10 +534,9 @@ def test_app_session_is_deployment_owned_and_shares_the_response_cache() -> None
     from litellm.caching.caching_handler import _is_response_cache_excluded
     from litellm.router_utils.cooldown_handlers import _is_per_user_provider_request
 
-    params: Final = {
-        "github_copilot_user_session": GithubCopilotUserSession("app-token", _CONFIG.api_base, is_app=True)
-    }
-    per_user: Final = {"github_copilot_user_session": GithubCopilotUserSession("user-token", _CONFIG.api_base)}
+    endpoints: Final = github_host_endpoints(_CONFIG.host)
+    params: Final = {"github_copilot_user_session": GithubCopilotUserSession("app-token", endpoints, is_app=True)}
+    per_user: Final = {"github_copilot_user_session": GithubCopilotUserSession("user-token", endpoints)}
     assert not is_github_copilot_per_user_request(params)
     assert not _is_per_user_provider_request({"litellm_params": params})
     assert not _is_response_cache_excluded("github_copilot/claude-sonnet-5.5", params)
@@ -558,6 +559,9 @@ async def test_caller_headers_keep_device_login_wire_headers_and_cannot_unpin_ap
     monkeypatch.setenv("TEST_APP_KEY", private_key)
     _ = (tmp_path / "access-token").write_text("gho_device_token")
     _ = respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload())
+    plan: Final = respx_mock.get("https://api.github.com/copilot_internal/user").respond(
+        200, json={"endpoints": {"api": "https://api.githubcopilot.com"}}
+    )
     upstream: Final = respx_mock.post(host="api.githubcopilot.com").respond(200, json=_model_payload("chat"))
     app_fields: Final = {
         "github_copilot_auth_type": "github_app",
@@ -573,6 +577,7 @@ async def test_caller_headers_keep_device_login_wire_headers_and_cannot_unpin_ap
     }
     _ = await litellm.acompletion(**args) if async_call else litellm.completion(**args)
     sent: Final = upstream.calls.last.request.headers
+    assert plan.called is not app
     assert sent["x-forwarded"] == "client"
     if app:
         assert sent["authorization"] == "Bearer installation-token"
@@ -1006,7 +1011,7 @@ def test_installation_token_requests_trust_the_configured_ca_bundle(
 def test_session_serialization_redacts_bearer_token(is_app: bool) -> None:
     from litellm.types.router import GenericLiteLLMParams
 
-    session: Final = GithubCopilotUserSession("sensitive-bearer", _CONFIG.api_base, is_app=is_app)
+    session: Final = GithubCopilotUserSession("sensitive-bearer", github_host_endpoints(_CONFIG.host), is_app=is_app)
     params: Final = GenericLiteLLMParams(github_copilot_user_session=session)
     assert session.token == "sensitive-bearer"
     assert "sensitive-bearer" not in repr(session)

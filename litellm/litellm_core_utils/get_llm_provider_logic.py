@@ -847,6 +847,7 @@ def _get_openai_compatible_provider_info(
         from litellm.llms.github_copilot.app_auth import app_config
         from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
         from litellm.llms.github_copilot.per_user_auth import (
+            copilot_session_api_base,
             github_copilot_per_user_credential_name,
             github_copilot_user_session_from,
         )
@@ -856,7 +857,7 @@ def _get_openai_compatible_provider_info(
         )
         github_app: Final = app_config(litellm_params) if user_session is None else None
         if user_session is not None:
-            api_base = user_session.api_base  # rebind-ok: resolves provider args in place
+            api_base = copilot_session_api_base(user_session)  # rebind-ok: resolves provider args in place
             dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
         elif github_app is not None:
             api_base = github_app.api_base  # rebind-ok: resolves provider args in place
@@ -869,7 +870,7 @@ def _get_openai_compatible_provider_info(
         ):
             # per-user deployments resolve no token at provider-info time; the
             # caller's session supplies base + key per request
-            api_base = api_base or DEFAULT_GITHUB_COPILOT_API_BASE  # rebind-ok: resolves provider args in place
+            api_base = DEFAULT_GITHUB_COPILOT_API_BASE  # rebind-ok: resolves provider args in place
             dynamic_api_key = None  # rebind-ok: resolves provider args in place
         else:
             (
