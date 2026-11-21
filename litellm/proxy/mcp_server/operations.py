@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
-from typing import Any, Final, NoReturn, TypeAlias, overload
+from typing import Final, NoReturn, TypeAlias, overload
 
 import anyio
 from fastapi import HTTPException
@@ -60,8 +60,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    publish_auth_cache_invalidation,
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
@@ -88,6 +88,7 @@ from litellm.proxy.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
     ProgressCallback,
+    ToolCallLoggingData,
 )
 from litellm.proxy.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.mcp_server.exceptions import (
@@ -235,7 +236,7 @@ async def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
     """Drop a stored-or-deleted BYOK credential from this worker's cache and from every peer worker's."""
     cache_key: Final = byok_credential_cache_key(user_id, server_id)
     byok_credential_cache.delete_cache(cache_key)
-    await publish_auth_cache_invalidation(cache_key=cache_key)
+    await publish_cache_invalidation(cache_key=cache_key)
 
 
 def _mcp_session_id_from_headers(
@@ -2163,7 +2164,7 @@ async def execute_mcp_tool(
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     flatten_url_elicitation: bool = False,
-    **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
+    **kwargs: Unpack[ToolCallLoggingData],  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
         user_api_key_auth=user_api_key_auth,
@@ -2183,7 +2184,7 @@ async def execute_mcp_tool(
         host_progress_callback=host_progress_callback,
         guardrail_context=guardrail_context,
         guardrail_auth=guardrail_auth,
-        logging_data=types.MappingProxyType(kwargs),
+        logging_data=kwargs,
         input_responses=input_responses,
         request_state=request_state,
         flatten_url_elicitation=flatten_url_elicitation,
@@ -2210,7 +2211,7 @@ async def _execute_mcp_tool(
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     flatten_url_elicitation: bool = False,
-    **kwargs: Any,
+    **kwargs: Unpack[ToolCallLoggingData],
 ) -> CallToolResult | InputRequiredResult:
     """
     Execute MCP tool.

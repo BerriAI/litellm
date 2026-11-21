@@ -472,16 +472,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
         "check_and_merge_model_level_guardrails",
     ),
     (
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub",
-        "_ConfigSyncPubSub",
-        "ConfigSyncPubSub",
-    ),
-    (
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub",
-        "_pubsub_capable_client",
-        "pubsub_capable_client",
-    ),
-    (
         "litellm.proxy.common_utils.key_rotation_manager",
         "_calculate_key_rotation_time",
         "calculate_key_rotation_time",

@@ -157,6 +157,17 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
 _SSE_EVENT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
+_CACHED_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _stored_finish_reason_indices(cached_result: Mapping[str, object]) -> frozenset[int]:
+    try:
+        choices: Final = _CACHED_CHOICES.validate_python(cached_result.get("choices"))
+    except ValidationError:
+        return frozenset()
+    return frozenset(index for index, choice in enumerate(choices) if choice.get("finish_reason") is not None)
+
+
 def _sse_event_data(line: str) -> Mapping[str, object] | None:
     if not line.startswith("data:"):
         return None
@@ -328,7 +339,7 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
     return task
 
 
-def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+def _request_cache_key(request_kwargs: Mapping[str, object]) -> object:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
 
@@ -389,7 +400,7 @@ class LLMCachingHandler:
         self.async_streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
         self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
-        self.preset_cache_key: str | None = None
+        self.preset_cache_key: object = None
         self.original_function = original_function
         self.start_time = start_time
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
@@ -407,7 +418,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         start_time: datetime.datetime,
         call_type: str,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse | None:
         """
@@ -1121,7 +1132,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         model: str,
         args: tuple[object, ...],
-        custom_llm_provider: str | None = None,
+        custom_llm_provider: object = None,
     ) -> object:
         """
         Internal method to process the cached result
@@ -1157,6 +1168,7 @@ class LLMCachingHandler:
                 cached_result = convert_to_model_response_object(
                     response_object=cached_result,
                     model_response_object=ModelResponse(),
+                    preserve_stored_finish_reason=True,
                 )
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
@@ -1230,6 +1242,7 @@ class LLMCachingHandler:
                     cached_result = convert_to_model_response_object(
                         response_object=cached_result,
                         model_response_object=ModelResponse(),
+                        preserve_stored_finish_reason=True,
                     )
             else:
                 from litellm.responses.streaming_iterator import (
@@ -1292,6 +1305,7 @@ class LLMCachingHandler:
             model=model,
             custom_llm_provider="cached_response",
             logging_obj=logging_obj,
+            stored_finish_reason_indices=_stored_finish_reason_indices(cached_result),
         )
 
     async def async_set_cache(
@@ -1532,7 +1546,7 @@ class LLMCachingHandler:
         self,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, object],
         cached_result: object,
         is_async: bool,
         is_embedding: bool = False,

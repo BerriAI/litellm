@@ -80,6 +80,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                     &config,
                     &litellm_gateway::Resources::build(&config).unwrap(),
                 )
+                .await
                 .unwrap(),
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
@@ -140,9 +141,9 @@ async fn send(gateway: SocketAddr, method: Method, path: &str, gzipped: &[u8]) -
 
 #[rstest]
 #[case::no_native_route(Method::POST, "", "/only/python")]
-#[case::wrong_method_on_a_native_route(Method::PUT, "", "/v1/chat/completions")]
-#[case::native_route(Method::POST, "", "/v1/chat/completions")]
-#[case::native_route_under_a_root_path(Method::POST, "/api", "/api/v1/chat/completions")]
+#[case::wrong_method_on_a_native_route(Method::PUT, "", "/v1/messages")]
+#[case::native_route(Method::POST, "", "/v1/messages")]
+#[case::native_route_under_a_root_path(Method::POST, "/api", "/api/v1/messages")]
 #[tokio::test]
 async fn python_answers_a_refused_request_as_the_client_sent_it(
     #[case] method: Method,
@@ -173,8 +174,8 @@ async fn python_answers_a_refused_request_as_the_client_sent_it(
 }
 
 #[rstest]
-#[case::at_the_root("", "/v1/chat/completions")]
-#[case::under_a_root_path("/api", "/api/v1/chat/completions")]
+#[case::at_the_root("", "/v1/messages")]
+#[case::under_a_root_path("/api", "/api/v1/messages")]
 #[tokio::test]
 async fn an_admitted_request_gets_the_native_layers_and_never_reaches_python(
     #[case] root_path: &str,
@@ -296,8 +297,9 @@ async fn a_master_key_callers_messages_request_is_answered_natively() {
         (
             response.status(),
             response.headers()[ANSWERED_BY_HEADER].to_str().unwrap(),
+            response.headers()["x-litellm-model-id"].to_str().unwrap(),
         ),
-        (StatusCode::OK, "rust")
+        (StatusCode::OK, "rust", "claude-a")
     );
     assert_eq!(provider.received_requests().await.unwrap().len(), 1);
     assert!(received.try_recv().is_err());

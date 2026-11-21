@@ -459,6 +459,12 @@ def _failure_route_is_trackable(request_route: str | None, request_fields: Mappi
     )
 
 
+def _failure_billed_the_provider(request_data: Mapping[str, object]) -> bool:
+    return failure_row_response_cost(request_data) > 0 or any(
+        attempt.response_cost > 0 for attempt in _billed_failed_attempts(request_data)
+    )
+
+
 def tracks_failure_spend(
     request_data: Mapping[str, object],
     original_exception: Exception,
@@ -471,7 +477,11 @@ def tracks_failure_spend(
     if request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN:
         return False
     # Error rows are off and the failure billed nothing.
-    if ProxyDBLogger._should_track_errors_in_db() is False and not completed_cost:  # pyright: ignore[reportPrivateUsage]  # the failure writer's own setting read
+    if (
+        ProxyDBLogger._should_track_errors_in_db() is False  # pyright: ignore[reportPrivateUsage]  # the failure writer's own setting read
+        and not completed_cost
+        and not _failure_billed_the_provider(request_data)
+    ):
         return False
     if ProxyDBLogger._skips_pre_routing_rejections() and is_pre_routing_rejection(  # pyright: ignore[reportPrivateUsage]  # the failure writer's own setting read
         original_exception, _REQUEST_DATA.validate_python(request_data)

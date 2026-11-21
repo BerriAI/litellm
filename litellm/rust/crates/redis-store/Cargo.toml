@@ -12,6 +12,7 @@ litellm-cache-memory.workspace = true
 litellm-python-compat.workspace = true
 litellm-redis-client.workspace = true
 parking_lot.workspace = true
+serde.workspace = true
 sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true

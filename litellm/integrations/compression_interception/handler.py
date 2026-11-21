@@ -17,6 +17,7 @@ from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_function
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import int_of
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
     CompressionSavingsMetadata,
@@ -136,13 +137,13 @@ class CompressionInterceptionLogger(CustomLogger):
         return CompressionInterceptionLogger.from_config_yaml(compression_params)
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: dict[str, Any], call_type: CallTypes | None
+        self, kwargs: dict[str, object], call_type: CallTypes | None
     ) -> dict[str, object] | None:
         if not self.enabled:
             return None
         if call_type is not None and call_type != CallTypes.anthropic_messages:
             return None
-        if int(kwargs.get("_agentic_loop_depth", 0) or 0) > 0:
+        if int_of(kwargs.get("_agentic_loop_depth", 0) or 0) > 0:
             return None
 
         messages: Final = kwargs.get("messages")

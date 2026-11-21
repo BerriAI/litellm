@@ -481,7 +481,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[CohereV2ChatResponse] = raw_response.json()
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
