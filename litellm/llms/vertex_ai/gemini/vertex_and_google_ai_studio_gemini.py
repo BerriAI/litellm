@@ -4320,6 +4320,7 @@ class ModelResponseIterator:
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
         self._token_after_unsent_images: str | None = None
+        self._stream_end_after_unsent_images: Exception | None = None
         self._first_response_id: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
@@ -4706,6 +4707,20 @@ class ModelResponseIterator:
         self._token_after_unsent_images = None
         return self._truncated_stream_end(token)
 
+    def _unsent_thought_images_before(self, stream_end: Exception) -> "ModelResponseStream":
+        images_end: Final = self._unsent_thought_images_end()
+        if images_end is None:
+            raise stream_end
+        self._stream_end_after_unsent_images = stream_end
+        return images_end
+
+    def _raise_after_unsent_images(self) -> None:
+        stream_end: Final = self._stream_end_after_unsent_images
+        if stream_end is None:
+            return
+        self._stream_end_after_unsent_images = None
+        raise stream_end
+
     def _end_of_unanswered_hop(
         self, reason: Exception | str = "the continuation stream ended without a readable frame"
     ) -> Optional["ModelResponseStream"]:
@@ -4815,13 +4830,16 @@ class ModelResponseIterator:
     def __next__(self) -> Optional["ModelResponseStream"]:
         if (end_after_images := self._end_after_unsent_images()) is not None:
             return end_after_images
+        self._raise_after_unsent_images()
         try:
             return self._next_chunk()
         except HOP_FAILURES as e:
             if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
+                return self._unsent_thought_images_before(e)
             self.close()
             return unanswered_end
+        except (StopIteration, RuntimeError) as e:
+            return self._unsent_thought_images_before(e)
 
     def _next_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
@@ -4835,8 +4853,6 @@ class ModelResponseIterator:
                 if (unanswered_end := self._end_of_unanswered_hop()) is not None:
                     return unanswered_end
                 if (token := self._pending_hop_token) is None:
-                    if (images_end := self._unsent_thought_images_end()) is not None:
-                        return images_end
                     raise StopIteration
                 self._pending_hop_token = None
                 if (truncated_end := self._open_next_hop_sync(token)) is not None:
@@ -4860,13 +4876,16 @@ class ModelResponseIterator:
     async def __anext__(self) -> Optional["ModelResponseStream"]:
         if (end_after_images := self._end_after_unsent_images()) is not None:
             return end_after_images
+        self._raise_after_unsent_images()
         try:
             return await self._anext_chunk()
         except HOP_FAILURES as e:
             if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
+                return self._unsent_thought_images_before(e)
             await self.aclose()
             return unanswered_end
+        except (StopAsyncIteration, RuntimeError) as e:
+            return self._unsent_thought_images_before(e)
 
     async def _anext_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
@@ -4880,8 +4899,6 @@ class ModelResponseIterator:
                 if (unanswered_end := self._end_of_unanswered_hop()) is not None:
                     return unanswered_end
                 if (token := self._pending_hop_token) is None:
-                    if (images_end := self._unsent_thought_images_end()) is not None:
-                        return images_end
                     raise StopAsyncIteration
                 self._pending_hop_token = None
                 if (truncated_end := await self._open_next_hop_async(token)) is not None:
