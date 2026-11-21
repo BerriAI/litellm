@@ -4,6 +4,7 @@ import { parseAsNativeArrayOf, parseAsString, parseAsStringEnum, type inferParse
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import { relativeTimeOptions } from "@/components/shared/date_range_presets";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import { userDetailHref } from "@/utils/entityLinks";
 import { uiHref } from "@/utils/uiHref";
 import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
 import { UsageClient } from "./components/overview/agentCatalog";
@@ -248,4 +249,4 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
 
 export const usageHrefForUser = (userId: string): string => uiHref(`usage?${new URLSearchParams({ user: userId })}`);
 
-export const userRecordHref = (userId: string): string => uiHref(`users?${new URLSearchParams({ user: userId })}`);
+export const userRecordHref = (userId: string): string | undefined => userDetailHref(userId);
