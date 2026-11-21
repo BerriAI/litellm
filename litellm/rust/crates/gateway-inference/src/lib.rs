@@ -36,6 +36,7 @@ use litellm_secrets::source::SecretSource;
 
 pub use asked::call_type;
 pub use error::{BodyError, Ended, Error};
+pub use group_usage::{GroupLimits, group_limits};
 pub use headers::ExposedHeader;
 pub use hooks::{CallHooks, CallType, HookError, Refusal, ServedCall};
 pub use litellm_redis_store::RouterTiers;

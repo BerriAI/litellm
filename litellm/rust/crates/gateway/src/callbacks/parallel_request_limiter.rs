@@ -20,13 +20,14 @@ use litellm_callbacks::{
     Abort, Activation, Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Outcome,
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
 };
+use litellm_callbacks_model_capacity::RATE_LIMIT_ERROR as CAPACITY_RATE_LIMITED;
 use litellm_callbacks_parallel_request_limiter::{
     AuthMetadata, CapSettings, Descriptor, DescriptorRequest, Engine, EstimateRequest,
     LimiterState, Lookups, OutputCapFacts, ParallelRequestLimiter, PolicyFacts,
     PostCallFailureFacts, PostCallSuccessFacts, PreCallFacts, PythonServed, RATE_LIMITED,
     RateLimitedModel, RequestFacts, Settings as EngineSettings, SuccessFacts, TargetFacts,
     TokenRateLimitType, UsageObject, aggregate_only, charged_tokens, explicit_output_cap,
-    header_map, output_cap, tokens_for_request, write_output_cap,
+    header_map, output_cap, prior_response, tokens_for_request, write_output_cap,
 };
 use litellm_config::{Config, Environment};
 use litellm_gateway_auth::Authenticated;
@@ -70,7 +71,8 @@ impl Default for Settings {
 }
 
 /// The proxy's `internal_usage_cache` counters, over the coordination Redis when there is one and
-/// over this process's memory otherwise.
+/// over this process's memory otherwise. A key's limits and a model group's capacity are counted
+/// on the same ones, as they are in the proxy.
 pub fn counters(redis: Option<RedisClient>) -> Arc<RateLimits> {
     let remote = redis.map(|client| Remote {
         client,
@@ -80,6 +82,14 @@ pub fn counters(redis: Option<RedisClient>) -> Arc<RateLimits> {
 }
 
 impl Settings {
+    pub(crate) fn window_size(self) -> i64 {
+        self.window_size
+    }
+
+    pub(crate) fn token_type(self) -> TokenRateLimitType {
+        self.token_type
+    }
+
     /// The limiter's engine over `counters`, which each limiter builds its own of, as the proxy
     /// does.
     pub(crate) fn engine(self, counters: Arc<RateLimits>) -> Engine {
@@ -209,7 +219,7 @@ impl KeyLimits {
 
 /// Who Python says the caller is: its `api_key` and its `user_id`.
 pub(crate) struct Caller {
-    api_key: String,
+    pub(crate) api_key: String,
     user_id: Option<&'static str>,
     pub(crate) limits: KeyLimits,
 }
@@ -270,7 +280,7 @@ pub(crate) fn rate_limited(abort: &Abort) -> Option<RateLimited> {
     let error = abort
         .error
         .as_ref()
-        .filter(|error| error.kind == RATE_LIMITED)?;
+        .filter(|error| error.kind == RATE_LIMITED || error.kind == CAPACITY_RATE_LIMITED)?;
     let headers = error
         .fields
         .get("headers")
@@ -299,7 +309,7 @@ fn manifest() -> Manifest {
         },
         subscriptions: vec![
             Subscription {
-                reads: FieldSet::of(&[Field::Model, Field::RequestBody]),
+                reads: FieldSet::of(&[Field::Model, Field::RequestBody, Field::RateLimitStatuses]),
                 writes: FieldSet::of(&[Field::OptionalParams]),
                 may_abort: true,
                 ..Subscription::on(Hook::PreCall)
@@ -477,7 +487,10 @@ impl KeyLimiter {
             _ => None,
         };
         let mut capped = sent.cloned().map(Value::Object);
-        let facts = self.pre_call_facts(&admission.caller, call_type, model, capped.as_mut());
+        let facts = PreCallFacts {
+            prior_response: prior_response(input)?,
+            ..self.pre_call_facts(&admission.caller, call_type, model, capped.as_mut())
+        };
         if let Some(abort) = self.limiter.pre_call(&admission.state, facts, None).await {
             return Ok(Some(Verdict::Abort(abort)));
         }
