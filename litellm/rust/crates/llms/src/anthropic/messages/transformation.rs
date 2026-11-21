@@ -7,15 +7,15 @@ use litellm_llms_types::{
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::Recognized,
+    recognized::{Recognized, is_one, python_str},
 };
+use litellm_python_compat::scalar::python_value;
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
     handler::shape_anthropic_messages_request,
-    scalar::{is_one, python_str, python_value},
     thinking::{drop_unsupported_effort, translate_thinking},
 };
 use crate::anthropic::{
