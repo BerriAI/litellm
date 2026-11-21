@@ -2284,10 +2284,9 @@ def test_bedrock_nova_embedding_bills_the_text_sent_beside_an_image(
         aws_region_name="us-east-1",
     )
 
-    pricing: Final = litellm.model_cost[_NOVA_MODEL_ID]
-    assert response._hidden_params["response_cost"] == pytest.approx(
-        expected_text_tokens * pricing["input_cost_per_token"] + pricing["input_cost_per_image"]
-    )
+    token_cost: Final[float] = litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
+    image_cost: Final[float] = litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_image"]
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_text_tokens * token_cost + image_cost)
 
 
 def test_bedrock_nova_embedding_keeps_the_cost_of_an_image_sent_beside_audio(respx_mock: respx.MockRouter) -> None:
@@ -2309,9 +2308,8 @@ def test_bedrock_nova_embedding_keeps_the_cost_of_an_image_sent_beside_audio(res
         aws_region_name="us-east-1",
     )
 
-    assert response._hidden_params["response_cost"] == pytest.approx(
-        litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_image"]
-    )
+    image_cost: Final[float] = litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_image"]
+    assert response._hidden_params["response_cost"] == pytest.approx(image_cost)
 
 
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
