@@ -4093,8 +4093,8 @@
     },
     "azure_ai/claude-fable-5": {
         "successor_model": "azure_ai/claude-fable-5-2",
-        "deprecation_date": "2027-12-05",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2027-12-07",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#anthropic",
         "supports_mid_conversation_system": true,
         "input_cost_per_token": 1e-05,
         "output_cost_per_token": 5e-05,
@@ -4162,8 +4162,8 @@
         "supports_web_search": true,
         "prompt_cache_min_tokens": 512,
         "successor_model": "azure_ai/claude-fable-5-2",
-        "deprecation_date": "2027-12-05",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement"
+        "deprecation_date": "2027-12-07",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#anthropic"
     },
     "azure_ai/claude-fable-latest": {
         "alias_of": "azure_ai/claude-fable-5-2"
@@ -4175,8 +4175,8 @@
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
         "successor_model": "azure_ai/claude-mythos-5-2",
-        "deprecation_date": "2027-09-01",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2027-12-07",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#anthropic",
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -4472,6 +4472,8 @@
         "supports_tool_choice": true
     },
     "azure_ai/gpt-6-astra": {
+        "deprecation_date": "2028-01-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#azure-openai",
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -4523,6 +4525,8 @@
         "alias_of": "azure_ai/gpt-6-astra"
     },
     "azure_ai/gpt-6-luna": {
+        "deprecation_date": "2028-03-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#azure-openai",
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
         "cache_read_input_token_cost": 1e-08,
@@ -4574,6 +4578,8 @@
         "alias_of": "azure_ai/gpt-6-luna"
     },
     "azure_ai/gpt-6-sol": {
+        "deprecation_date": "2028-03-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#azure-openai",
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
         "cache_read_input_token_cost": 2e-07,
@@ -4622,6 +4628,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure_ai/gpt-6.1-sol": {
+        "deprecation_date": "2028-03-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#azure-openai",
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -4673,6 +4681,8 @@
         "alias_of": "azure_ai/gpt-6.1-sol"
     },
     "azure_ai/gpt-6.1-terra": {
+        "deprecation_date": "2027-10-26",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#azure-openai",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-06,
         "cache_read_input_token_cost": 5e-08,
@@ -4767,7 +4777,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "deprecation_date": "2028-01-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/gpt-5.6-sol-2026-07-09": {
         "input_cost_per_token_above_272k_tokens": 8e-06,
@@ -4813,7 +4825,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "deprecation_date": "2028-01-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/gpt-5.6-terra": {
         "input_cost_per_token_above_272k_tokens": 4e-06,
@@ -4859,7 +4873,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "deprecation_date": "2028-01-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/gpt-5.6-terra-2026-07-09": {
         "input_cost_per_token_above_272k_tokens": 4e-06,
@@ -4905,7 +4921,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "deprecation_date": "2028-01-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/gpt-5.6-luna": {
         "input_cost_per_token_above_272k_tokens": 4e-07,
@@ -4947,7 +4965,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "deprecation_date": "2028-01-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/gpt-5.6-luna-2026-07-09": {
         "input_cost_per_token_above_272k_tokens": 4e-07,
@@ -4989,7 +5009,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "deprecation_date": "2028-01-11",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/gpt-5.5": {
         "successor_model": "azure_ai/gpt-6.1-sol",
@@ -13878,8 +13900,8 @@
             "/v1/images/generations",
             "/v1/images/edits"
         ],
-        "deprecation_date": "2026-10-01",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2026-11-24",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#microsoft",
         "successor_model": "azure_ai/MAI-Image-2.6",
         "max_input_tokens": 32000
     },
@@ -13895,15 +13917,15 @@
             "/v1/images/generations",
             "/v1/images/edits"
         ],
-        "deprecation_date": "2026-10-01",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2026-11-24",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#microsoft",
         "successor_model": "azure_ai/MAI-Image-2.6-Flash",
         "max_input_tokens": 32000
     },
     "azure_ai/MAI-Image-2.5-Pro": {
         "successor_model": "azure_ai/MAI-Image-2.6",
-        "deprecation_date": "2026-10-01",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2026-11-24",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#microsoft",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
@@ -13918,6 +13940,8 @@
         ]
     },
     "azure_ai/MAI-Thinking-1": {
+        "deprecation_date": "2027-03-02",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#microsoft",
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "azure_ai",
@@ -14076,6 +14100,8 @@
         "successor_model": "azure_ai/mistral-ocr-4-0"
     },
     "azure_ai/mistral-ocr-4-0": {
+        "deprecation_date": "2027-10-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#mistral-ai",
         "litellm_provider": "azure_ai",
         "ocr_cost_per_page": 0.004,
         "annotation_cost_per_page": 0.005,
@@ -14329,6 +14355,8 @@
         "supports_web_search": true
     },
     "azure_ai/grok-4.3": {
+        "deprecation_date": "2027-05-12",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#xai",
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "input_cost_per_token": 1.25e-06,
@@ -14350,6 +14378,8 @@
         "supports_web_search": true
     },
     "azure_ai/grok-4.6": {
+        "deprecation_date": "2027-08-24",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#xai",
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_200k_tokens": 1e-06,
         "input_cost_per_token": 2e-06,
@@ -30215,31 +30245,6 @@
         "comment": "Open flagship GLM for long-horizon coding agents and million-token context work",
         "source": "https://api.friendli.ai/serverless/v1/models"
     },
-    "friendliai/zai-org/GLM-5.1": {
-        "litellm_provider": "friendliai",
-        "max_input_tokens": 202752,
-        "max_output_tokens": 202752,
-        "input_cost_per_token": 1.4e-06,
-        "output_cost_per_token": 4.4e-06,
-        "cache_read_input_token_cost": 2.6e-07,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "reasoning_effort_levels": [],
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_native_structured_output": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_vision": false,
-        "supports_image_input": false,
-        "supports_video_input": false,
-        "mode": "chat",
-        "comment": "Strong GLM coding model for agentic engineering, terminals, and repository generation",
-        "source": "https://api.friendli.ai/serverless/v1/models",
-        "successor_model": "friendliai/zai-org/GLM-5.3",
-        "deprecation_date": "2026-11-20"
-    },
     "ft:babbage-002": {
         "deprecation_date": "2026-09-28",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -31739,9 +31744,9 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
-        "deprecation_date": "2026-11-19",
+        "deprecation_date": "2027-01-28",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
-        "successor_model": "vertex_ai/gemini-3.8-flash",
+        "successor_model": "vertex_ai/gemini-4-hydrogen",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -31806,7 +31811,7 @@
         "cache_read_input_token_cost_priority": 1.35e-07,
         "deprecation_date": "2027-01-28",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
-        "successor_model": "vertex_ai/gemini-3.8-flash",
+        "successor_model": "vertex_ai/gemini-4-hydrogen",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -34114,9 +34119,9 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
-        "deprecation_date": "2026-11-19",
+        "deprecation_date": "2027-01-28",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
-        "successor_model": "gemini-3.8-flash",
+        "successor_model": "vertex_ai/gemini-4-hydrogen",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -34180,7 +34185,7 @@
         "cache_read_input_token_cost_priority": 1.35e-07,
         "deprecation_date": "2027-01-28",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
-        "successor_model": "gemini-3.8-flash",
+        "successor_model": "vertex_ai/gemini-4-hydrogen",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -72752,6 +72757,8 @@
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/deepseek-v4-1-flash-is-coming-to-microsoft-foundry/4556431"
     },
     "azure_ai/MAI-Image-2.6": {
+        "deprecation_date": "2027-05-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#microsoft",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
@@ -72765,6 +72772,8 @@
         ]
     },
     "azure_ai/MAI-Image-2.6-Flash": {
+        "deprecation_date": "2027-05-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#microsoft",
         "input_cost_per_image_token": 2.5e-06,
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure_ai",
@@ -72879,6 +72888,8 @@
         "supports_tool_choice": true
     },
     "azure_ai/mistral-medium-3-5": {
+        "deprecation_date": "2027-10-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#mistral-ai",
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -83013,6 +83024,8 @@
         "supports_video_input": true
     },
     "azure_ai/Microsoft-Decision-1": {
+        "deprecation_date": "2027-02-04",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement#microsoft",
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32768,
@@ -87835,14 +87848,14 @@
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/routers/glm-5p3-spot": {
-        "cache_read_input_token_cost": 1.3e-07,
-        "input_cost_per_token": 7e-07,
+        "cache_read_input_token_cost": 1.82e-07,
+        "input_cost_per_token": 9.8e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 2.2e-06,
-        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "output_cost_per_token": 3.08e-06,
+        "source": "https://fireworks.ai/pricing",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
@@ -87852,14 +87865,14 @@
         "supports_vision": false
     },
     "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-spot": {
-        "cache_read_input_token_cost": 3e-09,
-        "input_cost_per_token": 1.5e-07,
+        "cache_read_input_token_cost": 4.2e-09,
+        "input_cost_per_token": 2.1e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 6e-07,
-        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "output_cost_per_token": 8.4e-07,
+        "source": "https://fireworks.ai/pricing",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
@@ -87886,14 +87899,14 @@
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
-        "cache_read_input_token_cost": 3e-09,
-        "input_cost_per_token": 1.5e-07,
+        "cache_read_input_token_cost": 4.2e-09,
+        "input_cost_per_token": 2.1e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 6e-07,
-        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "output_cost_per_token": 8.4e-07,
+        "source": "https://fireworks.ai/pricing",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
