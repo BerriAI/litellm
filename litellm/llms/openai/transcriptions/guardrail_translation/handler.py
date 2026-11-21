@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -17,6 +18,26 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.utils import TranscriptionResponse
+
+
+def _channel_transcripts(response: "TranscriptionResponse") -> tuple[Mapping[str, object], ...]:
+    """Per-channel transcripts (ElevenLabs ``use_multi_channel``) carry the transcribed text
+    while the top-level ``text`` stays empty, so they go through the same guardrail call."""
+    transcripts: Final[object] = getattr(response, "transcripts", None)
+    items: Final = as_object_list(transcripts) or ()
+    return tuple(channel for item in items if (channel := as_str_mapping(item)) is not None)
+
+
+def _channel_text(channel: Mapping[str, object]) -> str:
+    text: Final = channel.get("text")
+    return text if isinstance(text, str) else ""
+
+
+def _screened_channel(channel: Mapping[str, object], screened: str) -> Mapping[str, object]:
+    if screened == _channel_text(channel):
+        return channel
+    # the channel's words would still spell out what the guardrail masked
+    return {**{key: value for key, value in channel.items() if key != "words"}, "text": screened}
 
 
 class OpenAIAudioTranscriptionHandler(BaseTranslation):
@@ -94,7 +115,8 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
                 if user_metadata:
                     request_data["litellm_metadata"] = user_metadata
 
-            inputs: Final = GenericGuardrailAPIInputs(texts=[original_text])
+            channels: Final = _channel_transcripts(response)
+            inputs: Final = GenericGuardrailAPIInputs(texts=[original_text, *map(_channel_text, channels)])
             # Include model information from the response if available
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
@@ -106,6 +128,12 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
             )
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             response.text = guardrailed_texts[0] if guardrailed_texts else original_text
+            if channels:
+                screened_texts: Final = guardrailed_texts[1:]
+                response["transcripts"] = [  # rebind-ok: the guardrail rewrites the provider response in place
+                    _screened_channel(channel, screened_texts[index]) if index < len(screened_texts) else channel
+                    for index, channel in enumerate(channels)
+                ]
 
             verbose_proxy_logger.debug(
                 "OpenAI Audio Transcription: Applied guardrail to transcribed text. "
