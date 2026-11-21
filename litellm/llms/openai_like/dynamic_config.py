@@ -49,6 +49,29 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
     return calls if calls > 0 else None
 
 
+def _function_calling_disabled(model: str, provider: SimpleProviderConfig) -> bool:
+    from litellm.utils import (
+        ModelInfoLookupMiss,
+        is_explicitly_disabled_factory,
+        lookup_catalog_model_info,
+        supports_function_calling,
+    )
+
+    provider_disables: Final = provider.provider_info.get("supports_function_calling") is False
+    row: Final = lookup_catalog_model_info(model, provider.slug)
+    if isinstance(row, ModelInfoLookupMiss):
+        return provider_disables
+    if supports_function_calling(model=model, custom_llm_provider=provider.slug):
+        return False
+    return (
+        provider_disables
+        or row["key"] in GetModelCostMap.loaded_model_cost_map()
+        or is_explicitly_disabled_factory(
+            model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
+        )
+    )
+
+
 def _flattened_messages(
     messages: Sequence[AllMessageValues], handling: Mapping[str, bool]
 ) -> Sequence[AllMessageValues]:
@@ -158,15 +181,13 @@ def create_config_class(provider: SimpleProviderConfig):
             return ensure_api_route(api_base or provider.default_base_url(model), "chat/completions")
 
         def get_supported_openai_params(self, model: str) -> list:
-            """Get supported OpenAI params, excluding tool-related params for models
-            that don't support function calling."""
-            from litellm.utils import supports_function_calling, supports_reasoning
+            """Get supported OpenAI params, excluding tool-related params for models known not to support
+            function calling."""
+            from litellm.utils import supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
-
-            if not _supports_fc:
+            if _function_calling_disabled(model=model, provider=provider):
                 tool_params: Final = [
                     "tools",
                     "tool_choice",
