@@ -452,6 +452,21 @@ def _declared_tool_name(tool: object) -> object:
     return fields.get("name") if function is None else function.get("name")
 
 
+def _open_position_named(
+    name: object, request_tools: Sequence[object], open_positions: Sequence[int], taken: Mapping[int, object]
+) -> int | None:
+    if name is None:
+        return None
+    return next(
+        (
+            position
+            for position in open_positions
+            if position not in taken and _declared_tool_name(request_tools[position]) == name
+        ),
+        None,
+    )
+
+
 def _rewritten_in_place(
     request_tools: Sequence[object],
     open_positions: Sequence[int],
@@ -459,17 +474,11 @@ def _rewritten_in_place(
 ) -> Mapping[int, AllAnthropicToolsValues]:
     rewritten: Final[dict[int, AllAnthropicToolsValues]] = {}  # mutable-ok: built here, read-only to the caller
     for tool in converted:
-        name = _declared_tool_name(tool)
-        position = next(
-            (
-                position
-                for position in open_positions
-                if position not in rewritten and _declared_tool_name(request_tools[position]) == name
-            ),
-            None,
+        rewritten.update(
+            (position, tool)
+            for position in (_open_position_named(_declared_tool_name(tool), request_tools, open_positions, rewritten),)
+            if position is not None
         )
-        if name is not None and position is not None:
-            rewritten[position] = tool
     return rewritten
 
 
@@ -510,7 +519,16 @@ def _tools_after_guardrail(
     )
     as_sent_positions: Final = frozenset(position for position, _ in as_sent)
     as_sent_counts: Final = Counter(fingerprint for _, fingerprint in as_sent)
-    removed_or_rewritten: Final = frozenset(shown_positions) - as_sent_positions
+    web_search_removed: Final = (
+        frozenset(
+            position
+            for position, tool in enumerate(request_tools)
+            if (fields := as_str_mapping(tool)) is not None and is_anthropic_web_search_tool(fields)
+        )
+        if not returned_tools or len(returned_tools) < len(shown)
+        else frozenset()
+    )
+    removed_or_rewritten: Final = (frozenset(shown_positions) - as_sent_positions) | web_search_removed
     converted: Final = _converted_tools(
         tuple(
             tool
@@ -521,7 +539,7 @@ def _tools_after_guardrail(
         ),
         original_names,
     )
-    rewritten: Final = _rewritten_in_place(request_tools, sorted(removed_or_rewritten), converted)
+    rewritten: Final = _rewritten_in_place(request_tools, sorted(removed_or_rewritten - web_search_removed), converted)
     in_place: Final = tuple(
         rewritten.get(position, tool)
         for position, tool in enumerate(request_tools)

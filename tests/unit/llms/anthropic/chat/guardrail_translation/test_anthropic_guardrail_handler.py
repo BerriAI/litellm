@@ -3395,20 +3395,27 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
 
         assert tools == [{**self._READ, "type": "custom", "description": "[MASKED]"}, *self._sent_tools()[1:]]
 
-    async def test_a_tool_the_guardrail_removed_stays_removed_and_the_rest_are_not_rewritten(self):
+    async def test_a_guardrail_removing_a_tool_also_removes_web_search_and_the_rest_are_not_rewritten(self):
         tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write"))
 
-        assert tools == self._sent_tools()[:-1]
+        assert tools == [self._READ, self._MCP_TOOLSET, self._DEFERRED, self._BASH, self._GOOGLE_MAPS]
 
     async def test_a_removed_tool_stays_removed_when_the_guardrail_reorders_the_request_tools(self):
         tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write", reverses_request_tools=True))
 
-        assert tools == self._sent_tools()[:-1]
+        assert tools == [self._READ, self._MCP_TOOLSET, self._DEFERRED, self._BASH, self._GOOGLE_MAPS]
 
-    async def test_a_guardrail_removing_every_tool_it_saw_leaves_only_the_tools_it_never_saw(self):
+    async def test_a_guardrail_returning_no_tools_removes_web_search_too(self):
         tools: Final = await self._tools_after(AllToolsRemovingGuardrail(guardrail_name="test"))
 
-        assert tools == [self._WEB_SEARCH, self._GOOGLE_MAPS]
+        assert tools == [self._GOOGLE_MAPS]
+
+    async def test_a_guardrail_returning_no_tools_removes_a_lone_web_search_tool(self):
+        tools: Final = await self._tools_after(
+            AllToolsRemovingGuardrail(guardrail_name="test"), json.loads(json.dumps([self._WEB_SEARCH]))
+        )
+
+        assert tools == []
 
     async def test_a_tool_the_guardrail_added_joins_the_tools_that_are_not_rewritten(self):
         tools: Final = await self._tools_after(ToolAppendingGuardrail(guardrail_name="test"))
@@ -3447,7 +3454,7 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
             json.loads(json.dumps([first, self._WEB_SEARCH, last])),
         )
 
-        assert tools == [self._WEB_SEARCH, last]
+        assert tools == [last]
 
     async def test_a_tool_the_guardrail_returns_twice_reaches_the_provider_twice(self):
         tools: Final = await self._tools_after(

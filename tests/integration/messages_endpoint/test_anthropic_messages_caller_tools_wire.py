@@ -415,14 +415,14 @@ def test_a_vendor_redacting_one_tool_description_leaves_the_other_tools_as_sent(
     assert object_value(lint)["input_schema"] == strict_tool()["input_schema"], lint
 
 
-def test_a_vendor_removing_one_tool_leaves_the_other_tools_as_sent(rig: Rig) -> None:
+def test_a_vendor_removing_one_tool_removes_web_search_and_leaves_the_rest_as_sent(rig: Rig) -> None:
     request_nonce: Final = nonce()
     status, raw = rig.send(
         messages_body(CLAUDE_MODEL, request_nonce, tools=coding_agent_tools(), guardrails=(TOOL_REMOVING_GUARDRAIL,))
     )
 
     assert reply_text(status, raw, streaming=False) == f"linted {request_nonce.removeprefix('nonce-')}"
-    assert tools_claude_received(rig, request_nonce) == coding_agent_tools()[:3]
+    assert tools_claude_received(rig, request_nonce) == coding_agent_tools()[1:3]
 
 
 @pytest.mark.parametrize("guardrails", [(), (TOOL_RESULTS_GUARDRAIL,)], ids=["no_guardrail", "tool_results_guardrail"])
