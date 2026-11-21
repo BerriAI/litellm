@@ -36,12 +36,12 @@ from litellm.redis.stores.spend_counters.types import parse_customer_window_coun
 from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
-    SpendLogsRepository,
 )
 from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository

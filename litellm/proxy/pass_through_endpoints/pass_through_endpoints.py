@@ -176,6 +176,7 @@ from litellm.proxy.route_priority import (
     configured_pass_through_routes_first,
     shadowed_by_builtin_claim,
 )
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -1457,7 +1458,7 @@ async def _customer_passthrough_request_auth(
             **customer_usage_fields(body.get("metadata")),
         },
         auth,
-        ledger_enabled=general_settings_view().get("use_spend_logs_ledger", True) is not False,
+        ledger_enabled=spend_logs_ledger_enabled(general_settings_view()),
     )
     request_auth: Final = auth.with_customer_model_scopes(usage.model_scopes) if usage is not None else auth
     _check_customer_passthrough_model_access(request, body, request_auth, llm_router)

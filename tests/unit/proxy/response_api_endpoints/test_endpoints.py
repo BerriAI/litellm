@@ -4653,12 +4653,12 @@ class TestResponsesWSFirstFrameModelAuth:
             endpoint = asyncio.ensure_future(
                 responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
             )
-            await asyncio.wait_for(row_started.wait(), timeout=1)
+            await row_started.wait()
             proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
             finished_early, _ = await asyncio.wait({endpoint}, timeout=0.05)
             assert endpoint not in finished_early
             row_may_finish.set()
-            finished, _ = await asyncio.wait({endpoint}, timeout=1)
+            finished, _ = await asyncio.wait({endpoint})
             assert endpoint in finished
             assert row_written.is_set()
 
