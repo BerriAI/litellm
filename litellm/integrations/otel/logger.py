@@ -304,6 +304,10 @@ class OpenTelemetryV2(CustomLogger):
     #  closed here. See ``log_pre_api_call``.
     # ====================================================================== #
 
+    def _defer_llm_call(self, call_id: str, start_time_ns: int | None) -> None:
+        """Record only when the call started, leaving its span to be created by the close callback."""
+        self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
+
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         """Open the LLM-call span at the call boundary.
 
@@ -342,7 +346,7 @@ class OpenTelemetryV2(CustomLogger):
         # provider here would evict idle ones even though close re-routes.
         parent_context: Final = _llm_call_parent_context(call)
         if not is_recordable_span(get_current_span(parent_context)):
-            self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
+            self._defer_llm_call(call_id, start_time_ns)
             return
         # A detached route roots its own trace instead (linked to the request
         # trace) — see ``TenantRoute.detached``.

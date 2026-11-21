@@ -17,14 +17,14 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Span as RecordingSpan
@@ -44,14 +44,11 @@ from typing_extensions import override
 
 import litellm
 from litellm.integrations.lens.remote import LensConnection
-from litellm.integrations.otel.logger import OpenTelemetryV2, _LLMCallSpan
+from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import LLMCallEvent, RequestIdentity
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.types.utils import CaptureMessageContent
-
-if TYPE_CHECKING:
-    from litellm.caching.redis_cache import RedisCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,7 +486,13 @@ _SHARED_KEY: Final = "lens:interaction:{session}"
 _SHARED_SECONDS: Final = 6 * 60 * 60
 
 
-def _shared_cache() -> "RedisCache | None":
+class _SharedCache(Protocol):
+    def async_get_cache(self, key: str) -> Awaitable[object]: ...
+
+    def async_set_cache(self, key: str, value: str, *, ttl: int) -> Awaitable[object]: ...
+
+
+def _shared_cache() -> _SharedCache | None:
     """The Redis every gateway worker reaches, when the proxy was given one."""
     from litellm.proxy import proxy_server
 
@@ -530,6 +533,9 @@ class _LensTraceLogger(OpenTelemetryV2):
         return None
 
     _open_interactions: OrderedDict[str, _Open]  # mutable-ok: bounded per-worker memory of each session's turn
+
+    def remember_interactions(self) -> None:
+        self._open_interactions = OrderedDict()
 
     @override
     async def async_log_success_event(
@@ -593,7 +599,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         if call.is_no_upstream_call or call.call_id is None or call.call_id in self._open_llm_calls:
             return
         started: Final = to_ns(call.upstream_start_seconds) or time.time_ns()
-        self._store_open_call(call.call_id, _LLMCallSpan(span=None, start_time_ns=started))
+        self._defer_llm_call(call.call_id, started)
 
     @override
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
@@ -758,7 +764,7 @@ async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None
     )
     trace_logger.tracer_provider.add_span_processor(_CallFactsProcessor())
     trace_logger.tracer_provider.id_generator = _InteractionIds()
-    trace_logger._open_interactions = OrderedDict()
+    trace_logger.remember_interactions()
     manager: Final = litellm.logging_callback_manager
     manager.add_litellm_callback(trace_logger)
     try:
