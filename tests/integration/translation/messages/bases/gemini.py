@@ -152,6 +152,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
         "usage": {
             "input_tokens": 354,
             "output_tokens": 419,
+            "output_tokens_details": {"thinking_tokens": 355},
         },
     },
 )
@@ -286,6 +287,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
         "usage": {
             "input_tokens": 354,
             "output_tokens": 302,
+            "output_tokens_details": {"thinking_tokens": 233},
         },
     },
 )
@@ -416,6 +418,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
         "usage": {
             "input_tokens": 412,
             "output_tokens": 192,
+            "output_tokens_details": {"thinking_tokens": 124},
         },
     },
 )
@@ -467,7 +470,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
         "role": "assistant",
         "model": "gemini/gemini-3.5-flash",
         "stop_sequence": None,
-        "usage": {"input_tokens": 10, "output_tokens": 127},
+        "usage": {"input_tokens": 10, "output_tokens": 127, "output_tokens_details": {"thinking_tokens": 125}},
         "content": [{"type": "text", "text": "Hello."}],
         "stop_reason": "end_turn",
         "stop_details": None,
