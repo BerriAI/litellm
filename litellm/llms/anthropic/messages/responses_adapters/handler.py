@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     routed_model_info,
@@ -220,9 +221,25 @@ _PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
 )
 
 
+_INSTRUCTIONS_UNSUPPORTED: Final = (
+    "`instructions` is not supported on the Messages API. Send the text in `system` instead, or call the "
+    "Responses API (`/v1/responses`)."
+)
+
+
 def previous_response_id_error(request_params: Mapping[str, object]) -> str | None:
     sent: Final = _sent_responses_fields(request_params, ("previous_response_id",))
     return _PREVIOUS_RESPONSE_ID_UNSUPPORTED if sent["previous_response_id"] is not None else None
+
+
+def _caller_instructions_error(request_params: Mapping[str, object]) -> str | None:
+    """The router records what the request carried, so `instructions` its deployment sets is not rejected."""
+    metadata: Final = as_str_mapping(request_params.get("litellm_metadata")) or {}
+    caller_sent: Final = metadata.get(CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY)
+    if isinstance(caller_sent, Sequence) and "instructions" not in caller_sent:
+        return None
+    sent: Final = _sent_responses_fields(request_params, ("instructions",))
+    return _INSTRUCTIONS_UNSUPPORTED if sent["instructions"] is not None else None
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -334,7 +351,9 @@ def _build_responses_kwargs(
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs)
+    unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs) or _caller_instructions_error(
+        forwarded_kwargs
+    )
     if unsupported_param_error is not None:
         raise litellm.UnsupportedParamsError(
             message=unsupported_param_error,
@@ -401,16 +420,16 @@ def _build_responses_kwargs(
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
 
-    caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
-    caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
+    deployment_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    deployment_instructions: Final = deployment_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
     system_instructions: Final = responses_kwargs.get("instructions")
-    if isinstance(system_instructions, str) and isinstance(caller_instructions, str):
+    if isinstance(system_instructions, str) and isinstance(deployment_instructions, str):
         combined_instructions: Final = (
-            f"{system_instructions}\n{caller_instructions}" if caller_instructions else system_instructions
+            f"{system_instructions}\n{deployment_instructions}" if deployment_instructions else system_instructions
         )
         responses_kwargs["instructions"] = combined_instructions
-        if "instructions" in caller_extra_body:
-            responses_kwargs["extra_body"] = {**caller_extra_body, "instructions": combined_instructions}
+        if "instructions" in deployment_extra_body:
+            responses_kwargs["extra_body"] = {**deployment_extra_body, "instructions": combined_instructions}
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)

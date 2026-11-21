@@ -18,8 +18,10 @@ from pydantic import TypeAdapter, ValidationError
 from litellm import exceptions as litellm_exceptions
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
+    RESPONSES_ONLY_REQUEST_FIELDS,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
@@ -499,8 +501,14 @@ def update_kwargs_with_deployment(
     metadata_variable_name: Final = get_router_metadata_variable_name(function_name=function_name)
     routing: Final = deployment.get(KUBERNETES_POD_ROUTING_KEY)
     metadata: Final = metadata_bucket(kwargs, metadata_variable_name)
+    caller_extra_body: Final = as_dict(kwargs.get("extra_body"))
     metadata.update(
         {
+            CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY: tuple(
+                field
+                for field in RESPONSES_ONLY_REQUEST_FIELDS
+                if kwargs.get(field) is not None or caller_extra_body.get(field) is not None
+            ),
             "deployment": deployment_model,
             "model_info": model_info,
             "api_base": deployment_api_base,
