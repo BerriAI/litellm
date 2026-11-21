@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 
 from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
 from litellm.exceptions import BadRequestError
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.utils import ImageResponse, ImageUsage, Usage
 
 _T = TypeVar("_T")
@@ -148,10 +149,6 @@ def record_partial_image_spend(logging_obj: _SpendLog, responses: Sequence[Image
         return
     usage: Final = merge_image_responses(responses).usage
     logging_obj.record_partial_usage_for_failure(
-        Usage(
-            prompt_tokens=usage.input_tokens if usage else 0,
-            completion_tokens=usage.output_tokens if usage else 0,
-            total_tokens=usage.total_tokens if usage else 0,
-        ),
+        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage.model_dump() if usage else None),
         _summed_cost(logging_obj, responses) or 0.0,
     )

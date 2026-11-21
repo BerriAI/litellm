@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.types.utils import ImageResponse
 
 _REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
+_REFUSALS_GOOGLE_DOES_NOT_CHARGE: Final = frozenset({"IMAGE_RECITATION"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
 
 
@@ -21,6 +22,26 @@ class UnservedImageError(UnprocessableEntityError):
         self, message: str, model: str, llm_provider: str, response: httpx.Response, billed_answer: ImageResponse
     ) -> None:
         super().__init__(message=message, model=model, llm_provider=llm_provider, response=response)
+        self.billed_answer: Final = billed_answer
+
+
+class ChargedImageRefusalError(ContentPolicyViolationError):
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        llm_provider: str,
+        response: httpx.Response,
+        provider_specific_fields: Mapping[str, str | None],
+        billed_answer: ImageResponse,
+    ) -> None:
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response,
+            provider_specific_fields=dict(provider_specific_fields),
+        )
         self.billed_answer: Final = billed_answer
 
 
@@ -77,6 +98,34 @@ def _answered_without_model_output(raw_response: httpx.Response, result: _Genera
     )
 
 
+def _refusal_error(
+    reason: str,
+    message: str,
+    fields: Mapping[str, str | None],
+    model: str,
+    llm_provider: str,
+    raw_response: httpx.Response,
+    answer: ImageResponse,
+) -> ContentPolicyViolationError:
+    response: Final = _answered_as(400, raw_response)
+    if reason in _REFUSALS_GOOGLE_DOES_NOT_CHARGE:
+        return ContentPolicyViolationError(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response,
+            provider_specific_fields=dict(fields),
+        )
+    return ChargedImageRefusalError(
+        message=message,
+        model=model,
+        llm_provider=llm_provider,
+        response=response,
+        provider_specific_fields=fields,
+        billed_answer=answer,
+    )
+
+
 def empty_image_response_error(
     response: Mapping[str, object],
     model: str,
@@ -87,32 +136,30 @@ def empty_image_response_error(
     result: Final = _parsed(response)
     feedback: Final = result.prompt_feedback
     if feedback is not None and feedback.block_reason:
-        return ContentPolicyViolationError(
-            message=_with_detail(
+        return _refusal_error(
+            feedback.block_reason,
+            _with_detail(
                 f"Gemini blocked the image prompt, blockReason={feedback.block_reason}", feedback.block_reason_message
             ),
-            model=model,
-            llm_provider=llm_provider,
-            response=_answered_as(400, raw_response),
-            provider_specific_fields={
-                "block_reason": feedback.block_reason,
-                "block_reason_message": feedback.block_reason_message,
-            },
+            {"block_reason": feedback.block_reason, "block_reason_message": feedback.block_reason_message},
+            model,
+            llm_provider,
+            raw_response,
+            answer,
         )
     candidates: Final = result.candidates or ()
     refusal: Final = next((candidate for candidate in candidates if _is_refusal(candidate)), None)
-    if refusal is not None:
-        return ContentPolicyViolationError(
-            message=_with_detail(
+    if refusal is not None and refusal.finish_reason is not None:
+        return _refusal_error(
+            refusal.finish_reason,
+            _with_detail(
                 f"Gemini refused to return an image, finishReason={refusal.finish_reason}", refusal.finish_message
             ),
-            model=model,
-            llm_provider=llm_provider,
-            response=_answered_as(400, raw_response),
-            provider_specific_fields={
-                "finish_reason": refusal.finish_reason,
-                "finish_message": refusal.finish_message,
-            },
+            {"finish_reason": refusal.finish_reason, "finish_message": refusal.finish_message},
+            model,
+            llm_provider,
+            raw_response,
+            answer,
         )
     finish_reasons: Final = ",".join(candidate.finish_reason or "none" for candidate in candidates) or "none"
     return UnservedImageError(
