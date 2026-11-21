@@ -16,7 +16,7 @@ from litellm.types.llms.elevenlabs import ElevenLabsRealtimeConfigure
 
 RealtimeConnect: TypeAlias = Callable[[str, Mapping[str, str]], Awaitable[RealtimeBackend]]
 
-_OPEN_TIMEOUT_SECONDS: Final = 8.0
+OPEN_TIMEOUT_SECONDS: Final = 8.0
 
 
 class _AudioChunk(BaseModel):
@@ -40,7 +40,7 @@ async def open_realtime_websocket(url: str, headers: Mapping[str, str]) -> Realt
         additional_headers=dict(headers),
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=realtime_ssl_for_url(url),
-        open_timeout=_OPEN_TIMEOUT_SECONDS,
+        open_timeout=OPEN_TIMEOUT_SECONDS,
     )
     return _WebsocketBackend(connection)
 

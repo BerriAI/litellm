@@ -45,6 +45,10 @@ def native_health_check_mode(
         from litellm.llms.soniox.common_utils import soniox_health_check_mode
 
         return soniox_health_check_mode(model)
+    if custom_llm_provider == "elevenlabs":
+        from litellm.llms.elevenlabs.common_utils import elevenlabs_health_check_mode
+
+        return elevenlabs_health_check_mode(model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode

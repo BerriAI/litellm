@@ -1,12 +1,16 @@
+import asyncio
 import base64
 import json
+import os
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, get_args
 from urllib.parse import urlencode
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
+from websockets.exceptions import ConnectionClosed
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -29,7 +33,13 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     uses_server_vad,
 )
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
-from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
+from litellm.llms.elevenlabs.common_utils import SCRIBE_REALTIME_MODEL, ElevenLabsException, normalize_model
+from litellm.llms.elevenlabs.realtime.backend import (
+    OPEN_TIMEOUT_SECONDS,
+    ElevenLabsRealtimeBackend,
+    RealtimeConnect,
+    open_realtime_websocket,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.elevenlabs import (
     ElevenLabsCommitStrategy,
@@ -56,7 +66,6 @@ from litellm.types.realtime import (
     RealtimeResponseTypedDict,
 )
 
-SCRIBE_REALTIME_MODEL: Final = "scribe_v2_realtime"
 DEFAULT_ELEVENLABS_REALTIME_URL: Final = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
 MAX_AUDIO_CHUNK_BYTES: Final = 32_000
 _REALTIME_PATH: Final = "/v1/speech-to-text/realtime"
@@ -67,6 +76,15 @@ _KNOWN_SERVER_MESSAGE_TYPES: Final = frozenset(
     ("session_started", "partial_transcript", "committed_transcript", "warning", *get_args(ElevenLabsErrorType))
 )
 _SERVER_MESSAGE_ADAPTER: Final = TypeAdapter[ElevenLabsServerMessageUnion](ElevenLabsServerMessage)
+_ERROR_STATUS_CODES: Final[Mapping[ElevenLabsErrorType, int]] = MappingProxyType(
+    {
+        "auth_error": 401,
+        "quota_exceeded": 429,
+        "rate_limited": 429,
+        "invalid_request": 400,
+        "input_error": 400,
+    }
+)
 
 
 class ElevenLabsProtocolError(RealtimeTranscriptionProtocolError):
@@ -148,10 +166,6 @@ def realtime_options_from_params(params: Mapping[str, object]) -> ElevenLabsReal
         raise ValueError(f"Invalid ElevenLabs realtime options: {e}") from None
 
 
-def normalize_model(model: str) -> str:
-    return model.strip().removeprefix("elevenlabs/")
-
-
 def normalize_language(language: str) -> str:
     primary: Final = language.strip().replace("_", "-").split("-", 1)[0].casefold()
     if not (2 <= len(primary) <= 3 and primary.isascii() and primary.isalpha()):
@@ -222,14 +236,42 @@ def parse_server_message(payload: str | bytes) -> ElevenLabsServerMessageUnion |
         raise ElevenLabsProtocolError(f"ElevenLabs sent an invalid {message_type} message") from None
 
 
+def elevenlabs_error(error_type: ElevenLabsErrorType) -> ElevenLabsException:
+    return ElevenLabsException(
+        status_code=_ERROR_STATUS_CODES.get(error_type, 500),
+        message=f"ElevenLabs realtime transcription failed: {error_type}",
+    )
+
+
 def _new_item_id() -> str:
     return f"item_{uuid.uuid4().hex}"
+
+
+def _new_words(emitted: str, words: tuple[str, ...]) -> str:
+    emitted_words: Final = tuple(normalize_transcript_word(word) for word in emitted.split())
+    if len(words) > len(emitted_words) and emitted_words == tuple(
+        normalize_transcript_word(word) for word in words[: len(emitted_words)]
+    ):
+        new_words: Final = " ".join(words[len(emitted_words) :])
+        return f" {new_words}" if emitted else new_words
+    stable: Final = " ".join(words)
+    return stable[len(emitted) :] if stable.startswith(emitted) else ""
+
+
+def _new_text(emitted: str, previous: str | None, text: str) -> str:
+    if any(char.isspace() for char in text):
+        return _new_words(emitted, tuple(text.split()[:-1]))
+    if previous is None:
+        return ""
+    stable: Final = os.path.commonprefix((previous, text))
+    return stable[len(emitted) :] if stable.startswith(emitted) else ""
 
 
 @dataclass(frozen=True, slots=True)
 class _Turn:
     item_id: str
-    emitted: tuple[str, ...]
+    emitted: str
+    previous: str | None
 
 
 class ElevenLabsEventTransformer:
@@ -237,6 +279,12 @@ class ElevenLabsEventTransformer:
         self._new_item_id: Final = new_item_id
         self._turn: _Turn | None = None
         self._unbilled_seconds: float = 0.0
+        self._session_started: bool = False
+        self._refusal: ElevenLabsException | None = None
+
+    @property
+    def refusal(self) -> ElevenLabsException | None:
+        return self._refusal
 
     def record_audio(self, seconds: float) -> None:
         self._unbilled_seconds += seconds
@@ -253,6 +301,7 @@ class ElevenLabsEventTransformer:
     ) -> tuple[OpenAIRealtimeEvents, ...]:
         match message:
             case ElevenLabsSessionStarted(session_id=session_id):
+                self._session_started = True
                 return (session_created_event(config, session_id),)
             case ElevenLabsPartialTranscript(text=text):
                 return self._partial(text)
@@ -262,29 +311,26 @@ class ElevenLabsEventTransformer:
                 verbose_logger.warning("ElevenLabs realtime warning: %s", warning)
                 return ()
             case ElevenLabsErrorMessage(message_type=error_type):
-                return (error_event(f"ElevenLabs realtime transcription failed: {error_type}"),)
+                return (self._report(elevenlabs_error(error_type)),)
             case _:
                 assert_never(message)
+
+    def _report(self, error: ElevenLabsException) -> OpenAIRealtimeEvents:
+        if not self._session_started and self._refusal is None:
+            self._refusal = error
+        return error_event(error.message)
 
     def _partial(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
         if not text:
             return ()
         turn: Final = self._turn
-        current: Final = turn if turn is not None else _Turn(item_id=self._new_item_id(), emitted=())
+        current: Final = turn if turn is not None else _Turn(item_id=self._new_item_id(), emitted="", previous=None)
         started: Final[tuple[OpenAIRealtimeEvents, ...]] = (
             (speech_event("input_audio_buffer.speech_started", current.item_id),) if turn is None else ()
         )
-        if turn is None:
-            self._turn = current
-        stable: Final = tuple(text.split()[:-1])
-        if len(stable) <= len(current.emitted) or tuple(
-            normalize_transcript_word(word) for word in stable[: len(current.emitted)]
-        ) != tuple(normalize_transcript_word(word) for word in current.emitted):
-            return started
-        new_words: Final = " ".join(stable[len(current.emitted) :])
-        delta: Final = f" {new_words}" if current.emitted else new_words
-        self._turn = _Turn(item_id=current.item_id, emitted=stable)
-        return (*started, delta_event(current.item_id, delta))
+        delta: Final = _new_text(current.emitted, current.previous, text)
+        self._turn = _Turn(item_id=current.item_id, emitted=current.emitted + delta, previous=text)
+        return (*started, delta_event(current.item_id, delta)) if delta else started
 
     def _committed(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
         turn: Final = self._turn
@@ -379,7 +425,12 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
                 verbose_logger.debug("ElevenLabs realtime: dropping unsupported client event %s", event_type)
                 return ()
 
+    def session_refusal(self) -> Exception | None:
+        return self._transformer.refusal
+
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        if self._transformer.refusal is not None:
+            return None
         return self._transformer.take_unbilled_usage()
 
     def transform_realtime_response(
@@ -406,9 +457,12 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
     def _server_events(self, message: ElevenLabsServerMessageUnion) -> tuple[OpenAIRealtimeEvents, ...]:
         if isinstance(message, ElevenLabsSessionStarted):
             verbose_logger.debug("ElevenLabs realtime session started: %s", message.session_id)
-            session_id: Final = self._session_id if self._session_id is not None else message.session_id
-            return (session_created_event(self._require_config(), session_id),)
-        return self._transformer.transform(message, self._require_config())
+        reported: Final = (
+            message.model_copy(update={"session_id": self._session_id})
+            if isinstance(message, ElevenLabsSessionStarted) and self._session_id is not None
+            else message
+        )
+        return self._transformer.transform(reported, self._require_config())
 
     def _configure(self, message: str) -> tuple[str, ...]:
         if self._config is not None:
@@ -443,3 +497,41 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
 
 def elevenlabs_realtime_config(params: Mapping[str, object], *, drop_params: bool) -> ElevenLabsRealtimeConfig:
     return ElevenLabsRealtimeConfig(options=realtime_options_from_params(params), drop_params=drop_params)
+
+
+async def _next_frame(backend: RealtimeBackend) -> str | bytes:
+    try:
+        return await backend.recv()
+    except ConnectionClosed:
+        raise ElevenLabsException(
+            status_code=502, message="ElevenLabs closed the realtime session before starting it"
+        ) from None
+
+
+async def _session_start_outcome(backend: RealtimeBackend) -> bool:
+    while True:
+        match parse_server_message(await _next_frame(backend)):
+            case ElevenLabsSessionStarted():
+                return True
+            case ElevenLabsErrorMessage(message_type=error_type):
+                raise elevenlabs_error(error_type)
+            case _:
+                continue
+
+
+async def elevenlabs_realtime_health_check(
+    model: str,
+    api_base: str | None,
+    api_key: str | None,
+    options: ElevenLabsRealtimeOptions,
+    *,
+    connect: RealtimeConnect = open_realtime_websocket,
+) -> bool:
+    config: Final = ElevenLabsRealtimeConfig()
+    url: Final = config.get_complete_url(api_base, model)
+    headers: Final = config.validate_environment({}, model, api_key)
+    backend: Final = await connect(f"{url}?{default_session_config(options).query()}", headers)
+    try:
+        return await asyncio.wait_for(_session_start_outcome(backend), OPEN_TIMEOUT_SECONDS)
+    finally:
+        await backend.close()

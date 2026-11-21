@@ -61,6 +61,7 @@ from ..llms.azure.live.handler import AzureLiveApiBaseMissing, azure_live_upstre
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
+from ..llms.elevenlabs.realtime.transformation import elevenlabs_realtime_health_check, realtime_options_from_params
 from ..llms.openai.common_utils import is_openai_backed_api_base
 from ..llms.openai.live.handler import LiveUpstream, OpenAILiveSessions
 from ..llms.openai.realtime.handler import (
@@ -1320,6 +1321,13 @@ async def realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
+    elif custom_llm_provider == "elevenlabs":
+        return await elevenlabs_realtime_health_check(
+            model=model,
+            api_base=resolved_api_base,
+            api_key=health_check_api_key,
+            options=realtime_options_from_params(resolved_params),
+        )
     elif custom_llm_provider == "soniox":
         return await soniox_realtime_health_check(
             model=model,

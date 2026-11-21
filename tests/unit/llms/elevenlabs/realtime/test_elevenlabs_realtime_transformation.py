@@ -2,6 +2,7 @@ import base64
 import itertools
 import json
 from collections.abc import Callable, Mapping
+from types import TracebackType
 from typing import Final, get_args
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs
@@ -9,6 +10,7 @@ from urllib.parse import parse_qs
 import pytest
 
 from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
+from litellm.llms.elevenlabs.common_utils import ElevenLabsException
 from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
 from litellm.llms.elevenlabs.realtime.transformation import (
     DEFAULT_ELEVENLABS_REALTIME_URL,
@@ -22,6 +24,7 @@ from litellm.llms.elevenlabs.realtime.transformation import (
     ElevenLabsProtocolError,
     ElevenLabsSessionConfig,
     default_session_config,
+    elevenlabs_realtime_health_check,
     normalize_language,
     parse_server_message,
     parse_session_update,
@@ -393,6 +396,82 @@ def test_provider_errors_name_the_error_type_without_upstream_detail(error_type:
     assert "private upstream detail" not in message
 
 
+def test_unspaced_chinese_partials_stream_the_prefix_kept_across_two_partials():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        *(_frame("partial_transcript", text=text) for text in ("今天", "今天天气", "今天天气很好", "今天天气很好。")),
+        _frame("committed_transcript", text="今天天气很好。"),
+    )
+
+    assert _summary(events) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "今天"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "天气"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "很好"),
+        ("input_audio_buffer.speech_stopped", "item_0", None),
+        ("conversation.item.input_audio_transcription.completed", "item_0", "今天天气很好。"),
+    ]
+
+
+def test_unspaced_japanese_partials_stream_the_prefix_kept_across_two_partials():
+    partials: Final = ("こんにちは", "こんにちは世界", "こんにちは世界です", "こんにちは世界です。")
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        *(_frame("partial_transcript", text=text) for text in partials),
+        _frame("committed_transcript", text="こんにちは世界です。"),
+    )
+
+    assert _summary(events) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "こんにちは"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "世界"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "です"),
+        ("input_audio_buffer.speech_stopped", "item_0", None),
+        ("conversation.item.input_audio_transcription.completed", "item_0", "こんにちは世界です。"),
+    ]
+
+
+def test_a_revision_inside_unspaced_text_emits_nothing_until_the_emitted_prefix_is_kept_again():
+    transformer: Final = ElevenLabsEventTransformer(new_item_id=_item_ids())
+    first: Final = _events(
+        transformer, _frame("partial_transcript", text="今天"), _frame("partial_transcript", text="今天天气")
+    )
+    revised: Final = _events(
+        transformer,
+        _frame("partial_transcript", text="明天天气很好"),
+        _frame("partial_transcript", text="今天天气很好"),
+    )
+    resumed: Final = _events(
+        transformer,
+        _frame("partial_transcript", text="今天天气很好啊"),
+        _frame("committed_transcript", text="今天天气很好啊。"),
+    )
+
+    assert revised == []
+    assert _summary([*first, *resumed]) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "今天"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "天气很好"),
+        ("input_audio_buffer.speech_stopped", "item_0", None),
+        ("conversation.item.input_audio_transcription.completed", "item_0", "今天天气很好啊。"),
+    ]
+
+
+def test_a_turn_that_moves_between_unspaced_and_spaced_text_only_extends_the_emitted_text():
+    partials: Final = ("今天", "今天天气", "今天天气 很好 啊", "今天天气 很好 啊 吧", "今天天气很好啊吧呢")
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        *(_frame("partial_transcript", text=text) for text in partials),
+    )
+
+    assert _summary(events) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "今天"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "天气 很好"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " 啊"),
+    ]
+
+
 def test_warnings_and_unknown_messages_are_not_forwarded():
     assert _events(ElevenLabsEventTransformer(), _frame("warning", warning="slow down")) == []
     assert parse_server_message(_frame("committed_transcript_with_timestamps", text="x")) is None
@@ -546,6 +625,54 @@ async def test_failed_audio_chunks_do_not_contribute_to_completed_or_close_usage
     assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) == {"type": "duration", "seconds": 0.5}
 
 
+_REFUSAL_STATUS_CODES: Final = {
+    "auth_error": 401,
+    "quota_exceeded": 429,
+    "rate_limited": 429,
+    "invalid_request": 400,
+    "input_error": 400,
+}
+
+
+@pytest.mark.parametrize("error_type", get_args(ElevenLabsErrorType))
+def test_an_error_before_session_started_refuses_the_session_with_the_mapped_status(error_type: str):
+    config: Final = _configured()
+    events: Final = _response(config, _frame(error_type, error="private upstream detail"))
+
+    refusal: Final = config.session_refusal()
+    assert isinstance(refusal, ElevenLabsException)
+    assert (refusal.status_code, refusal.message) == (
+        _REFUSAL_STATUS_CODES.get(error_type, 500),
+        f"ElevenLabs realtime transcription failed: {error_type}",
+    )
+    assert events == [{"type": "error", "error": {"type": "server_error", "message": refusal.message}}]
+
+
+def test_an_error_after_session_started_is_an_error_event_and_not_a_refusal():
+    config: Final = _configured()
+    _response(config, _frame("session_started", session_id="el_sess_1"))
+    events: Final = _response(config, _frame("auth_error", error="private upstream detail"))
+
+    assert events == [
+        {
+            "type": "error",
+            "error": {"type": "server_error", "message": "ElevenLabs realtime transcription failed: auth_error"},
+        }
+    ]
+    assert config.session_refusal() is None
+
+
+async def test_a_refused_session_bills_nothing_at_close():
+    upstream: Final = MagicMock(spec=RealtimeBackend)
+    upstream.send = AsyncMock()
+    config, backend = await _billing_session(24_000, upstream)
+    for message in config.transform_realtime_request(_append(b"\x00\x00" * 12_000), SCRIBE_REALTIME_MODEL):
+        await backend.send(message)
+    _response(config, _frame("auth_error", error="Invalid API key"))
+
+    assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) is None
+
+
 def test_session_started_without_a_synthetic_event_reports_the_upstream_id_and_configured_session():
     config: Final = _configured(_session_update(rate=16_000, language="es"))
     events: Final = _response(config, _frame("session_started", session_id="el_sess_1"))
@@ -643,3 +770,89 @@ def test_provider_config_manager_builds_the_elevenlabs_config_from_deployment_pa
     )
 
     assert parse_qs(ElevenLabsRealtimeConfigure.model_validate_json(sent[0]).query)["keyterms"] == ["Scribe"]
+
+
+class _ScriptedUpstream:
+    def __init__(self, *frames: str | Exception) -> None:
+        self.frames = list(frames)
+        self.sent: list[str | bytes] = []
+        self.closed = False
+
+    async def __aenter__(self) -> "_ScriptedUpstream":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.close()
+
+    async def send(self, message: str | bytes) -> None:
+        self.sent.append(message)
+
+    async def recv(self, decode: bool | None = None) -> str | bytes:
+        frame = self.frames.pop(0)
+        if isinstance(frame, Exception):
+            raise frame
+        return frame
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _RecordingConnect:
+    def __init__(self, upstream: _ScriptedUpstream) -> None:
+        self.upstream = upstream
+        self.calls: list[tuple[str, Mapping[str, str]]] = []
+
+    async def __call__(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend:
+        self.calls.append((url, dict(headers)))
+        return self.upstream
+
+
+async def test_health_check_opens_a_default_session_without_audio_and_is_healthy_on_session_started():
+    options: Final = ElevenLabsRealtimeOptions(keyterms=("Scribe",))
+    upstream: Final = _ScriptedUpstream(_frame("session_started", session_id="el_sess_1"))
+    connect: Final = _RecordingConnect(upstream)
+
+    healthy: Final = await elevenlabs_realtime_health_check(
+        f"elevenlabs/{SCRIBE_REALTIME_MODEL}", None, "secret", options, connect=connect
+    )
+
+    assert healthy is True
+    assert connect.calls == [
+        (f"{DEFAULT_ELEVENLABS_REALTIME_URL}?{default_session_config(options).query()}", {"xi-api-key": "secret"})
+    ]
+    assert (upstream.sent, upstream.closed) == ([], True)
+
+
+async def test_health_check_raises_the_mapped_refusal_when_elevenlabs_rejects_the_key():
+    upstream: Final = _ScriptedUpstream(_frame("auth_error", error="Invalid API key"))
+
+    with pytest.raises(ElevenLabsException) as refused:
+        await elevenlabs_realtime_health_check(
+            SCRIBE_REALTIME_MODEL, None, "bad-key", NO_OPTIONS, connect=_RecordingConnect(upstream)
+        )
+
+    assert (refused.value.status_code, refused.value.message) == (
+        401,
+        "ElevenLabs realtime transcription failed: auth_error",
+    )
+    assert upstream.closed is True
+
+
+async def test_health_check_raises_a_bad_gateway_when_elevenlabs_closes_before_starting_the_session():
+    from websockets.exceptions import ConnectionClosedOK
+    from websockets.frames import Close
+
+    upstream: Final = _ScriptedUpstream(ConnectionClosedOK(rcvd=Close(1000, ""), sent=None))
+
+    with pytest.raises(ElevenLabsException) as failed:
+        await elevenlabs_realtime_health_check(
+            SCRIBE_REALTIME_MODEL, None, "secret", NO_OPTIONS, connect=_RecordingConnect(upstream)
+        )
+
+    assert failed.value.status_code == 502
+    assert upstream.closed is True

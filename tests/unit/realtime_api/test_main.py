@@ -2773,6 +2773,17 @@ async def test_soniox_realtime_health_check_fails_when_soniox_closes_without_fin
             )
 
 
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_health_check_validates_the_deployment_options_before_connecting():
+    with pytest.raises(ValueError, match="Invalid ElevenLabs realtime options"):
+        await realtime_main.realtime_health_check(
+            model="scribe_v2_realtime",
+            custom_llm_provider="elevenlabs",
+            api_key="elevenlabs-key",
+            model_params={"model": "elevenlabs/scribe_v2_realtime", "vad_threshold": -1},
+        )
+
+
 def test_session_metadata_keeps_the_proxy_caller_identity_for_bedrock_session_tags() -> None:
     request_data: Final = {
         "metadata": {
