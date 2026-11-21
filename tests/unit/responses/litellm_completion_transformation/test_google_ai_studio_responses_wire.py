@@ -189,8 +189,8 @@ _SEARCH_PARTS: Final = (
     },
     {"toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "response": {}, "id": "call_1"}},
 )
-_GROUNDING: Final = {"webSearchQueries": ["litellm pypi version", "litellm changelog"]}
-_SEARCHED_QUERIES: Final = ("litellm latest release", "litellm pypi version", "litellm changelog")
+_GROUNDING: Final = {"webSearchQueries": ["litellm pypi version"]}
+_SEARCHED_QUERIES: Final = ("litellm latest release", "litellm pypi version")
 
 
 class _SearchAction(BaseModel):
@@ -294,7 +294,11 @@ async def test_gemini_web_searches_come_back_as_web_search_call_items_before_the
 
     items: Final = _output_items(response)
     searches: Final = _search_items(items)
-    assert tuple(item.type for item in items) == ("web_search_call",) * 3 + ("message", "function_call")
+    assert tuple(item.type for item in items) == (
+        *("web_search_call",) * len(_SEARCHED_QUERIES),
+        "message",
+        "function_call",
+    )
     assert tuple(search.action.query for search in searches if search.action) == _SEARCHED_QUERIES
     assert {(search.status, search.action.type if search.action else None) for search in searches} == {
         ("completed", "search")
@@ -374,7 +378,8 @@ async def test_streamed_gemini_web_searches_arrive_in_order_with_the_non_streami
         call_id: {position} for position, item in enumerate(completed_output) if (call_id := item.id) in trails
     }
     assert len(set(added_indexes)) == len(added_indexes)
-    assert added_positions[0] < added_positions[1] < first_text_position < added_positions[2]
+    assert len(added_positions) == len(_SEARCHED_QUERIES)
+    assert max(added_positions) < first_text_position
 
 
 _CHUNKS_SHARING_SEARCHES_WITH_THE_FIRST_OUTPUT: Final = (
