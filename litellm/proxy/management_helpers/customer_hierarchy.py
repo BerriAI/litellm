@@ -303,6 +303,7 @@ def budget_limit_json(value: object) -> "Json":
                 "budget_duration": limit.budget_duration,
                 "max_budget": limit.max_budget,
                 "reset_at": limit.reset_at.isoformat() if limit.reset_at is not None else None,
+                **({"window_start": limit.window_start.isoformat()} if limit.window_start is not None else {}),
             }
             for limit in limits
         ]
@@ -823,9 +824,11 @@ class CustomerHierarchyStore:
         )
         return budget_id
 
-    async def update_budget(self, budget_id: str | None, budget: Budget, actor: str) -> str:
+    async def update_budget(
+        self, budget_id: str | None, budget: Budget, actor: str, *, previous: tuple[BudgetLimit, ...] | None = None
+    ) -> str:
         if budget_id is None:
-            return await self.create_budget(budget, actor)
+            return await self.create_budget(budget, actor, previous=previous or ())
         if budget.budget_limits:
             from litellm.proxy.management_helpers.utils import validate_budget_windows_update
 
@@ -851,7 +854,11 @@ class CustomerHierarchyStore:
                             "budget_limits": initialize_budget_limits(
                                 carry_budget_limit_resets(
                                     budget.budget_limits,
-                                    (current.budget_limits or ()) if current is not None else (),
+                                    previous
+                                    if previous is not None
+                                    else (current.budget_limits or ())
+                                    if current is not None
+                                    else (),
                                 ),
                                 self.settings,
                                 self.now,
@@ -1400,7 +1407,9 @@ class CustomerHierarchyStore:
         if member.budget_override_id is None or member.budget_override_expires_at is not None:
             return member
         permanent: Final = effective_member_budget(member.budget, member.budget_override, None, self.now)
-        base_id: Final = await self.update_budget(member.budget_override_id, permanent, actor)
+        base_id: Final = await self.update_budget(
+            member.budget_override_id, permanent, actor, previous=permanent.budget_limits or ()
+        )
         await update_budget_row(self.budgets, base_id, {"budget_reset_at": member.budget_reset_at}, actor)
         await self.members.update(
             where={"customer_member_id": member.customer_member_id},

@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     is_annual_budget_duration,
     normalize_budget_window_start,
+    rolled_budget_window_start,
 )
 from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
@@ -142,11 +143,19 @@ def _customer_window_counter(
         limit.budget_duration, settings, now, previous_reset=configured_reset
     )
     reset_at: Final = configured_reset if configured_reset is not None and configured_reset > now else standard_reset
-    start: Final = calendar_budget_window_start(
+    calendar_start: Final = calendar_budget_window_start(
         limit.budget_duration,
         reset_at.astimezone(standard_reset.tzinfo),
         reset_time_of_day=settings.reset_time_of_day,
     ).astimezone(timezone.utc)
+    saved_start: Final = limit.window_start if isinstance(limit, BudgetLimit) and reset_at is configured_reset else None
+    start: Final = normalize_budget_window_start(
+        saved_start.replace(tzinfo=saved_start.tzinfo or timezone.utc).astimezone(timezone.utc)
+        if saved_start is not None
+        else rolled_budget_window_start(calendar_start, configured_reset)
+        if configured_reset is not None and reset_at is standard_reset
+        else calendar_start
+    )
     return _BudgetCounter(
         counter_key=customer_window_counter(scope_key, entity_id, limit.budget_duration, start),
         max_budget=limit.max_budget,
