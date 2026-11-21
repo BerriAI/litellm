@@ -3177,6 +3177,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
     )
+    mcp_catalog_permission_cache_enabled: bool | None = Field(
+        None,
+        description="Allow MCP catalog listings for tools, resources, and prompts to reuse cached authorization records. Unset or false reads policy from the database; this does not cache upstream catalog responses.",
+    )
     mcp_trusted_proxy_ranges: list[str] | None = Field(
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.",

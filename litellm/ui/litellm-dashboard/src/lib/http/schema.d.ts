@@ -33084,6 +33084,11 @@ export interface components {
              */
             mcp_allowed_clients?: components["schemas"]["MCPAllowedClient"][] | null;
             /**
+             * Mcp Catalog Permission Cache Enabled
+             * @description Allow MCP catalog listings for tools, resources, and prompts to reuse cached authorization records. Unset or false reads policy from the database; this does not cache upstream catalog responses.
+             */
+            mcp_catalog_permission_cache_enabled?: boolean | null;
+            /**
              * Mcp Client Id Header
              * @description Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.
              */
