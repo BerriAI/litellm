@@ -39,7 +39,7 @@ export default function CustomerSettings() {
           </PageHeaderTitle>
           <PageHeaderDescription>{t("customerPortal.budgetGroups.settingsHint")}</PageHeaderDescription>
           <PageHeaderControls className="flex-wrap">
-            <PageTabsList aria-label={t("customerPortal.budgetGroups.title")} className="min-w-0 flex-1">
+            <PageTabsList aria-label={t("customerPortal.budgetGroups.title")} className="min-w-0 basis-full sm:flex-1">
               {catalogs.map(({ scope, label }) => (
                 <PageTabsTrigger key={scope} value={scope}>
                   {t(label)}
