@@ -10886,6 +10886,308 @@ async def test_async_retry_helpers_stop_when_the_call_is_cancelled(
     assert upstream.await_count == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async", "async_stream"])
+@pytest.mark.parametrize(
+    ("status_code", "num_retries", "expected_calls", "expected_exc"),
+    [
+        (500, 1, 2, litellm.InternalServerError),
+        (500, 3, 4, litellm.InternalServerError),
+        (400, 2, 1, litellm.BadRequestError),
+        (401, 3, 1, litellm.AuthenticationError),
+        (403, 2, 1, litellm.PermissionDeniedError),
+        (404, 2, 1, litellm.NotFoundError),
+        (422, 2, 1, litellm.BadRequestError),
+    ],
+)
+async def test_completion_num_retries_runs_single_loop_and_skips_non_retryable_4xx(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    status_code: int,
+    num_retries: int,
+    expected_calls: int,
+    expected_exc: type[Exception],
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = "https://openai-retry-test.invalid/v1"
+    with respx.mock as mock_router:
+        route: Final = mock_router.post(f"{api_base}/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code,
+                json={"error": {"message": "boom"}},
+                headers={"retry-after-ms": "1"},
+            )
+        )
+        call_kwargs: Final = {
+            "model": "openai/gpt-4o-mini",
+            "api_base": api_base,
+            "api_key": "sk-test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "num_retries": num_retries,
+            "stream": mode == "async_stream",
+        }
+        if mode == "sync":
+            with pytest.raises(expected_exc):
+                litellm.completion(**call_kwargs)
+        else:
+            with pytest.raises(expected_exc):
+                await litellm.acompletion(**call_kwargs)
+        assert route.call_count == expected_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_completion_num_retries_stops_when_retry_attempt_returns_401(
+    monkeypatch: pytest.MonkeyPatch,
+    use_async: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = "https://openai-retry-stop.invalid/v1"
+    with respx.mock as mock_router:
+        route: Final = mock_router.post(f"{api_base}/chat/completions").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "transient"}}, headers={"retry-after-ms": "1"}),
+                httpx.Response(401, json={"error": {"message": "invalid key"}}),
+                httpx.Response(500, json={"error": {"message": "should not be reached"}}),
+            ]
+        )
+        call_kwargs: Final = {
+            "model": "openai/gpt-4o-mini",
+            "api_base": api_base,
+            "api_key": "sk-test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "num_retries": 3,
+        }
+        if use_async:
+            with pytest.raises(litellm.InternalServerError):
+                await litellm.acompletion(**call_kwargs)
+        else:
+            with pytest.raises(litellm.AuthenticationError):
+                litellm.completion(**call_kwargs)
+        assert route.call_count == 2
+
+
+def test_completion_global_num_retries_and_explicit_retry_policy_and_header_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.router import RetryPolicy
+
+    api_base: Final = "https://openai-retry-policy.invalid/v1"
+    with respx.mock as mock_router:
+        monkeypatch.setattr(litellm, "num_retries", 2)
+        global_route: Final = mock_router.post(f"{api_base}/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "boom"}}, headers={"retry-after-ms": "1"})
+        )
+        with pytest.raises(litellm.InternalServerError):
+            litellm.completion(
+                model="openai/gpt-4o-mini",
+                api_base=api_base,
+                api_key="sk-test",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        assert global_route.call_count == 3
+
+    with respx.mock as mock_router:
+        monkeypatch.setattr(litellm, "num_retries", None)
+        policy_route: Final = mock_router.post(f"{api_base}/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": {"message": "bad request"}})
+        )
+        with pytest.raises(litellm.BadRequestError):
+            litellm.completion(
+                model="openai/gpt-4o-mini",
+                api_base=api_base,
+                api_key="sk-test",
+                messages=[{"role": "user", "content": "hi"}],
+                retry_policy=RetryPolicy(BadRequestErrorRetries=2),
+            )
+        assert policy_route.call_count == 3
+
+    with respx.mock as mock_router:
+        no_retry_header_route: Final = mock_router.post(f"{api_base}/chat/completions").mock(
+            return_value=httpx.Response(
+                500,
+                json={"error": {"message": "do not retry"}},
+                headers={"x-should-retry": "false"},
+            )
+        )
+        with pytest.raises(litellm.InternalServerError):
+            litellm.completion(
+                model="openai/gpt-4o-mini",
+                api_base=api_base,
+                api_key="sk-test",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=3,
+            )
+        assert no_retry_header_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("use_global_retries", [False, True])
+async def test_responses_bridged_to_completion_runs_single_retry_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    use_async: bool,
+    use_global_retries: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "num_retries", 2 if use_global_retries else None)
+    api_base: Final = "https://responses-bridge-retry.invalid/v1"
+    with respx.mock as mock_router:
+        route: Final = mock_router.post(f"{api_base}/chat/completions").mock(
+            return_value=httpx.Response(
+                500,
+                json={"error": {"message": "boom"}},
+                headers={"retry-after-ms": "1"},
+            )
+        )
+        call_kwargs: Final[dict[str, object]] = {
+            "model": "openai/gpt-4o-mini",
+            "api_base": api_base,
+            "api_key": "sk-test",
+            "input": "hi",
+            "use_chat_completions_api": True,
+            **({} if use_global_retries else {"num_retries": 2}),
+        }
+        if use_async:
+            with pytest.raises(litellm.InternalServerError):
+                await litellm.aresponses(**call_kwargs)  # pyright: ignore[reportArgumentType]  # dynamic test kwargs
+        else:
+            with pytest.raises(litellm.InternalServerError):
+                litellm.responses(**call_kwargs)  # pyright: ignore[reportArgumentType]  # dynamic test kwargs
+        assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("use_global_retries", [False, True])
+async def test_completion_bridged_to_responses_runs_single_retry_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    use_async: bool,
+    use_global_retries: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "num_retries", 2 if use_global_retries else None)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/test-responses-bridge-model",
+        {"mode": "responses", "litellm_provider": "openai"},
+    )
+    api_base: Final = "https://completion-bridge-retry.invalid/v1"
+    with respx.mock as mock_router:
+        route: Final = mock_router.post(f"{api_base}/responses").mock(
+            return_value=httpx.Response(
+                500,
+                json={"error": {"message": "boom"}},
+                headers={"retry-after-ms": "1"},
+            )
+        )
+        call_kwargs: Final[dict[str, object]] = {
+            "model": "openai/test-responses-bridge-model",
+            "api_base": api_base,
+            "api_key": "sk-test",
+            "messages": [{"role": "user", "content": "hi"}],
+            **({} if use_global_retries else {"num_retries": 2}),
+        }
+        if use_async:
+            with pytest.raises(litellm.InternalServerError):
+                await litellm.acompletion(**call_kwargs)  # pyright: ignore[reportArgumentType]  # dynamic test kwargs
+        else:
+            with pytest.raises(litellm.InternalServerError):
+                litellm.completion(**call_kwargs)  # pyright: ignore[reportArgumentType]  # dynamic test kwargs
+        assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_async_retry_runs_output_guardrail_on_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _MaskingGuardrail(CustomLogger):
+        async def async_post_call_success_deployment_hook(
+            self,
+            request_data: dict,
+            response: object,
+            call_type: object,
+        ) -> object:
+            if hasattr(response, "choices") and response.choices:
+                response.choices[0].message.content = "[REDACTED]"
+            elif hasattr(response, "output") and response.output:
+                response.output[0].content[0].text = "[REDACTED]"
+            return response
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "callbacks", [_MaskingGuardrail()])
+
+    api_base: Final = "https://async-retry-guardrail.invalid/v1"
+    with respx.mock as mock_router:
+        chat_route: Final = mock_router.post(f"{api_base}/chat/completions").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "transient"}}, headers={"retry-after-ms": "1"}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "chatcmpl-retry-guardrail",
+                        "object": "chat.completion",
+                        "created": 0,
+                        "model": "gpt-4o-mini",
+                        "choices": [
+                            {"index": 0, "message": {"role": "assistant", "content": "secret-token"}, "finish_reason": "stop"}
+                        ],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    },
+                ),
+            ]
+        )
+        chat_response: Final = await litellm.acompletion(
+            model="openai/gpt-4o-mini",
+            api_base=api_base,
+            api_key="sk-test",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=1,
+        )
+        assert chat_route.call_count == 2
+        assert chat_response.choices[0].message.content == "[REDACTED]"
+
+        responses_route: Final = mock_router.post(f"{api_base}/responses").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "transient"}}, headers={"retry-after-ms": "1"}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "resp-retry-guardrail",
+                        "object": "response",
+                        "created_at": 0,
+                        "status": "completed",
+                        "model": "gpt-4o-mini",
+                        "output": [
+                            {
+                                "id": "msg_1",
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": [{"type": "output_text", "text": "secret-token", "annotations": []}],
+                            }
+                        ],
+                        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                    },
+                ),
+            ]
+        )
+        responses_result: Final = await litellm.aresponses(
+            model="openai/gpt-4o-mini",
+            api_base=api_base,
+            api_key="sk-test",
+            input="hi",
+            num_retries=1,
+        )
+        assert responses_route.call_count == 2
+        assert responses_result.output[0].content[0].text == "[REDACTED]"
+
+
 def test_azure_embedding_exceptions():
     with pytest.raises(Exception, match="Mock error") as exc_info:
         litellm.embedding(

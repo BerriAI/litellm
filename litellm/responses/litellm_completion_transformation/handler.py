@@ -158,7 +158,14 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            **{
+                **kwargs,
+                **litellm_completion_request,
+                "_skip_responses_api_bridge": True,
+                "num_retries": 0,
+                "max_retries": 0,
+                "retry_policy": None,
+            },
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -260,7 +267,14 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            **{
+                **kwargs,
+                **litellm_completion_request,
+                "_skip_responses_api_bridge": True,
+                "num_retries": 0,
+                "max_retries": 0,
+                "retry_policy": None,
+            },
         )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
