@@ -63,6 +63,7 @@ from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendUpdateQueue
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
+from litellm.proxy.spend_tracking import legacy_spend_counters
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.redis.stores.spend_counters import SpendCounterStore
@@ -9151,7 +9152,7 @@ async def test_prepare_spend_counter_increment_reseeds_from_db_on_counter_miss(m
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
 
-    pending = await ps._prepare_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_spend_counter_increment(
         counter_key="spend:team:team-9",
         source_cache_key="team_id:team-9",
         increment=1.5,
@@ -9284,10 +9285,8 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
 
 @pytest.mark.asyncio
 async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
-    from litellm.proxy.proxy_server import (
-        _apply_spend_counter_increments,
-        _prepare_window_spend_counter_increment,
-    )
+    from litellm.proxy.proxy_server import _apply_spend_counter_increments
+    from litellm.proxy.spend_tracking.legacy_spend_counters import _prepare_window_spend_counter_increment
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -9339,7 +9338,7 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory(monkeyp
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
     monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
 
-    pending = await ps._prepare_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_spend_counter_increment(
         counter_key=counter_key,
         source_cache_key="team_id:team-stale-local",
         increment=1.5,
@@ -9367,7 +9366,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory(monke
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
 
-    pending = await ps._prepare_window_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key=counter_key,
         entity_type="Key",
         entity_id="key-window-stale-local",
@@ -9413,7 +9412,7 @@ async def test_window_spend_counter_seed_asks_the_store_to_increment_a_lost_seed
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
 
-    await ps._prepare_window_spend_counter_increment(
+    await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key=counter_key,
         entity_type="Key",
         entity_id="key-window-concurrent-seed",
@@ -9431,7 +9430,7 @@ async def test_window_spend_counter_seed_asks_the_store_to_increment_a_lost_seed
 
 @pytest.mark.asyncio
 async def test_window_spend_counter_skips_invalid_window_start():
-    from litellm.proxy.proxy_server import _prepare_window_spend_counter_increment
+    from litellm.proxy.spend_tracking.legacy_spend_counters import _prepare_window_spend_counter_increment
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
 
@@ -9513,7 +9512,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(mo
     monkeypatch.setattr(ps, "spend_counter_store", counter_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
     with patch(
-        "litellm.proxy.proxy_server._prepare_spend_counter_increment",
+        "litellm.proxy.spend_tracking.legacy_spend_counters._prepare_spend_counter_increment",
         new=AsyncMock(side_effect=assert_reservation_not_finalized_yet),
     ):
         await ps.increment_spend_counters(
@@ -9794,10 +9793,8 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     import asyncio as _asyncio
 
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import (
-        _prepare_spend_counter_increment,
-        get_current_spend,
-    )
+    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.spend_tracking.legacy_spend_counters import _prepare_spend_counter_increment
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_key = "spend:team_member:user-1:team-cross-path"

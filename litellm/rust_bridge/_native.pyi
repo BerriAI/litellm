@@ -1949,6 +1949,15 @@ class NativeBudgets:
         actual: float,
         apply_consistent: bool,
     ) -> Future[JsonValue]: ...
+    def charge_counters(
+        self,
+        step: Mapping[str, object],
+        record: BudgetReservation | None,
+        reservation: dict[str, object] | None,
+        request: NativeRequestRedis | None,
+        host: object,
+        /,
+    ) -> Execution: ...
 
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
 
