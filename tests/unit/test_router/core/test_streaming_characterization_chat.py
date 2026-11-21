@@ -45,6 +45,13 @@ MakeCore = Callable[..., RouterCore]
 PREFILL_MODEL: Final = "anthropic/claude-sonnet-4-5"
 """A model whose deployments accept an assistant prefill, so a continuation may land on them."""
 GROUPS_AB: Final = [deployment("a", "a"), deployment("b", "b")]
+T1_PUBLIC: Final = {"team_id": "T1", "team_public_model_name": "tp"}
+T2_PUBLIC: Final = {"team_id": "T2", "team_public_model_name": "tp"}
+INTERLEAVED_TEAM_TIERS: Final = [
+    deployment("t1-first", "t1-first", order=1, model_info=T1_PUBLIC),
+    deployment("t2-first", "t2-first", order=2, model_info=T2_PUBLIC),
+    deployment("t1-second", "t1-second", order=3, model_info=T1_PUBLIC),
+]
 
 
 def build(make_core: MakeCore, **arguments: object) -> RouterCore:  # kwargs-ok: the router's constructor arguments
@@ -322,6 +329,38 @@ async def test_a_mid_stream_server_error_before_content_falls_through_order_tier
     assert host.deployments_called() == ["a1", "a2"]
     assert model_id(stream) == "a2"
     assert headers(stream)["x-litellm-model-group"] == "a"
+
+
+async def open_team_stream(core: RouterCore, bucket: str) -> object:
+    return await core.acompletion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="tp", messages=MESSAGES, stream=True, **{bucket: {"user_api_key_team_id": "T1"}}
+    )
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_a_mid_stream_error_before_content_falls_through_the_callers_team_order_tiers(
+    make_core: MakeCore, host: ScriptedHost, bucket: str
+) -> None:
+    host.answer("openai/t1-first", chat_stream(error=server_error(), leading_role_chunk=True))
+    host.answer("openai/t2-first", chat_stream("T2"))
+    host.answer("openai/t1-second", chat_stream("T1"))
+    core: Final = make_core(model_list=INTERLEAVED_TEAM_TIERS, num_retries=0)
+    stream: Final = await open_team_stream(core, bucket)
+    assert await collect_texts(stream) == "T1"
+    assert host.deployments_called() == ["t1-first", "t1-second"]
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_a_mid_stream_error_after_content_on_a_team_tier_is_raised_without_fallback(
+    make_core: MakeCore, host: ScriptedHost, bucket: str
+) -> None:
+    host.answer("openai/t1-first", chat_stream("partial", error=rate_limit(message="cut after content")))
+    host.answer("openai/t1-second", chat_stream("T1"))
+    core: Final = make_core(model_list=INTERLEAVED_TEAM_TIERS, num_retries=0)
+    stream: Final = await open_team_stream(core, bucket)
+    with pytest.raises(litellm.RateLimitError, match="cut after content"):
+        await collect_texts(stream)
+    assert host.deployments_called() == ["t1-first"]
 
 
 async def test_a_mid_stream_bad_request_before_content_is_raised_without_fallback(
