@@ -96,12 +96,15 @@ from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
+    attribute_or_none,
     bind_budget_reservation_to_callbacks,
+    callable_of,
     has_attributes,
     iter_items,
     json_contains,
     normalize_drop_params,
     require_attributes,
+    subscript,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
@@ -280,7 +283,6 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
-    FileTypes,
     Function,
     ImageResponse,
     LlmProviders,
@@ -302,6 +304,9 @@ from litellm.types.utils import (
     Usage,
     credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
+)
+from litellm.types.utils import (
+    FileTypes as _FileTypes,
 )
 from litellm.types.utils import (
     TextChoices as _TextChoices,
@@ -354,6 +359,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, Type
 
 from typing_extensions import assert_never
 
+FileTypes: TypeAlias = _FileTypes
 TextChoices: TypeAlias = _TextChoices
 TextCompletionResponse: TypeAlias = _TextCompletionResponse
 TextCompletionStreamWrapper: TypeAlias = _TextCompletionStreamWrapper
@@ -1512,9 +1518,9 @@ def function_setup(
         ):
             messages = None
             if len(args) > 1:
-                messages = args[1]
+                messages = _OPAQUE_VALUE.validate_python(args[1])
             elif kwargs.get("messages", None):
-                messages = kwargs["messages"]
+                messages = _OPAQUE_VALUE.validate_python(kwargs["messages"])
             ### PRE-CALL RULES ###
             Rules: Final = litellm_utils.Rules
             if (
@@ -1556,7 +1562,7 @@ def function_setup(
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
             messages = _ocr_document_summary(args[1] if len(args) > 1 else kwargs.get("document"))
         elif call_type == CallTypes.atranscription.value or call_type == CallTypes.transcription.value:
-            _file_obj: Final[FileTypes] = args[1] if len(args) > 1 else kwargs["file"]
+            _file_obj: Final = _OPAQUE_VALUE.validate_python(args[1] if len(args) > 1 else kwargs["file"])
             # Lazy import audio_utils.utils only when needed for transcription calls
             audio_utils: Final = _get_cached_audio_utils()
             file_checksum: Final = audio_utils.get_audio_file_content_hash(file_obj=_file_obj)
@@ -1586,7 +1592,9 @@ def function_setup(
                     get_last_user_message,
                 )
 
-                contents_param: Final = args[1] if len(args) > 1 else kwargs.get("contents")
+                contents_param: Final = _OPAQUE_VALUE.validate_python(
+                    args[1] if len(args) > 1 else kwargs.get("contents")
+                )
                 model_param: Final[str] = args[0] if len(args) > 0 else kwargs.get("model", "")
 
                 if contents_param:
@@ -1896,17 +1904,6 @@ def _get_wrapper_num_retries(kwargs: dict[str, object], exception: Exception) ->
             num_retries = retry_policy_num_retries
 
     return num_retries, kwargs
-
-
-@runtime_checkable
-class _ModelFallbackLookup(Protocol):
-    def __getitem__(self, model: str | None, /) -> object: ...
-
-
-def _context_window_fallback_model(fallbacks: object, model: str | None) -> object:
-    if isinstance(fallbacks, _ModelFallbackLookup):
-        return fallbacks[model]
-    raise TypeError(f"'{type(fallbacks).__name__}' object is not subscriptable")
 
 
 def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
@@ -2987,9 +2984,9 @@ def client(original_function):
                     and not is_acompletion_litellm_router_call
                 ):
                     if len(args) > 0:
-                        args[0] = _context_window_fallback_model(context_window_fallback_dict, model)
+                        args[0] = subscript(context_window_fallback_dict, model)
                     else:
-                        kwargs["model"] = _context_window_fallback_model(context_window_fallback_dict, model)
+                        kwargs["model"] = subscript(context_window_fallback_dict, model)
                     result = await original_function(*args, **kwargs)
                     return result
             elif retry_call_type == CallTypes.aresponses.value:
@@ -5535,7 +5532,11 @@ def filter_out_litellm_params(
     return {key: value for key, value in kwargs.items() if key not in excluding and not is_litellm_owned_kwarg(key)}
 
 
-def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
+class _SupportsStartswith(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+def _provider_supports_vertex_params(custom_llm_provider: object) -> bool:
     if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
         return True
     try:
@@ -5551,8 +5552,8 @@ class PreProcessNonDefaultParams:
     def base_pre_process_non_default_params(
         passed_params: dict,
         special_params: Mapping[str, object],
-        custom_llm_provider: str,
-        additional_drop_params: list[str] | None,
+        custom_llm_provider: object,
+        additional_drop_params: object,
         default_param_values: dict,
         additional_endpoint_specific_params: list[str],
     ) -> dict:
@@ -5563,7 +5564,12 @@ class PreProcessNonDefaultParams:
                 continue
             if (
                 k.startswith("aws_")
-                and (custom_llm_provider != "bedrock" and not custom_llm_provider.startswith("sagemaker"))
+                and (
+                    custom_llm_provider != "bedrock"
+                    and not require_attributes(custom_llm_provider, _SupportsStartswith, "startswith").startswith(
+                        "sagemaker"
+                    )
+                )
                 or k == "hf_model_name"
                 and custom_llm_provider != "sagemaker"
                 or k.startswith("vertex_")
@@ -7209,7 +7215,7 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
 
 def _first_registered_match(
     candidates: Sequence[str], custom_llm_provider: str | None
-) -> tuple[str | None, dict[str, Any] | None]:
+) -> tuple[str | None, dict[str, object] | None]:
     registered_keys: Final = (key for key in map(get_model_cost_key, candidates) if key is not None)
     entries: Final = ((key, _get_model_info_from_model_cost(key=key)) for key in registered_keys)
     matches: Final = (
@@ -8122,6 +8128,26 @@ def json_schema_type(python_type_name: str):
     return python_to_json_schema_types.get(python_type_name, "string")
 
 
+class _SignatureParameterDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+    @property
+    def empty(self) -> object: ...
+
+
+def _has_no_default(param: _SignatureParameterDefault) -> bool:
+    return param.default == param.empty
+
+
+class _NamedAnnotation(Protocol):
+    @property
+    def __name__(self) -> str: ...
+
+
+def _annotation_name(param: object) -> str:
+    return require_attributes(attribute_or_none(param, "annotation"), _NamedAnnotation, "__name__").__name__
+
+
 def function_to_dict(input_function) -> dict:
     """Using type hints and numpy-styled docstring,
     produce a dictionary usable for OpenAI function calling
@@ -8157,7 +8183,7 @@ def function_to_dict(input_function) -> dict:
 
     for param_name, param in param_info.items():
         if hasattr(param, "annotation"):
-            param_type = json_schema_type(param.annotation.__name__)
+            param_type = json_schema_type(_annotation_name(param))
         else:
             param_type = None
         param_description = None
@@ -8191,7 +8217,7 @@ def function_to_dict(input_function) -> dict:
         parameters[param_name] = {k: v for k, v in param_dict.items() if isinstance(v, str)}
 
         # Check if the parameter has no default value (i.e., it's required)
-        if param.default == param.empty:
+        if _has_no_default(param):
             required_params.append(param_name)
 
     # Create the dictionary
@@ -9002,13 +9028,13 @@ async def async_mock_completion_streaming_obj(
 
 
 ########## Reading Config File ############################
-def read_config_args(config_path) -> dict:
+def read_config_args(config_path) -> object:
     try:
         import os
 
         os.getcwd()
         with open(config_path, "r") as config_file:
-            config: Final = json.load(config_file)
+            config: Final = _OPAQUE_VALUE.validate_python(json.load(config_file))
 
         # read keys/ values from config file and return them
         return config
@@ -10072,12 +10098,14 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 
 
 @lru_cache(maxsize=1)
-def get_bundled_model_cost_map() -> dict[str, Any]:
+def get_bundled_model_cost_map() -> Mapping[str, Mapping[str, object]]:
     try:
         model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
+        bundled_entries: Final = _OPAQUE_VALUE.validate_python(json.loads(model_cost_path.read_text()))
     except Exception:
         return {}
+    else:
+        return bundled_entries  # pyright: ignore[reportReturnType]  # main returns the parsed JSON unchecked
 
 
 _get_bundled_model_cost_map = get_bundled_model_cost_map
@@ -12298,12 +12326,12 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
         raw_request_only=True,
     )
 
-    llm_api_endpoint: Final = getattr(litellm, endpoint.value)
+    llm_api_endpoint: Final = _OPAQUE_VALUE.validate_python(getattr(litellm, endpoint.value))
 
     received_exception = ""
 
     try:
-        llm_api_endpoint(
+        callable_of(llm_api_endpoint)(
             **kwargs,
             litellm_logging_obj=litellm_logging_obj,
             api_key="my-fake-api-key",
@@ -12359,7 +12387,7 @@ def should_run_mock_completion(
     return False
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     from litellm._lazy_imports import resolve_lazy_attribute
 
     return resolve_lazy_attribute(__name__, name)

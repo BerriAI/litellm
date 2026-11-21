@@ -95,7 +95,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-audit_log_callbacks: List[CALLBACK_TYPES] = []
+audit_log_callbacks: list[object] = []
 batch_line_item_callbacks: Sequence[CALLBACK_TYPES] = ()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -528,6 +528,7 @@ if TYPE_CHECKING:
     )
 
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
+    global_prompt_directory: str | None = None
 
 
 ######## Networking Settings ########
@@ -553,7 +554,7 @@ allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
 num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
-secret_manager_client: Optional[Any] = (
+secret_manager_client: object | None = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
@@ -703,6 +704,7 @@ darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
+resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
@@ -1001,6 +1003,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             kyma_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
+        elif value.get("litellm_provider") == "resetdata":
+            resetdata_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
@@ -1186,6 +1190,7 @@ model_list = list(
     | openinfer_models
     | kyma_models
     | streamlake_models
+    | resetdata_models
     | wally_models
     | zerogpu_models
     | v0_models
@@ -1319,6 +1324,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,
+        "resetdata": resetdata_models,
         "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,

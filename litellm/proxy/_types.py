@@ -137,7 +137,7 @@ if TYPE_CHECKING:
     from litellm.integrations.lens import TraceReceiver
     from litellm.repositories.database import Database
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -2613,6 +2613,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
+    reject_unregistered_guardrails: bool = Field(
+        False,
+        description="Return 400 for a request whose merged guardrails (request, key, team, project, policy and model level) name a guardrail that is not registered on the proxy, instead of serving it without that guardrail.",
+    )
+
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
@@ -3650,6 +3655,20 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
 
 
+def masked_audit_log_value(value: object) -> object:
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
+
+    def decoded() -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+
+    return mask_credentials_in_payload(decoded(), SensitiveDataMasker(sensitive_patterns={"key"}))
+
+
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
@@ -3670,25 +3689,10 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
-
-        masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
-
-        def decoded(value: object) -> object:
-            if not isinstance(value, str):
-                return value
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                return value
-
-        def masked_json(value: object) -> str:
-            return json.dumps(mask_credentials_in_payload(decoded(value), masker), default=str)
-
         if self.before_value is not None:
-            self.before_value = masked_json(self.before_value)
+            self.before_value = json.dumps(masked_audit_log_value(self.before_value), default=str)
         if self.updated_values is not None:
-            self.updated_values = masked_json(self.updated_values)
+            self.updated_values = json.dumps(masked_audit_log_value(self.updated_values), default=str)
 
         return self
 
@@ -3775,7 +3779,7 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
-    field_value: Any
+    field_value: object
     source: Literal["config", "db", "env", "default", "unset"] = "unset"
     editable: bool = True
 

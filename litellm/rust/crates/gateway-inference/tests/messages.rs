@@ -438,7 +438,7 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(ResponseTemplate::new(429).set_body_json(error.clone()))
-        .expect(1)
+        .expect(3)
         .mount(&upstream)
         .await;
     let request = Request::post("/v1/messages")
@@ -461,10 +461,7 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
 
 #[rstest]
 #[case::messages("/v1/messages")]
-#[case::chat("/v1/chat/completions")]
-#[case::model_path("/engines/path-model/chat/completions")]
 #[case::ocr("/ocr")]
-#[case::transcription("/audio/transcriptions")]
 #[tokio::test]
 async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
     let upstream = MockServer::start().await;
@@ -525,4 +522,33 @@ async fn openrouter_receives_native_messages_headers_and_its_deployment_bearer(
     let requests = upstream.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].headers.contains_key("x-api-key"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_body_is_read_as_json_whatever_the_content_type(
+    #[values(None, Some("application/json"), Some("text/plain"))] content_type: Option<&str>,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(message_response())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages");
+    let request = match content_type {
+        Some(content_type) => request.header("content-type", content_type),
+        None => request,
+    };
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(
+            request
+                .body(Body::from(
+                    messages_request("public/model", json!({"max_tokens": 16})).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
 }

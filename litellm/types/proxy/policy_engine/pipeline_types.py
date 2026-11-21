@@ -90,7 +90,7 @@ class PipelineStepResult(LiteLLMBaseModel):
     guardrail_name: str
     outcome: Literal["pass", "fail", "error", "skip"]
     action_taken: str
-    modified_data: dict[str, Any] | None = None
+    modified_data: dict[str, object] | None = None
     error_detail: str | None = None
     duration_seconds: float | None = None
 
