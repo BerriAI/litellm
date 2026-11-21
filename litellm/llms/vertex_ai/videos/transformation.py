@@ -18,14 +18,16 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_base_url,
+    pop_vertex_request_labels,
 )
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -350,7 +352,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[dict, RequestFiles, str]:
         """
         Transform the video creation request for Veo API.
@@ -372,9 +374,14 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             }
         }
         """
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         # Build instance with prompt
         instance_dict: Final[dict[str, object]] = {"prompt": prompt}
         params_copy: Final = video_create_optional_request_params.copy()
+        labels: Final = (
+            pop_vertex_request_labels(params_copy, dict(litellm_params)) if vertex_request_label_fields() else None
+        )
 
         # Check if user wants to provide full instance dict
         if "instances" in params_copy and isinstance(params_copy["instances"], dict):
@@ -419,6 +426,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Only add parameters if there are any
         if vertex_params:
             request_data["parameters"] = vertex_params
+        if labels:
+            request_data["labels"] = labels
 
         # Append :predictLongRunning endpoint to api_base
         url: Final = f"{api_base}:predictLongRunning"
@@ -737,7 +746,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         headers: dict,
         video_file: FileContent | None = None,
         extra_body: dict[str, object] | None = None,
-        prefetched_source_data: dict[str, Any] | None = None,
+        prefetched_source_data: dict[str, object] | None = None,
     ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
         Build a predictLongRunning edit request from the pre-fetched source video.
@@ -754,18 +763,18 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if not prefetched_source_data.get("done", False):
             raise ValueError("Source video generation is not complete yet. Check the video status before editing.")
 
-        source_response: Final[_VeoOperationResponse] = prefetched_source_data.get("response", {})
+        source_response: Final = require_get(prefetched_source_data.get("response", {}))
         videos: Final = source_response.get("videos", [])
         if not videos:
             raise ValueError("No videos found in the completed operation. Cannot edit.")
 
-        source_video: Final = videos[0]
-        video_input: Final[dict[str, str]] = {}
-        if "gcsUri" in source_video:
-            video_input["gcsUri"] = source_video["gcsUri"]
-        elif "bytesBase64Encoded" in source_video:
-            video_input["bytesBase64Encoded"] = source_video["bytesBase64Encoded"]
-            video_input["mimeType"] = source_video.get("mimeType", "video/mp4")
+        source_video: Final = subscript(videos, 0)
+        video_input: Final[dict[str, object]] = {}
+        if json_contains(source_video, "gcsUri"):
+            video_input["gcsUri"] = subscript(source_video, "gcsUri")
+        elif json_contains(source_video, "bytesBase64Encoded"):
+            video_input["bytesBase64Encoded"] = subscript(source_video, "bytesBase64Encoded")
+            video_input["mimeType"] = require_get(source_video).get("mimeType", "video/mp4")
         else:
             raise ValueError("Source video has neither gcsUri nor bytesBase64Encoded. Cannot edit.")
 

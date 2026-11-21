@@ -2,7 +2,7 @@ import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Final, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -43,7 +43,6 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
 
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
 from litellm.proxy._types import (  # re-exported
     CommonProxyErrors,
     KeyRequestBase,
@@ -60,6 +59,7 @@ from litellm.proxy._types import (  # re-exported
     user_api_key_has_admin_view,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management.teams.authz import is_team_admin
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -318,7 +318,7 @@ _team_member_has_permission: Final = team_member_has_permission
 async def user_has_admin_privileges(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
-    user_api_key_cache: Optional["DualCache"] = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: Optional["ProxyLogging"] = None,
 ) -> bool:
     """
@@ -342,14 +342,13 @@ async def user_has_admin_privileges(
         return False
 
     # Get user object to check team and org admin status
-    from litellm.caching import DualCache as DualCacheImport
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
         user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache or DualCacheImport(),
+            user_api_key_cache=user_api_key_cache or UserApiKeyCache(),
             user_id_upsert=False,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -457,7 +456,7 @@ async def admin_can_invite_user(
     target_user_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
-    user_api_key_cache: Optional["DualCache"] = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: Optional["ProxyLogging"] = None,
 ) -> bool:
     """
@@ -484,11 +483,10 @@ async def admin_can_invite_user(
     if prisma_client is None or user_api_key_dict.user_id is None:
         return False
 
-    from litellm.caching import DualCache as DualCacheImport
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
-        cache: Final = user_api_key_cache or DualCacheImport()
+        cache: Final = user_api_key_cache or UserApiKeyCache()
         admin_user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
@@ -536,7 +534,7 @@ def set_object_metadata_field(
         "UpdateProjectRequest",
     ],
     field_name: str,
-    value: Any,
+    value: object,
 ) -> None:
     """
     Helper function to set metadata fields that require premium user checks
@@ -656,6 +654,8 @@ async def upsert_budget_and_membership(
     A patch whose every field already matches the shared row changes nothing and
     is a no-op rather than a clone.
     """
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
     ignore_default_model_budget_clear: Final = (
         existing_budget_id is not None
         and existing_budget_id == team_default_budget_id
@@ -694,7 +694,10 @@ async def upsert_budget_and_membership(
 
     if existing_budget_id is not None and not is_shared_default:
         existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
+        merged: Final = (
+            _BUDGET_COLUMNS.validate_python(existing_budget.model_dump()) if existing_budget is not None else {}
+        )
+        reject_budget_windows(merged)
         merged.update(write_data)
         if not _has_meaningful_budget_limit(merged):
             await _disconnect()
@@ -713,6 +716,7 @@ async def upsert_budget_and_membership(
         if source_row is not None
         else MappingProxyType({})
     )
+    reject_budget_windows(source)
     if is_shared_default and all(source.get(field) == value for field, value in effective_patch.items()):
         return
 

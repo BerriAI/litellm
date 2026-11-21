@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -44,8 +44,11 @@ from starlette.types import Message
 
 import litellm
 from litellm import Router
-from litellm._logging import JsonFormatter, verbose_proxy_logger
+from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
+from litellm.litellm_core_utils.tokenizer import HuggingFace
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.responses_adapters.transformation import LiteLLMAnthropicToResponsesAPIAdapter
 from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -63,10 +66,10 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.mistral.count_tokens import handler as mistral_count_tokens_http
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
-from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -83,10 +86,12 @@ from litellm.proxy.proxy_server import (
     _provider_token_count,
     _try_provider_token_count,
     count_request_tokens,
+    token_counter,
 )
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -95,6 +100,7 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
+from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -440,6 +446,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -522,6 +529,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1344,6 +1352,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1403,6 +1412,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1462,6 +1472,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -1585,7 +1596,7 @@ async def _count_on_a_model_without_a_count_api(
         model_list=[
             {
                 "model_name": "mistral-tool-result",
-                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "sk-test"},
             }
         ],
         default_litellm_params=router_defaults,
@@ -1593,7 +1604,11 @@ async def _count_on_a_model_without_a_count_api(
     request: Final = _json_request(body, "python-httpx/0.28.1")
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
+        respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 7})
+        )
         return await anthropic_count_tokens(request, Response(), UserAPIKeyAuth())
 
 
@@ -1682,6 +1697,75 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
     assert sent["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "build ok"}]
 
 
+def _weather_tool(description: str) -> dict[str, object]:
+    return {
+        "name": "get_weather",
+        "description": description,
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_falls_back_to_a_local_estimate_that_counts_mid_conversation_tool_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude-framed",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-ant-test"},
+                    "model_info": {"token_count_framing": 100},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    brief: Final = _weather_tool("Weather.")
+    detailed: Final = _weather_tool("Current weather, temperature and wind for a city in any country.")
+
+    def conversation(tool: Mapping[str, object]) -> list[dict[str, object]]:
+        return [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {"role": "system", "content": [{"type": "tool_addition", "tool": tool}]},
+            {"role": "user", "content": "Never mind."},
+            {
+                "role": "system",
+                "content": [{"type": "tool_removal", "tool": {"type": "tool_reference", "name": "get_weather"}}],
+            },
+        ]
+
+    async def estimate(tool: Mapping[str, object], tools: list[dict[str, object]] | None) -> TokenCountResponse:
+        return await count_request_tokens(
+            request=TokenCountRequest(model="claude-framed", messages=conversation(tool), tools=tools),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    by_reference: Final = {"type": "tool_reference", "name": "get_weather"}
+    with respx.mock:
+        route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(
+                404, json={"type": "error", "error": {"type": "not_found_error", "message": "count unavailable"}}
+            )
+        )
+        inline_brief: Final = await estimate({"type": "tool_definition", "definition": brief}, None)
+        inline_detailed: Final = await estimate({"type": "tool_definition", "definition": detailed}, None)
+        declared_brief: Final = await estimate(by_reference, [brief])
+        declared_detailed: Final = await estimate(by_reference, [detailed])
+
+    inline_delta: Final = inline_detailed.total_tokens - inline_brief.total_tokens
+    declared_delta: Final = declared_detailed.total_tokens - declared_brief.total_tokens
+    assert route.called
+    assert {inline_brief.count_source, inline_detailed.count_source} == {"local_estimate"}
+    assert declared_delta > 0
+    assert inline_delta == declared_delta
+
+
 class _ScriptedCounter(BaseTokenCounter):
     def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies
@@ -1706,6 +1790,7 @@ class _ScriptedCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: object = None,
         chat_params: object = None,
+        count_options: object = None,
     ) -> TokenCountResponse | None:
         self.calls.append((model_to_use, messages, tools, system))
         self.regions.append(None if deployment is None else deployment["litellm_params"].get("aws_region_name"))
@@ -1748,7 +1833,7 @@ async def _ladder(
     counter: _ScriptedCounter,
     settings: TokenCountSettings,
     local_estimate_allowed: bool = True,
-    forwarded_edits: bool = False,
+    forwards_request_fields: bool = False,
 ) -> TokenCountResponse | None:
     return await _provider_token_count(
         count_with=partial(
@@ -1766,7 +1851,7 @@ async def _ladder(
         request_model=_COUNT_REQUEST.model,
         settings=settings,
         local_estimate_allowed=local_estimate_allowed,
-        forwarded_edits=forwarded_edits,
+        forwards_request_fields=forwards_request_fields,
     )
 
 
@@ -2024,7 +2109,7 @@ async def test_a_pinned_token_count_model_rejecting_forwarded_edits_answers_with
         await _ladder(
             counter,
             TokenCountSettings(framing=None, count_model=replace(_OPUS_IN_US_EAST_1, configured=True)),
-            forwarded_edits=True,
+            forwards_request_fields=True,
         )
 
     assert raised.value.code == str(status_code)
@@ -2119,12 +2204,17 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "unreadable_body",
-    [
-        pytest.param(
-            {
-                "messages": [
+async def test_framed_estimate_counts_server_tool_history_when_the_provider_counter_rejects_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _framed_kimi(monkeypatch)
+    _available_kimi_k3(monkeypatch, tmp_path)
+
+    async def count(title: str) -> TokenCountResponse:
+        return await count_request_tokens(
+            request=TokenCountRequest(
+                model="kimi",
+                messages=[
                     {"role": "user", "content": "What is new?"},
                     {
                         "role": "assistant",
@@ -2135,13 +2225,31 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
                                 "name": "web_search",
                                 "input": {"query": "new"},
                             },
-                            {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
+                            {
+                                "type": "web_search_tool_result",
+                                "tool_use_id": "srvtoolu_01",
+                                "content": [
+                                    {"type": "web_search_result", "url": "https://example.invalid", "title": title}
+                                ],
+                            },
                         ],
                     },
-                ]
-            },
-            id="web_search_blocks",
-        ),
+                ],
+            ),
+            call_endpoint=True,
+        )
+
+    short: Final = await count("Release")
+    long: Final = await count("Release notes " * 100)
+
+    assert (short.count_source, long.count_source) == ("local_estimate", "local_estimate")
+    assert long.total_tokens > short.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unreadable_body",
+    [
         pytest.param(
             {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
             id="google_contents",
@@ -3296,6 +3404,119 @@ def _shipped_kimi_k3_framing() -> int:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize(
+    "model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"]
+)
+async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_header(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, model: str
+) -> None:
+    router: Final = _single_deployment_router({"model": model}, {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = [{"type": "text", "text": "Be concise."}] if as_blocks else "Be concise."
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system] if isinstance(system, list) else billing + "\n" + system
+    )
+    request: Final = TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system)
+
+    baseline: Final = await count_request_tokens(request=request, messages_format="anthropic")
+    counted: Final = await count_request_tokens(
+        request=request.model_copy(update={"system": with_billing}), messages_format="anthropic"
+    )
+
+    assert counted.total_tokens == baseline.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat_fallback", [False, True])
+@pytest.mark.parametrize("with_edits", [False, True])
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_provider_count_removes_only_the_first_adjacent_billing_block(
+    monkeypatch: pytest.MonkeyPatch, chat_fallback: bool, with_edits: bool, as_blocks: bool
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", chat_fallback)
+    router: Final = _single_deployment_router(
+        {"model": "openai/gpt-6.2-sol", "api_key": "test-key", "store": False}, {}
+    )
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    bodies: Final[list[dict[str, object]]] = []  # mutable-ok: records the HTTP peer's input
+
+    def peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 47}, request=request)
+
+    with patch.object(
+        openai_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        assert (
+            await _input_tokens(
+                router,
+                {
+                    "model": "counted",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "system": [
+                        {"type": "text", "text": billing_a},
+                        {"type": "text", "text": billing_b},
+                        {"type": "text", "text": "Be concise."},
+                    ]
+                    if as_blocks
+                    else billing_a + "\n" + billing_b + "\nBe concise.",
+                    **({"context_management": _CLEAR_TOOL_USES} if with_edits else {}),
+                },
+            )
+            == 47
+        )
+
+    assert bodies[0]["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+            if as_blocks
+            else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
+    ]
+
+
+@pytest.mark.parametrize("as_blocks", [False, True])
+def test_generation_keeps_the_second_adjacent_billing_block(as_blocks: bool) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "openai/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [
+            {"type": "text", "text": billing_a},
+            {"type": "text", "text": billing_b},
+            {"type": "text", "text": "Be concise."},
+        ]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    responses: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_request(request)
+    assert chat["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": billing_b}, {"type": "text", "text": "Be concise."}]
+        if as_blocks
+        else billing_b + "\nBe concise.",
+    }
+    assert responses["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+        if as_blocks
+        else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_framing_in_both_request_formats(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -3350,6 +3571,78 @@ async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_fr
         "local_estimate",
     )
     assert (anthropic.total_tokens, anthropic.tokenizer_type) == (openai.total_tokens, "huggingface_tokenizer")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages_format", "tools", "forced", "unforced"),
+    [
+        pytest.param(
+            "openai", [_KIMI_WEATHER], {"type": "function", "function": {"name": "get_weather"}}, "auto", id="openai"
+        ),
+        pytest.param(
+            "anthropic",
+            [
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "input_schema": _KIMI_WEATHER["function"]["parameters"],
+                }
+            ],
+            {"type": "tool", "name": "get_weather"},
+            {"type": "auto"},
+            id="anthropic",
+        ),
+    ],
+)
+@pytest.mark.parametrize("drops_tool_choice", [False, True])
+async def test_bedrock_kimi_k3_count_adds_the_template_message_of_a_forced_tool_choice_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    messages_format: TokenCountMessagesFormat,
+    tools: list[dict[str, object]],
+    forced: dict[str, object],
+    unforced: str | dict[str, object],
+    drops_tool_choice: bool,
+):
+    _framed_kimi(monkeypatch)
+    if drops_tool_choice:
+        monkeypatch.setattr(
+            litellm.proxy.proxy_server,
+            "llm_router",
+            Router(
+                model_list=[
+                    {
+                        "model_name": "kimi",
+                        "litellm_params": {
+                            "model": "bedrock/us.moonshotai.kimi-k3",
+                            "additional_drop_params": ["tool_choice"],
+                        },
+                    }
+                ]
+            ),
+        )
+    encoding: Final = _available_kimi_k3(monkeypatch, tmp_path)
+    question: Final = [{"role": "user", "content": "Weather in Paris?"}]
+
+    async def count(tool_choice: str | dict[str, object] | None) -> int:
+        counted: Final = await count_request_tokens(
+            request=TokenCountRequest(model="kimi", messages=question, tools=tools, tool_choice=tool_choice),
+            call_endpoint=True,
+            messages_format=messages_format,
+        )
+        assert counted.tokenizer_type == "huggingface_tokenizer"
+        return counted.total_tokens
+
+    plain: Final = kimi_k3_tokens(encoding, "us.moonshotai.kimi-k3", question, [_KIMI_WEATHER])
+    required: Final = kimi_k3_tokens(encoding, "us.moonshotai.kimi-k3", question, [_KIMI_WEATHER], "required")
+    unset: Final = await count(None)
+
+    assert plain is not None and required is not None and required > plain
+    assert (await count(unforced), await count(forced)) == (
+        unset,
+        unset if drops_tool_choice else unset + required - plain,
+    )
 
 
 @pytest.mark.asyncio
@@ -4071,18 +4364,18 @@ async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop
     assert sent_bodies == ()
 
 
-_MISTRAL_MODEL: Final = "mistral/mistral-large-latest"
+_GROQ_MODEL: Final = "groq/llama-3.3-70b-versatile"
 
 
-def _mistral_router(
+def _groq_router(
     litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     router_defaults: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Router:
     return Router(
         model_list=[
             {
-                "model_name": "mistral-agent",
-                "litellm_params": {"model": _MISTRAL_MODEL, "api_key": "test-key", **litellm_params},
+                "model_name": "groq-agent",
+                "litellm_params": {"model": _GROQ_MODEL, "api_key": "test-key", **litellm_params},
             }
         ],
         default_litellm_params=dict(router_defaults),
@@ -4130,9 +4423,9 @@ async def _messages_the_inference_polyfill_sends(model: str) -> list[dict[str, J
 
 @pytest.mark.asyncio
 async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_sends_on_a_bridged_provider() -> None:
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
     }
@@ -4140,11 +4433,134 @@ async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_send
     edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _CLEAR_TOOL_USES})
     unedited: Final = await _input_tokens(router, unedited_body)
     polyfilled: Final = await _input_tokens(
-        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_MISTRAL_MODEL)}
+        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_GROQ_MODEL)}
     )
 
     assert edited < unedited
     assert edited == polyfilled
+
+
+class _MistralCountTokensPeer:
+    def __init__(self) -> None:
+        self.request_bodies: tuple[bytes, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_bodies = (*self.request_bodies, request.content)
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 57}, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("prefix", ["ordinary", "single", "adjacent", "empty_first", "literal", "header_only", "style"])
+async def test_mistral_count_system_matches_the_generation_http_payload(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, prefix: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    before, after = {
+        "ordinary": (["answer=OK"], ["answer=OK"]),
+        "single": ([billing_a, "Be concise."], ["Be concise."]),
+        "adjacent": ([billing_a, billing_b, "answer=OK"], [billing_b, "answer=OK"]),
+        "empty_first": (["", billing_b, "Be concise."], ["", billing_b, "Be concise."]),
+        "literal": (
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+        ),
+        "header_only": ([billing_a], []),
+        "style": ([billing_a, "style=concise"], ["style=concise"]),
+    }[prefix]
+    system: Final = [{"type": "text", "text": text} for text in before] if as_blocks else "\n".join(before)
+    expected: Final = ("" if as_blocks else "\n").join(after)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        counted: Final = respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 57})
+        )
+        generated: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "mistral-large-4",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 57, "completion_tokens": 1, "total_tokens": 58},
+                },
+            )
+        )
+        assert (
+            await _input_tokens(
+                router, {"model": "mistral-agent", "messages": [{"role": "user", "content": "Hello"}], "system": system}
+            )
+            == 57
+        )
+        await litellm.anthropic.messages.acreate(
+            model="mistral/mistral-large-4",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "Hello"}],
+            system=system,
+            max_tokens=32,
+        )
+    sent: Final = json.loads(generated.calls.last.request.content)
+    assert sent["messages"] == ([{"role": "system", "content": expected}] if expected else []) + [
+        {"role": "user", "content": "Hello"}
+    ]
+    count_body: Final = json.loads(counted.calls.last.request.content)
+    assert count_body == {
+        "model": "mistral-large-4",
+        "input": (
+            [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": expected}]}]
+            if expected
+            else []
+        )
+        + [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_sends_mistral_the_messages_the_inference_polyfill_edits() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-mistral-key"},
+            }
+        ]
+    )
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "mistral-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+    }
+    polyfilled_messages: Final = await _messages_the_inference_polyfill_sends("mistral/mistral-large-4")
+    peer: Final = _MistralCountTokensPeer()
+
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        for request_body in (
+            {**unedited_body, "context_management": _CLEAR_TOOL_USES},
+            {**unedited_body, "messages": polyfilled_messages},
+            unedited_body,
+        ):
+            assert await _input_tokens(router, request_body) == 57
+
+    edited, polyfilled, unedited = (json.loads(body)["input"] for body in peer.request_bodies)
+    assert edited == polyfilled
+    assert edited != unedited
 
 
 @pytest.mark.asyncio
@@ -4162,9 +4578,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_keeps_the_unedited_co
     router_defaults: dict[str, JsonValue],
     request_options: dict[str, JsonValue],
 ) -> None:
-    router: Final = _mistral_router(deployment_params, router_defaults)
+    router: Final = _groq_router(deployment_params, router_defaults)
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
         **request_options,
@@ -4179,9 +4595,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_keeps_the_unedited_co
 async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_edit_without_drop_params() -> None:
     with patch.object(litellm, "drop_params", False):
         response: Final = await _messages_endpoint_count(
-            _mistral_router(),
+            _groq_router(),
             {
-                "model": "mistral-agent",
+                "model": "groq-agent",
                 "messages": _agent_turns_with_tool_results(3),
                 "tools": [_READ_FILE_TOOL],
                 "context_management": _INVALID_COMPACT_EDIT,
@@ -4194,9 +4610,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_ed
 
 @pytest.mark.asyncio
 async def test_messages_count_tokens_on_a_bridged_provider_counts_without_an_invalid_edit_under_drop_params() -> None:
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
         "drop_params": True,
@@ -4221,9 +4637,9 @@ def _turns_compacted_by_the_client() -> list[dict[str, JsonValue]]:
 async def test_messages_count_tokens_on_a_bridged_provider_counts_only_what_follows_a_client_compaction_block() -> None:
     from litellm.llms.anthropic.messages.adapters.handler import prepare_context_managed_request
 
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     sent: Final = await prepare_context_managed_request(
-        model=_MISTRAL_MODEL,
+        model=_GROQ_MODEL,
         messages=[dict(message) for message in _turns_compacted_by_the_client()],
         tools=[dict(_READ_FILE_TOOL)],
         system=None,
@@ -4235,15 +4651,15 @@ async def test_messages_count_tokens_on_a_bridged_provider_counts_only_what_foll
     assert sent is not None
 
     compacted: Final = await _input_tokens(
-        router, {"model": "mistral-agent", "messages": _turns_compacted_by_the_client(), "tools": [_READ_FILE_TOOL]}
+        router, {"model": "groq-agent", "messages": _turns_compacted_by_the_client(), "tools": [_READ_FILE_TOOL]}
     )
     uncompacted: Final = await _input_tokens(
-        router, {"model": "mistral-agent", "messages": _agent_turns_with_tool_results(3), "tools": [_READ_FILE_TOOL]}
+        router, {"model": "groq-agent", "messages": _agent_turns_with_tool_results(3), "tools": [_READ_FILE_TOOL]}
     )
     sent_body_count: Final = await _input_tokens(
         router,
         {
-            "model": "mistral-agent",
+            "model": "groq-agent",
             "messages": TypeAdapter(list[dict[str, JsonValue]]).validate_python(sent.messages),
             "system": TypeAdapter(JsonValue).validate_python(sent.system),
             "tools": [_READ_FILE_TOOL],
@@ -4336,13 +4752,14 @@ async def test_messages_count_tokens_on_a_responses_api_bridge_rejects_an_invali
 
 
 class _CountTokensPeer:
-    def __init__(self, reply: Mapping[str, JsonValue]) -> None:
+    def __init__(self, reply: Mapping[str, JsonValue], status_code: int = 200) -> None:
         self._reply: Final = reply
+        self._status_code: Final = status_code
         self.requests: tuple[httpx.Request, ...] = ()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests = (*self.requests, request)
-        return httpx.Response(200, json=dict(self._reply), request=request)
+        return httpx.Response(self._status_code, json=dict(self._reply), request=request)
 
 
 class _BedrockInvokeModel(BaseModel):
@@ -4365,18 +4782,49 @@ def _bedrock_counted_request(request_body: bytes) -> str:
     return base64.b64decode(invoke_model.body).decode()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("provider", ["gemini", "bedrock"])
+async def test_nontranslating_provider_count_removes_only_the_first_billing_block(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, provider: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [{"type": "text", "text": text} for text in (billing_a, billing_b, "Be concise.")]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    expected: Final = (
+        [{"text": text} for text in (billing_b, "Be concise.")]
+        if as_blocks
+        else [{"text": billing_b + "\nBe concise."}]
+    )
+    if provider == "bedrock":
+        response, sent = await _count_on_a_bridged_provider_count_api(body, monkeypatch)
+        assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
+        assert json.loads(sent[0].content)["input"]["converse"]["system"] == expected
+        return
+    router: Final = Router(model_list=[_gemini_deployment("gemini-agent", {})])
+    response, sent_bodies = await _count_through_the_messages_endpoint(router, {**body, "model": "gemini-agent"})
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert json.loads(sent_bodies[0])["generateContentRequest"]["systemInstruction"] == {"parts": expected}
+
+
 async def _count_on_a_bridged_provider_count_api(
     request_body: Mapping[str, JsonValue],
     monkeypatch: pytest.MonkeyPatch,
     bedrock_model: str = "bedrock/us.amazon.nova-2-lite-v1:0",
     peer_reply: Mapping[str, JsonValue] = MappingProxyType({"inputTokens": 57}),
     model_info: Mapping[str, JsonValue] = MappingProxyType({}),
+    peer_status: int = 200,
 ) -> tuple[object, tuple[httpx.Request, ...]]:
     from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
     from litellm.llms.bedrock.count_tokens import mantle_handler as bedrock_mantle_count_tokens_handler
 
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    peer: Final = _CountTokensPeer(peer_reply)
+    peer: Final = _CountTokensPeer(peer_reply, peer_status)
     router: Final = Router(
         model_list=[
             {
@@ -4488,6 +4936,42 @@ async def test_messages_count_tokens_forwards_bedrock_supported_edits_and_their_
         _CLEAR_TOOL_USES,
         [ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value],
     )
+
+
+@pytest.mark.parametrize(
+    ("count_options", "region_hints"),
+    [({"thinking": {"type": "enabled", "budget_tokens": 1024}}, 0), ({}, 1)],
+    ids=["count_options_forwarded", "no_count_options"],
+)
+@pytest.mark.asyncio
+async def test_a_mantle_count_rejecting_the_forwarded_count_options_answers_without_the_region_hint(
+    count_options: Mapping[str, JsonValue], region_hints: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response, sent = await _count_on_a_bridged_provider_count_api(
+        {"messages": [{"role": "user", "content": "Read the README"}], **count_options},
+        monkeypatch,
+        _BEDROCK_CLAUDE_MODEL,
+        MappingProxyType(
+            {"type": "error", "error": {"type": "invalid_request_error", "message": "thinking: invalid value"}}
+        ),
+        MappingProxyType(
+            {
+                "token_count_model": {
+                    "model": "us.anthropic.claude-sonnet-5-5",
+                    "litellm_provider": "bedrock_mantle",
+                    "region": "us-west-2",
+                }
+            }
+        ),
+        peer_status=400,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert len(sent) == 1
+    assert ("thinking" in json.loads(sent[0].content)) == bool(count_options)
+    message: Final = json.loads(bytes(response.body))["error"]["message"]
+    assert message.count("counts tokens with us.anthropic.claude-sonnet-5-5 in us-west-2") == region_hints
 
 
 @pytest.mark.asyncio
@@ -4959,7 +5443,9 @@ async def test_framed_stand_in_counts_a_prompt_like_the_same_text_sent_as_a_user
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model", ["fireworks_ai/accounts/fireworks/models/glm-5", "deepseek/deepseek-v4-flash"], ids=["plain", "framed"]
+    "model",
+    ["fireworks_ai/accounts/fireworks/models/glm-5", "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"],
+    ids=["plain", "framed"],
 )
 async def test_call_endpoint_counts_a_prompt_on_a_provider_without_a_count_api_as_raw_text(
     model: str,
@@ -5477,6 +5963,9 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
 
 
+_MULTILINGUAL_TEXT: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+
+
 @pytest.mark.asyncio
 async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base_models_tokenizer(
     monkeypatch: pytest.MonkeyPatch,
@@ -5495,12 +5984,568 @@ async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base
             ]
         ),
     )
-    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
 
     named: Final = await count_request_tokens(request=TokenCountRequest(model="named", messages=messages))
     served: Final = await count_request_tokens(request=TokenCountRequest(model="served", messages=messages))
 
     assert named.total_tokens == served.total_tokens
+
+
+_LOOKUP_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_order",
+            "description": "Look up an order by its id",
+            "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+        },
+    }
+)
+
+
+_FLASH_BASE_MODEL: Final = "azure_ai/deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("served_model", "named_params", "named_model_info", "tools"),
+    [
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash"},
+            {"base_model": _FLASH_BASE_MODEL},
+            [dict(_LOOKUP_TOOL)],
+            id="model_info base_model, one tool",
+        ),
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash"},
+            {"base_model": _FLASH_BASE_MODEL},
+            None,
+            id="model_info base_model, text only",
+        ),
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash", "base_model": _FLASH_BASE_MODEL},
+            {},
+            [dict(_LOOKUP_TOOL)],
+            id="litellm_params base_model",
+        ),
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            {"model": "anthropic/my-opus"},
+            {"base_model": "anthropic/claude-opus-5-5"},
+            None,
+            id="provider-prefixed claude base_model",
+        ),
+    ],
+)
+async def test_token_counter_counts_a_custom_named_deployment_like_the_base_model_it_declares(
+    monkeypatch: pytest.MonkeyPatch,
+    served_model: str,
+    named_params: Mapping[str, str],
+    named_model_info: Mapping[str, str],
+    tools: list[dict[str, JsonValue]] | None,
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "https://example.services.ai.azure.com"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "named",
+                    "litellm_params": {**named_params, **credentials},
+                    "model_info": dict(named_model_info),
+                },
+                {"model_name": "served", "litellm_params": {"model": served_model, **credentials}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    named: Final = await _token_counter_route(TokenCountRequest(model="named", messages=messages, tools=tools))
+    served: Final = await _token_counter_route(TokenCountRequest(model="served", messages=messages, tools=tools))
+
+    assert named.total_tokens == served.total_tokens
+
+
+@pytest.fixture
+def no_huggingface_tokenizer_loaded() -> Iterator[None]:
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    yield
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+_LLAMA_3_HUB_TOKENIZER: Final = "Xenova/llama-3-tokenizer"
+
+
+async def _token_counter_route(request: TokenCountRequest) -> TokenCountResponse:
+    return await token_counter(
+        request=request, http_request=_json_request({}, "python-httpx/0.28.1"), fastapi_response=Response()
+    )
+
+
+def _stub_hub_downloads(monkeypatch: pytest.MonkeyPatch, download: Callable[[str], None]) -> None:
+    downloaded: Final = litellm.utils._load_huggingface_tokenizer("deepseek")
+
+    def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> HuggingFace:
+        download(identifier)
+        return downloaded
+
+    monkeypatch.setattr(litellm.utils.tokenizer_dispatch, "from_pretrained", from_pretrained)
+
+
+def _hanging_llama_download(
+    monkeypatch: pytest.MonkeyPatch, download_started: threading.Event, hub_released: threading.Event
+) -> None:
+    def llama_download_hangs(identifier: str) -> None:
+        if identifier == _LLAMA_3_HUB_TOKENIZER:
+            download_started.set()
+            hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, llama_download_hangs)
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_custom_named_llama_deployment_counts_with_tiktoken_while_its_tokenizer_download_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                }
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def hanging_download(identifier: str) -> None:
+        downloads.append(identifier)
+        download_started.set()
+        hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, hanging_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type() -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model="my-llama", messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def burst_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            burst: Final = asyncio.gather(*(tokenizer_type() for _ in range(20)))
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            return tuple(await asyncio.wait_for(burst, 8))
+        finally:
+            hub_released.set()
+
+    assert set(_run_on_skippable_clock(burst_past_the_wait)) == {"openai_tokenizer"}
+    assert downloads == [_LLAMA_3_HUB_TOKENIZER]
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_custom_named_deepseek_deployment_keeps_its_bundled_tokenizer_while_a_hub_download_fills_the_load_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                },
+                {
+                    "model_name": "my-deepseek",
+                    "litellm_params": {"model": "hosted_vllm/my-deepseek", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/deepseek-ai/DeepSeek-V4-Flash"},
+                },
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_MAX_RUNNING", 1)
+
+    async def tokenizer_type(model: str) -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model=model, messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def deepseek_while_the_llama_download_hangs() -> str:
+        llama: Final = asyncio.ensure_future(tokenizer_type("my-llama"))
+        try:
+            await asyncio.to_thread(download_started.wait, 10)
+            return await asyncio.wait_for(tokenizer_type("my-deepseek"), 5)
+        finally:
+            hub_released.set()
+            await llama
+
+    assert asyncio.run(deepseek_while_the_llama_download_hangs()) == "huggingface_tokenizer"
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+@pytest.mark.parametrize(
+    "model_info",
+    [{}, {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"}],
+    ids=["no base_model", "base_model naming its own model"],
+)
+def test_named_llama_deployment_keeps_waiting_for_its_slow_tokenizer_download(
+    monkeypatch: pytest.MonkeyPatch, model_info: dict[str, str]
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "llama-3.3-70b",
+                    "litellm_params": {
+                        "model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct",
+                        "api_base": "http://127.0.0.1:9/v1",
+                    },
+                    "model_info": model_info,
+                }
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type() -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model="llama-3.3-70b", messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            count: Final = asyncio.ensure_future(tokenizer_type())
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            await asyncio.wait({count}, timeout=1)
+        finally:
+            hub_released.set()
+        return (await asyncio.wait_for(count, 8),)
+
+    assert _run_on_skippable_clock(count_past_the_wait) == ("huggingface_tokenizer",)
+
+
+def _custom_named_llama_router(model_info: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "my-llama",
+                "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct", **model_info},
+            }
+        ]
+    )
+
+
+async def _my_llama_tokenizer_type() -> str:
+    response: Final = await _token_counter_route(
+        TokenCountRequest(model="my-llama", messages=[{"role": "user", "content": "What is new?"}])
+    )
+    return response.tokenizer_type or ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_custom_named_llama_deployment_counts_with_its_base_models_tokenizer_once_downloaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _custom_named_llama_router({}))
+    _stub_hub_downloads(monkeypatch, lambda identifier: None)
+
+    assert await _my_llama_tokenizer_type() == "huggingface_tokenizer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        pytest.param(
+            "anthropic/claude-sonnet-5-5", "bedrock/us.anthropic.claude-sonnet-5-5", id="bundled claude tokenizer"
+        ),
+        pytest.param(
+            "databricks/databricks-meta-llama-3-3-70b-instruct",
+            "bedrock/meta.llama3-3-70b-instruct-v1:0",
+            id="hub llama tokenizer",
+        ),
+    ],
+)
+async def test_base_model_without_a_tokenizer_leaves_the_deployment_on_its_own_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch, model: str, base_model: str
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "http://127.0.0.1:9/v1"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "based",
+                    "litellm_params": {"model": model, **credentials},
+                    "model_info": {"base_model": base_model},
+                },
+                {"model_name": "own", "litellm_params": {"model": model, **credentials}},
+            ]
+        ),
+    )
+    _stub_hub_downloads(monkeypatch, lambda identifier: None)
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    based: Final = await _token_counter_route(TokenCountRequest(model="based", messages=messages))
+    own: Final = await _token_counter_route(TokenCountRequest(model="own", messages=messages))
+
+    assert (based.tokenizer_type, based.total_tokens) == ("huggingface_tokenizer", own.total_tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_deployment_with_a_custom_tokenizer_never_waits_for_its_base_models_tokenizer_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        _custom_named_llama_router(
+            {"custom_tokenizer": {"identifier": "lit-tests/my-llama", "revision": "main", "auth_token": None}}
+        ),
+    )
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def llama_download_hangs(identifier: str) -> None:
+        downloads.append(identifier)
+        if identifier == _LLAMA_3_HUB_TOKENIZER:
+            hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, llama_download_hangs)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+    try:
+        tokenizer_type: Final = await asyncio.wait_for(_my_llama_tokenizer_type(), 5)
+    finally:
+        hub_released.set()
+
+    assert tokenizer_type == "huggingface_tokenizer"
+    assert downloads == ["lit-tests/my-llama"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_cooling_down_deployment_with_a_custom_tokenizer_never_downloads_its_base_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = _custom_named_llama_router(
+        {
+            "id": "my-llama-deployment",
+            "custom_tokenizer": {"identifier": "lit-tests/my-llama", "revision": "main", "auth_token": None},
+        }
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    downloads: Final[list[str]] = []
+    _stub_hub_downloads(monkeypatch, downloads.append)
+    router.health().cooldowns.add_deployment_to_cooldown(
+        model_id="my-llama-deployment",
+        original_exception=Exception("rate limited"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+
+    assert await _my_llama_tokenizer_type() == "openai_tokenizer"
+    assert downloads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_custom_named_deployments_whose_base_models_share_a_tokenizer_download_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {"model": f"hosted_vllm/{name}", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": f"hosted_vllm/meta-llama/{base_model}"},
+                }
+                for name, base_model in (
+                    ("my-llama-70b", "Llama-3.3-70B-Instruct"),
+                    ("my-llama-8b", "Llama-3.1-8B-Instruct"),
+                )
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    second_download: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def hanging_download(identifier: str) -> None:
+        downloads.append(identifier)
+        (second_download if download_started.is_set() else download_started).set()
+        hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, hanging_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type(model: str) -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model=model, messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    first: Final = asyncio.ensure_future(tokenizer_type("my-llama-70b"))
+    try:
+        await asyncio.to_thread(download_started.wait, 10)
+        second: Final = asyncio.ensure_future(tokenizer_type("my-llama-8b"))
+        await asyncio.to_thread(second_download.wait, 0.5)
+    finally:
+        hub_released.set()
+
+    assert await asyncio.wait_for(asyncio.gather(first, second), 8) == ["huggingface_tokenizer"] * 2
+    assert downloads == [_LLAMA_3_HUB_TOKENIZER]
+
+
+@pytest.mark.asyncio
+async def test_deployment_whose_own_model_has_a_tokenizer_keeps_it_when_base_model_names_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "http://127.0.0.1:9/v1"}
+    own_model: Final = "hosted_vllm/deepseek-ai/DeepSeek-V4-Flash"
+    base_model: Final = "anthropic/claude-opus-5-5"
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "based",
+                    "litellm_params": {"model": own_model, **credentials},
+                    "model_info": {"base_model": base_model},
+                },
+                {"model_name": "own", "litellm_params": {"model": own_model, **credentials}},
+                {"model_name": "base", "litellm_params": {"model": base_model, **credentials}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    based, own, base = [
+        (await _token_counter_route(TokenCountRequest(model=name, messages=messages))).total_tokens
+        for name in ("based", "own", "base")
+    ]
+
+    assert based == own != base
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_framed_count_still_estimates_while_base_model_tokenizer_downloads_hang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                },
+                {
+                    "model_name": "kimi",
+                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+                    "model_info": {
+                        "custom_tokenizer": {"identifier": "lit-tests/kimi", "revision": "main", "auth_token": None}
+                    },
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_MAX_RUNNING", 1)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+    llama: Final = asyncio.ensure_future(
+        _token_counter_route(
+            TokenCountRequest(model="my-llama", messages=[{"role": "user", "content": "What is new?"}])
+        )
+    )
+    try:
+        await asyncio.to_thread(download_started.wait, 10)
+        framed: Final = await asyncio.wait_for(_count_status("kimi"), 5)
+    finally:
+        hub_released.set()
+        await llama
+
+    assert framed == "local_estimate"
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_framed_custom_named_deployment_counts_like_before_while_its_base_model_tokenizer_download_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "framed-llama",
+                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+                    "model_info": {
+                        "base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct",
+                        "token_count_framing": 7,
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            count: Final = asyncio.ensure_future(_count_status("framed-llama"))
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            return (await asyncio.wait_for(count, 8),)
+        finally:
+            hub_released.set()
+
+    assert _run_on_skippable_clock(count_past_the_wait) == ("local_estimate",)
 
 
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -5681,3 +6726,824 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+@pytest.mark.asyncio
+async def test_mistral_proxy_token_counter_chat_and_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-proxy-model",
+                "litellm_params": {
+                    "model": "mistral/mistral-large-4",
+                    "api_key": "test-mistral-key",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 33}, request=request)
+
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        utils_result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="mistral-proxy-model", messages=[{"role": "user", "content": "hello mistral"}]
+            ),
+            call_endpoint=True,
+        )
+        responses_result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="mistral-proxy-model", messages=[{"role": "user", "content": "hello mistral"}]
+            ),
+            call_endpoint=True,
+            responses_request={"model": "mistral-proxy-model", "input": "hello mistral"},
+        )
+
+    assert utils_result.total_tokens == 33
+    assert utils_result.tokenizer_type == "mistral_api"
+    assert responses_result.total_tokens == 33
+    assert responses_result.tokenizer_type == "mistral_api"
+
+
+def _input_texts(item: JsonValue) -> list[str]:
+    assert isinstance(item, dict)
+    content: Final = item.get("content")
+    if isinstance(content, str):
+        return [content]
+    assert isinstance(content, list)
+    return [str(part["text"]) for part in content if isinstance(part, dict) and "text" in part]
+
+
+class _SpendLogsTable:
+    def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
+        self.rows: Final = rows
+
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[Mapping[str, object]]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
+        return [row for row in self.rows if row["session_id"] in sessions]
+
+
+@pytest.mark.asyncio
+async def test_responses_count_on_mistral_counts_the_turns_previous_response_id_replays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-counted",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-mistral-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    stored_turn: Final = {
+        "request_id": "chatcmpl-stored",
+        "call_type": "aresponses",
+        "session_id": "session-1",
+        "proxy_server_request": {"input": "Who won in 1998?", "model": "mistral-counted"},
+        "response": {
+            "id": "chatcmpl-stored",
+            "object": "chat.completion",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "The Bulls."}, "finish_reason": "stop"}
+            ],
+        },
+        "status": "success",
+    }
+    bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 41}, request=request)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable((stored_turn,))))
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="mistral-counted", messages=[{"role": "user", "content": "And in 1999?"}]),
+            call_endpoint=True,
+            responses_request={
+                "model": "mistral-counted",
+                "input": "And in 1999?",
+                "previous_response_id": "chatcmpl-stored",
+            },
+        )
+
+    assert (result.error, result.total_tokens, result.tokenizer_type) == (False, 41, "mistral_api")
+    (body,) = bodies
+    assert "previous_response_id" not in body
+    sent_input: Final = body["input"]
+    assert isinstance(sent_input, list)
+    assert list(itertools.chain.from_iterable(map(_input_texts, sent_input))) == [
+        "Who won in 1998?",
+        "The Bulls.",
+        "And in 1999?",
+    ]
+
+
+_COUNTED_OPTION_FIELDS: Final = ("thinking", "tool_choice", "output_config")
+_DEEPSEEK_COUNT_ROUTE: Final = "https://api.deepseek.com/anthropic/v1/messages/count_tokens"
+_CUSTOM_READ_FILE_TOOL: Final[dict[str, JsonValue]] = {**_READ_FILE_TOOL, "type": "custom"}
+
+
+def _messages_inference_fields(
+    config: object, model: str, body: Mapping[str, JsonValue], fields: tuple[str, ...]
+) -> dict[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    inference: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=json.loads(json.dumps(body["messages"])),
+        anthropic_messages_optional_request_params={
+            **{key: json.loads(json.dumps(value)) for key, value in body.items() if key not in ("model", "messages")},
+            "max_tokens": 4096,
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    return {field: inference.get(field) for field in fields}
+
+
+async def _count_messages_body(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, JsonValue],
+    body: Mapping[str, JsonValue],
+    count_route: str,
+    provider_reply: httpx.Response,
+) -> tuple[object, respx.Route]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    monkeypatch.delenv("DEEPSEEK_ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "counted", "litellm_params": dict(deployment_params)}]),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(count_route).mock(return_value=provider_reply)
+        response: Final = await anthropic_count_tokens(
+            _json_request({"model": "counted", **body}, "python-httpx/0.28.1"), Response(), UserAPIKeyAuth()
+        )
+    return response, route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "options"),
+    (
+        ("claude-sonnet-4-5", {"tool_choice": {"type": "any"}}),
+        ("claude-sonnet-4-5", {"thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        ("claude-haiku-5-5", {"thinking": {"type": "enabled", "budget_tokens": 2048}, "tool_choice": {"type": "auto"}}),
+        ("claude-opus-5-5", {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}),
+    ),
+)
+async def test_messages_count_tokens_counts_the_thinking_tool_choice_and_effort_messages_inference_sends(
+    monkeypatch: pytest.MonkeyPatch, model: str, options: Mapping[str, JsonValue]
+) -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Read the README"}],
+        "tools": [_READ_FILE_TOOL],
+        **options,
+    }
+
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": f"anthropic/{model}", "api_key": "sk-ant-test"},
+        body,
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert response == {"input_tokens": 120, "litellm_count_source": "provider"}
+    assert {field: sent.get(field) for field in _COUNTED_OPTION_FIELDS} == _messages_inference_fields(
+        AnthropicMessagesConfig(), model, body, _COUNTED_OPTION_FIELDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_leaves_out_an_option_the_request_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-test"},
+        {
+            "messages": [{"role": "user", "content": "Read the README"}],
+            "tools": [_READ_FILE_TOOL],
+            "tool_choice": {"type": "any"},
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "additional_drop_params": ["thinking"],
+        },
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert response == {"input_tokens": 120, "litellm_count_source": "provider"}
+    assert (sent["tool_choice"], "thinking" in sent) == ({"type": "any"}, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body_options", "sent_thinking_type"),
+    (
+        ({}, "disabled"),
+        ({"thinking": {"type": "enabled"}}, "enabled"),
+        ({"additional_drop_params": ["thinking"]}, None),
+    ),
+)
+async def test_messages_count_tokens_counts_the_thinking_the_deployment_sets_unless_the_request_overrides_it(
+    monkeypatch: pytest.MonkeyPatch, body_options: Mapping[str, JsonValue], sent_thinking_type: str | None
+) -> None:
+    _, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test", "thinking": {"type": "disabled"}},
+        {"messages": [{"role": "user", "content": "Read the README"}], **body_options},
+        _DEEPSEEK_COUNT_ROUTE,
+        httpx.Response(200, json={"input_tokens": 91}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent.get("thinking") or {}).get("type") == sent_thinking_type
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_answers_400_for_a_thinking_budget_messages_inference_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Read the README"}],
+        "thinking": {"type": "enabled", "budget_tokens": "lots"},
+    }
+    with pytest.raises(BadRequestError) as rejected:
+        _messages_inference_fields(AnthropicMessagesConfig(), "claude-opus-5-5", body, _COUNTED_OPTION_FIELDS)
+
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test"},
+        body,
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert rejected.value.message in json.loads(response.body)["error"]["message"]
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_counts_deepseek_on_its_anthropic_count_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
+
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Read the README"}],
+        "tools": [_CUSTOM_READ_FILE_TOOL],
+        "tool_choice": {"type": "any"},
+        "thinking": {"type": "enabled"},
+        "output_config": {"effort": "max"},
+    }
+
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test"},
+        body,
+        _DEEPSEEK_COUNT_ROUTE,
+        httpx.Response(200, json={"input_tokens": 91}),
+    )
+
+    sent_request: Final = route.calls.last.request
+    sent: Final = json.loads(sent_request.content)
+    inference: Final = _messages_inference_fields(
+        DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro", body, ("tool_choice", "output_config", "tools", "thinking")
+    )
+    assert response == {"input_tokens": 91, "litellm_count_source": "provider"}
+    assert sent_request.headers["x-api-key"] == "sk-deepseek-test"
+    assert (sent["tool_choice"], sent.get("output_config"), sent["tools"], sent["thinking"]["type"]) == (
+        inference["tool_choice"],
+        inference["output_config"],
+        inference["tools"],
+        inference["thinking"]["type"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_on_deepseek_on_another_host_answers_the_estimate_without_a_count_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-other-host", "api_base": "https://gateway.example/v1"},
+        {"messages": [{"role": "user", "content": "Read the README"}]},
+        "https://gateway.example/anthropic/v1/messages/count_tokens",
+        httpx.Response(401, json={"error": "Authentication required."}),
+    )
+
+    assert not route.called
+    assert isinstance(response, dict)
+    assert response["litellm_count_source"] == "local_estimate"
+    assert response["input_tokens"] > 0
+
+
+async def _count_deepseek_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_options: Mapping[str, JsonValue],
+    responses_options: Mapping[str, JsonValue] | None,
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+) -> tuple[TokenCountResponse, dict[str, JsonValue]]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    monkeypatch.delenv("DEEPSEEK_ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "deepseek-counted",
+                    "litellm_params": {
+                        "model": "deepseek/deepseek-v4-pro",
+                        "api_key": "sk-deepseek-test",
+                        **deployment_options,
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(return_value=httpx.Response(200, json={"input_tokens": 91}))
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest.model_validate(
+                {"model": "deepseek-counted", "messages": [{"role": "user", "content": "Say hi."}], **request_options}
+            ),
+            call_endpoint=True,
+            responses_request=None
+            if responses_options is None
+            else {
+                "model": "deepseek-counted",
+                "input": "Say hi.",
+                "tools": [_WEATHER_TOOL],
+                **responses_options,
+            },
+        )
+    return result, json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reasoning", "expected_options"),
+    (
+        ({}, {}),
+        ({"reasoning": {"effort": "none"}}, {"thinking": {"type": "disabled"}}),
+        ({"reasoning": {"effort": "high"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "high"}}),
+        ({"reasoning": {"effort": "max"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "max"}}),
+    ),
+)
+async def test_responses_count_on_deepseek_maps_reasoning_effort_the_way_deepseek_chat_inference_does(
+    monkeypatch: pytest.MonkeyPatch, reasoning: Mapping[str, JsonValue], expected_options: Mapping[str, JsonValue]
+) -> None:
+    result, sent = await _count_deepseek_responses(monkeypatch, {}, reasoning)
+
+    assert (result.total_tokens, result.count_source) == (91, "provider")
+    assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
+    assert all("type" not in tool for tool in sent["tools"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_options", "responses_options", "expected_options"),
+    (
+        ({"thinking": {"type": "disabled"}}, {}, {"thinking": {"type": "disabled"}}),
+        ({"reasoning_effort": "none"}, {}, {"thinking": {"type": "disabled"}}),
+        ({"thinking": {"type": "disabled"}}, {"additional_drop_params": ["thinking"]}, {}),
+        ({"thinking": {"type": "disabled"}}, {"thinking": {"type": "enabled"}}, {"thinking": {"type": "enabled"}}),
+    ),
+)
+async def test_responses_count_on_deepseek_counts_the_thinking_inference_sends_from_the_request_or_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_options: Mapping[str, JsonValue],
+    responses_options: Mapping[str, JsonValue],
+    expected_options: Mapping[str, JsonValue],
+) -> None:
+    result, sent = await _count_deepseek_responses(monkeypatch, deployment_options, responses_options)
+
+    assert (result.total_tokens, result.count_source) == (91, "provider")
+    assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_options", "expected_options"),
+    (
+        ({"thinking": {"type": "disabled"}}, {"thinking": {"type": "disabled"}}),
+        ({"reasoning_effort": "high"}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "high"}}),
+        ({"thinking": {"type": "disabled"}, "additional_drop_params": ["thinking"]}, {}),
+    ),
+)
+async def test_chat_count_on_deepseek_counts_the_thinking_the_deployment_sets_unless_it_drops_it(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_options: Mapping[str, JsonValue],
+    expected_options: Mapping[str, JsonValue],
+) -> None:
+    result, sent = await _count_deepseek_responses(monkeypatch, deployment_options, None)
+
+    assert (result.total_tokens, result.count_source) == (91, "provider")
+    assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_options", "request_options", "expected_options"),
+    (
+        ({}, {"reasoning_effort": "none"}, {"thinking": {"type": "disabled"}}),
+        ({}, {"reasoning_effort": "max"}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "max"}}),
+        ({"thinking": {"type": "disabled"}}, {"thinking": {"type": "enabled"}}, {"thinking": {"type": "enabled"}}),
+    ),
+)
+async def test_chat_count_on_deepseek_counts_the_thinking_the_request_sends_over_the_deployment_default(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_options: Mapping[str, JsonValue],
+    request_options: Mapping[str, JsonValue],
+    expected_options: Mapping[str, JsonValue],
+) -> None:
+    result, sent = await _count_deepseek_responses(monkeypatch, deployment_options, None, request_options)
+
+    assert (result.total_tokens, result.count_source) == (91, "provider")
+    assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_drops", "sent_options"),
+    (
+        ({}, (True, None)),
+        ({"additional_drop_params": ["tool_choice"]}, (False, "enabled")),
+    ),
+)
+async def test_messages_count_tokens_drops_what_the_deployment_drops_unless_the_request_sends_its_own_list(
+    monkeypatch: pytest.MonkeyPatch, request_drops: Mapping[str, JsonValue], sent_options: tuple[bool, str | None]
+) -> None:
+    _, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-test", "additional_drop_params": ["thinking"]},
+        {
+            "messages": [{"role": "user", "content": "Read the README"}],
+            "tools": [_READ_FILE_TOOL],
+            "tool_choice": {"type": "auto"},
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            **request_drops,
+        },
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert ("tool_choice" in sent, (sent.get("thinking") or {}).get("type")) == sent_options
+
+
+_TOOL_CHOICE_MODEL: Final = "qwen/qwen3.8-27b"
+_TOOL_CHOICE_QUESTION: Final = "What is the weather in Paris?"
+_CITY_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_CHAT_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "description": "Get the weather for a city", "parameters": _CITY_SCHEMA},
+}
+
+
+def _tool_choice_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "no-count-api",
+                "litellm_params": {"model": f"groq/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+
+async def _utils_route_count(tool_choice: Mapping[str, JsonValue], model: str = "no-count-api") -> int:
+    response: Final = await token_counter(
+        request=TokenCountRequest(
+            model=model,
+            messages=[{"role": "user", "content": _TOOL_CHOICE_QUESTION}],
+            tools=[_CHAT_WEATHER_TOOL],
+            **tool_choice,
+        ),
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+    )
+    return response.total_tokens
+
+
+async def _messages_route_count(tool_choice: Mapping[str, JsonValue]) -> int:
+    body: Final = {
+        "model": "no-count-api",
+        "messages": [{"role": "user", "content": _TOOL_CHOICE_QUESTION}],
+        "tools": [{"name": "get_weather", "description": "Get the weather for a city", "input_schema": _CITY_SCHEMA}],
+        **tool_choice,
+    }
+    response: Final = await anthropic_count_tokens(
+        _json_request(body, "python-httpx/0.28.1"), Response(), UserAPIKeyAuth()
+    )
+    assert isinstance(response, dict)
+    return response["input_tokens"]
+
+
+async def _responses_route_count(tool_choice: Mapping[str, JsonValue]) -> int:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_input_tokens
+
+    body: Final = {
+        "model": "no-count-api",
+        "input": _TOOL_CHOICE_QUESTION,
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather for a city",
+                "parameters": _CITY_SCHEMA,
+            }
+        ],
+        **tool_choice,
+    }
+    response: Final = await responses_input_tokens(
+        request=_json_request(body, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+        general_settings=MappingProxyType({}),
+        token_counter=count_request_tokens,
+        llm_router=litellm.proxy.proxy_server.llm_router,
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_id_security=None,
+        managed_files=None,
+    )
+    assert isinstance(response, dict)
+    return response["input_tokens"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [
+        (_utils_route_count, {"type": "function", "function": {"name": "get_weather"}}),
+        (_utils_route_count, "none"),
+        (_messages_route_count, {"type": "tool", "name": "get_weather"}),
+        (_messages_route_count, {"type": "none"}),
+        (_responses_route_count, {"type": "function", "name": "get_weather"}),
+        (_responses_route_count, "none"),
+    ],
+    ids=["utils-named", "utils-none", "messages-named", "messages-none", "responses-named", "responses-none"],
+)
+async def test_count_routes_without_a_count_api_count_the_tool_choice_like_token_counter(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    question: Final = [{"role": "user", "content": _TOOL_CHOICE_QUESTION}]
+    sdk_added: Final = litellm.token_counter(
+        model=_TOOL_CHOICE_MODEL, messages=question, tools=[_CHAT_WEATHER_TOOL], tool_choice=tool_choice
+    ) - litellm.token_counter(model=_TOOL_CHOICE_MODEL, messages=question, tools=[_CHAT_WEATHER_TOOL])
+
+    route_added: Final = await route_count({"tool_choice": tool_choice}) - await route_count({})
+
+    assert route_added == sdk_added > 0
+
+
+_AZURE_GROK_PARAMS: Final = {"api_base": "https://example.services.ai.azure.com", "api_key": "sk-test"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "served_by_xai"),
+    [
+        ({"litellm_params": {"model": "xai/grok-4-1-fast-reasoning", "api_key": "sk-test"}}, True),
+        ({"litellm_params": {"model": "openrouter/x-ai/grok-4.3", "api_key": "sk-test"}}, True),
+        (
+            {"litellm_params": {"model": "openai/grok-4.3", "api_base": "https://api.x.ai/v1", "api_key": "sk-test"}},
+            True,
+        ),
+        ({"litellm_params": {"model": "openai/grok-4.3", "api_base": "http://[bad", "api_key": "sk-test"}}, False),
+        (
+            {
+                "litellm_params": {"model": "azure_ai/grok-4-1", **_AZURE_GROK_PARAMS},
+                "model_info": {"base_model": "azure_ai/grok-4-1-fast-reasoning"},
+            },
+            False,
+        ),
+        ({"litellm_params": {"model": "azure_ai/grok-4-1-fast-reasoning", **_AZURE_GROK_PARAMS}}, False),
+        ({"litellm_params": {"model": "grok-4.3", "custom_llm_provider": "azure_ai", **_AZURE_GROK_PARAMS}}, False),
+        (
+            {
+                "litellm_params": {
+                    "model": "vertex_ai/xai/grok-4.3",
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",
+                }
+            },
+            False,
+        ),
+    ],
+)
+async def test_utils_token_counter_counts_xai_tool_choice_costs_only_on_grok_that_xai_serves(
+    monkeypatch: pytest.MonkeyPatch, deployment: dict[str, dict[str, str]], served_by_xai: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=[{"model_name": "grok", **deployment}])
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    named: Final = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
+    question: Final = [{"role": "user", "content": _TOOL_CHOICE_QUESTION}]
+    sdk_added: Final = litellm.token_counter(
+        model="xai/grok-4.3", messages=question, tools=[_CHAT_WEATHER_TOOL], **named
+    ) - litellm.token_counter(model="xai/grok-4.3", messages=question, tools=[_CHAT_WEATHER_TOOL])
+
+    route_added: Final = await _utils_route_count(named, "grok") - await _utils_route_count({}, "grok")
+
+    assert route_added == (sdk_added if served_by_xai else 0)
+    assert sdk_added > 0
+
+
+def _litellm_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(record.getMessage() for record in caplog.records if record.name == verbose_logger.name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize("model", ["chatgpt/gpt-6.1-sol", "github_copilot/kimi-k3"])
+async def test_count_routes_leave_the_provider_login_alone_when_counting_a_tool_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    model: str,
+) -> None:
+    (tmp_path / "auth.json").write_text("not a saved login")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "no-count-api", "litellm_params": {"model": model}}]),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        without_choice: Final = await route_count({})
+        warnings_without_choice: Final = _litellm_warnings(caplog)
+        caplog.clear()
+        with_choice: Final = await route_count({"tool_choice": tool_choice})
+
+    assert with_choice > without_choice
+    assert _litellm_warnings(caplog) == warnings_without_choice
+
+
+def _nested_json(depth: int) -> JsonValue:
+    return "none" if depth == 0 else {"nested": _nested_json(depth - 1)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "field"),
+    [
+        (_utils_route_count, "tool_choice"),
+        (_utils_route_count, "additional_drop_params"),
+        (_messages_route_count, "tool_choice"),
+        (_messages_route_count, "thinking"),
+        (_responses_route_count, "tool_choice"),
+    ],
+    ids=["utils-tool-choice", "utils-drop-params", "messages-tool-choice", "messages-thinking", "responses-tool-choice"],
+)
+async def test_count_routes_skip_a_value_nested_too_deep_to_validate(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    field: str,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    assert await route_count({field: _nested_json(300)}) == await route_count({})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "counts_choice"),
+    [({"additional_drop_params": ["tool_choice"]}, False), ({"drop_params": True}, True)],
+    ids=["tool-choice-dropped", "only-unsupported-dropped"],
+)
+async def test_count_routes_count_no_tool_choice_the_deployment_drops(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    drop_params: dict[str, JsonValue],
+    counts_choice: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "no-count-api",
+                    "litellm_params": {"model": f"groq/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test", **drop_params},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    route_added: Final = await route_count({"tool_choice": tool_choice}) - await route_count({})
+
+    assert (route_added > 0) == counts_choice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize(
+    ("dropped", "counts_choice"),
+    [(["tool_choice"], False), (["temperature"], True)],
+    ids=["tool-choice-dropped", "other-param-dropped"],
+)
+async def test_count_routes_count_no_tool_choice_the_request_drops(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    dropped: list[JsonValue],
+    counts_choice: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "no-count-api",
+                    "litellm_params": {"model": f"groq/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    drop_list: Final = {"additional_drop_params": dropped}
+
+    route_added: Final = await route_count({"tool_choice": tool_choice, **drop_list}) - await route_count(drop_list)
+
+    assert (route_added > 0) == counts_choice
+
+
+@pytest.mark.asyncio
+async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_the_prompt_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+
+    with_choice: Final = await token_counter(
+        request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION, tool_choice="required"),
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+    )
+    prompt_alone: Final = await token_counter(
+        request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION),
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+    )
+
+    assert (with_choice.error, with_choice.total_tokens) == (False, prompt_alone.total_tokens)

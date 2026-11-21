@@ -100,6 +100,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             pin_session_authorization(
                 cast("dict[str, str]", headers),  # cast-ok: headers is a str-valued request dict at runtime
                 user_session.token,
+                user_session.integration_id,
             )
 
         headers["openai-intent"] = "messages-proxy"

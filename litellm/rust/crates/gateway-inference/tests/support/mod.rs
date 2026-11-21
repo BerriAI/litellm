@@ -1,0 +1,253 @@
+// Shared across integration-test targets; each target uses a different subset.
+#![allow(dead_code)]
+
+use std::{collections::HashMap, sync::Arc};
+
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::Request,
+    response::Response,
+};
+use futures_util::future::BoxFuture;
+use litellm_gateway::{Gateway, host::NativeHost};
+use litellm_gateway_inference::router;
+use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
+use litellm_inference::resources::CoreResources;
+use litellm_secret_value::SecretValue;
+use litellm_secrets::source::SecretSource;
+
+use litellm_router_core::{DeploymentSpec, RouterConfig};
+use litellm_router_types::RouterSettings;
+use serde_json::{Map, Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tower::ServiceExt;
+
+pub struct NoSecrets;
+
+impl SecretSource for NoSecrets {
+    fn get_secret_str<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SecretValue>, litellm_secrets::Error>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+pub fn app(model: &str, api_base: &str) -> Router {
+    app_with_permissions(model, api_base, litellm_gateway_auth::Permissions::All)
+}
+
+pub fn app_with_permissions(
+    model: &str,
+    api_base: &str,
+    permissions: litellm_gateway_auth::Permissions,
+) -> Router {
+    configured_app(model, api_base, permissions, None, None)
+}
+
+pub fn app_with_cache(
+    model: &str,
+    api_base: &str,
+    cache: Arc<dyn litellm_cache_response::ResponseCacheService>,
+) -> Router {
+    configured_app(
+        model,
+        api_base,
+        litellm_gateway_auth::Permissions::All,
+        Some(cache),
+        None,
+    )
+}
+
+pub fn app_with_cache_for_principal(
+    model: &str,
+    api_base: &str,
+    cache: Arc<dyn litellm_cache_response::ResponseCacheService>,
+    principal: litellm_gateway_auth::Principal,
+) -> Router {
+    configured_app(
+        model,
+        api_base,
+        litellm_gateway_auth::Permissions::All,
+        Some(cache),
+        Some(principal),
+    )
+}
+
+pub fn app_with_litellm_params(model: &str, api_base: &str, litellm_params: Value) -> Router {
+    app_with_shaping(
+        model,
+        api_base,
+        litellm_params,
+        Value::Object(Default::default()),
+    )
+}
+
+pub fn app_with_shaping(
+    model: &str,
+    api_base: &str,
+    litellm_params: Value,
+    shaping: Value,
+) -> Router {
+    deployment_app(
+        test_params(model, api_base)
+            .into_iter()
+            .chain(litellm_params.as_object().cloned().unwrap_or_default())
+            .collect(),
+        shaping,
+        litellm_gateway_auth::Permissions::All,
+        None,
+        None,
+    )
+}
+
+fn test_params(model: &str, api_base: &str) -> Map<String, Value> {
+    json!({"model": model, "api_base": api_base, "api_key": "test-key", "timeout": 5})
+        .as_object()
+        .cloned()
+        .unwrap()
+}
+
+fn configured_app(
+    model: &str,
+    api_base: &str,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
+    deployment_app(
+        test_params(model, api_base),
+        Value::Object(Map::new()),
+        permissions,
+        cache,
+        principal,
+    )
+}
+
+fn deployment_app(
+    litellm_params: Map<String, Value>,
+    shaping: Value,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let http = Resolution::from(&HttpSettings::default()).config;
+    let secrets = Arc::new(NoSecrets);
+    let resources = CoreResources::new(pool);
+    let (config, dynamic) = RouterConfig::from_settings(&RouterSettings::default()).unwrap();
+    let models = litellm_router_core::Router::new(
+        RouterConfig {
+            model_list: vec![DeploymentSpec {
+                model_name: "public/model".into(),
+                litellm_params,
+                ..DeploymentSpec::default()
+            }],
+            ..config
+        },
+        dynamic,
+    )
+    .unwrap();
+    let id = models.registry().group("public/model").unwrap()[0]
+        .id
+        .clone();
+    let gateway = Gateway::new(
+        resources,
+        http,
+        secrets,
+        models,
+        HashMap::from([(id, serde_json::from_value(shaping).unwrap())]),
+        NativeHost,
+    )
+    .unwrap();
+    let gateway = match cache {
+        Some(cache) => gateway.with_cache(cache),
+        None => gateway,
+    };
+    router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(
+        (permissions, principal),
+        test_identity,
+    ))
+}
+
+async fn test_identity(
+    axum::extract::State((permissions, principal)): axum::extract::State<(
+        litellm_gateway_auth::Permissions,
+        Option<litellm_gateway_auth::Principal>,
+    )>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let auth = litellm_gateway_auth::Auth::new(
+        Arc::new(litellm_gateway_auth::MasterKeyAuthenticator::new(Some(
+            SecretValue::new("test-inbound-key"),
+        ))),
+        Arc::new(TestPermissions(permissions, principal)),
+        Arc::new(litellm_gateway_auth::NoAdditionalPolicy),
+        Arc::new(litellm_gateway_auth::SystemClock),
+    );
+    let identity = auth
+        .authenticate(&SecretValue::new("test-inbound-key"))
+        .await
+        .unwrap();
+    request.extensions_mut().insert(identity);
+    next.run(request).await
+}
+
+pub async fn post(app: Router, path: &str, body: Value) -> Response {
+    app.oneshot(
+        Request::post(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+pub async fn json(response: Response) -> Value {
+    serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
+}
+
+struct TestPermissions(
+    litellm_gateway_auth::Permissions,
+    Option<litellm_gateway_auth::Principal>,
+);
+
+impl litellm_gateway_auth::IdentityResolver for TestPermissions {
+    fn resolve<'a>(
+        &'a self,
+        identity: &'a litellm_gateway_auth::VerifiedIdentity,
+    ) -> litellm_gateway_auth::AuthFuture<'a, litellm_gateway_auth::ResolvedIdentity> {
+        Box::pin(async move {
+            Ok(litellm_gateway_auth::ResolvedIdentity {
+                principal: self.1.clone().unwrap_or_else(|| identity.principal.clone()),
+                permissions: self.0.clone(),
+            })
+        })
+    }
+}
+
+/// Answers with the SSE head and one event, then drops the connection short of the
+/// announced body length.
+pub async fn truncating_upstream(first_event: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{first_event}",
+                    first_event.len() * 2
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    base
+}
