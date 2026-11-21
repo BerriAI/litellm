@@ -367,23 +367,23 @@ _FLAC_HEAD: Final = (
 )
 
 
-def _crc(data: bytes, polynomial: int, bits: int) -> int:
+def _crc16(data: bytes) -> int:
     crc = 0
     for byte in data:
-        crc ^= byte << bits - 8
+        crc ^= byte << 8
         for _ in range(8):
-            crc = (crc << 1 ^ polynomial if crc >> bits - 1 else crc << 1) & (1 << bits) - 1
+            crc = (crc << 1 ^ 0x8005 if crc >> 15 else crc << 1) & 0xFFFF
     return crc
 
 
 def _flac_frame(header: bytes, samples: bytes = bytes(30)) -> bytes:
-    body: Final = header + bytes([_crc(header, 0x07, 8)]) + samples
-    return body + _crc(body, 0x8005, 16).to_bytes(2, "big")
+    body: Final = header + samples
+    return body + _crc16(body).to_bytes(2, "big")
 
 
 _FLAC: Final = _FLAC_HEAD + _flac_frame(b"\xff\xf8\x40\x08\x00") + _flac_frame(b"\xff\xf8\x20\x08\x1f")
-_FLAC_LONG: Final = _FLAC_HEAD + _flac_frame(b"\xff\xf8\x70\x08\xc3\x88\x04\x7f")
-_FLAC_LONG_BILLED_TOKENS: Final = (200 * _FLAC_BLOCK + 1152) * 20 // 24000
+_FLAC_LONG: Final = _FLAC_HEAD + _flac_frame(b"\xff\xf8\x70\x08\xc3\x88\x04\xaf")
+_FLAC_LONG_BILLED_TOKENS: Final = (200 * _FLAC_BLOCK + 1200) * 20 // 24000
 
 
 def _speech_sse(audio: bytes, delta_bytes: int | None = None) -> bytes:
@@ -441,6 +441,7 @@ def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object], delta
         pytest.param(_AAC, {"response_format": "aac"}, _AAC_BILLED_TOKENS, id="aac drops the encoder delay"),
         pytest.param(_AAC, {"response_format": "aac", "speed": 2.0}, _AAC_BILLED_TOKENS * 2, id="sped up aac"),
         pytest.param(_FLAC, {"response_format": "flac"}, _BILLED_TOKENS, id="flac"),
+        pytest.param(_FLAC, {"response_format": "flac", "speed": 4.0}, _BILLED_TOKENS * 4, id="sped up flac"),
         pytest.param(
             _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\x1f", _flac_frame(b"\xff\xf8\x20\x08\x7f")[:-2] + bytes(2)),
             {"response_format": "flac"},
@@ -466,10 +467,21 @@ def test_token_priced_speech_bills_the_length_of_the_audio_not_the_tokens_the_do
     [
         pytest.param(_PCM, "aac", id="aac that is not adts frames"),
         pytest.param(_AAC[:-1], "aac", id="aac cut off inside a frame"),
+        pytest.param(_AAC.replace(b"\xff\xf1", b"\xff\x01"), "aac", id="aac whose frames lack their sync bits"),
+        pytest.param(_AAC + b"\xff\xf1\x58\x40\x00\x1f\xfc", "aac", id="aac with a frame shorter than its header"),
+        pytest.param(_AAC + bytes(16), "aac", id="aac followed by bytes that are not a frame"),
+        pytest.param(
+            _FLAC_HEAD + _flac_frame(b"\xff\xf8\x70\x08\x00\x09\x00"), "flac", id="flac whose last frame is too long"
+        ),
+        pytest.param(
+            _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\xff" + bytes(7)), "flac", id="flac with no frame number"
+        ),
+        pytest.param(
+            _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\x9f"), "flac", id="flac with a malformed frame number"
+        ),
         pytest.param(b"", "aac", id="aac with no frames"),
         pytest.param(_AAC, "webm", id="a format whose length is not read"),
         pytest.param(_FLAC[:-1] + b"\x01", "flac", id="flac whose last frame fails its checksum"),
-        pytest.param(_FLAC.replace(b"\x08\x1f", b"\x08\x1e"), "flac", id="flac whose last header fails its checksum"),
         pytest.param(_FLAC.replace(b"fLaC", b"fLaX"), "flac", id="flac without its marker"),
         pytest.param(
             _FLAC.replace(_FLAC_BLOCK.to_bytes(2, "big") * 2, bytes(2) + _FLAC_BLOCK.to_bytes(2, "big")),

@@ -152,13 +152,12 @@ class _AdtsFrames:
         return Fraction(self._blocks * _AAC_SAMPLES_PER_BLOCK - _AAC_ENCODER_DELAY_SAMPLES, self._sample_rate)
 
 
-def _crc(data: bytes, polynomial: int, bits: int) -> int:
-    top: Final = 1 << bits - 1
+def _flac_crc16(data: bytes) -> int:
     crc = 0
     for byte in data:
-        crc ^= byte << bits - 8
+        crc ^= byte << 8
         for _ in range(8):
-            crc = (crc << 1 ^ polynomial if crc & top else crc << 1) & (1 << bits) - 1
+            crc = (crc << 1 ^ 0x8005 if crc & 0x8000 else crc << 1) & 0xFFFF
     return crc
 
 
@@ -175,26 +174,22 @@ def _flac_block_size(code: int, extra: bytes) -> int | None:
 
 
 def _flac_frame_end_samples(frame: bytes, block_size: int) -> int | None:
-    """Samples played once this fixed-block frame, the last of its stream, ends. None unless both its CRCs hold."""
+    """Samples played once this fixed-block frame, the last of its stream, ends. None unless its CRC holds."""
     if len(frame) < _FLAC_MIN_FRAME_BYTES:
         return None
-    number_bytes: Final = max(8 - (frame[4] ^ 0xFF).bit_length(), 1)
+    leading_ones: Final = 8 - (frame[4] ^ 0xFF).bit_length()
+    number_bytes: Final = max(leading_ones, 1)
     size_code: Final = frame[2] >> 4
-    rate_code: Final = frame[2] & 0xF
     size_at: Final = 4 + number_bytes
-    header_end: Final = size_at + max(size_code - 5, 0) * (size_code <= 7) + (rate_code >= 12) + (rate_code >= 13)
-    last_block: Final = _flac_block_size(size_code, frame[size_at:header_end])
+    last_block: Final = _flac_block_size(size_code, frame[size_at : size_at + 2])
     if (
-        number_bytes == 8
+        leading_ones in (1, 8)
         or last_block is None
         or last_block > block_size
-        or len(frame) < header_end + 3
-        or _crc(frame[:header_end], 0x07, 8) != frame[header_end]
-        or _crc(frame[:-2], 0x8005, 16) != int.from_bytes(frame[-2:], "big")
+        or _flac_crc16(frame[:-2]) != int.from_bytes(frame[-2:], "big")
     ):
         return None
-    lead: Final = frame[4] & 0xFF >> number_bytes if number_bytes > 1 else frame[4]
-    number = lead
+    number = frame[4] & 0xFF >> leading_ones
     for byte in frame[5:size_at]:
         number = number << 6 | byte & 0x3F
     return number * block_size + last_block
