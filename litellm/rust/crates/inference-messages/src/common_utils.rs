@@ -3,18 +3,19 @@ use litellm_llms::ErrorDetail;
 use litellm_llms::tencent::messages::transformation::TENCENT_MESSAGES_CONFIG;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
-    azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
+    azure_ai::messages::transformation::AZURE_AI_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
-    bedrock::messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
-    deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+    bedrock::messages::invoke::transformation::BEDROCK_INVOKE_MESSAGES_CONFIG,
+    deepseek::messages::transformation::DEEPSEEK_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
-    vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
+    vertex_ai::messages::transformation::VERTEX_AI_MESSAGES_CONFIG,
 };
 use litellm_llms::{
-    bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-    bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
-    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
+    bedrock::messages::claude_platform::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::{
+        BEDROCK_MANTLE_MESSAGES_CONFIG, BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
+    },
 };
 use serde_json::{Map, Value};
 
@@ -58,25 +59,25 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
     let config: &'static dyn BaseMessagesConfig = match provider {
         LlmProviders::Tencent => &TENCENT_MESSAGES_CONFIG,
         LlmProviders::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
-        LlmProviders::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::AzureAi => &AZURE_AI_MESSAGES_CONFIG,
         LlmProviders::Bedrock if has_route_prefix(model, "claude_platform/") => {
             &BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
         }
         LlmProviders::Bedrock if has_route_prefix(model, "converse/") => return None,
         LlmProviders::Bedrock if has_route_prefix(model, "mantle/") => {
-            &AMAZON_MANTLE_MESSAGES_CONFIG
+            &BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG
         }
-        LlmProviders::Bedrock if model.contains("claude") => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Bedrock if model.contains("claude") => &BEDROCK_INVOKE_MESSAGES_CONFIG,
         LlmProviders::Bedrock => return None,
         LlmProviders::BedrockMantle if model.to_ascii_lowercase().contains("claude") => {
             &BEDROCK_MANTLE_MESSAGES_CONFIG
         }
         LlmProviders::BedrockMantle => return None,
-        LlmProviders::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Deepseek => &DEEPSEEK_MESSAGES_CONFIG,
         LlmProviders::Edenai => &EDENAI_MESSAGES_CONFIG,
         LlmProviders::Minimax => &MINIMAX_MESSAGES_CONFIG,
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
-            &VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            &VERTEX_AI_MESSAGES_CONFIG
         }
         LlmProviders::Openrouter => &OPENROUTER_MESSAGES_CONFIG,
         _ => return None,
@@ -211,8 +212,8 @@ mod tests {
     ) {
         use litellm_llms::{
             base_llm::messages::transformation::BaseMessagesConfig,
-            bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-            bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
+            bedrock::messages::claude_platform::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+            bedrock_mantle::messages::transformation::BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
         };
         let params = litellm_router_types::LitellmParams::default();
         let region = |key: &str| {
@@ -230,7 +231,7 @@ mod tests {
             .config());
         assert_eq!(
             (
-                routed == url(&AMAZON_MANTLE_MESSAGES_CONFIG),
+                routed == url(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG),
                 routed == url(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG),
             ),
             (mantle, claude_platform)
