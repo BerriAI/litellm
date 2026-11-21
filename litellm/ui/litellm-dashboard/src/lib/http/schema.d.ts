@@ -30543,6 +30543,11 @@ export interface components {
             max_budget: number;
             /** Reset At */
             reset_at?: string | null;
+            /**
+             * Window Start
+             * @description Server-managed start of the current spend window.
+             */
+            window_start?: string | null;
         };
         /**
          * BudgetListItem

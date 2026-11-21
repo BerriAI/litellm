@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from typing import Annotated, Final
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 import jwt
@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse, RedirectResponse
 
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.integrations.lens.proxy.buffering import (
     FORWARD_BUFFER_BUDGET,
     AdmittedBody,
@@ -70,10 +71,12 @@ class Connection:
     def identity_token(self, identity: Identity, now: int) -> str | None:
         return self._signed(identity, now, _REQUEST_AUDIENCE, 30)
 
-    def login_token(self, identity: Identity, now: int) -> str | None:
-        return self._signed(identity, now, _LOGIN_AUDIENCE, _LOGIN_TOKEN_SECONDS)
+    def login_token(self, identity: Identity, user_name: str | None, now: int) -> str | None:
+        return self._signed(identity, now, _LOGIN_AUDIENCE, _LOGIN_TOKEN_SECONDS, user_name)
 
-    def _signed(self, identity: Identity, now: int, audience: str, lifetime: int) -> str | None:
+    def _signed(
+        self, identity: Identity, now: int, audience: str, lifetime: int, user_name: str | None = None
+    ) -> str | None:
         subject: Final = identity.user_id or identity.token
         if not subject:
             return None
@@ -84,7 +87,7 @@ class Connection:
                 "sub": subject,
                 "iat": now,
                 "exp": now + lifetime,
-                "identity": identity.model_dump(mode="json"),
+                "identity": identity.model_dump(mode="json") | ({"user_name": user_name} if user_name else {}),
             },
             self.secret,
             algorithm="HS256",
@@ -175,14 +178,34 @@ async def browser_session(request: Request) -> UserAPIKeyAuth | None:
     return auth if auth.user_id == user_id else None
 
 
+def login_user_name(auth: UserAPIKeyAuth, admin_user_name: str) -> str | None:
+    if auth.user_email:
+        return auth.user_email
+    return admin_user_name if auth.user_id == LITELLM_PROXY_ADMIN_NAME else None
+
+
+def sign_in_redirect(sign_in_url: str) -> RedirectResponse:
+    # The dashboard login page sends any browser holding an unexpired `token` cookie straight back
+    # here, so a session this route refused has to be dropped or the two pages redirect forever
+    response: Final = RedirectResponse(sign_in_url, status_code=303)
+    response.delete_cookie("token", path="/")
+    response.delete_cookie("token", path=urlsplit(sign_in_url).path.removesuffix("/login"))
+    return response
+
+
 def login_redirect(
-    connection: Connection | None, lens_url: str, identity: Identity | None, sign_in_url: str, now: int
+    connection: Connection | None,
+    lens_url: str,
+    identity: Identity | None,
+    user_name: str | None,
+    sign_in_url: str,
+    now: int,
 ) -> Response:
     if connection is None or not lens_url:
         raise HTTPException(503, _LOGIN_UNAVAILABLE)
     if identity is None:
-        return RedirectResponse(sign_in_url, status_code=303)
-    token: Final = connection.login_token(identity, now)
+        return sign_in_redirect(sign_in_url)
+    token: Final = connection.login_token(identity, user_name, now)
     if token is None:
         raise HTTPException(403, "Lens requires an authenticated user or key")
     return RedirectResponse(
@@ -221,6 +244,7 @@ async def lens_login(request: Request, log_team_lookup: LogTeamLookupDependency)
         Connection.from_env(),
         os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/"),
         await delegated_identity(auth, log_team_lookup) if auth else None,
+        login_user_name(auth, os.environ.get("UI_USERNAME", "admin")) if auth else None,
         f"{base_url}/ui/login?{urlencode({'redirect_to': route})}",
         int(time.time()),
     )

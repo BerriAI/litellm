@@ -202,11 +202,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
-from litellm.litellm_core_utils.duration_parser import (
-    get_annual_budget_window_start,
-    get_budget_window_start,
-    is_annual_budget_duration,
-)
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
@@ -9739,11 +9735,10 @@ def _as_aware(moment: datetime) -> datetime:
 
 def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
     window_end: Final = _as_aware(budget_reset_at)
-    window_start: Final = (
-        get_annual_budget_window_start(window_end, get_budget_reset_settings().timezone)
-        if is_annual_budget_duration(budget_duration)
-        else get_budget_window_start(budget_duration, window_end)
-    )
+    settings: Final = get_budget_reset_settings()
+    window_start: Final = get_budget_window_start(
+        budget_duration, window_end, settings.timezone, settings.reset_time_of_day
+    ).astimezone(timezone.utc)
     return (window_start, window_end) if window_start < window_end else None
 
 

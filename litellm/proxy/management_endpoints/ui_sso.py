@@ -107,12 +107,10 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     is_admin_ui_disabled,
     show_missing_vars_in_env,
 )
-from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.native_client_consent import team_select_field
-from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.state_cache import StateCache
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -1180,7 +1178,6 @@ async def google_login(
     """
     from litellm.proxy.proxy_server import (
         cli_sso_session_cache,
-        general_settings,
         saml_sso_cache,
         user_custom_ui_sso_sign_in_handler,
     )
@@ -1269,22 +1266,19 @@ async def google_login(
     if admin_ui_is_disabled:
         return admin_ui_disabled()
 
-    from fastapi.responses import HTMLResponse
+    # No SSO: sign in on the dashboard login page. return_to is kept in the same one-shot cookie the
+    # SSO branch uses and honoured by /login/resume, which a browser that is already signed in goes
+    # to directly, since the login page would send it to the dashboard and drop the return_to.
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import session_identity_from_cookie
 
-    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
-    form_response: Final = HTMLResponse(
-        content=build_ui_login_form(
-            show_deprecation_banner=True,
-            hide_default_credentials_hint=hide_default_credentials_hint,
-        ),
-        status_code=200,
+    base_url: Final = get_custom_url(str(request.base_url)).rstrip("/")
+    signed_in: Final = session_identity_from_cookie(request)[0] is not None
+    login_response: Final = RedirectResponse(
+        url=f"{base_url}/login/resume" if signed_in and return_to is not None else f"{base_url}/ui/login",
+        status_code=303,
     )
-    # Preserve return_to across the username/password sign-in too, via the SAME shared, never-raising
-    # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
-    # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
-    # renders, since the helper never raises on a bad return_to).
-    _persist_return_to_cookie(form_response, return_to, request)
-    return form_response
+    _persist_return_to_cookie(login_response, return_to, request)
+    return login_response
 
 
 def generic_response_convertor(

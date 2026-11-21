@@ -585,7 +585,6 @@ from litellm.proxy.common_utils.healthy_model_filter import (
 )
 from litellm.proxy.common_utils.hook_cache import HookCache
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
-from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401, RUF100  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -20412,23 +20411,21 @@ async def fallback_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
-    from litellm.proxy.proxy_server import ui_link
+    from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+    from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import SSO_FALLBACK_COOKIE
 
-    # get url from request
-    redirect_url = get_custom_url(str(request.base_url))
-    if redirect_url.endswith("/"):
-        redirect_url += "sso/callback"
-    else:
-        redirect_url += "/sso/callback"
-
-    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
-    return HTMLResponse(
-        content=build_ui_login_form(
-            show_deprecation_banner=False,
-            hide_default_credentials_hint=hide_default_credentials_hint,
-        ),
-        status_code=200,
+    login_page: Final = RedirectResponse(
+        url=get_custom_url(str(request.base_url)).rstrip("/") + "/ui/login", status_code=303
     )
+    login_page.set_cookie(
+        key=SSO_FALLBACK_COOKIE,
+        value="1",
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=IPAddressUtils.is_request_https(request),
+    )
+    return login_page
 
 
 @router.post("/login", include_in_schema=False)  # hidden since this is a helper for UI sso login
@@ -20525,6 +20522,33 @@ async def login(request: Request):
     return redirect_response
 
 
+@router.get("/login/resume", include_in_schema=False)
+async def login_resume(request: Request) -> RedirectResponse:
+    """Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in"""
+    from litellm.proxy.management_endpoints.ui_sso import read_return_to_cookie, sso_return_to_redirect
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import session_identity_from_cookie
+    from litellm.proxy.utils import get_custom_url
+
+    dashboard: Final = RedirectResponse(
+        url=get_custom_url(str(request.base_url)).rstrip("/") + "/ui?login=success", status_code=303
+    )
+    dashboard.delete_cookie(key="litellm_cp_return_to")
+    session_token: Final = request.cookies.get("token")
+    if session_token is None or session_identity_from_cookie(request)[0] is None:
+        return dashboard
+    try:
+        resumed: Final = await sso_return_to_redirect(
+            return_to=read_return_to_cookie(request),
+            jwt_token=session_token,
+            redis_usage_cache=redis_usage_cache,
+            sso_flow_cache=sso_flow_cache,
+            request=request,
+        )
+    except Exception:  # noqa: BLE001  # a stale return_to must never strand a signed-in browser
+        return dashboard
+    return resumed or dashboard
+
+
 @router.post("/v2/login", include_in_schema=False)  # hidden helper for UI logins via API
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
@@ -20556,7 +20580,9 @@ async def login_v2(request: Request):
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
         litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
-        litellm_dashboard_ui += "/ui?login=success"
+        from litellm.proxy.management_endpoints.ui_sso import read_return_to_cookie
+
+        litellm_dashboard_ui += "/login/resume" if read_return_to_cookie(request) else "/ui?login=success"
 
         # Token is included in the response body so the UI can set a JS-accessible
         # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the

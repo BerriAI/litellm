@@ -50,7 +50,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, get_budget_window_reset_fields
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
@@ -248,20 +248,28 @@ BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
 def budget_windows_json(requested: Sequence[BudgetLimitEntry] | None, stored: Sequence[BudgetLimitEntry] | None) -> str:
     if not requested:
         return json.dumps(None)
-    stored_reset_at: Final = MappingProxyType(
-        {window.budget_duration: window.reset_at for window in stored or () if window.reset_at is not None}
+    stored_windows: Final = MappingProxyType(
+        {window.budget_duration: window for window in stored or () if window.reset_at is not None}
     )
     return json.dumps(
         [
             {
-                **window.model_dump(),
-                "reset_at": (
-                    stored_reset_at.get(window.budget_duration)
-                    or get_budget_reset_time(budget_duration=window.budget_duration)
-                ).isoformat(),
+                **window.model_dump(exclude={"window_start", "reset_at"}),
+                **_stored_or_new_window_fields(window.budget_duration, stored_windows.get(window.budget_duration)),
             }
             for window in requested
         ]
+    )
+
+
+def _stored_or_new_window_fields(duration: str, stored: BudgetLimitEntry | None) -> Mapping[str, str]:
+    if stored is None or stored.reset_at is None:
+        return get_budget_window_reset_fields(duration)
+    return MappingProxyType(
+        {
+            "reset_at": stored.reset_at.isoformat(),
+            **({"window_start": stored.window_start.isoformat()} if stored.window_start is not None else {}),
+        }
     )
 
 
