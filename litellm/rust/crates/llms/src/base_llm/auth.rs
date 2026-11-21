@@ -9,13 +9,14 @@ use litellm_auth::{AuthServices, CredentialPlacement, TokenProviderHandle};
 use litellm_auth_azure::AzureAuthInputs;
 use litellm_secret_value::SecretValue;
 
-use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
-use litellm_auth_gcp::VertexConfig;
+use litellm_auth::VertexParams;
+use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, SigV4Signer};
+use litellm_auth_gcp::vertex::{vertex_credentials, vertex_project};
 use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
 
-const ENTRA_AUTHORIZATION_HEADER: &str = "Authorization";
+const PYTHON_AUTHORIZATION_KEY: &str = "Authorization";
 
 #[derive(Clone, Debug)]
 pub enum AuthScheme {
@@ -48,15 +49,17 @@ pub enum AuthScheme {
         entra: Box<AuthScheme>,
         unhosted: Result<(), litellm_auth::Error>,
     },
-    /// A Google access token for the Vertex AI project the config names, acquired when the
-    /// request is sent through the shared GCP token cache.
-    GcpAccessToken { config: Box<VertexConfig> },
+    /// Claude on Vertex AI's Google login, Python's `VertexBase.load_auth`, from the deployment's
+    /// Vertex params. [`log_in_to_vertex`] runs it before the URL is built, since the login can
+    /// name the project the URL is addressed to.
+    GcpAccessToken { params: Box<VertexParams> },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
     AwsSigV4 {
         region: String,
         service: &'static str,
         credentials: Box<AwsCredentialSource>,
+        caller_headers: CallerSigningHeaders,
     },
 }
 
@@ -124,6 +127,58 @@ pub struct Authenticated {
     pub signer: Option<SigV4Signer>,
 }
 
+/// What a login before the URL resolved about where the call goes: the project a Vertex AI
+/// login names.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LoggedIn {
+    pub project: Option<String>,
+}
+
+/// The scheme steps that must run before the URL is built: an Entra ID scheme takes the token
+/// source it names, and a Vertex AI login runs. Any other scheme passes through.
+pub async fn prepare_auth(
+    services: &AuthServices,
+    validated: ValidatedEnvironment,
+    azure_ad_token_hosts: AzureAdTokenHosts,
+    secrets: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<(ValidatedEnvironment, LoggedIn), crate::Error> {
+    let validated = validated.with_azure_ad_token_hosts(azure_ad_token_hosts)?;
+    let (validated, project) = log_in_to_vertex(services, validated, secrets).await?;
+    Ok((validated, LoggedIn { project }))
+}
+
+/// Logs a Claude on Vertex AI call in before its URL is built, as Python's
+/// `validate_anthropic_messages_environment` does, reading `VERTEXAI_CREDENTIALS` and
+/// `VERTEXAI_PROJECT` through the host's `secrets`. Returns the call's environment with the
+/// token in hand and the project the login resolved; any other scheme passes through.
+pub async fn log_in_to_vertex(
+    services: &AuthServices,
+    validated: ValidatedEnvironment,
+    secrets: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<(ValidatedEnvironment, Option<String>), litellm_auth::Error> {
+    let ValidatedEnvironment { headers, auth } = validated;
+    let AuthScheme::GcpAccessToken { params } = auth else {
+        return Ok((ValidatedEnvironment { headers, auth }, None));
+    };
+    let login = services
+        .vertex_login
+        .login(
+            vertex_credentials(&params, secrets),
+            vertex_project(&params, secrets),
+        )
+        .await?;
+    // Deliberately keeps Python's exact-key behaviour: a caller's `authorization` header in another
+    // casing is not replaced, so both tokens reach the provider joined as "Bearer <caller>, Bearer
+    // <google>", as they do on main.
+    Ok((
+        ValidatedEnvironment {
+            headers: with_python_authorization_bearer(headers, login.token.expose()),
+            auth: AuthScheme::Forwarded,
+        },
+        Some(login.project_id),
+    ))
+}
+
 pub async fn resolve_auth(
     services: &AuthServices,
     validated: ValidatedEnvironment,
@@ -161,14 +216,16 @@ pub async fn resolve_auth(
                 })?;
             Ok(Authenticated {
                 headers: match token {
-                    Some(token) => with_entra_bearer(headers, token.value().secret().expose()),
+                    Some(token) => {
+                        with_python_authorization_bearer(headers, token.value().secret().expose())
+                    }
                     None => headers,
                 },
                 signer: None,
             })
         }
         AuthScheme::AzureAdTokenValue { secret } => Ok(Authenticated {
-            headers: with_entra_bearer(headers, secret.expose()),
+            headers: with_python_authorization_bearer(headers, secret.expose()),
             signer: None,
         }),
         AuthScheme::PythonHostedAzureAdToken { unhosted, .. } => unhosted.map(|()| Authenticated {
@@ -180,35 +237,37 @@ pub async fn resolve_auth(
                 subject: "Azure AD token without a Python host",
             },
         )),
-        AuthScheme::GcpAccessToken { config } => {
-            let token = services.gcp.access_token(&config, env_lookup).await?;
-            Ok(Authenticated {
-                headers: with_credential(headers, CredentialPlacement::Bearer, &token),
-                signer: None,
-            })
-        }
+        // `log_in_to_vertex` logs in and forwards the token before auth resolves.
+        AuthScheme::GcpAccessToken { .. } => Err(litellm_auth::Error::CredentialAcquisition(
+            litellm_auth::ErrorDetail::Unresolved {
+                subject: "Vertex AI token without its login",
+            },
+        )),
         AuthScheme::AwsSigV4 {
             region,
             service,
             credentials,
+            caller_headers,
         } => Ok(Authenticated {
             headers,
             signer: Some(
                 SigV4Signer::resolve(&services.aws, region, service, *credentials, env_lookup)
-                    .await?,
+                    .await?
+                    .with_caller_headers(caller_headers),
             ),
         }),
     }
 }
 
-/// Python's `_base_validate_azure_environment` sets `headers["Authorization"]`: only that exact
-/// key is replaced, and a caller `authorization` in another casing is joined with it on the wire.
-fn with_entra_bearer(headers: Headers, token: &str) -> Headers {
+/// Python's `headers["Authorization"] = f"Bearer {token}"`, as the Azure and Vertex configs set
+/// it: only that exact key is replaced, and a caller `authorization` in another casing is joined
+/// with it on the wire.
+fn with_python_authorization_bearer(headers: Headers, token: &str) -> Headers {
     headers
         .into_iter()
-        .filter(|(name, _)| name != ENTRA_AUTHORIZATION_HEADER)
+        .filter(|(name, _)| name != PYTHON_AUTHORIZATION_KEY)
         .chain([(
-            ENTRA_AUTHORIZATION_HEADER.to_string(),
+            PYTHON_AUTHORIZATION_KEY.to_string(),
             format!("Bearer {token}"),
         )])
         .collect()
@@ -230,6 +289,8 @@ mod tests {
     use litellm_auth::{AuthServices, ResolvedCredential, TokenFuture, TokenProvider};
     use litellm_auth_aws::Credentials;
     use rstest::rstest;
+
+    use litellm_auth_gcp::{google::OnGce, vertex::VertexLoginService};
 
     use super::*;
 
@@ -391,6 +452,52 @@ mod tests {
         assert_eq!(authenticated.headers, headers(expected));
     }
 
+    async fn log_in(
+        forwarded: &[(&str, &str)],
+    ) -> Result<(ValidatedEnvironment, Option<String>), litellm_auth::Error> {
+        let services = AuthServices {
+            vertex_login: VertexLoginService::new(Arc::new(OnGce {
+                project: "gce-project",
+                token: "google",
+            })),
+            ..AuthServices::default()
+        };
+        log_in_to_vertex(
+            &services,
+            ValidatedEnvironment {
+                headers: headers(forwarded),
+                auth: AuthScheme::GcpAccessToken {
+                    params: Box::default(),
+                },
+            },
+            &no_env,
+        )
+        .await
+    }
+
+    #[rstest]
+    #[case::pythons_exact_key_is_replaced(
+        &[("Authorization", "Bearer caller"), ("x-trace", "1")],
+        &[("x-trace", "1"), ("Authorization", "Bearer google")]
+    )]
+    #[case::another_casing_stays_beside_it(
+        &[("authorization", "Bearer caller")],
+        &[("authorization", "Bearer caller"), ("Authorization", "Bearer google")]
+    )]
+    #[case::no_caller_credential(&[], &[("Authorization", "Bearer google")])]
+    #[tokio::test]
+    async fn a_google_token_is_set_under_pythons_authorization_key(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let (validated, project) = log_in(forwarded).await.unwrap();
+        let authenticated = resolve_auth(&AuthServices::default(), validated, &no_env)
+            .await
+            .unwrap();
+        assert_eq!(authenticated.headers, headers(expected));
+        assert_eq!(project.as_deref(), Some("gce-project"));
+    }
+
     #[rstest]
     #[case::the_host_token_is_sent_as_a_bearer(Some("from-python"), &[("Authorization", "Bearer from-python")])]
     #[case::no_host_token_sends_no_credential(Some(""), &[])]
@@ -445,6 +552,7 @@ mod tests {
                     None,
                     "test",
                 ))),
+                caller_headers: CallerSigningHeaders::Dropped,
             },
         )
         .await;

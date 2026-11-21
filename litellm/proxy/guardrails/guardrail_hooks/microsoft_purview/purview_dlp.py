@@ -111,9 +111,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_id: str,
         text: str,
         activity: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         block_on_violation: bool = True,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         """Evaluate content against Purview DLP policies.
 
         Args:
@@ -128,7 +128,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         """
         start_time: Final = datetime.now()
         status: GuardrailStatus = "success"
-        response: dict[str, object] = {}
+        response: Mapping[str, object] = {}
 
         try:
             etag, _ = await self._compute_protection_scopes(user_id)
@@ -400,7 +400,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict[str, Any],
+        data: dict[str, object],
         call_type: "CallTypesLiteral",
     ) -> dict[str, object] | None:
         """Check user prompt against Purview DLP policies before LLM call."""
@@ -434,7 +434,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 )
             prompt_text = self.completion_prompt_to_str(raw_prompt)
         else:
-            messages: Final[list | None] = data.get("messages")
+            messages: Final = data.get("messages")
             if messages:
                 prompt_text = self.get_prompt_text_for_dlp(cast(list["AllMessageValues"], messages))
 

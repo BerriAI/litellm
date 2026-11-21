@@ -1215,6 +1215,53 @@ async def test_update_customer_hierarchy_db_enqueues_one_increment_per_level():
     assert aggregated["customer_org_list_transactions"] == {"org-1": 0.25}
 
 
+@pytest.mark.asyncio
+async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds
+
+    writer: Final = DBSpendUpdateWriter()
+    ids: Final = CustomerHierarchyIds(
+        customer_org_id="org",
+        customer_team_id="team",
+        customer_member_id="member:local",
+        app_id="app",
+    )
+    await writer._update_customer_hierarchy_db(response_cost=0.25, customer_hierarchy=ids, prisma_client=MagicMock())
+    queued: Final = await writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    aggregated: Final = writer.spend_update_queue.get_aggregated_db_spend_update_transactions(queued)
+    batcher: Final = MagicMock()
+    transaction: Final = MagicMock()
+    transaction.batch_.return_value.__aenter__.return_value = batcher
+    await writer._commit_customer_hierarchy_spend(
+        aggregated,
+        prisma_client=MagicMock(),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+        outer_transaction=transaction,
+        on_table_committed=None,
+    )
+    batcher.litellm_customerorganizationtable.update_many.assert_called_once_with(
+        where={"customer_org_id": "org"},
+        data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_customermembertable.update_many.assert_called_once_with(
+        where={"customer_member_id": "member:local"},
+        data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_apptable.update_many.assert_called_once_with(
+        where={"app_id": "app"},
+        data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_appcustomerorgtable.update_many.assert_called_once_with(
+        where={"app_id": "app", "customer_org_id": "org"},
+        data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_appcustomermembertable.update_many.assert_called_once_with(
+        where={"app_id": "app", "customer_member_id": "member:local"},
+        data={"spend": {"increment": 0.25}},
+    )
+
+
 def _team_member_flush_fixtures() -> tuple[AsyncMock, MagicMock]:
     """A transaction and prisma client that record the raw statement the member spend flush runs."""
     mock_transaction = AsyncMock()
@@ -3632,10 +3679,22 @@ _REQUEUE_SAFETY_CASES: Final = [
 @pytest.mark.parametrize(
     ("failure", "lands_on_the_next_tick"),
     [
-        pytest.param(httpx.ReadTimeout("no reply"), False, id="reply lost after the statement was sent"),
-        pytest.param(httpx.ConnectError("refused"), True, id="statement never reached the database"),
+        pytest.param(
+            httpx.ReadTimeout("no reply"),
+            False,
+            id="reply lost after the statement was sent",
+        ),
+        pytest.param(
+            httpx.ConnectError("refused"),
+            True,
+            id="statement never reached the database",
+        ),
         pytest.param(_postgres_rejection("22021"), False, id="postgres refused the data itself"),
-        pytest.param(_postgres_rejection("23502"), False, id="postgres refused a constraint violation"),
+        pytest.param(
+            _postgres_rejection("23502"),
+            False,
+            id="postgres refused a constraint violation",
+        ),
         pytest.param(_postgres_rejection("42P01"), True, id="table missing"),
         pytest.param(_postgres_rejection("57014"), True, id="statement cancelled"),
     ],
@@ -3670,7 +3729,8 @@ async def test_failed_daily_spend_commit_is_requeued_only_when_the_rows_are_prov
 async def test_failed_daily_spend_commit_drops_only_the_batch_that_was_sent():
     """A tick holding more than one batch of 100 rows sends them one statement at a time, and
     a reply lost on one statement says nothing about the batches after it: only the batch that
-    was on the wire is dropped, the ones never sent go back on the queue and land next tick."""
+    was on the wire is dropped, the ones never sent go back on the queue and land next tick.
+    """
     db_writer = DBSpendUpdateWriter()
     await db_writer.daily_spend_update_queue.add_update(
         {f"user-{i:03d}": _daily_txn(user_id=f"user-{i:03d}") for i in range(150)}
@@ -4430,7 +4490,8 @@ async def test_commit_spend_updates_retries_a_rollup_lock_timeout_then_commits(
 ):
     """A spend UPDATE cancelled under ``lock_timeout`` (55P03) never took its row lock, so the
     transaction rolled back with nothing applied. Every entity path retries it like a deadlock
-    and lands the increment exactly once, instead of raising and dropping the drained batch."""
+    and lands the increment exactly once, instead of raising and dropping the drained batch.
+    """
     slept = []
     monkeypatch.setattr(
         "litellm.proxy.db.db_spend_update_writer.asyncio.sleep",
@@ -4500,6 +4561,24 @@ def _responses_router() -> litellm.Router:
                 "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test", "use_chat_completions_api": True},
                 "model_info": {"id": "dep-forced-bridge"},
             },
+            {
+                "model_name": "native-router",
+                "litellm_params": {
+                    "model": "azure_ai/model_router/model-router",
+                    "api_base": "https://res.services.ai.azure.com/api/projects/proj/openai/v1",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "dep-native-router"},
+            },
+            {
+                "model_name": "azure-openai-router",
+                "litellm_params": {
+                    "model": "azure/model-router",
+                    "api_base": "https://res.services.ai.azure.com/openai/v1",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "dep-azure-openai-router"},
+            },
         ]
     )
 
@@ -4515,6 +4594,8 @@ def _responses_router() -> litellm.Router:
         ("aresponses", "dep-native", False),
         ("responses", "dep-native", False),
         ("acompletion", "dep-bridged", False),
+        ("aresponses", "dep-native-router", True),
+        ("aresponses", "dep-azure-openai-router", False),
     ],
 )
 async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bridge_reads_back(
@@ -4533,6 +4614,33 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
     await db_writer._insert_spend_log_to_db(payload=payload, prisma_client=prisma, llm_router=_responses_router())
 
     assert prisma.spend_log_transactions == [payload]
+    assert prisma.spend_log_flush_requested.is_set() is expects_flush
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answered_id, expects_flush",
+    [pytest.param("chatcmpl-turn-1", True, id="bridged-turn"), pytest.param("resp_turn_1", False, id="native-turn")],
+)
+async def test_a_native_deployment_row_flushes_at_once_when_the_chat_bridge_answered_its_turn(
+    answered_id: str, expects_flush: bool
+):
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    prisma: Final = _tool_usage_prisma()
+    prisma.spend_log_flush_requested = asyncio.Event()
+    payload: Final = {
+        "request_id": ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="dep-native", response_id=answered_id
+        ),
+        "call_type": "aresponses",
+        "model_id": "dep-native",
+    }
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(
+        payload=payload, prisma_client=prisma, llm_router=_responses_router()
+    )
+
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 
@@ -4628,10 +4736,26 @@ async def _update_database_with(
     ("inserted", "existing", "charged"),
     [
         (1, None, True),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25), False),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.0), True),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="failure", spend=0.0), True),
-        (0, SimpleNamespace(call_type="aembedding", status="success", spend=0.25), True),
+        (
+            0,
+            SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25),
+            False,
+        ),
+        (
+            0,
+            SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.0),
+            True,
+        ),
+        (
+            0,
+            SimpleNamespace(call_type="aretrieve_batch", status="failure", spend=0.0),
+            True,
+        ),
+        (
+            0,
+            SimpleNamespace(call_type="aembedding", status="success", spend=0.25),
+            True,
+        ),
         (0, None, True),
     ],
     ids=[
@@ -4740,7 +4864,11 @@ async def test_update_database_leaves_a_batch_that_cost_nothing_to_the_retrieve_
     ("inserted", "existing", "charged"),
     [
         (1, None, True),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25), False),
+        (
+            0,
+            SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25),
+            False,
+        ),
     ],
     ids=["first_retrieve_owns_the_row", "another_retrieve_already_charged"],
 )
@@ -4849,7 +4977,10 @@ async def test_update_database_queues_a_batch_cost_row_it_could_not_claim():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
-    [{**_batch_cost_payload(), "call_type": "acompletion"}, {**_batch_cost_payload(), "status": "failure"}],
+    [
+        {**_batch_cost_payload(), "call_type": "acompletion"},
+        {**_batch_cost_payload(), "status": "failure"},
+    ],
     ids=["not_a_batch_retrieve", "failed_batch_retrieve"],
 )
 async def test_update_database_queues_every_other_spend_row_for_the_next_flush(payload: dict):
@@ -4957,7 +5088,8 @@ async def test_a_job_cost_row_counts_its_polls_guardrail_run_in_guardrail_usage_
     disable_spend_logs: bool, left_uncharged: bool
 ):
     """The job's cost row is written by its claim, not the spend log queue whose flush counts guardrail runs, so a
-    finished video's guardrail run must still reach guardrail usage, once, and not when spend logs are off."""
+    finished video's guardrail run must still reach guardrail usage, once, and not when spend logs are off.
+    """
     from litellm.repositories.table_repositories import (
         DailyGuardrailMetricsRepository,
         SpendLogGuardrailIndexRepository,
@@ -4999,7 +5131,8 @@ def _job_poll(
     call_type: str = "avideo_status",
 ) -> tuple[dict[str, object], object]:
     """The logging kwargs a job poll reaches the spend writer with: litellm logs the provider's own cost as
-    response_cost and the guardrails' on top of it only in the standard logging payload."""
+    response_cost and the guardrails' on top of it only in the standard logging payload.
+    """
     from litellm.types.utils import LiteLLMBatch
     from litellm.types.videos.main import VideoObject
 
@@ -5106,7 +5239,8 @@ async def test_update_database_charges_the_completed_polls_cost_and_not_a_runnin
 async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_whatever_call_id_the_client_sent():
     """A client picks its own x-litellm-call-id, so a guardrail-only video poll naming the job's charge row, once or
     twice, must still be charged each time and leave the finished job's charge to the poll that sees it done. An
-    unfinished batch retrieve never reaches the writer, and its row is named by the batch id the provider sent."""
+    unfinished batch retrieve never reaches the writer, and its row is named by the batch id the provider sent.
+    """
     call_type: Final = "avideo_status"
     charge_row_id: Final = "video_abc_video_cost"
     db_writer = DBSpendUpdateWriter()
@@ -5132,11 +5266,15 @@ async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_what
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("call_type", "charge_row_id"),
-    [("avideo_status", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc_batch_cost")],
+    [
+        ("avideo_status", "video_abc_video_cost"),
+        ("aretrieve_batch", "batch_abc_batch_cost"),
+    ],
 )
 async def test_a_finished_job_cheaper_than_its_polls_guardrail_is_still_charged_once(call_type, charge_row_id):
     """A batch of a few cheap requests costs less than a priced guardrail on its retrieve, and the finished job's
-    cost must still settle under its charge row once instead of being billed again on every poll."""
+    cost must still settle under its charge row once instead of being billed again on every poll.
+    """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
     prisma = _spend_logs_table_prisma()
@@ -5158,7 +5296,8 @@ async def test_a_finished_job_cheaper_than_its_polls_guardrail_is_still_charged_
 @pytest.mark.asyncio
 async def test_a_finished_batch_that_cost_nothing_itself_settles_its_retrieves_guardrail_once():
     """A batch whose every request failed costs nothing itself, and its finished retrieves must still settle under
-    the batch's charge row once, as they always have, instead of each paying the retrieve's guardrail again."""
+    the batch's charge row once, as they always have, instead of each paying the retrieve's guardrail again.
+    """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
     prisma = _spend_logs_table_prisma()
@@ -5590,7 +5729,8 @@ async def test_tag_batch_drained_from_redis_and_cancelled_mid_flight_is_restored
 
 class _CommittingDailySpendFakeDB(_DailySpendFakeDB):
     """Runs the daily upsert at once but holds the COMMIT until released. A COMMIT that has left
-    the client lands on the server whether or not the client keeps waiting for the reply."""
+    the client lands on the server whether or not the client keeps waiting for the reply.
+    """
 
     def __init__(self) -> None:
         super().__init__(failing_table=None)
@@ -5619,7 +5759,8 @@ async def test_cancel_that_lands_while_the_daily_batch_is_committing_waits_for_t
 ):
     """Shutdown cancels the tick after the COMMIT has left for Postgres. The server finishes that
     commit whatever the client does, so putting the batch back on the queue makes the final flush
-    write the same spend a second time. The tick has to wait for the commit's outcome instead."""
+    write the same spend a second time. The tick has to wait for the commit's outcome instead.
+    """
     db_writer = DBSpendUpdateWriter()
     queue = _DAILY_SPEND_QUEUES[queue_name](db_writer)
     await queue.add_update({"key-a": _daily_entity_txn(entity_id_field)})
@@ -5791,7 +5932,8 @@ async def test_shutdown_flush_that_lands_before_the_interrupted_commit_resolves_
 @pytest.mark.asyncio
 async def test_shutdown_drain_that_lands_before_the_interrupted_tag_commit_resolves_restores_a_failed_batch():
     """Same ordering for the Redis tag path: the shutdown drain must settle the interrupted
-    commit before the destructive drain, or a commit that fails late is never restored."""
+    commit before the destructive drain, or a commit that fails late is never restored.
+    """
     db_writer = DBSpendUpdateWriter()
     drained = {"key-a": cast(DailyTagSpendTransaction, _daily_entity_txn("tag"))}
     redis_buffer = _DrainedTagRedisBuffer(drained)
@@ -5841,7 +5983,8 @@ def _lock_timeout_error() -> PrismaDataError:
 @pytest.mark.asyncio
 async def test_daily_spend_upsert_runs_under_the_rollup_lock_timeout():
     """The bulk daily upsert opens its transaction by bounding how long it may wait on
-    rows another pod holds; the setting is transaction-local and bound as a parameter."""
+    rows another pod holds; the setting is transaction-local and bound as a parameter.
+    """
     prisma_client = _RecordingPrisma()
     daily_spend_transactions = {
         "key": {
@@ -6184,7 +6327,10 @@ _CALLER_SESSION: Final[Mapping[str, object]] = {
         pytest.param(
             {
                 **_CALLER_SESSION,
-                "metadata": {"session_id": "cc-session-1", "internal_call_origin": "autorouter_classifier"},
+                "metadata": {
+                    "session_id": "cc-session-1",
+                    "internal_call_origin": "autorouter_classifier",
+                },
             },
             id="classifier-sub-call",
         ),
@@ -6208,7 +6354,10 @@ async def test_a_billed_row_in_a_caller_session_adds_its_spend_to_that_sessions_
         pytest.param(
             {
                 "litellm_session_id": "minted-1",
-                "metadata": {"session_id": "minted-1", "litellm_session_id_generated": True},
+                "metadata": {
+                    "session_id": "minted-1",
+                    "litellm_session_id_generated": True,
+                },
             },
             0.25,
             id="generated-session",

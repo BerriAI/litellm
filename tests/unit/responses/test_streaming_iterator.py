@@ -12,7 +12,7 @@ import time
 import weakref
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Final, Optional
+from typing import Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -38,6 +38,7 @@ from litellm.responses.streaming_iterator import (
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -1854,6 +1855,9 @@ class _FakeLoggingObj:
         self.success_logged = threading.Event()
         self.failure_logged = threading.Event()
 
+    def post_call(self, *, original_response: str, additional_args: Mapping[str, object]) -> None:
+        pass
+
     # Signature alignment with Logging handlers
     async def dispatch_success_handlers(self, *args, **kwargs):
         kwargs.pop("prefer_async_handlers", None)
@@ -2432,6 +2436,43 @@ async def test_responses_streaming_completed_event_persists_async_cache():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_responses_streaming_incomplete_event_from_the_provider_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logging_obj: Final = _FakeLoggingObj()
+    cache: Final = SimpleNamespace(add_cache=MagicMock(), async_add_cache=AsyncMock())
+    monkeypatch.setattr(litellm, "cache", cache)
+    request_kwargs: Final = {"model": "test-model", "input": "hello", "stream": True}
+    logging_obj.llm_caching_handler = SimpleNamespace(
+        request_kwargs=request_kwargs,
+        preset_cache_key="responses-stream-cache-key",
+        original_function=litellm.aresponses,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
+    )
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data=request_kwargs,
+        call_type=CallTypes.aresponses.value,
+    )
+    iterator.completed_response = ResponseIncompleteEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        response=_make_completed_response().response.model_copy(update={"status": "incomplete"}),
+    )
+
+    existing_tasks: Final = asyncio.all_tasks()
+    iterator._handle_logging_completed_response()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert logging_obj.success_logged.wait(timeout=5)
+    cache.async_add_cache.assert_not_called()
+    cache.add_cache.assert_not_called()
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_responses_streaming_completed_event_persists_sync_cache():
     logging_obj = _FakeLoggingObj()
     original_cache = litellm.cache
@@ -2912,6 +2953,81 @@ def _answer_with_text_and_tool_call() -> ResponsesAPIResponse:
         ],
         usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
     )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("completed", "incomplete"))
+@pytest.mark.parametrize("cached", (False, True))
+@pytest.mark.parametrize("sync", (False, True))
+@pytest.mark.parametrize("empty_output", (False, True))
+async def test_synthetic_stream_preserves_terminal_status_and_success_callbacks(
+    status: Literal["completed", "incomplete"],
+    cached: bool,
+    sync: bool,
+    empty_output: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    original: Final = _answer_with_text_and_tool_call()
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            **original.model_dump(),
+            "status": status,
+            "incomplete_details": {"reason": "max_output_tokens"} if status == "incomplete" else None,
+            "output": [] if empty_output else original.output,
+            "usage": {
+                "input_tokens": 13,
+                "input_tokens_details": {"cached_tokens": 3},
+                "output_tokens": 32,
+                "output_tokens_details": {"reasoning_tokens": 16},
+                "total_tokens": 45,
+            },
+        }
+    )
+    logging_obj: Final = _FakeLoggingObj()
+    cache: Final = SimpleNamespace(add_cache=MagicMock(), async_add_cache=AsyncMock())
+    monkeypatch.setattr(litellm, "cache", cache)
+    logging_obj.llm_caching_handler = SimpleNamespace(
+        request_kwargs={"model": transformed.model, "input": "hello", "stream": True},
+        preset_cache_key="synthetic-terminal-cache",
+        original_function=litellm.aresponses,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
+    )
+    iterator: Final = (
+        CachedResponsesAPIStreamingIterator(response=transformed, logging_obj=logging_obj)
+        if cached
+        else MockResponsesAPIStreamingIterator(
+            response=httpx.Response(200, json=transformed.model_dump()),
+            model=transformed.model,
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+        )
+    )
+    existing_tasks: Final = asyncio.all_tasks()
+    events: Final = tuple(iterator) if sync else tuple([event async for event in iterator])
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert logging_obj.success_logged.wait(timeout=5)
+    assert tuple(event.type for event in events if event.type in ("response.completed", "response.incomplete")) == (
+        f"response.{status}",
+    )
+    assert events[-1].response.model_dump() == transformed.model_dump()
+    downstream_response: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(iterator)
+    assert isinstance(downstream_response, ResponsesAPIResponse)
+    assert downstream_response.model_dump() == transformed.model_dump()
+    assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == (
+        "" if empty_output else "Checking the weather."
+    )
+    assert logging_obj.success_calls == logging_obj.async_success_calls == 1
+    assert logging_obj.failure_calls == logging_obj.async_failure_calls == 0
+    assert logging_obj.last_success_kwargs["cache_hit"] is (True if cached else None)
+    assert logging_obj.last_async_success_kwargs["cache_hit"] is (True if cached else None)
+    expected_cache_writes: Final = int(not cached and not empty_output)
+    assert cache.add_cache.call_count == (expected_cache_writes if sync else 0)
+    assert cache.async_add_cache.call_count == (0 if sync else expected_cache_writes)
 
 
 def test_faked_stream_bridged_to_chat_sends_tool_arguments_once():

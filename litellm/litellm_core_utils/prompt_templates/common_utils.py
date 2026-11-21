@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data as extract_file_data,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -184,13 +185,13 @@ from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     split_concatenated_json_objects as split_concatenated_json_objects,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-    _image_part_url,  # pyright: ignore[reportPrivateUsage]  # Shared implementation for as_openai_image_part
-)
-from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     anthropic_image_source_to_openai_url as anthropic_image_source_to_openai_url,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     embedding_input_is_all_media as embedding_input_is_all_media,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    image_part_url,
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_embedding_media_for_tpm as split_embedding_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
@@ -377,6 +378,43 @@ def handle_messages_with_content_list_to_str_conversion(
     Returns new messages with each content list flattened to a string, leaving the caller's messages untouched
     """
     return [_message_with_str_content(message) for message in messages]
+
+
+def _text_part(part: object) -> str | None:
+    match part:
+        case {"type": "text", "text": str() as text}:
+            return text
+        case _:
+            return None
+
+
+def _text_only_content(content: object) -> str | None:
+    if not isinstance(content, list) or not content:
+        return None
+    parts: Final = cast("list[object]", content)  # cast-ok: isinstance narrows object to an unparameterized list
+    texts: Final = tuple(_text_part(part) for part in parts)
+    if None in texts:
+        return None
+    return "\n".join(text for text in texts if text is not None)
+
+
+def _content_of(message: Mapping[str, object]) -> object:
+    return message.get("content")
+
+
+def _message_with_text_only_content_as_str(message: AllMessageValues) -> AllMessageValues:
+    text: Final = _text_only_content(_content_of(message))
+    if text is None:
+        return message
+    return cast(  # cast-ok: the same message with its text parts joined into one string
+        AllMessageValues, {**message, "content": text}
+    )
+
+
+def handle_messages_with_text_only_content_lists_as_str(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(_message_with_text_only_content_as_str(message) for message in messages)
 
 
 def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:
@@ -643,7 +681,7 @@ def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObjec
 
     Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
     """
-    url: Final = _image_part_url(part)
+    url: Final = image_part_url(part)
     return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
@@ -903,7 +941,7 @@ def _estimate_json_bytes(obj: object) -> int:
     serialised size, which is what a schema-bomb budget needs.
     """
     total = 0
-    stack: Final[list] = [obj]
+    stack: Final[list[object]] = [obj]
     while stack:
         x = stack.pop()
         if isinstance(x, dict):
@@ -928,10 +966,40 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
+    {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
+)
+JSON_SCHEMA_KEPT_REF_SIBLINGS: Final = _JSON_SCHEMA_ANNOTATION_KEYWORDS | frozenset({"required"})
+
+_SCHEMA_NODE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _required_names(schema: Mapping[str, object]) -> tuple[str, ...] | None:
+    entries: Final = as_object_list(schema.get("required", []))
+    if entries is None:
+        return None
+    names: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    return names if len(names) == len(entries) else None
+
+
+def _ref_target_with_siblings(
+    target_schema: Mapping[str, object], ref_node: Mapping[str, object]
+) -> Mapping[str, object]:
+    target_required: Final = _required_names(target_schema)
+    target_names: Final = frozenset(target_required or ())
+    added: Final = tuple(dict.fromkeys(name for name in _required_names(ref_node) or () if name not in target_names))
+    return {
+        **target_schema,
+        **{key: value for key, value in ref_node.items() if key in _JSON_SCHEMA_ANNOTATION_KEYWORDS},
+        **({"required": [*target_required, *added]} if target_required is not None and added else {}),
+    }
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
+    keep_ref_siblings: bool = False,
 ) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
@@ -951,6 +1019,10 @@ def unpack_defs(
     (a target containing a large string, ``const``, or ``enum`` entry).
     Defaults to ``None`` (unbounded) so existing callers are unaffected;
     raises ``ValueError`` on overflow.
+
+    ``keep_ref_siblings`` keeps the annotations next to a ``$ref`` (a field's
+    ``description``, say) over the inlined target's and adds a sibling
+    ``required`` to the target's, since both apply to the value.
     """
 
     import copy
@@ -959,15 +1031,17 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[dict] = {
-        **defs,
-        **schema.get("$defs", {}),
-        **schema.get("definitions", {}),
-    }
+    root_defs: Final[tuple[Mapping[str, object], ...]] = (
+        {
+            **defs,
+            **schema.get("$defs", {}),
+            **schema.get("definitions", {}),
+        },
+    )
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, tuple, set[str]]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -980,19 +1054,34 @@ def unpack_defs(
             # --- Case 1: this node *is* a reference ---
             if "$ref" in node:
                 ref_name = node["$ref"].split("/")[-1]
+                resolved_ref = next(
+                    (
+                        (node["$ref"], scope[node["$ref"]]) if node["$ref"] in scope else (ref_name, scope[ref_name])
+                        for scope in active_defs
+                        if ref_name in scope
+                    ),
+                    None,
+                )
+                # Unknown reference – leave untouched
+                if resolved_ref is None:
+                    continue
+                ref_key, target_schema = resolved_ref
 
                 # Check for circular reference in the resolution chain
-                if ref_name in ref_chain:
+                if ref_key in ref_chain:
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = active_defs.get(ref_name)
-                # Unknown reference – leave untouched
-                if target_schema is None:
-                    continue
+                replacement = (
+                    _ref_target_with_siblings(
+                        _SCHEMA_NODE.validate_python(target_schema), _SCHEMA_NODE.validate_python(node)
+                    )
+                    if keep_ref_siblings
+                    else target_schema
+                )
 
                 if max_inlined_bytes is not None:
-                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    inlined_bytes += _estimate_json_bytes(replacement)
                     if inlined_bytes > max_inlined_bytes:
                         raise ValueError(
                             f"unpack_defs: inlined schema exceeded the "
@@ -1002,14 +1091,16 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = {
-                    **active_defs,
-                    **target_schema.get("$defs", {}),
-                    **target_schema.get("definitions", {}),
-                }
+                child_defs = (
+                    active_defs
+                    if isinstance(target_schema, dict)
+                    and "$defs" not in target_schema
+                    and "definitions" not in target_schema
+                    else ({**target_schema.get("$defs", {}), **target_schema.get("definitions", {})}, *active_defs)
+                )
 
                 # Replace the reference with resolved copy
-                resolved = copy.deepcopy(target_schema)
+                resolved = copy.deepcopy(replacement)
                 if parent is not None and key is not None:
                     if (
                         isinstance(parent, dict)
@@ -1026,7 +1117,7 @@ def unpack_defs(
 
                 # Add to ref chain to track circular references
                 new_ref_chain = ref_chain.copy()
-                new_ref_chain.add(ref_name)
+                new_ref_chain.add(ref_key)
 
                 # Add resolved node to queue for further processing
                 queue.append((resolved, parent, key, child_defs, new_ref_chain))
@@ -1034,11 +1125,11 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = {
-                **active_defs,
-                **node.get("$defs", {}),
-                **node.get("definitions", {}),
-            }
+            current_defs = (
+                ({**node.get("$defs", {}), **node.get("definitions", {})}, *active_defs)
+                if "$defs" in node or "definitions" in node
+                else active_defs
+            )
 
             # Add all dict values to queue
             for k, v in node.items():
@@ -1067,6 +1158,38 @@ def _has_legacy_defs(schema: object) -> bool:
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
+
+
+def _definitions_shadowed_by_defs(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+    dollar_defs: Final = json_schema.get("$defs")
+    definitions: Final = json_schema.get("definitions")
+    if not isinstance(dollar_defs, dict) or not isinstance(definitions, dict):
+        return MappingProxyType({})
+    current: Final = _SCHEMA_NODE.validate_python(dollar_defs)
+    legacy: Final = _SCHEMA_NODE.validate_python(definitions)
+    return MappingProxyType(
+        {
+            f"#/definitions/{name}": legacy[name]
+            for name in current.keys() & legacy.keys()
+            if current[name] != legacy[name]
+        }
+    )
+
+
+def defs_unpacked(json_schema: Mapping[str, object], keep_ref_siblings: bool = False) -> Mapping[str, object]:
+    import copy
+
+    unpacked: Final = copy.deepcopy(dict(json_schema))
+    dollar_defs: Final = unpacked.pop("$defs", None)
+    definitions: Final = unpacked.pop("definitions", None)
+    defs: Final = {
+        **(definitions if isinstance(definitions, dict) else {}),
+        **(dollar_defs if isinstance(dollar_defs, dict) else {}),
+        **_definitions_shadowed_by_defs(json_schema),
+    }
+    if defs:
+        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES, keep_ref_siblings=keep_ref_siblings)
+    return unpacked
 
 
 def unpack_legacy_defs(

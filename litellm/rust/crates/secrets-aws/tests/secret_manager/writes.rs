@@ -353,7 +353,7 @@ async fn creation_replicates_only_to_configured_regions(#[case] regions: Option<
             response: json!({"ARN":"replica-arn"}),
         });
     scripted_actions(&server, create.into_iter().chain(replicate).collect()).await;
-    let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> = {
+    let environment: Arc<dyn litellm_env::Lookup + Send + Sync> = {
         let endpoint = server.uri();
         Arc::new(move |name: &str| match name {
             "AWS_BEDROCK_RUNTIME_ENDPOINT" => Some(endpoint.clone()),

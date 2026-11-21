@@ -197,7 +197,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -399,7 +399,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
 
         model_response.hidden_params["model"] = payload.get("model", model)
 
-    def _read_image_bytes(self, image: FileTypes) -> bytes:
+    def _read_image_bytes(self, image: object) -> bytes:
         """Read raw bytes from various image input types."""
         if isinstance(image, bytes):
             return image

@@ -1,9 +1,10 @@
-from contextlib import asynccontextmanager
 import asyncio
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
+from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, assert_never
@@ -11,9 +12,10 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, ConnectError
 from pytest_mock import MockerFixture
 
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
@@ -28,6 +30,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     GroupMemberExtractionResult,
     SCIMRosterSyncError,
@@ -69,6 +72,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
@@ -84,6 +88,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 _SYNC_GROUP_ROSTER: Final = "litellm.proxy.management_endpoints.scim.scim_v2._sync_group_roster"
 
@@ -3203,7 +3208,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="member-1", value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
+        key=AuthObject.user("member-1"), value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     prisma, tx = _scim_admin_prisma(mocker, user_teams=["engineering"])
@@ -3211,7 +3216,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
     tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
-    assert await cache.async_get_cache(key="member-1") is None
+    assert await cache.async_get_cache(key=AuthObject.user("member-1")) is None
 
 
 @pytest.mark.asyncio
@@ -3955,8 +3960,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     updated = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-1", value={"team_id": "team-1"})
-    proxy_server.user_api_key_cache.set_cache(key="team_alias:Old", value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-1"), value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team_alias("Old"), value={"team_id": "team-1"})
 
     result = await _apply_group_patch_updates(
         group_id="team-1",
@@ -3968,8 +3973,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     assert result is updated
     mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
     assert mock_prisma_client.db.litellm_teamtable.update.await_args.kwargs["data"] == {"team_alias": "Renamed"}
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-1") is None
-    assert proxy_server.user_api_key_cache.get_cache("team_alias:Old") is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-1")) is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team_alias("Old")) is None
 
 
 @pytest.mark.asyncio
@@ -3982,7 +3987,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
     existing = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-2", value={"team_id": "team-2"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-2"), value={"team_id": "team-2"})
 
     result = await _apply_group_patch_updates(
         group_id="team-2", update_data={}, prisma_client=mock_prisma_client, team_alias="Kept"
@@ -3990,7 +3995,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
 
     assert result is existing
     mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-2") is not None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-2")) is not None
 
 
 def _mock_prisma_for_delete_user(mocker, team):
@@ -6399,6 +6404,59 @@ async def test_roster_sync_error_status_follows_unanimous_failures(
     assert "2 of 2 team membership writes" in str(exc_info.value)
 
 
+def _raise_as_a_management_endpoint_does(internals: str) -> None:
+    try:
+        raise RuntimeError(internals)
+    except RuntimeError as e:
+        raise handle_exception_on_proxy(e)
+
+
+def _raise_unconverted(internals: str) -> None:
+    raise RuntimeError(internals)
+
+
+def _raise_as_team_member_add_does(internals: str) -> None:
+    try:
+        raise RuntimeError(internals)
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=500, detail={"error": f"Unable to add user - user1, to team - team-b, for reason - {e}"}
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raise_failure",
+    [_raise_as_a_management_endpoint_does, _raise_unconverted, _raise_as_team_member_add_does],
+    ids=["converted", "unconverted", "wrapped-in-its-own-500"],
+)
+async def test_a_roster_write_that_fails_unexpectedly_names_the_write_but_not_the_error_text(
+    mocker: MockerFixture, raise_failure: Callable[[str], None]
+):
+    internals: Final = "connection to server at 10.0.4.17 port 5432 failed for user litellm_prod"
+
+    async def add_member(**kwargs: object) -> None:
+        if kwargs["data"].team_id == "team-a":
+            raise HTTPException(status_code=404, detail={"error": "Team not found: team-a"})
+        raise_failure(internals)
+
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_add", AsyncMock(side_effect=add_member))
+
+    with pytest.raises(SCIMRosterSyncError) as exc_info:
+        await patch_team_membership(
+            user_id="user1",
+            teams_ids_to_add_user_to=["team-a", "team-b"],
+            teams_ids_to_remove_user_from=[],
+            raise_on_error=True,
+        )
+
+    assert [failure.description for failure in exc_info.value.failures] == [
+        "add user1 to team-a: Team not found: team-a",
+        f"add user1 to team-b: {HTTPStatus.INTERNAL_SERVER_ERROR.phrase}",
+    ]
+    assert internals not in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failing_team", ["team-a", "team-b", "team-c"])
 async def test_patch_team_membership_attempts_every_team_before_reporting(mocker, failing_team):
@@ -7200,3 +7258,385 @@ async def test_group_push_of_500_members_reads_the_user_table_once_and_writes_th
     assert prisma_client.db.litellm_usertable.find_many.await_count == 1
     prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
     prisma_client.db.litellm_teamtable.find_many.assert_not_awaited()
+
+
+_SCIM_ERROR_URN: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
+
+
+def _okta_user(user_name: str) -> dict[str, object]:
+    return {
+        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+        "userName": user_name,
+        "externalId": "00u00000001",
+        "name": {"givenName": "Okta", "familyName": "User"},
+        "emails": [{"value": user_name, "primary": True, "type": "work"}],
+        "displayName": "Okta User",
+        "active": True,
+    }
+
+
+@pytest.fixture
+def proxy_scim_client(monkeypatch: pytest.MonkeyPatch) -> AsyncClient:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, premium_user_check, lambda: None)
+    return AsyncClient(transport=ASGITransport(app=proxy_server.app), base_url="http://test")
+
+
+@pytest.fixture
+def proxy_admin_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+
+def _proxy_database(monkeypatch: pytest.MonkeyPatch, users: MagicMock, teams: MagicMock) -> MagicMock:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_usertable = users
+    prisma_client.db.litellm_teamtable = teams
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_create_user_past_the_license_seat_cap_answers_a_scim_error_naming_the_license(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    license_check: Final = LicenseCheck()
+    license_check.airgapped_license_data = {"max_users": 1}
+    monkeypatch.setattr(proxy_server, "_license_check", license_check)
+    users: Final = MagicMock()
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(return_value=None)
+    users.count = AsyncMock(side_effect=lambda where=None: 0 if where is not None else 2)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            response = await client.post("/scim/v2/Users", json=_okta_user("user-b@okta-test.com"))
+
+    reason: Final = "License is over limit. Please contact support@berri.ai to upgrade your license."
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        403,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "403", "detail": reason},
+    )
+    assert any(
+        record.levelno == logging.WARNING
+        and "user-b@okta-test.com" in record.getMessage()
+        and "403" in record.getMessage()
+        and reason in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body", "existing_users", "existing_teams", "reason"),
+    [
+        (
+            "/scim/v2/Users",
+            _okta_user("user-a@okta-test.com"),
+            LiteLLM_UserTable(user_id="user-a@okta-test.com"),
+            None,
+            "User already exists with username: user-a@okta-test.com",
+        ),
+        (
+            "/scim/v2/Groups",
+            {"schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"], "id": "eng", "displayName": "Engineering"},
+            None,
+            LiteLLM_TeamTable(team_id="eng"),
+            "Group already exists with ID: eng",
+        ),
+    ],
+    ids=["duplicate-userName", "duplicate-group"],
+)
+async def test_creating_a_resource_that_already_exists_answers_409_with_scim_type_uniqueness(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    body: dict[str, object],
+    existing_users: LiteLLM_UserTable | None,
+    existing_teams: LiteLLM_TeamTable | None,
+    reason: str,
+):
+    users: Final = MagicMock()
+    users.find_unique = AsyncMock(return_value=existing_users)
+    teams: Final = MagicMock()
+    teams.find_unique = AsyncMock(return_value=existing_teams)
+    _proxy_database(monkeypatch, users=users, teams=teams)
+
+    async with proxy_scim_client as client:
+        response = await client.post(path, json=body)
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        409,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "409", "detail": reason, "scimType": "uniqueness"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_user_whose_email_matches_another_only_ignoring_case_answers_409_with_scim_type_uniqueness(
+    proxy_scim_client: AsyncClient, proxy_admin_caller: None, monkeypatch: pytest.MonkeyPatch
+):
+    existing: Final = LiteLLM_UserTable(user_id="erin-from-okta", user_email="erin@example.com")
+
+    async def find_first(where: dict[str, object]) -> LiteLLM_UserTable | None:
+        match where:
+            case {"user_email": {"equals": str() as email, "mode": "insensitive"}} if email.casefold() == "erin@example.com":
+                return existing
+            case _:
+                return None
+
+    users: Final = MagicMock()
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(side_effect=find_first)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.post("/scim/v2/Users", json=_okta_user("Erin@Example.com"))
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        409,
+        "application/scim+json",
+        {
+            "schemas": [_SCIM_ERROR_URN],
+            "status": "409",
+            "detail": "User with email erin@example.com already exists",
+            "scimType": "uniqueness",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_failure_before_the_handler_answers_a_scim_error_and_logs_what_broke(
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    from litellm.proxy import proxy_server
+
+    internals: Final = "row decode failed for column metadata"
+
+    def fail_while_authenticating() -> UserAPIKeyAuth:
+        raise RuntimeError(internals)
+
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, fail_while_authenticating)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            response = await client.post("/scim/v2/Users", json=_okta_user("user-d@okta-test.com"))
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        500,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": HTTPStatus.INTERNAL_SERVER_ERROR.phrase},
+    )
+    assert internals not in response.text
+    assert any(internals in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_failure_inside_a_handler_answers_the_status_phrase_and_logs_what_broke(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    internals: Final = "connection to server at 10.0.4.17 port 5432 failed for user litellm_prod"
+    users: Final = MagicMock()
+    users.find_many = AsyncMock(side_effect=RuntimeError(internals))
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            response = await client.get("/scim/v2/Users")
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        500,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": HTTPStatus.INTERNAL_SERVER_ERROR.phrase},
+    )
+    assert internals not in response.text
+    assert any(internals in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_server_error_a_handler_raises_on_purpose_keeps_its_reason(
+    proxy_scim_client: AsyncClient, proxy_admin_caller: None, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    async with proxy_scim_client as client:
+        response = await client.get("/scim/v2/Users")
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        500,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": "No database connected"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_auth_check_during_a_database_outage_answers_503_with_its_retry_hint(
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    outage: Final = ConnectError("All connection attempts failed")
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+    monkeypatch.setattr(rust_auth_stores.key, "find", AsyncMock(side_effect=outage))
+
+    async with proxy_scim_client as client:
+        response = await client.post(
+            "/scim/v2/Users",
+            json=_okta_user("user-a@okta-test.com"),
+            headers={"Authorization": "Bearer sk-a-key-the-cache-has-not-seen"},
+        )
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        503,
+        "application/scim+json",
+        {
+            "schemas": [_SCIM_ERROR_URN],
+            "status": "503",
+            "detail": PrismaDBExceptionHandler.database_unavailable_message(outage),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "logged_as"),
+    [
+        (json.dumps({**_okta_user("gail@okta-test.com"), "emails": "gail@okta-test.com"}), "gail@okta-test.com"),
+        ('{"userName": "gail@okta-test.com",', "with no readable userName"),
+    ],
+    ids=["schema-mismatch", "malformed-json"],
+)
+async def test_a_create_with_a_body_the_schema_rejects_logs_the_user_name_it_was_for(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    caplog: pytest.LogCaptureFixture,
+    body: str,
+    logged_as: str,
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            response = await client.post(
+                "/scim/v2/Users", content=body, headers={"Content-Type": "application/scim+json"}
+            )
+
+    assert response.status_code == 422
+    assert [record.getMessage() for record in caplog.records if "SCIM create user" in record.getMessage()] == [
+        f"SCIM create user {logged_as} failed with 422: {response.json()['detail']}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_for(
+    proxy_scim_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    rust_auth_stores: RustAuthStores,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+    unknown_key: Final = {"Authorization": "Bearer sk-not-a-real-key"}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            created = await client.post("/scim/v2/Users", json=_okta_user("hank@okta-test.com"), headers=unknown_key)
+            listed = await client.get("/scim/v2/Users", headers=unknown_key)
+
+    assert (created.status_code, listed.status_code) == (401, 401)
+    assert [record.getMessage() for record in caplog.records if "SCIM create user" in record.getMessage()] == [
+        "SCIM create user hank@okta-test.com failed with 401: Authentication Error, Invalid API key provided."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_key_the_proxy_does_not_know_answers_401_as_a_scim_error_with_the_auth_reason(
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.post(
+            "/scim/v2/Users",
+            json=_okta_user("user-a@okta-test.com"),
+            headers={"Authorization": "Bearer sk-not-a-real-key"},
+        )
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        401,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "401", "detail": "Authentication Error, Invalid API key provided."},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_body_that_fails_validation_answers_422_as_a_scim_error_without_echoing_the_input(
+    proxy_scim_client: AsyncClient, proxy_admin_caller: None
+):
+    from pydantic import TypeAdapter, ValidationError
+
+    rejected_value: Final = "definitely-not-a-boolean"
+    with pytest.raises(ValidationError) as pydantic_rejection:
+        TypeAdapter(bool).validate_python(rejected_value)
+
+    async with proxy_scim_client as client:
+        response = await client.post(
+            "/scim/v2/Users", json={**_okta_user("user-c@okta-test.com"), "active": rejected_value}
+        )
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        422,
+        "application/scim+json",
+        {
+            "schemas": [_SCIM_ERROR_URN],
+            "status": "422",
+            "detail": f"body.active: {pydantic_rejection.value.errors()[0]['msg']}",
+        },
+    )
+    assert rejected_value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_a_refused_placeholder_merge_keeps_the_proxy_error_shape(
+    proxy_scim_client: AsyncClient, proxy_admin_caller: None, monkeypatch: pytest.MonkeyPatch
+):
+    users: Final = MagicMock()
+    users.find_unique = AsyncMock(return_value=None)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.post("/scim/v2/placeholders/ghost-user/merge")
+
+    error: Final = response.json()["error"]
+    assert (response.status_code, response.headers["content-type"], error["code"]) == (
+        404,
+        "application/json",
+        "404",
+    )
+    assert "User not found with ID: ghost-user" in error["message"]

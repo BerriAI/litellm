@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
+    LoggedPassthroughRequest,
     PassthroughStreamCollector,
     relayed_json_object,
 )
@@ -22,7 +23,12 @@ from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     bedrock_invoke_guardrail_headers,
 )
-from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionUserMessage,
+)
 from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponseStream, PromptTokensDetailsWrapper, Usage
 
 from ..base_aws_llm import BaseAWSLLM
@@ -331,18 +337,27 @@ def _leaf_texts(block: Mapping[str, object]) -> Iterator[str]:
         yield text
     if "json" in block:
         yield json.dumps(block["json"], default=str)
+    guarded: Final = object_mapping((object_mapping(block.get("guardContent")) or {}).get("text")) or {}
+    if isinstance(guarded.get("text"), str):
+        yield str(guarded["text"])
     if "toolUse" in block:
         yield json.dumps(_JSON_OBJECT.validate_python(block["toolUse"]).get("input"), default=str)
+    if block.get("type") == "tool_use":
+        yield json.dumps(block.get("input"), default=str)
 
 
 def _block_texts(block: Mapping[str, object]) -> Iterator[str]:
     """The prompt text a request content block carries, including the blocks of a tool result's content, which
     Bedrock does not nest further."""
     yield from _leaf_texts(block)
-    if "toolResult" not in block:
+    tool_result: Final = block if block.get("type") == "tool_result" else object_mapping(block.get("toolResult"))
+    if tool_result is None:
         return
-    tool_result: Final = _JSON_OBJECT.validate_python(block["toolResult"])
-    yield from chain.from_iterable(map(_leaf_texts, _JSON_OBJECTS.validate_python(tool_result.get("content", ()))))
+    result_content: Final = tool_result.get("content", ())
+    if isinstance(result_content, str):
+        yield result_content
+        return
+    yield from chain.from_iterable(map(_leaf_texts, _JSON_OBJECTS.validate_python(result_content)))
 
 
 def _content_text(content: object) -> str:
@@ -369,6 +384,60 @@ def _count_prompt_tokens(model: str, request_body: object) -> int:
         *map(_chat_message, _JSON_OBJECTS.validate_python(body["messages"])),
     )
     return token_counter(model=model, messages=messages)
+
+
+def _logged_turn(turn: Mapping[str, object]) -> AllMessageValues:
+    content: Final = _content_text(turn.get("content", ""))
+    if turn.get("role") == "assistant":
+        return ChatCompletionAssistantMessage(role="assistant", content=content)
+    return ChatCompletionUserMessage(role="user", content=content)
+
+
+_INVOKE_PROMPT_FIELDS: Final = ("prompt", "inputText")
+
+
+def _logged_messages(body: Mapping[str, object]) -> Iterator[AllMessageValues]:
+    if body.get("system"):
+        yield ChatCompletionSystemMessage(role="system", content=_content_text(body["system"]))
+    if "messages" in body:
+        yield from map(_logged_turn, _JSON_OBJECTS.validate_python(body["messages"]))
+    yield from (
+        ChatCompletionUserMessage(role="user", content=text)
+        for text in map(body.get, _INVOKE_PROMPT_FIELDS)
+        if isinstance(text, str)
+    )
+
+
+def _numeric_setting(value: object) -> object:
+    if isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, Mapping):
+        return _numeric_settings(_JSON_OBJECT.validate_python(value)) or None
+    return None
+
+
+def _is_set(setting: tuple[str, object]) -> bool:
+    return setting[1] is not None
+
+
+def _numeric_settings(body: Mapping[str, object]) -> Mapping[str, object]:
+    """A native body's numbers and booleans, nested ones included. Model-specific bodies name their prompt fields
+    freely, so everything that could hold prompt text is left out of the logged settings."""
+    settings: Final = ((name, _numeric_setting(value)) for name, value in body.items())
+    return dict(filter(_is_set, settings))
+
+
+def _logged_request(endpoint: str, body: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+    action: Final = _bedrock_endpoint_action(endpoint)
+    if action not in _BEDROCK_CONVERSE_ACTIONS | _BEDROCK_INVOKE_ACTIONS:
+        return None
+    try:
+        messages: Final = tuple(_logged_messages(body))
+    except (ValidationError, KeyError):
+        return None
+    return LoggedPassthroughRequest(
+        messages=messages, model_parameters={**_numeric_settings(body), "operation": action}
+    )
 
 
 def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
@@ -495,6 +564,9 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
 
+    def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+        return _logged_request(endpoint, request_data)
+
     def _encode_model_id_for_endpoint(self, model_id: str) -> str:
         """
         Encode model_id (especially ARNs) for use in Bedrock endpoints.
@@ -610,7 +682,10 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         logging_obj: Logging,
         endpoint: str,
     ) -> Optional["CostResponseTypes"]:
-        from litellm import encoding
+        if TYPE_CHECKING:
+            from litellm.main import encoding
+        else:
+            from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
