@@ -97,6 +97,7 @@ def test_files_api_reference_in_gemini_tool_result(version: str) -> None:
 @pytest.mark.parametrize(
     ("mime_type", "selection", "expected_selection"),
     [
+        ("application/pdf", {}, {}),
         (
             "application/pdf",
             {"document_metadata": {"start_page": 3, "end_page": 4}},
