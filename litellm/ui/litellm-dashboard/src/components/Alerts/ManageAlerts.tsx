@@ -16,6 +16,7 @@ import { backgroundFetchClient } from "@/lib/http/api";
 import { getProxyBaseUrl } from "@/components/networking";
 import type { components } from "@/lib/http/schema";
 import AlertThresholds from "./AlertThresholds";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 
 function statusMessage(data: components["schemas"]["AlertMonitoring"]) {
   if (data.disabled_by_config) return "alerts.monitoring.disabledByConfig";
@@ -60,9 +61,10 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
   const data = query.data;
   const messageKey = data ? statusMessage(data) : undefined;
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">{t("alerts.unified.title")}</h1>
+    <PageHeader>
+      <PageHeaderTitle>{t("alerts.unified.title")}</PageHeaderTitle>
+      <PageHeaderDescription>{t("alerts.unified.inboxDescription")}</PageHeaderDescription>
+      <PageHeaderControls>
         <Dialog>
           <DialogTrigger render={<Button variant="outline" size="sm" />}>
             <Settings className="size-4" aria-hidden />
@@ -150,12 +152,12 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
             </a>
           </DialogContent>
         </Dialog>
-      </div>
+      </PageHeaderControls>
       {data && (
-        <p className="text-xs text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground">
           {t(data.alert_limit === null ? "alerts.monitoring.enterpriseNote" : "alerts.monitoring.freeNote")}
         </p>
       )}
-    </div>
+    </PageHeader>
   );
 }
