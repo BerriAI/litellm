@@ -27,12 +27,14 @@ class _FailureCost(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.cost: float | None = None
+        self.usage: object = None
 
     def log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         response_cost: Final = kwargs.get("response_cost")
         self.cost = float(response_cost) if isinstance(response_cost, (int, float)) else None
+        self.usage = kwargs.get("combined_usage_object")
 
 
 def _request_image(route: str, model: str, reply: Mapping[str, object]) -> ImageResponse:
@@ -127,43 +129,96 @@ def test_answer_without_an_image_is_a_422_that_does_not_echo_the_model_output(
     assert "dot" not in unanswered.value.response.text
 
 
-def _failure_cost(
+def _failure_log(
     monkeypatch: pytest.MonkeyPatch,
     route: str,
     model: str,
     reply: Mapping[str, object],
     error: type[litellm.ContentPolicyViolationError | litellm.UnprocessableEntityError],
-) -> float | None:
+) -> _FailureCost:
     failure_log: Final = _FailureCost()
     monkeypatch.setattr(litellm, "failure_callback", [failure_log])
     with pytest.raises(error):
         _request_image(route, model, reply)
-    return failure_log.cost
+    return failure_log
+
+
+_NINE_IN_SEVEN_OUT: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
-def test_answer_without_an_image_bills_its_tokens_while_a_refusal_bills_nothing(
-    monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str
+@pytest.mark.parametrize(
+    ("reply", "error"),
+    (
+        pytest.param(
+            {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}]},
+            litellm.UnprocessableEntityError,
+            id="text-only",
+        ),
+        pytest.param(
+            {"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}]},
+            litellm.ContentPolicyViolationError,
+            id="IMAGE_PROHIBITED_CONTENT",
+        ),
+        pytest.param(
+            {"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}]},
+            litellm.ContentPolicyViolationError,
+            id="IMAGE_SAFETY",
+        ),
+        pytest.param(
+            {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}},
+            litellm.ContentPolicyViolationError,
+            id="blockReason",
+        ),
+    ),
+)
+def test_answer_without_an_image_bills_its_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    model: str,
+    provider: str,
+    reply: Mapping[str, object],
+    error: type[litellm.ContentPolicyViolationError | litellm.UnprocessableEntityError],
 ):
-    usage: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
-    unanswered: Final = {
-        "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}],
-        "usageMetadata": usage,
-    }
-    refused: Final = {
-        "candidates": [{"finishReason": "IMAGE_RECITATION", "content": {"role": "model"}}],
-        "usageMetadata": usage,
-    }
-
-    unanswered_cost: Final = _failure_cost(monkeypatch, route, model, unanswered, litellm.UnprocessableEntityError)
-    refused_cost: Final = _failure_cost(monkeypatch, route, model, refused, litellm.ContentPolicyViolationError)
+    cost: Final = _failure_log(monkeypatch, route, model, {**reply, "usageMetadata": _NINE_IN_SEVEN_OUT}, error).cost
 
     prices: Final = litellm.get_model_info(model)
     text_price: Final = sum(litellm.cost_per_token(model=model, prompt_tokens=9, completion_tokens=7))
     image_price: Final = text_price + 7 * (prices["output_cost_per_image_token"] - prices["output_cost_per_token"])
 
-    assert unanswered_cost is not None and text_price <= unanswered_cost < image_price
-    assert refused_cost == 0
+    assert cost is not None and text_price <= cost < image_price
+
+
+@pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
+def test_recitation_refusal_google_does_not_charge_bills_nothing(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str
+):
+    refused: Final = {
+        "candidates": [{"finishReason": "IMAGE_RECITATION", "finishMessage": _NOT_CHARGED, "content": {"role": "model"}}],
+        "usageMetadata": _NINE_IN_SEVEN_OUT,
+    }
+
+    assert _failure_log(monkeypatch, route, model, refused, litellm.ContentPolicyViolationError).cost == 0
+
+
+@pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
+def test_billed_answer_keeps_its_reasoning_tokens_on_the_failure_log(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str
+):
+    unanswered: Final = {
+        "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 7,
+            "thoughtsTokenCount": 30,
+            "totalTokenCount": 46,
+        },
+    }
+
+    usage: Final = _failure_log(monkeypatch, route, model, unanswered, litellm.UnprocessableEntityError).usage
+
+    assert isinstance(usage, litellm.Usage)
+    assert usage.completion_tokens_details is not None and usage.completion_tokens_details.reasoning_tokens == 30
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)

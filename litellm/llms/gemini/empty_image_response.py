@@ -14,6 +14,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.utils import ImageResponse, Usage
 
 _REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
+_REFUSALS_GOOGLE_DOES_NOT_CHARGE: Final = frozenset({"IMAGE_RECITATION"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
 
 
@@ -71,6 +72,12 @@ def _bill_answer(billing: FailedImageBilling, answer: ImageResponse) -> None:
     )
 
 
+def _bill_refusal(reason: str, billing: FailedImageBilling, answer: ImageResponse) -> None:
+    if reason in _REFUSALS_GOOGLE_DOES_NOT_CHARGE:
+        return
+    _bill_answer(billing, answer)
+
+
 def _with_detail(summary: str, detail: str | None) -> str:
     return f"{summary}: {detail}" if detail else summary
 
@@ -98,6 +105,7 @@ def empty_image_response_error(
     result: Final = _parsed(response)
     feedback: Final = result.prompt_feedback
     if feedback is not None and feedback.block_reason:
+        _bill_refusal(feedback.block_reason, billing, answer)
         return ContentPolicyViolationError(
             message=_with_detail(
                 f"Gemini blocked the image prompt, blockReason={feedback.block_reason}", feedback.block_reason_message
@@ -112,7 +120,8 @@ def empty_image_response_error(
         )
     candidates: Final = result.candidates or ()
     refusal: Final = next((candidate for candidate in candidates if _is_refusal(candidate)), None)
-    if refusal is not None:
+    if refusal is not None and refusal.finish_reason is not None:
+        _bill_refusal(refusal.finish_reason, billing, answer)
         return ContentPolicyViolationError(
             message=_with_detail(
                 f"Gemini refused to return an image, finishReason={refusal.finish_reason}", refusal.finish_message
