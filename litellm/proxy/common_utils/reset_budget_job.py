@@ -251,6 +251,10 @@ def _has_personal_rollover(row: object) -> bool:
     return isinstance(row, LiteLLM_UserTable) and row.active_rollover_credit() is not None
 
 
+def _needs_rollover_row_conversion(row: object) -> bool:
+    return not isinstance(row, LiteLLM_UserTable) and getattr(row, "rollover_max_budget", None) is not None
+
+
 def _rollover_cap(max_budget: float | None) -> float | None:
     if max_budget is None or not math.isfinite(max_budget):
         return None
@@ -1730,8 +1734,8 @@ class ResetBudgetJob:
                 for user in users_to_reset:
                     try:
                         reset_user = (
-                            LiteLLM_UserTable.model_validate(user, from_attributes=True)
-                            if getattr(user, "rollover_max_budget", None) is not None
+                            LiteLLM_UserTable.model_validate(user.model_dump())
+                            if _needs_rollover_row_conversion(user)
                             else user
                         )
                         pre_reset_spend, expected_reset_at = (

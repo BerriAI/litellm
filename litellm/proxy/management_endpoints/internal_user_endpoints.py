@@ -662,13 +662,7 @@ async def new_user(
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
-        if data.rollover_max_budget is not None:
-            configured_budget: Final = as_str_mapping(data_json) or {}
-            _require_valid_rollover(
-                _USER_ROLLOVER_BASE.validate_python(configured_budget.get("max_budget")),
-                data.rollover_max_budget,
-                _USER_ROLLOVER_PERIOD.validate_python(configured_budget.get("budget_duration")),
-            )
+        _validate_new_user_rollover(data_json, data.rollover_max_budget)
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
@@ -1492,6 +1486,16 @@ def _require_valid_rollover(base: float | None, cap: float | None, duration: str
         )
 
 
+def _validate_new_user_rollover(data_json: object, cap: float | None) -> None:
+    if cap is not None:
+        configured_budget: Final = as_str_mapping(data_json) or {}
+        _require_valid_rollover(
+            _USER_ROLLOVER_BASE.validate_python(configured_budget.get("max_budget")),
+            cap,
+            _USER_ROLLOVER_PERIOD.validate_python(configured_budget.get("budget_duration")),
+        )
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -1524,9 +1528,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if "rollover_max_budget" in data.model_fields_set and data.rollover_max_budget is None:
         non_default_values["rollover_credit"] = None
 
-    is_internal_user = False
-    if data.user_role == LitellmUserRoles.INTERNAL_USER:
-        is_internal_user = True
+    is_internal_user: Final = data.user_role == LitellmUserRoles.INTERNAL_USER
 
     if "budget_duration" in non_default_values:
         validate_budget_duration(non_default_values["budget_duration"])
