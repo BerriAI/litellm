@@ -2247,14 +2247,16 @@ _SEARCHED_TURNS: Final = {
     ),
     "tool_calls_and_grounding": _SearchedTurn(
         tool_call_parts=(
-            *_search_tool_call_parts("call_1", ["litellm latest release", "litellm pypi version"]),
+            *_search_tool_call_parts(
+                "call_1", ["site:github.com/BerriAI/litellm releases latest", "litellm pypi version"]
+            ),
             _URL_CONTEXT_CALL_PART,
         ),
         grounding={
-            "webSearchQueries": ["litellm pypi version", "litellm changelog"],
+            "webSearchQueries": ["releases latest", "litellm pypi version"],
             "groundingChunks": [{"web": {"uri": "https://pypi.org/project/litellm/", "title": "pypi.org"}}],
         },
-        searched_queries=("litellm latest release", "litellm pypi version", "litellm changelog"),
+        searched_queries=("site:github.com/BerriAI/litellm releases latest", "litellm pypi version"),
     ),
 }
 _SEARCHED_REQUEST: Final = {

@@ -45,8 +45,9 @@ def calculate_grounding_requests(
 ) -> GroundingRequests:
     """Billable grounding requests across candidates, counting each distinct query once.
 
-    Web searches are the distinct queries of the Google Search toolCall parts and of
-    groundingMetadata.webSearchQueries (#36377), and empty strings are ignored. Maps grounding
+    Web searches are the distinct queries of the Google Search toolCall parts, or of
+    groundingMetadata.webSearchQueries (#36377) when no toolCall reported one, since Vertex repeats
+    each toolCall query there with its site: operators removed. Empty strings are ignored. Maps grounding
     is floored at one request whenever a candidate carries maps chunks or a widget token,
     since per-prompt billing charges the prompt even when no query is reported.
     """
@@ -92,4 +93,4 @@ def web_search_queries(
     grounding_metadata: Sequence[Mapping[str, object]],
     tool_call_queries: Sequence[str] = (),
 ) -> tuple[str, ...]:
-    return tuple(dict.fromkeys((*tool_call_queries, *_grounding_query_stream(grounding_metadata))))
+    return tuple(dict.fromkeys(tool_call_queries or _grounding_query_stream(grounding_metadata)))

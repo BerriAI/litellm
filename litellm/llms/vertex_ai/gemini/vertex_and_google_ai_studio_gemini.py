@@ -3827,11 +3827,16 @@ class ModelResponseIterator:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     def _report_web_search_calls_so_far(self, model_response: "ModelResponseStream") -> None:
+        searched: Final = frozenset(
+            call.id for call in gemini_web_search_calls(model_response.id, self._search_tool_call_queries)
+        )
         for choice in model_response.choices:
-            if (fields := self._fields_with_web_search_calls_so_far(choice)) is not None:
+            if (fields := self._fields_with_web_search_calls_so_far(choice, searched)) is not None:
                 choice.delta.provider_specific_fields = fields
 
-    def _fields_with_web_search_calls_so_far(self, choice: "StreamingChoices") -> dict[str, object] | None:
+    def _fields_with_web_search_calls_so_far(
+        self, choice: "StreamingChoices", searched: frozenset[str]
+    ) -> dict[str, object] | None:
         fields: Final[Mapping[str, object]] = choice.delta.provider_specific_fields or {}
         arrived: Final = as_object_list(fields.get("web_search_calls"))
         if not arrived:
@@ -3839,7 +3844,11 @@ class ModelResponseIterator:
         reported: Final = MappingProxyType(
             {
                 **self._web_search_calls_by_choice.get(choice.index, {}),
-                **{call.id: call for call in arrived if isinstance(call, ResponseFunctionWebSearch)},
+                **{
+                    call.id: call
+                    for call in arrived
+                    if isinstance(call, ResponseFunctionWebSearch) and (not searched or call.id in searched)
+                },
             }
         )
         self._web_search_calls_by_choice = MappingProxyType(
