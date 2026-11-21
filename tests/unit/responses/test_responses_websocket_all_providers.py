@@ -551,8 +551,18 @@ class TestManagedWebSocketHandlerIntegration:
                 },
                 {"type": "apply_patch_call_output", "call_id": "call_patch", "status": "completed", "output": "done"},
             ),
+            (
+                {
+                    "type": "mcp_approval_request",
+                    "id": "mcpr_1",
+                    "server_label": "deepwiki",
+                    "name": "read_wiki_structure",
+                    "arguments": "{}",
+                },
+                {"type": "mcp_approval_response", "approval_request_id": "mcpr_1", "approve": True},
+            ),
         ],
-        ids=["custom_tool_call", "function_call", "apply_patch_call"],
+        ids=["custom_tool_call", "function_call", "apply_patch_call", "mcp_approval_request"],
     )
     @pytest.mark.asyncio
     async def test_next_turn_sends_the_provider_the_call_its_output_answers(
@@ -584,7 +594,42 @@ class TestManagedWebSocketHandlerIntegration:
         )
 
         second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
-        assert [item for item in second_turn_input if item.get("call_id") == call["call_id"]] == [call, answer]
+        assert second_turn_input[1:] == [call, answer]
+
+    @pytest.mark.asyncio
+    async def test_next_turn_leaves_out_items_no_later_turn_answers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        unanswerable: Final = (
+            {"type": "reasoning", "id": "rs_1", "summary": []},
+            {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search", "query": "x"}},
+            {"type": "mcp_list_tools", "id": "mcpl_1", "server_label": "deepwiki", "tools": []},
+        )
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering(unanswerable), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "thanks"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == ["message", "message"]
 
     @pytest.mark.asyncio
     async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(
