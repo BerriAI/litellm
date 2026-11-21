@@ -127,9 +127,18 @@ vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
 }));
 
 vi.mock("@/components/team/TeamMemberTab", () => ({
-  default: vi.fn(({ setIsAddMemberModalVisible }) => (
+  default: vi.fn(({ setIsAddMemberModalVisible, setSelectedEditMember, setIsEditMemberModalVisible }) => (
     <div>
       <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
+      <button
+        type="button"
+        onClick={() => {
+          setSelectedEditMember({ user_id: "dev-example", user_email: "dev@example.com", role: "user" });
+          setIsEditMemberModalVisible(true);
+        }}
+      >
+        Edit dev@example.com
+      </button>
     </div>
   )),
 }));
@@ -140,19 +149,6 @@ vi.mock("@/components/common_components/user_search_modal", () => ({
       <div>
         <button onClick={onCancel}>Cancel</button>
         <button onClick={() => onSubmit({ user_email: "new@test.com", user_id: "new-user", role: "user" })}>
-          Submit
-        </button>
-      </div>
-    ) : null,
-  ),
-}));
-
-vi.mock("@/components/team/EditMembership", () => ({
-  default: vi.fn(({ visible, onCancel, onSubmit }) =>
-    visible ? (
-      <div>
-        <button onClick={onCancel}>Cancel</button>
-        <button onClick={() => onSubmit({ user_email: "edit@test.com", user_id: "edit-user", role: "admin" })}>
           Submit
         </button>
       </div>
@@ -493,6 +489,23 @@ describe("TeamInfoView - member budget reset prompt", () => {
     expect(within(keyPanel).getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("button", { name: "Back to Keys" }));
     expect(await screen.findByRole("button", { name: "example-key" })).toBeInTheDocument();
+  });
+
+  it("opens the inherited member's team keys without updating their model scope", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData() as TeamData);
+    renderWithProviders(<TeamInfoView {...props} />, { searchParams: { detail_tab: "members" } });
+
+    await user.click(await screen.findByRole("button", { name: "Edit dev@example.com" }));
+    await user.click(await screen.findByRole("button", { name: "View member’s keys" }));
+
+    expect(screen.getByRole("tab", { name: "Virtual Keys" })).toHaveAttribute("aria-selected", "true");
+    expect(mockUseKeys).toHaveBeenCalledWith(
+      1,
+      50,
+      expect.objectContaining({ teamID: "123", ownerUserID: "dev-example" }),
+    );
+    expect(networking.teamMemberUpdateCall).not.toHaveBeenCalled();
   });
 
   it("holds the save behind the prompt when the default changes while a member has a custom budget", async () => {

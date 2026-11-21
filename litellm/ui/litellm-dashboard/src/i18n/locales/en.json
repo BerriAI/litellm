@@ -6144,6 +6144,7 @@
   "alerts": {
     "unified": {
       "title": "Alerts",
+      "inboxDescription": "Review gateway alerts and manage monitoring settings.",
       "saveError": "Could not save status. Please try again.",
       "resourceHeading": "This alert is tied to the following resource",
       "migrationDetails": "View migration details",
@@ -15332,6 +15333,7 @@
     },
     "page": {
       "loading": "Loading",
+      "description": "Review requests, audit activity, and deleted resources.",
       "tabs": {
         "requestLogs": "Request Logs",
         "auditLogs": "Audit Logs",
@@ -17149,7 +17151,9 @@
         "rpmLimitTooltip": "Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit",
         "rpmLimitPlaceholder": "Requests per minute limit for this member in this team",
         "allowedModels": "Allowed Models",
-        "allowedModelsTooltip": "Models this member can access within this team. Leave empty to inherit all team models.",
+        "allowedModelsTooltip": "Selecting models limits this member to your selection. Leave empty to inherit all team models.",
+        "addModelsOnKey": "To add a model without changing inherited access, attach an access group to an inheriting virtual key.",
+        "viewMemberKeys": "View member’s keys",
         "allowedModelsPlaceholder": "Leave empty to inherit all team models"
       },
       "deleteMember": {
@@ -21287,6 +21291,7 @@
     },
     "list": {
       "title": "$t(customerPortal.entities.organizations)",
+      "description": "Manage customer organizations and review their usage.",
       "create": "Create organization",
       "searchPlaceholder": "Search by name or ID",
       "overallUsage": "Overall customer usage",
