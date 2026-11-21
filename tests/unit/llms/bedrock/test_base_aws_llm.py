@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 
 
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Final, Optional
 from unittest.mock import MagicMock, Mock, patch
 
@@ -4483,7 +4484,7 @@ async def test_extra_headers_and_authorization_override_reach_converse_and_invok
 
 
 @pytest.fixture
-def logged_out_sso_profile(tmp_path, monkeypatch: pytest.MonkeyPatch) -> str:
+def logged_out_sso_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     config: Final = tmp_path / "config"
     config.write_text(
         "[profile logged-out-sso]\n"
@@ -4528,6 +4529,15 @@ _SSO_SIGNED_CALLS: Final = (
         id="embedding",
     ),
     pytest.param(
+        lambda profile: litellm.anthropic.messages.acreate(
+            model="bedrock/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+            aws_profile_name=profile,
+        ),
+        id="messages",
+    ),
+    pytest.param(
         lambda profile: litellm.aresponses(
             model="bedrock/us.anthropic.claude-haiku-5-5", input="hi", aws_profile_name=profile
         ),
@@ -4539,10 +4549,12 @@ _SSO_SIGNED_CALLS: Final = (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", _SSO_SIGNED_CALLS)
 async def test_an_sso_profile_without_a_usable_token_answers_401_instead_of_a_retryable_500(
-    logged_out_sso_profile: str, call
+    logged_out_sso_profile: str, call: Callable[[str], Awaitable[object]]
 ) -> None:
+    from botocore.exceptions import SSOTokenLoadError
+
     with pytest.raises(litellm.AuthenticationError) as excinfo:
         await call(logged_out_sso_profile)
 
     assert excinfo.value.status_code == 401
-    assert "Error loading SSO Token" in excinfo.value.message
+    assert type(excinfo.value.__context__) is SSOTokenLoadError

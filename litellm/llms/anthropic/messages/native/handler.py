@@ -33,7 +33,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.outcomes import Patch
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
-from litellm.litellm_core_utils.exception_mapping_utils import exception_type, is_aws_credential_error
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
@@ -693,9 +693,7 @@ async def anthropic_messages(
         if asyncio.iscoroutine(init_response):
             return await init_response
         return init_response
-    except Exception as e:
-        if not isinstance(e, BaseLLMException) and not is_aws_credential_error(e):
-            raise
+    except BaseLLMException as e:
         raise exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,

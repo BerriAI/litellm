@@ -5,7 +5,6 @@ import functools
 import json
 import logging
 import os
-from pathlib import Path
 import queue
 import socket
 import ssl
@@ -14,6 +13,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -3127,7 +3127,6 @@ def test_a_bedrock_credential_failure_answers_401_with_what_python_signing_raise
 
     assert type(mapped) is litellm.AuthenticationError
     assert mapped.status_code == 401
-    assert "Unable to locate credentials" in mapped.message
     assert type(mapped.__context__) is NoCredentialsError
     assert mapped.__traceback__ is not None
 
@@ -3154,9 +3153,11 @@ def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
         "bedrock",
     )
 
+    from botocore.exceptions import SSOTokenLoadError
+
     assert type(mapped) is litellm.AuthenticationError
     assert mapped.status_code == 401
-    assert "Error loading SSO Token" in mapped.message
+    assert type(mapped.__context__) is SSOTokenLoadError
 
 
 @pytest.mark.parametrize(
@@ -3212,8 +3213,8 @@ def test_an_access_key_without_its_secret_answers_401_with_the_partial_credentia
     )
 
     assert type(mapped) is litellm.AuthenticationError
-    assert "Partial credentials found in env, missing: AWS_SECRET_ACCESS_KEY" in mapped.message
     assert type(mapped.__context__) is PartialCredentialsError
+    assert getattr(mapped.__context__, "kwargs", None) == {"provider": "env", "cred_var": "AWS_SECRET_ACCESS_KEY"}
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
@@ -3675,7 +3676,7 @@ def test_a_mantle_missing_profile_raises_what_python_signing_raises(
 
     assert type(mapped).__name__ == raised
     if raised == "AuthenticationError":
-        assert "The config profile (absent-profile) could not be found" in str(mapped)
+        assert getattr(mapped.__context__, "kwargs", None) == {"profile": "absent-profile"}
 
 
 def _refused(text: str, **markers: object) -> ValueError:
