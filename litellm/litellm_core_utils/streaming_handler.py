@@ -163,9 +163,8 @@ def _prepend_upstream_choice_extras(
 ) -> None:
     if not extra_keys:
         return
-    stored_extras: Final = {
-        key: value for key, value in (upstream_choice.__pydantic_extra__ or {}).items() if key in extra_keys
-    }
+    upstream_pydantic_extras: Final[Mapping[str, object]] = upstream_choice.__pydantic_extra__ or {}
+    stored_extras: Final = {key: value for key, value in upstream_pydantic_extras.items() if key in extra_keys}
     upstream_extras: Final[Mapping[str, object]] = (
         stored_extras
         if _holds_only_scalars(stored_extras.items())
@@ -1378,6 +1377,7 @@ class CustomStreamWrapper:
             preserve_upstream_non_openai_attributes,
         )
 
+        response_fields: Final[Mapping[str, object]] = response_obj
         is_chunk_non_empty: Final = self.is_chunk_non_empty(completion_obj, model_response, response_obj)
         upstream_chunk_choice_fields: Final[Mapping[str, object]] = (
             _NO_UPSTREAM_CHOICE_FIELDS
@@ -1396,7 +1396,7 @@ class CustomStreamWrapper:
 
             if hold is False:
                 ## check if openai/azure chunk
-                original_chunk: Final[object] = response_obj.get("original_chunk", None)
+                original_chunk: Final[object] = response_fields.get("original_chunk", None)
                 if original_chunk:
                     upstream_chunk: Final = require_attributes(original_chunk, _UpstreamChunkLike, "choices")
                     if len(upstream_chunk.choices) > 0:
@@ -1537,7 +1537,7 @@ class CustomStreamWrapper:
 
             # Preserve custom attributes from original chunk (applies to both
             # empty and non-empty delta final chunks).
-            _original_chunk: Final[object] = response_obj.get("original_chunk", None)
+            _original_chunk: Final[object] = response_fields.get("original_chunk", None)
             if _original_chunk is not None:
                 preserve_upstream_non_openai_attributes(
                     model_response=model_response,

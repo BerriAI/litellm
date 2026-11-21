@@ -1739,7 +1739,7 @@ def get_key_model_rpm_limit(
     key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_rpm_limit")
     if key_own_limit is not None:
         return key_own_limit
-    return (user_api_key_dict.team_metadata or {}).get("model_rpm_limit")
+    return get_team_model_rpm_limit(user_api_key_dict)
 
 
 def get_key_model_tpm_limit(
@@ -1768,7 +1768,7 @@ def get_key_model_tpm_limit(
     key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit")
     if key_own_limit is not None:
         return key_own_limit
-    return (user_api_key_dict.team_metadata or {}).get("model_tpm_limit")
+    return get_team_model_tpm_limit(user_api_key_dict)
 
 
 ESTIMATED_OUTPUT_TOKENS_FIELD: Final = "default_estimated_output_tokens"
@@ -2091,12 +2091,7 @@ def get_key_mcp_rpm_limit(
         if result is not None:
             return result
 
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("mcp_rpm_limit")
-        if team_limit is not None:
-            return team_limit
-
-    return None
+    return get_team_mcp_rpm_limit(user_api_key_dict)
 
 
 def get_team_mcp_rpm_limit(
