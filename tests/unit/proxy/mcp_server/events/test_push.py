@@ -1,0 +1,146 @@
+from typing import Final
+
+import anyio
+import pytest
+from mcp.shared.exceptions import MCPError
+
+from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.events.access import principal_of
+from litellm.proxy.mcp_server.events.catalog import prepare_event
+from litellm.proxy.mcp_server.events.config import EventsSettings
+from litellm.proxy.mcp_server.events.cursors import CursorBinding, arguments_digest, open_cursor
+from litellm.proxy.mcp_server.events.push import PushRelay, granted_heartbeat, push
+from litellm.proxy.mcp_server.events.upstream import Overflow, StreamFrame
+from litellm.proxy.mcp_server.outbound_credentials.result import Ok
+from litellm.types.mcp_server.events import JsonObject, StreamEventsParams
+
+from .fakes import CALLER, SETTINGS, FakeUpstream, context, occurrence, runtime, screen_blocking, server
+
+ARGS: Final[JsonObject] = {"repo": "acme/web"}
+BINDING: Final = CursorBinding("srv-ci", "build.failed", arguments_digest(ARGS), principal_of(CALLER) or "")
+SUBSCRIPTION: Final = "stream-7"
+
+
+@pytest.fixture(autouse=True)
+def salt_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-events-push-key")
+
+
+def _active(cursor: str = "1", truncated: bool = False) -> StreamFrame:
+    return StreamFrame("notifications/events/active", {"cursor": cursor, "truncated": truncated, "heartbeatMs": 30000})
+
+
+def _event(event_id: str = "evt_1", cursor: str = "2") -> StreamFrame:
+    return StreamFrame("notifications/events/event", occurrence(event_id, cursor).model_dump(by_alias=True, mode="json"))
+
+
+async def _authorized() -> OperationContext:
+    return context()
+
+
+async def _revoked() -> OperationContext:
+    raise PermissionError("key deleted")
+
+
+async def _run(frames: tuple[object, ...], authorize=_authorized, screen=None, settings: EventsSettings = SETTINGS):  # noqa: ANN001, ANN202  # test helper
+    sent: Final[list[tuple[str, JsonObject]]] = []  # mutable-ok: collects downstream notifications
+
+    async def send(method: str, params: JsonObject) -> None:
+        sent.append((method, params))
+
+    upstream: Final = FakeUpstream(frames=frames)
+    await push(
+        send,
+        SUBSCRIPTION,
+        context(),
+        StreamEventsParams(name="ci-build.failed", arguments=ARGS, heartbeat_ms=1),
+        None,
+        settings,
+        authorize,
+        runtime((server(),), upstream=upstream, screen=screen),
+    )
+    return sent, upstream
+
+
+def _opened(cursor: object) -> str | None:
+    opened: Final = open_cursor(cursor if isinstance(cursor, str) else None, BINDING, 1_800_000_000)
+    return opened.ok.upstream if isinstance(opened, Ok) else None
+
+
+@pytest.mark.asyncio
+async def test_the_stream_forwards_active_and_events_with_sealed_cursors_and_the_subscription_id() -> None:
+    sent, upstream = await _run((_active("1"), _event("evt_1", "2")))
+    assert [method for method, _ in sent] == ["notifications/events/active", "notifications/events/event"]
+    assert all(params["_meta"] == {"io.modelcontextprotocol/subscriptionId": SUBSCRIPTION} for _, params in sent)
+    active, event = sent[0][1], sent[1][1]
+    assert (_opened(active["cursor"]), active["heartbeatMs"], active["truncated"]) == ("1", 5000, False)
+    assert (event["name"], event["eventId"], _opened(event["cursor"])) == ("ci-build.failed", "evt_1", "2")
+    assert (upstream.stream_calls[0]["name"], upstream.stream_calls[0]["heartbeatMs"]) == ("build.failed", 5000)
+
+
+@pytest.mark.asyncio
+async def test_revocation_before_an_event_terminates_with_forbidden_and_stops() -> None:
+    sent, _ = await _run((_active(), _event("evt_1"), _event("evt_2")), authorize=_revoked)
+    assert [method for method, _ in sent] == ["notifications/events/active", "notifications/events/terminated"]
+    assert sent[1][1]["error"] == {"code": -32024, "message": "Forbidden", "data": {"reason": "Access revoked"}}
+
+
+@pytest.mark.asyncio
+async def test_an_overflow_becomes_a_truncated_active_with_the_latest_skipped_cursor() -> None:
+    sent, _ = await _run((_active("1"), Overflow(cursor="40")))
+    assert [(method, params["truncated"], _opened(params["cursor"])) for method, params in sent] == [
+        ("notifications/events/active", False, "1"),
+        ("notifications/events/active", True, "40"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_terminated_is_forwarded_and_ends_the_stream() -> None:
+    terminated: Final = StreamFrame("notifications/events/terminated", {"error": {"code": -32023, "message": "NotFound"}})
+    sent, _ = await _run((_active(), terminated, _event("evt_late")))
+    assert [method for method, _ in sent] == ["notifications/events/active", "notifications/events/terminated"]
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_event_becomes_a_truncated_active() -> None:
+    sent, _ = await _run((_active("1"), _event("evt_1", "2")), screen=screen_blocking())
+    assert [(method, params.get("truncated"), _opened(params.get("cursor"))) for method, params in sent] == [
+        ("notifications/events/active", False, "1"),
+        ("notifications/events/active", True, "2"),
+    ]
+
+
+@pytest.mark.parametrize(("requested", "granted"), ((None, 30000), (1, 5000), (15000, 15000), (600000, 60000)))
+def test_the_heartbeat_grant_is_clamped(requested: int | None, granted: int) -> None:
+    assert granted_heartbeat(requested) == granted
+
+
+async def _relay(heartbeat_ms: int) -> tuple[PushRelay, list[tuple[str, JsonObject]]]:
+    sent: Final[list[tuple[str, JsonObject]]] = []  # mutable-ok: collects downstream notifications
+
+    async def send(method: str, params: JsonObject) -> None:
+        sent.append((method, params))
+
+    prepared: Final = await prepare_event(context(), "ci-build.failed", runtime((server(),)))
+    assert isinstance(prepared, Ok)
+    relay: Final = PushRelay(
+        send, SUBSCRIPTION, prepared.ok, BINDING, SETTINGS, _authorized, heartbeat_ms, False, runtime((server(),)), CALLER
+    )
+    return relay, sent
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_sends_heartbeats_only_after_the_upstream_confirms() -> None:
+    relay, sent = await _relay(heartbeat_ms=10)
+    send_stream, receive_stream = anyio.create_memory_object_stream[StreamFrame | Overflow](4)
+    with anyio.move_on_after(0.08):
+        await relay.consume(receive_stream)
+    assert sent == []
+    send_stream.send_nowait(_active("3"))
+    with anyio.move_on_after(0.08):
+        await relay.consume(receive_stream)
+    methods: Final = [method for method, _ in sent]
+    assert methods[0] == "notifications/events/active"
+    assert "notifications/events/heartbeat" in methods[1:]
+    heartbeat: Final = next(params for method, params in sent if method == "notifications/events/heartbeat")
+    assert _opened(heartbeat["cursor"]) == "3"

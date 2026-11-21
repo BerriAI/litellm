@@ -6,7 +6,7 @@ from mcp.shared.inbound import MCP_NAME_HEADER, decode_header_value, validate_mc
 
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import grant_allows, principal_of
-from litellm.proxy.mcp_server.events.catalog import PreparedEvent, offered_modes, prepare_event
+from litellm.proxy.mcp_server.events.catalog import PreparedEvent, event_servers, offered_modes, prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings, server_allows_event
 from litellm.proxy.mcp_server.events.cursors import CursorBinding, arguments_digest
 from litellm.proxy.mcp_server.events.errors import EventsFailure, exhausted, header_mismatch, unsupported
@@ -70,13 +70,15 @@ def binding_for(context: OperationContext, prepared: PreparedEvent, arguments: J
 
 
 async def still_authorized(context: OperationContext, prepared: PreparedEvent, runtime: EventsRuntime) -> bool:
-    server: Final = prepared.resolved.target.server
-    allowed: Final = await runtime.allowed_servers(context)
-    if not any(item.server_id == server.server_id for item in allowed):
-        return False
-    grant: Final = await runtime.grant(server.server_id, context.user_api_key_auth)
+    server_id: Final = prepared.resolved.target.server.server_id
+    current: Final = next(
+        (item for item in event_servers(await runtime.allowed_servers(context)) if item.server.server_id == server_id),
+        None,
+    )
     upstream_name: Final = prepared.resolved.upstream_name
-    return server_allows_event(prepared.resolved.target.config, upstream_name) and grant_allows(grant, upstream_name)
+    if current is None or not server_allows_event(current.config, upstream_name):
+        return False
+    return grant_allows(await runtime.grant(server_id, context.user_api_key_auth), upstream_name)
 
 
 async def screen_all(

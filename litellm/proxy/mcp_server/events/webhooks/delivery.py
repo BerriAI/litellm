@@ -46,7 +46,9 @@ def is_https_callback(url: str) -> bool:
     return parsed.scheme == "https" and bool(parsed.hostname) and not parsed.fragment
 
 
-async def pin(url: str, resolve: Resolver = _resolve) -> Result[PinnedUrl, CallbackFailure]:
+async def pin(
+    url: str, resolve: Resolver = _resolve, allowlisted: Callable[[str, int], bool] = _is_host_allowlisted
+) -> Result[PinnedUrl, CallbackFailure]:
     parsed: Final = urlparse(url)
     hostname: Final = parsed.hostname
     if parsed.scheme != "https" or not hostname:
@@ -58,7 +60,7 @@ async def pin(url: str, resolve: Resolver = _resolve) -> Result[PinnedUrl, Callb
         return Error("connection_refused")
     if not addresses:
         return Error("connection_refused")
-    if not _is_host_allowlisted(hostname, port) and any(_is_blocked_ip(address) for address in addresses):
+    if not allowlisted(hostname, port) and any(_is_blocked_ip(address) for address in addresses):
         return Error("connection_refused")
     address: Final = addresses[0]
     ip_host: Final = f"[{address}]" if ":" in address else address
