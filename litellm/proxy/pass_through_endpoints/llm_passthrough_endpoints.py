@@ -17,10 +17,10 @@ import re
 import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
-from urllib.parse import quote
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
+from urllib.parse import quote, unquote
 
 import httpx
 import openai
@@ -52,11 +52,18 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_get,
+)
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
+    is_anthropic_oauth_key,
     merge_anthropic_beta_headers,
 )
 from litellm.llms.azure.common_utils import entra_rejection_in
@@ -155,6 +162,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket
     openai_websocket_frame_kind,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    ANTHROPIC_CLIENT_OAUTH_STATE_KEY,
     STORED_PROMPT_PROBE_MODEL,
     HttpPassThroughEndpointHelpers,
     UpstreamRequest,
@@ -352,8 +360,12 @@ def _string_keyed_mapping(value: object) -> Mapping[str, object] | None:
     return None
 
 
-async def _json_request_body(request: Request) -> Mapping[str, object]:
-    return await request.json()
+async def _json_request_value(request: Request) -> object:
+    return _DECODED_JSON.validate_python(await request.json())
+
+
+async def _json_request_body(request: Request) -> SupportsGet:
+    return require_get(await _json_request_value(request))
 
 
 _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -481,6 +493,53 @@ async def llm_passthrough_factory_proxy_route(
     return received_value
 
 
+_GEMINI_SINGLE_FILE_PATH: Final = re.compile(r"(?:^|/)files/([^/:]+)(?::download)?/?$")
+
+
+@runtime_checkable
+class _ProviderFileAccessGuard(Protocol):
+    async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None: ...
+
+
+_METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
+
+
+_MAX_PATH_DECODE_ROUNDS: Final = 8
+
+
+def _fully_decoded_path(path: str) -> str | None:
+    decoded: Final = reduce(lambda current, _: unquote(current), range(_MAX_PATH_DECODE_ROUNDS), path)
+    return decoded if unquote(decoded) == decoded else None
+
+
+def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
+    methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
+    return not methods.isdisjoint(("GET", "DELETE"))
+
+
+def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{decoded_path}".replace("\\", "/")))
+    return single_file.group(1) if single_file is not None else None
+
+
+async def _enforce_gemini_passthrough_file_ownership(
+    request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    if not _is_gemini_get_or_delete(request.method, request.headers):
+        return
+    decoded_path: Final = _fully_decoded_path(path)
+    if decoded_path is None:
+        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+    file_id: Final = _gemini_passthrough_file_id(decoded_path)
+    if file_id is None:
+        return
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if isinstance(hook, _ProviderFileAccessGuard):
+        await hook.enforce_provider_file_access(file_id, user_api_key_dict)
+
+
 @router.api_route(
     "/gemini/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -512,6 +571,7 @@ async def gemini_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
+    await _enforce_gemini_passthrough_file_ownership(request, updated_url.path, user_api_key_dict)
 
     # Add or update query parameters
     gemini_api_key: Final[str | None] = passthrough_endpoint_router.get_credentials(
@@ -1380,11 +1440,6 @@ async def anthropic_proxy_route(
     )
 
     # Add or update query parameters
-    anthropic_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="anthropic",
-        region_name=None,
-    )
-
     ## check for streaming
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
@@ -1399,9 +1454,7 @@ async def anthropic_proxy_route(
     )
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = await AnthropicModelInfo.aget_auth_header(
-        anthropic_api_key or None, allow_workload_identity=True
-    )
+    auth_header: Final = await anthropic_route_auth_header()
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
@@ -1727,7 +1780,10 @@ async def _bedrock_count_tokens(
             )
 
         # Get model parameters from router
-        litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
+        litellm_params: Final = {
+            "user_api_key_dict": user_api_key_dict,
+            "litellm_metadata": get_passthrough_router_request_metadata(user_api_key_dict),
+        }
         resolved_model = model  # Default fallback
 
         deployments: Final = llm_router.registry().deployments(model) if llm_router else None
@@ -1740,7 +1796,7 @@ async def _bedrock_count_tokens(
 
             # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
             for key, value in model_litellm_params.items():
-                if key != "user_api_key_dict":
+                if key not in ("user_api_key_dict", "metadata", "litellm_metadata"):
                     litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
@@ -1953,12 +2009,15 @@ async def bedrock_proxy_route(
     agent_runtime_aws: Final = BedrockAgentRuntimeAWS()
     # Assuming the body contains JSON data, parse it
     try:
-        data: Final = await _json_request_body(request)
+        data: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=agent_runtime_aws.get_credentials,
+        get_credentials=partial(
+            agent_runtime_aws.get_credentials,
+            litellm_params={"litellm_metadata": get_passthrough_router_request_metadata(user_api_key_dict, request)},
+        ),
         service_name="bedrock",
         aws_region_name=aws_region_name,
         url=str(updated_url),
@@ -2049,11 +2108,12 @@ async def comprehend_medical_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
@@ -2317,11 +2377,12 @@ async def transcribe_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Request body must be valid JSON: {e}")
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not an Amazon Transcribe request member")
@@ -3383,15 +3444,32 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
     return forwarded
 
 
+async def anthropic_route_auth_header() -> Mapping[str, str] | None:
+    credential: Final = passthrough_endpoint_router.get_credentials(custom_llm_provider="anthropic", region_name=None)
+    return await AnthropicModelInfo.aget_auth_header(credential or None, allow_workload_identity=True)
+
+
+async def anthropic_route_uses_client_oauth(request: Request, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    _upstream_headers_for_anthropic_route(request, user_api_key_dict, await anthropic_route_auth_header())
+    return getattr(request.state, ANTHROPIC_CLIENT_OAUTH_STATE_KEY, False) is True
+
+
 def _upstream_headers_for_anthropic_route(
     request: Request, user_api_key_dict: UserAPIKeyAuth, proxy_auth_header: Mapping[str, str] | None
 ) -> Mapping[str, str]:
+    setattr(request.state, ANTHROPIC_CLIENT_OAUTH_STATE_KEY, False)
     caller_headers: Final = caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
     if proxy_auth_header is None:
         if _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
             raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
+        setattr(
+            request.state,
+            ANTHROPIC_CLIENT_OAUTH_STATE_KEY,
+            is_anthropic_oauth_key(caller_headers.get("authorization"))
+            or is_anthropic_oauth_key(caller_headers.get("x-api-key")),
+        )
         return caller_headers
     forwarded: Final = MappingProxyType(
         {name: value for name, value in caller_headers.items() if name not in _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS}

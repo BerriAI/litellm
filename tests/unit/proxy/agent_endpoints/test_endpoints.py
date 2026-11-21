@@ -1441,6 +1441,20 @@ def test_identity_evidence_is_persisted_and_never_taken_from_runtime_metadata(mo
     assert client.get("/v1/agents/bound/identity").status_code == 503
 
 
+def test_identity_providers_trust_the_jwt_issuer_when_only_litellm_jwtauth_sets_the_audience(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth(audience="gateway"))
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
+    monkeypatch.setenv("JWT_ISSUER", "https://issuer.example")
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+
+    assert client.get("/v1/agents/identity/providers").json() == ["https://issuer.example"]
+
+
 @pytest.mark.parametrize("enabled", [True, False])
 def test_identity_providers_honor_issuer_specific_audiences_and_global_fallback(
     monkeypatch: pytest.MonkeyPatch, enabled: bool

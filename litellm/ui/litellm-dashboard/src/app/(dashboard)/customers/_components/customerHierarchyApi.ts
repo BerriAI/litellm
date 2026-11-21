@@ -1,11 +1,52 @@
 import { apiClient } from "@/components/networking";
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
+import { $api, fetchClient } from "@/lib/http/api";
+import type { CustomerHierarchyPatch } from "./customerHierarchyForms";
 
 type Organization = components["schemas"]["Organization"];
 type Team = components["schemas"]["Team"];
 type Member = components["schemas"]["CustomerMember"];
 type Collection = "customer_organizations" | "customer_teams" | "customer_members";
+
+export async function saveCustomerHierarchy(id: string, patch: CustomerHierarchyPatch) {
+  switch (patch.kind) {
+    case "organization": {
+      const params = { path: { customer_org_id: id } };
+      const { data } = await fetchClient.PATCH("/management/v1/customer_organizations/{customer_org_id}", {
+        params,
+        body: patch.body,
+      });
+      return {
+        data,
+        queryKey: $api.queryOptions("get", "/management/v1/customer_organizations/{customer_org_id}", { params })
+          .queryKey,
+      };
+    }
+    case "team": {
+      const params = { path: { customer_team_id: id } };
+      const { data } = await fetchClient.PATCH("/management/v1/customer_teams/{customer_team_id}", {
+        params,
+        body: patch.body,
+      });
+      return {
+        data,
+        queryKey: $api.queryOptions("get", "/management/v1/customer_teams/{customer_team_id}", { params }).queryKey,
+      };
+    }
+    case "member": {
+      const params = { path: { customer_member_id: id } };
+      const { data } = await fetchClient.PATCH("/management/v1/customer_members/{customer_member_id}", {
+        params,
+        body: patch.body,
+      });
+      return {
+        data,
+        queryKey: $api.queryOptions("get", "/management/v1/customer_members/{customer_member_id}", { params }).queryKey,
+      };
+    }
+  }
+}
 
 export interface CustomerHierarchyScope {
   org: string;

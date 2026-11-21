@@ -147,7 +147,7 @@ pub(crate) fn map_error(error: litellm_db::Error) -> PyErr {
 }
 
 impl NativeDatabase {
-    /// What a Rust auth repository needs to run its queries on these pools. Statements are named only when both
+    /// What a Rust repository needs to run its queries on these pools. Statements are named only when both
     /// sides name them, since a read can land on either.
     pub(crate) fn repository_database(&self) -> PyResult<litellm_repositories::Database> {
         let names_statements = self.writer_endpoint.names_statements()

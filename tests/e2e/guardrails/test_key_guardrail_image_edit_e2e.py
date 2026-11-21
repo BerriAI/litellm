@@ -13,7 +13,7 @@ from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 
-CHAT_MODEL: Final = "gemini-2.5-flash"
+CHAT_MODEL: Final = "gemini-3.8-flash"
 IMAGE_BACKEND: Final = "openai/gpt-image-2.5-flare"
 SOURCE_PNG: Final = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0lEQVR42u3PMQ0AAAwDoPo3"

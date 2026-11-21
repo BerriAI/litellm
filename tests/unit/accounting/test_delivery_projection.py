@@ -187,3 +187,52 @@ def test_entity_transactions_key_memberships_the_way_the_writer_applies_them() -
     ((org_member_key, org_member_spend),) = transactions["org_member_list_transactions"].items()
     _, quoted_org_id, _, quoted_user_id = org_member_key.split("::")
     assert (unquote(quoted_org_id), unquote(quoted_user_id), org_member_spend) == ("org::1", "user/1", 0.25)
+
+
+def test_group_totals_and_history_use_each_requests_snapshot_after_membership_changes() -> None:
+    def delivery(group_id: str, app_id: str, organization_id: str, cost: float) -> DeliveryProjection:
+        return DeliveryProjection(
+            {
+                "request_id": f"{group_id}-{app_id}-{organization_id}",
+                "startTime": _NOW,
+                "spend": cost,
+                "api_key": "key",
+                "model": "model",
+                "model_group": "model",
+                "custom_llm_provider": "provider",
+                "metadata": {
+                    "accounting_entities": {
+                        "app_id": app_id,
+                        "app_group_id": group_id,
+                        "customer_org_id": organization_id,
+                    }
+                },
+            }
+        )
+
+    contributions: Final = project_deliveries(
+        (
+            delivery("first", "chat", "org", 1),
+            delivery("first", "search", "org", 2),
+            delivery("first", "chat", "other", 4),
+            delivery("second", "chat", "org", 8),
+        )
+    )
+    totals: Final = entity_transactions(contributions)
+    assert totals["app_group_list_transactions"] == {"first": 7, "second": 8}
+    assert totals["app_group_customer_org_list_transactions"] == {"first:org": 3, "first:other": 4, "second:org": 8}
+    assert totals["app_list_transactions"] == {"chat": 13, "search": 2}
+    assert totals["customer_org_list_transactions"] == {"org": 11, "other": 4}
+    daily: Final = {
+        (dict(item.key)["app_group_id"], dict(item.key)["app_id"], dict(item.key)["customer_org_id"]): dict(
+            item.increments
+        )["spend"]
+        for item in contributions
+        if item.table == "LiteLLM_DailyCustomerMemberSpend"
+    }
+    assert daily == {
+        ("first", "chat", "org"): 1,
+        ("first", "search", "org"): 2,
+        ("first", "chat", "other"): 4,
+        ("second", "chat", "org"): 8,
+    }
