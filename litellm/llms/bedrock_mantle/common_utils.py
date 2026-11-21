@@ -19,11 +19,12 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
-from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
+from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig, get_bedrock_cross_region_inference_regions
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 BEDROCK_REGIONS: Final = frozenset(AmazonBedrockGlobalConfig().get_all_regions())
+BEDROCK_GEO_PROFILES: Final = frozenset(get_bedrock_cross_region_inference_regions())
 
 MANTLE_AUTH_FAILED: Final = (
     "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
@@ -45,6 +46,31 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
     if sep and head in BEDROCK_REGIONS:
         return head, tail
     return None, model
+
+
+def mantle_catalog_id(model: str) -> str:
+    """The id a Mantle model is listed under in the cost map: no region path, no geo inference-profile prefix.
+
+    ``us-east-1/us.openai.gpt-6.1-sol`` -> ``openai.gpt-6.1-sol``. Only lookups use it, AWS still gets the profile id.
+    """
+    model_id: Final = split_mantle_region_prefix(model)[1]
+    geo, sep, profiled_id = model_id.partition(".")
+    return profiled_id if sep and geo in BEDROCK_GEO_PROFILES else model_id
+
+
+def aws_error_envelope_type(body: object) -> str | None:
+    """The error type in an AWS ``{"Output": {"__type": ...}}`` body, which bedrock-runtime sends with a 200
+    for a path it does not serve, so a caller would otherwise read it as an empty answer."""
+    output: Final = body.get("Output") if isinstance(body, Mapping) else None
+    error_type: Final = output.get("__type") if isinstance(output, Mapping) else None
+    return error_type if isinstance(error_type, str) else None
+
+
+def aws_error_envelope_message(error_type: str) -> str:
+    return (
+        f"Bedrock answered HTTP 200 with {error_type} and no completion, so the request URL names an operation "
+        "it does not serve. Check the deployment's api_base and model id."
+    )
 
 
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
@@ -151,7 +177,7 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
+    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_catalog_id(model)}", {}) if model else {}
     if "/v1/responses" in (entry.get("supported_endpoints") or []):
         return True
     return entry.get("mode") == "responses"
@@ -168,5 +194,5 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     the base for the model's whole OpenAI-compatible surface, so both the chat and
     responses configs derive from it -- there is no separate model-name rule.
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
+    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_catalog_id(model)}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"

@@ -37,6 +37,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
+    mantle_catalog_id,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -281,7 +282,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     @staticmethod
     def _model_map_lookup_name(model: str) -> str:
-        return model.split("/")[-1].removeprefix("openai.")
+        return mantle_catalog_id(model.split("/")[-1]).removeprefix("openai.")
 
     def map_openai_params(
         self,

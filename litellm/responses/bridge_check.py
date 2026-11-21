@@ -88,11 +88,19 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
 
 def _mantle_responses_series_name(model: str) -> str | None:
     """The bare OpenAI series name of a Bedrock Mantle model that also serves the Responses API, or ``None``."""
-    from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses, split_mantle_region_prefix
+    from litellm.llms.bedrock_mantle.common_utils import mantle_catalog_id, mantle_supports_responses
 
     if not mantle_supports_responses(model, litellm.model_cost):
         return None
-    return split_mantle_region_prefix(model)[1].removeprefix("openai.")
+    return mantle_catalog_id(model).removeprefix("openai.")
+
+
+def _routing_lookup_model(model: str, custom_llm_provider: str) -> str:
+    """The id whose cost-map row decides routing. A Mantle geo profile id routes by its Mantle row, never by the
+    Converse row listed under the same profile id."""
+    from litellm.llms.bedrock_mantle.common_utils import mantle_catalog_id
+
+    return mantle_catalog_id(model) if custom_llm_provider == "bedrock_mantle" else model
 
 
 def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -170,7 +178,9 @@ def responses_api_bridge_check(
     try:
         model_info = cast(
             dict[str, object],
-            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
+            get_model_info_helper(
+                model=_routing_lookup_model(model, custom_llm_provider), custom_llm_provider=custom_llm_provider
+            ),
         )
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)

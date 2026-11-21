@@ -23,8 +23,11 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
+    aws_error_envelope_message,
+    aws_error_envelope_type,
 )
 from litellm.llms.openai.chat.gpt_reasoning_transformation import get_effort_level, is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -36,9 +39,26 @@ from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import mantle_base_segment, split_mantle_region_prefix
 
 if TYPE_CHECKING:
-    from litellm.llms.openai.chat.gpt_transformation import (
-        OpenAIChatCompletionStreamingHandler,
-    )
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_AWS_ERROR_ENVELOPE_STATUS: Final = 404
+
+
+def _json_or_none(response: httpx.Response) -> object:
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+class BedrockMantleChatStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    @staticmethod
+    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:
+        error_type: Final = aws_error_envelope_type(chunk)
+        if error_type is not None:
+            return aws_error_envelope_message(error_type), _AWS_ERROR_ENVELOPE_STATUS
+        return OpenAIChatCompletionStreamingHandler._extract_error_from_chunk(chunk)
 
 
 def _with_chat_reasoning_effort(non_default_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -227,6 +247,41 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             super().transform_extra_body(extra_body, request, model, litellm_params), _drops_params(litellm_params)
         )
 
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        error_type: Final = aws_error_envelope_type(_json_or_none(raw_response))
+        if error_type is not None:
+            raise BedrockError(
+                status_code=_AWS_ERROR_ENVELOPE_STATUS,
+                message=aws_error_envelope_message(error_type),
+                headers=raw_response.headers,
+            )
+        return super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
     def _supports_reasoning(self, model: str) -> bool:
         try:
             return litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
@@ -239,12 +294,8 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> "OpenAIChatCompletionStreamingHandler":
-        from litellm.llms.openai.chat.gpt_transformation import (
-            OpenAIChatCompletionStreamingHandler,
-        )
-
-        return OpenAIChatCompletionStreamingHandler(
+    ) -> OpenAIChatCompletionStreamingHandler:
+        return BedrockMantleChatStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
