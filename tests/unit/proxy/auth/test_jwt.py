@@ -452,16 +452,18 @@ async def test_litellm_jwtauth_public_key_url_and_audience_verify_a_matching_tok
 
 
 @pytest.mark.parametrize(
-    "token",
+    ("audience", "signing_key"),
     [
-        pytest.param(_signed({"sub": "user-1", "aud": "other-app"}), id="another_audience"),
-        pytest.param(_signed({"sub": "user-1", "aud": "env-app"}), id="environment_audience"),
-        pytest.param(_signed({"sub": "user-1", "aud": "litellm-app"}, _ENV_SIGNING_KEY), id="environment_key"),
+        pytest.param("other-app", _SIGNING_KEY, id="another_audience"),
+        pytest.param("env-app", _SIGNING_KEY, id="environment_audience"),
+        pytest.param("litellm-app", _ENV_SIGNING_KEY, id="environment_key"),
     ],
 )
 @pytest.mark.asyncio
 async def test_litellm_jwtauth_public_key_url_and_audience_refuse_any_other_token(
-    config_jwt_settings: RustAuthSettings, token: str
+    config_jwt_settings: RustAuthSettings, audience: str, signing_key: rsa.RSAPrivateKey
 ) -> None:
+    token: Final = _signed({"sub": "user-1", "aud": audience}, signing_key)
+
     with pytest.raises(Exception, match="Validation fails"):
         _ = await proxy_jwt.verify(config_jwt_settings, token)
