@@ -238,6 +238,14 @@ async def test_an_unsubscribe_holds_only_the_upstream_subscription_it_read_and_d
         assert await store.reserve(row) is False
         held: Final = await store.get(row.id)
         assert held is not None and held.status == "pending" and held.refresh_before is not None
+        renewal: Final = Activation(
+            client_secret=SECRET,
+            upstream_subscription_id="up_1",
+            upstream_refresh_before=None,
+            refresh_before=None,
+            cursor="c9",
+        )
+        assert await store.activate(row.id, renewal, ("active", "suspended")) is False
         await store.delete_held(row.id, "up_other")
         assert await store.get(row.id) is not None
         await store.delete_held(row.id, "up_1")

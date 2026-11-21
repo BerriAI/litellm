@@ -331,9 +331,11 @@ async def test_a_failed_subscribe_never_deletes_a_row_another_request_activated(
 @pytest.mark.asyncio
 async def test_a_subscription_terminated_while_upstream_answers_is_ended_upstream_too() -> None:
     class _TerminatingStore(MemoryStore):
-        async def activate(self, subscription_id: str, activation: Activation) -> bool:
+        async def activate(
+            self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = ()
+        ) -> bool:
             await self.terminate(subscription_id)
-            return await super().activate(subscription_id, activation)
+            return await super().activate(subscription_id, activation, from_statuses)
 
     store: Final = _TerminatingStore()
     upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
@@ -368,3 +370,48 @@ async def test_a_name_now_served_by_another_server_ends_the_old_subscription_and
         "active",
         0,
     )
+
+
+@pytest.mark.asyncio
+async def test_a_renewal_cannot_revive_a_subscription_an_unsubscribe_is_holding() -> None:
+    store: Final = MemoryStore()
+    await _subscribe(store, FakeUpstream(responses={"events/subscribe": UPSTREAM_OK}), _Client())
+
+    class _HeldMidRenewal(FakeUpstream):
+        async def call(
+            self, target: SubscriptionTarget, method: str, params: JsonObject, headers: Mapping[str, str]
+        ) -> Mapping[str, object]:
+            if method == "events/subscribe":
+                assert await store.hold_for_unsubscribe(SID, "up_1")
+            return await super().call(target, method, params, headers)
+
+    upstream: Final = _HeldMidRenewal(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    renewed: Final = await _subscribe(store, upstream, _Client())
+    assert isinstance(renewed, Error) and renewed.error.code is EventsErrorCode.NOT_FOUND
+    assert ([method for method, *_ in upstream.calls], store.rows[SID].status) == (
+        ["events/subscribe", "events/unsubscribe"],
+        "pending",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_activation_write_undoes_the_upstream_subscription() -> None:
+    class _WriteFails(MemoryStore):
+        async def activate(
+            self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = ()
+        ) -> bool:
+            raise ConnectionError("database went away")
+
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    with pytest.raises(ConnectionError):
+        await _subscribe(_WriteFails(), upstream, _Client())
+    assert [method for method, *_ in upstream.calls] == ["events/subscribe", "events/unsubscribe"]
+
+
+@pytest.mark.asyncio
+async def test_unsubscribing_a_subscription_still_being_set_up_is_told_to_retry() -> None:
+    store: Final = MemoryStore()
+    await _subscribe(store, FakeUpstream(responses={"events/subscribe": UPSTREAM_OK}), _Client())
+    store.rows[SID] = store.rows[SID].model_copy(update={"status": "pending"})
+    result: Final = await unsubscribe(context(), _UNSUBSCRIBE, None, SETTINGS, runtime((server(),)), store)
+    assert isinstance(result, Error) and result.error.code is EventsErrorCode.INTERNAL_ERROR

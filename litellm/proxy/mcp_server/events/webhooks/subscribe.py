@@ -47,6 +47,7 @@ from litellm.proxy.mcp_server.events.webhooks.store import (
     EventStore,
     QueuedDelivery,
     SubscriptionRow,
+    SubscriptionStatus,
     default_store,
 )
 from litellm.proxy.mcp_server.events.webhooks.termination import end_upstream
@@ -243,7 +244,15 @@ async def _activate(
         refresh_before=refresh_before,
         cursor=sealed.ok,
     )
-    if not await subscription.request.store.activate(base.id, activation):
+    expected: Final[tuple[SubscriptionStatus, ...]] = (
+        ("pending",) if subscription.reserved else (existing.status,) if existing is not None else ("pending",)
+    )
+    try:
+        activated: Final = await subscription.request.store.activate(base.id, activation, expected)
+    except Exception:
+        await _roll_back(subscription, upstream, settings, runtime)
+        raise
+    if not activated:
         await _roll_back(subscription, upstream, settings, runtime)
         return Error(subscription_not_found())
     refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
@@ -388,6 +397,8 @@ async def unsubscribe(
     row: Final = await events_store.get(sid)
     if row is None or row.status == "terminated":
         return Error(subscription_not_found())
+    if row.status == "pending":
+        return Error(_BEING_CREATED)
     prepared: Final = await _same_server_event(context, params.name, row, runtime)
     if prepared is not None:
         mismatch: Final = check_routing_headers(headers, params.name, params.arguments, prepared)

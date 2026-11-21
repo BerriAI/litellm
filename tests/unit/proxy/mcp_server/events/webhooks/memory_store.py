@@ -50,7 +50,12 @@ class MemoryStore:
         self.rows[subscription_id] = current.model_copy(update=fields)
         return True
 
-    async def activate(self, subscription_id: str, activation: Activation) -> bool:
+    async def activate(
+        self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = LIVE_STATUSES
+    ) -> bool:
+        current: Final = self.rows.get(subscription_id)
+        if current is None or current.status not in from_statuses:
+            return False
         return self._update_live(subscription_id, status="active", consecutive_failures=0, **activation.model_dump())
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:

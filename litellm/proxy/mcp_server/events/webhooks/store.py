@@ -88,8 +88,14 @@ class EventStore(Protocol):
 
     async def discard_pending(self, subscription_id: str) -> None: ...
 
-    async def activate(self, subscription_id: str, activation: Activation) -> bool:
-        """Mark a non-terminated row active with fresh secrets and deadlines; False when it was terminated."""
+    async def activate(
+        self,
+        subscription_id: str,
+        activation: Activation,
+        from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
+    ) -> bool:
+        """Mark the row active with fresh secrets and deadlines while its status is still one of ``from_statuses``;
+        False when it changed, so a renewal cannot revive a row an unsubscribe is holding."""
         ...
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None: ...
@@ -233,9 +239,14 @@ class PrismaEventStore:
     async def discard_pending(self, subscription_id: str) -> None:
         await self._subscriptions.delete_many(where={"id": subscription_id, "status": "pending"})
 
-    async def activate(self, subscription_id: str, activation: Activation) -> bool:
+    async def activate(
+        self,
+        subscription_id: str,
+        activation: Activation,
+        from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
+    ) -> bool:
         updated: Final = await self._subscriptions.update_many(
-            where={"id": subscription_id, "status": _NOT_TERMINATED},
+            where={"id": subscription_id, "status": {"in": list(from_statuses)}},
             data={
                 "status": "active",
                 "client_secret": _encrypt(activation.client_secret),
