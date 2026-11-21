@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, urlparse
@@ -122,6 +123,61 @@ async def test_afile_retrieve_rejects_a_provider_file_without_its_size():
 
     assert exc_info.value.title == "OpenAIFileObject"
     assert [error["loc"] for error in exc_info.value.errors()] == [("bytes",)]
+
+
+VLLM_ROUTER_API_BASE: Final = "http://vllm-router.test/v1"
+VLLM_ROUTER_FILE: Final = MappingProxyType(
+    {"id": "file-b73f4c", "bytes": 156, "created_at": 1793238707, "filename": "batch_requests.jsonl", "purpose": "batch"}
+)
+
+
+async def _upload_to_vllm_router() -> OpenAIFileObject:
+    return await litellm.acreate_file(
+        file=("batch_requests.jsonl", b'{"custom_id": "request-1"}'),
+        purpose="batch",
+        custom_llm_provider="hosted_vllm",
+        api_key="sk-test",
+        api_base=VLLM_ROUTER_API_BASE,
+    )
+
+
+async def _retrieve_from_vllm_router() -> OpenAIFileObject:
+    return await litellm.afile_retrieve(
+        file_id="file-b73f4c", custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
+    )
+
+
+VLLM_ROUTER_FILE_CALLS: Final = (
+    pytest.param("POST", "/files", _upload_to_vllm_router, id="acreate_file"),
+    pytest.param("GET", "/files/file-b73f4c", _retrieve_from_vllm_router, id="afile_retrieve"),
+)
+
+
+@pytest.mark.parametrize("method, path, call_router", VLLM_ROUTER_FILE_CALLS)
+@respx.mock
+async def test_hosted_vllm_file_without_an_object_type_comes_back_as_a_file(
+    method: str, path: str, call_router: Callable[[], Awaitable[OpenAIFileObject]]
+):
+    respx.route(method=method, url=f"{VLLM_ROUTER_API_BASE}{path}").respond(200, json=dict(VLLM_ROUTER_FILE))
+
+    file_object: Final = await call_router()
+
+    assert file_object.model_dump(exclude_none=True) == {**VLLM_ROUTER_FILE, "object": "file"}
+
+
+@pytest.mark.parametrize("method, path, call_router", VLLM_ROUTER_FILE_CALLS)
+@respx.mock
+async def test_hosted_vllm_file_with_a_different_object_type_is_rejected(
+    method: str, path: str, call_router: Callable[[], Awaitable[OpenAIFileObject]]
+):
+    respx.route(method=method, url=f"{VLLM_ROUTER_API_BASE}{path}").respond(
+        200, json={**VLLM_ROUTER_FILE, "object": "batch"}
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        await call_router()
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [("object",)]
 
 
 _FILE_BODY: Final = b'{"prompt": "Hello", "completion": "Hi"}'

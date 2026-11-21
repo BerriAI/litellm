@@ -8,7 +8,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -67,6 +67,7 @@ class _StoredResponse:
     id: str
     unified_object_id: str
     status: str
+    created_at: datetime = datetime(2026, 1, 2)
     model_object_id: str = ""
     file_purpose: str = "response"
     file_object: Mapping[str, object] = dataclasses.field(default_factory=lambda: {"model": "gpt-5"})
@@ -76,6 +77,7 @@ class _StoredResponse:
     org_id: str | None = None
     request_tags: object = None
     end_user_id: str | None = None
+    creator_billing_context: Mapping[str, object] | None = None
 
 
 class _InMemoryManagedObjectTable:
@@ -203,7 +205,7 @@ class TestCheckResponsesCost:
         """Create a mock LLM Router"""
         router = MagicMock()
         router.aget_responses = AsyncMock()
-        router.get_deployment = MagicMock(side_effect=lambda model_id: _deployment(model_id))
+        router.registry.return_value.deployment = MagicMock(side_effect=lambda model_id: _deployment(model_id))
         return router
 
     @pytest.fixture
@@ -556,8 +558,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404"
         mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-404")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-404")
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=litellm.NotFoundError(
                 message="Response with id 'resp_upstream_404' not found.", model="gpt-5", llm_provider="openai"
@@ -571,7 +573,7 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         mock_sdk_aget.assert_not_called()
-        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-404")
+        mock_llm_router.registry.return_value.deployment.assert_called_once_with("deployment-404")
         assert mock_llm_router.aget_responses.call_args.kwargs["response_id"] == encoded_response_id
         assert table.updates == (({"id": {"in": ["job-404"]}}, {"status": "stale_expired"}),)
 
@@ -619,8 +621,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404-mapped"
         mock_job.file_object = {"model": "gpt-5.5", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-404-mapped")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-404-mapped")
         mock_llm_router.aget_responses = AsyncMock(side_effect=mapped.value)
 
         table = _RecordingManagedObjectTable(rows=(mock_job,))
@@ -652,8 +654,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404-fallback"
         mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = None
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = None
 
         table = _RecordingManagedObjectTable(rows=(mock_job,))
         mock_prisma_client.db.litellm_managedobjecttable = table
@@ -691,8 +693,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404-other"
         mock_job.file_object = {"model": "azure-gpt-5", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-renamed")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-renamed")
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=litellm.NotFoundError(
                 message="Resource not found", model="gpt-5", llm_provider="azure"
@@ -735,7 +737,7 @@ class TestCheckResponsesCost:
         healthy_job.id = "job-healthy"
         healthy_job.file_object = {"model": "gpt-5.5", "id": healthy_response_id}
 
-        mock_llm_router.get_deployment.side_effect = [
+        mock_llm_router.registry.return_value.deployment.side_effect = [
             Exception("Model invalid format - <class 'str'>"),
             _deployment("deployment-healthy"),
         ]
@@ -783,8 +785,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-500"
         mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-500")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-500")
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=litellm.InternalServerError(
                 message="boom", model="gpt-5", llm_provider="openai"
@@ -1088,7 +1090,7 @@ class TestCheckResponsesCost:
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
             return_value=0
         )
-        mock_llm_router.get_deployment = MagicMock(return_value=None)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=None)
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=AssertionError("router has no deployment for this model_id")
         )
@@ -1106,7 +1108,7 @@ class TestCheckResponsesCost:
             mock_sdk_aget.return_value = mock_response
             await check_responses_cost_instance.check_responses_cost()
 
-        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-deleted")
+        mock_llm_router.registry.return_value.deployment.assert_called_once_with("deployment-deleted")
         mock_llm_router.aget_responses.assert_not_called()
         mock_sdk_aget.assert_called_once()
         assert mock_sdk_aget.call_args[1]["response_id"] == encoded_response_id
@@ -1207,11 +1209,8 @@ class TestCheckResponsesCost:
             return_value=1
         )
 
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
+            mock_aget.return_value = _terminal_response()
             await check_responses_cost_instance.check_responses_cost()
 
         assert [_is_billed(call[1]["litellm_metadata"]) for call in mock_aget.call_args_list] == [False]
@@ -1252,7 +1251,7 @@ class TestCheckResponsesCost:
         )
 
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = MagicMock(status="completed")
+            mock_aget.return_value = _terminal_response()
             await check_responses_cost_instance.check_responses_cost()
 
         (billed,) = billed_logger.billed
@@ -1762,6 +1761,7 @@ def _priced_poller(
     requested_model: str = "priced-gpt",
     model_group_alias: Mapping[str, str] = MappingProxyType({}),
     team_id: str | None = None,
+    creator_billing_context: Mapping[str, object] | None = None,
 ) -> _PricedPoller:
     from types import SimpleNamespace
 
@@ -1781,6 +1781,7 @@ def _priced_poller(
                 status="queued",
                 api_key=api_key,
                 file_object={"model": requested_model},
+                creator_billing_context=creator_billing_context,
                 team_id=team_id or _team_alpha_when_its_rows_exist(team_row, deleted_team_row, default_team_settings),
             ),
         )
@@ -2084,7 +2085,14 @@ def _key_row(metadata: Mapping[str, object]) -> object:
 def _team_row(metadata: Mapping[str, object]) -> object:
     from types import SimpleNamespace
 
-    return SimpleNamespace(team_alias=None, organization_id=None, spend=0.0, max_budget=None, metadata=dict(metadata))
+    return SimpleNamespace(
+        team_alias=None,
+        organization_id=None,
+        spend=0.0,
+        max_budget=None,
+        metadata=dict(metadata),
+        created_at=datetime(2026, 1, 1),
+    )
 
 
 def _langfuse_callback_settings(callback_vars: Mapping[str, object]) -> Mapping[str, object]:
@@ -2490,3 +2498,54 @@ async def test_a_key_that_disabled_a_callback_has_its_charge_logged_wherever_its
 
     assert len(billed_events) == len(request_events)
     assert all(cost == pytest.approx(_PRICED_COST) for cost, _ in billed_events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_context", (True, False))
+async def test_background_settlement_keeps_the_admitted_app_customer_and_request_period_once(
+    monkeypatch: pytest.MonkeyPatch, with_context: bool
+) -> None:
+    import litellm
+    from litellm_enterprise.proxy.common_utils.check_responses_cost import BilledCharge
+
+    started_at: Final = datetime(2025, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    scope: Final = {
+        "key": "app_customer_org",
+        "entity_id": "app-created:customer-created",
+        "budget_limits": [{"budget_duration": "1mo", "max_budget": 20, "reset_at": "2026-01-01T00:00:00Z"}],
+    }
+    context: Final = {
+        "hierarchy": {
+            "app_id": "app-created",
+            "app_alias": "Created app",
+            "customer_org_id": "customer-created",
+            "customer_member_id": "member-created",
+            "scopes": [scope],
+        },
+        "started_at": started_at.isoformat(),
+    }
+    capture: Final = _spend_capture_logger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+    priced: Final = _priced_poller(creator_billing_context=context if with_context else None)
+    charge: Final = await priced.bill(_terminal_response())
+    repeated: Final = await priced.bill(_terminal_response())
+
+    assert isinstance(charge, BilledCharge)
+    assert charge.cost == pytest.approx(_PRICED_COST)
+    assert repeated is None
+    (payload,) = capture.payloads
+    assert payload["response_cost"] == pytest.approx(_PRICED_COST)
+    metadata: Final = payload["metadata"]
+    assert metadata["user_api_key_hash"] == _CREATING_KEY_HASH
+    if with_context:
+        assert charge.logging_obj.start_time == started_at
+        assert metadata["user_api_key_app_id"] == "app-created"
+        assert metadata["user_api_key_customer_org_id"] == "customer-created"
+        assert metadata["user_api_key_customer_member_id"] == "member-created"
+        assert json.loads(metadata["user_api_key_customer_budget_scopes"]) == [
+            {**scope, "soft_budget_duration": None}
+        ]
+    else:
+        assert metadata.get("user_api_key_app_id") is None
+        assert metadata.get("user_api_key_customer_org_id") is None
+        assert metadata.get("user_api_key_customer_budget_scopes") is None

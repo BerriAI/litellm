@@ -32,7 +32,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         additional_provider_specific_params=getattr(litellm_params, "additional_provider_specific_params", {}),
         unreachable_fallback=getattr(litellm_params, "unreachable_fallback", "fail_closed"),
         fail_on_error=getattr(litellm_params, "fail_on_error", True),
-        forward_messages_as_sent=getattr(litellm_params, "forward_messages_as_sent", False),
+        forward_messages_as_sent=litellm_params.forward_messages_as_sent,
         extra_headers=getattr(litellm_params, "extra_headers", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

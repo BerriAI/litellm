@@ -8,6 +8,8 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.databricks.common_utils import DatabricksBase
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
 DATABRICKS_AI_DECIDE_MODEL: Final = "ai_decide"
@@ -73,6 +75,17 @@ class DatabricksDecisionsConnection:
 class DatabricksDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("DATABRICKS_API_KEY", "DATABRICKS_TOKEN")
     api_base_env = ("DATABRICKS_API_BASE",)
+
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        if api_key:
+            return api_key
+        client_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
+        client_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
+        if not client_id or not client_secret:
+            return None
+        return DatabricksBase().get_cached_oauth_m2m_token(api_base, client_id, client_secret)
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return (

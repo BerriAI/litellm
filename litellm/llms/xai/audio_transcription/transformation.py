@@ -39,7 +39,7 @@ class _XAISttWord(LiteLLMBaseModel):
 
 
 class _XAISttResponse(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
     text: str = ""
     language: str = "unknown"
     duration: float | None = None

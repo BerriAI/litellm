@@ -90,7 +90,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         payload_to_check: Final = {
             k: v
             for k, v in without_server_streaming_classification(data).items()
-            if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
+            if not k.startswith("_") and k not in ("metadata", "litellm_metadata", "litellm_logging_obj")
         }
         verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
         return safe_dumps(payload_to_check)
@@ -352,6 +352,12 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         translation: Final = self._event_stream_translation(responses_so_far)
         return translation.get_streaming_scan_key(responses_so_far) if translation is not None else None
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        """The answer of the provider translation that reads this event stream. A stream no translation reads is
+        not scanned at all, so there is no verdict to hold it for."""
+        translation: Final = self._event_stream_translation((item,))
+        return translation is not None and translation.starts_client_tool_call(item)
 
     def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
         translation: Final = self._event_stream_translation(responses_so_far)

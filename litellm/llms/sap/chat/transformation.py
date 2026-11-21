@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -42,6 +43,7 @@ from .models import (
     SAPToolChatMessage,
     SAPUserMessage,
 )
+from .reasoning import normalize_reasoning_blocks
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -104,7 +106,7 @@ def _message_role_mapping(role: str) -> type[ChatMessage]:
 def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
-        folded_message = _fold_message_cache_control(message)
+        folded_message = _fold_message_cache_control(message_with_file_parts_as_image_urls(message))
         message_role_class = _message_role_mapping(str(folded_message["role"]))
         validated_message = validate_dict(folded_message, message_role_class)
         template.append(validated_message)
@@ -409,7 +411,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(
+            normalize_reasoning_blocks(raw_response.json()["final_result"], "message")
+        )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```

@@ -2,11 +2,12 @@ import asyncio
 import copy
 import itertools
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Final, cast
 
 import pytest
+from pytest_mock import MockerFixture
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
@@ -22,10 +23,17 @@ from litellm.proxy.management_helpers.bulk_user_deletion import (
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkDeleteUserRequest
 from litellm.types.proxy.management_endpoints.team_endpoints import BulkTeamMemberDeleteRequest, TeamMemberRef
+from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
 INTERNAL: Final = UserAPIKeyAuth(user_id="someone", user_role=LitellmUserRoles.INTERNAL_USER)
 ORG_ADMIN: Final = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
+
+
+@pytest.fixture(autouse=True)
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 class _UserRow(BaseModel):
@@ -120,7 +128,6 @@ class _Db:
         tokens: Sequence[Mapping[str, object]] = (),
         invitations: Sequence[Mapping[str, object]] = (),
         org_memberships: Sequence[Mapping[str, object]] = (),
-        jwt_mappings: Sequence[Mapping[str, object]] = (),
         after_user_read: Callable[[dict[str, _UserRow]], None] = lambda _: None,
     ) -> None:
         self.litellm_usertable = _UserTable(users, after_user_read)
@@ -130,7 +137,6 @@ class _Db:
         self.litellm_deletedverificationtoken = _Rows()
         self.litellm_invitationlink = _Rows(invitations)
         self.litellm_organizationmembership = _Rows(org_memberships)
-        self.litellm_jwtkeymapping = _Rows(jwt_mappings)
 
 
 class _Tx:
@@ -196,14 +202,13 @@ class _FakePrisma:
         tokens: Sequence[Mapping[str, object]] = (),
         invitations: Sequence[Mapping[str, object]] = (),
         org_memberships: Sequence[Mapping[str, object]] = (),
-        jwt_mappings: Sequence[Mapping[str, object]] = (),
         on_lock: Callable[[str], None] = lambda _: None,
         fail_locks: frozenset[str] = frozenset(),
         fail_commit: bool = False,
         on_user_lock: Callable[[_Db], None] = lambda _: None,
         after_user_read: Callable[[dict[str, _UserRow]], None] = lambda _: None,
     ) -> None:
-        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, jwt_mappings, after_user_read)
+        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, after_user_read)
         self._on_lock = on_lock
         self._on_user_lock = on_user_lock
         self._fail_locks = fail_locks
@@ -252,8 +257,8 @@ def _cache_with(*hashed_tokens: str) -> UserApiKeyCache:
     return cache
 
 
-def _jwt_mapping(token: str, claim_value: str, issuer: str | None = None) -> Mapping[str, object]:
-    return {"token": token, "jwt_claim_name": "sub", "jwt_claim_value": claim_value, "jwt_issuer": issuer}
+def _jwt_mapping(token: str, claim_value: str, issuer: str = "") -> JwtMapping:
+    return JwtMapping(token=token, jwt_claim_name="sub", jwt_claim_value=claim_value, jwt_issuer=issuer)
 
 
 def _cache_with_jwt_mapping_keys(*cache_keys: str) -> UserApiKeyCache:
@@ -670,7 +675,7 @@ async def test_team_members_gauge_keeps_the_team_alias_label_after_a_removal(tea
 
 
 @pytest.mark.asyncio
-async def test_bulk_delete_evicts_jwt_key_mappings_of_the_deleted_users_keys():
+async def test_bulk_delete_evicts_jwt_key_mappings_of_the_deleted_users_keys(rust_auth_stores: RustAuthStores):
     issuer: Final = "https://issuer.example"
     doomed_global: Final = jwt_key_mapping_cache_key("sub", "alice")
     doomed_scoped: Final = jwt_key_mapping_cache_key("sub", "alice", issuer)
@@ -683,11 +688,13 @@ async def test_bulk_delete_evicts_jwt_key_mappings_of_the_deleted_users_keys():
             {"token": "personal-key", "user_id": "u1"},
             {"token": "keep-key", "user_id": "keep", "team_id": "t1"},
         ],
-        jwt_mappings=[
+    )
+    rust_auth_stores.jwt_key_mapping.mappings.extend(
+        [
             _jwt_mapping("personal-key", "alice"),
             _jwt_mapping("team-key", "alice", issuer=issuer),
             _jwt_mapping("keep-key", "bob"),
-        ],
+        ]
     )
     cache = _cache_with_jwt_mapping_keys(doomed_global, doomed_scoped, kept)
 
@@ -695,6 +702,34 @@ async def test_bulk_delete_evicts_jwt_key_mappings_of_the_deleted_users_keys():
 
     assert cache.get_cache(key=doomed_global) is None and cache.get_cache(key=doomed_scoped) is None
     assert cache.get_cache(key=kept) is not None
+
+
+async def _delete_through_scim_or_user_delete(prisma: _FakePrisma, user_ids: Sequence[str]) -> object:
+    return await delete_users_from_current_teams(
+        prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+        user_ids=user_ids,
+        user_api_key_dict=ADMIN,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=None,
+        litellm_changed_by=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete", [_delete, _delete_through_scim_or_user_delete])
+async def test_user_deletes_drop_the_committed_spend_of_the_users_they_deleted(
+    delete: Callable[[_FakePrisma, Sequence[str]], Awaitable[object]], mocker: MockerFixture
+) -> None:
+    spend: Final = FakeSpendCounters(
+        redis=None, memory={"spend:committed:user:u1": 7.0, "spend:committed:user:keep": 3.0}
+    )
+    mocker.patch("litellm.proxy.proxy_server.spend_counter_store", spend.store())  # test-quality-ok: substitute the spend counter dependency
+    prisma: Final = _FakePrisma(users=[_user("u1"), _user("keep")])
+
+    _ = await delete(prisma, ["u1"])
+
+    assert sorted(prisma.db.litellm_usertable.rows) == ["keep"]
+    assert spend.memory == {"spend:committed:user:keep": 3.0}
 
 
 @pytest.mark.asyncio
@@ -864,7 +899,7 @@ async def test_bulk_member_delete_evicts_the_removed_team_keys_from_the_auth_cac
 
 
 @pytest.mark.asyncio
-async def test_bulk_member_delete_evicts_jwt_key_mappings_of_the_removed_team_keys():
+async def test_bulk_member_delete_evicts_jwt_key_mappings_of_the_removed_team_keys(rust_auth_stores: RustAuthStores):
     issuer: Final = "https://issuer.example"
     doomed: Final = jwt_key_mapping_cache_key("sub", "alice", issuer)
     kept: Final = jwt_key_mapping_cache_key("sub", "bob")
@@ -875,7 +910,9 @@ async def test_bulk_member_delete_evicts_jwt_key_mappings_of_the_removed_team_ke
             {"token": "team-key", "user_id": "u1", "team_id": "t1"},
             {"token": "keep-key", "user_id": "keep", "team_id": "t1"},
         ],
-        jwt_mappings=[_jwt_mapping("team-key", "alice", issuer=issuer), _jwt_mapping("keep-key", "bob")],
+    )
+    rust_auth_stores.jwt_key_mapping.mappings.extend(
+        [_jwt_mapping("team-key", "alice", issuer=issuer), _jwt_mapping("keep-key", "bob")]
     )
     cache = _cache_with_jwt_mapping_keys(doomed, kept)
 
@@ -950,6 +987,20 @@ async def test_bulk_member_delete_rejects_unknown_team_and_unauthorized_callers(
     assert missing.value.problem.status == 404
     assert forbidden.value.problem.status == 403
     assert _roster(prisma, "t1") == ["u1"] and prisma.locks == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_member_delete_answers_404_when_the_team_was_deleted_while_it_waited_on_the_team_lock():
+    def team_delete_commits_first(team_id: str) -> None:
+        del prisma.db.litellm_teamtable.rows[team_id]
+
+    prisma = _FakePrisma(users=[_user("u1", "t1")], teams=[_team("t1", "u1")], on_lock=team_delete_commits_first)
+
+    with pytest.raises(ManagementProblem) as missing:
+        await _remove(prisma, "t1", [{"user_id": "u1"}])
+
+    assert missing.value.problem.status == 404
+    assert prisma.db.litellm_usertable.rows["u1"].teams == ["t1"]
 
 
 @pytest.mark.asyncio
