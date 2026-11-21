@@ -397,10 +397,8 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
   });
 
   it("keeps the team budget visible next to the key's own budget, since both are enforced", async () => {
-    vi.mocked(useTeams).mockReturnValue({
-      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, spend: 1100 })],
-      setTeams: vi.fn(),
-    });
+    const nearlySpentTeam = { team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, spend: 1100 };
+    vi.mocked(useTeams).mockReturnValue({ teams: [makeTeam(nearlySpentTeam)], setTeams: vi.fn() });
     renderWithProviders(
       <KeyInfoView
         keyData={{ ...MOCK_KEY_DATA, max_budget: 25, spend: 5, team_id: "team-123" } as unknown as KeyResponse}
