@@ -79,16 +79,18 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
             continue
         if not stripped.startswith("data:"):
             continue
+        named_event_type = current_event_type
+        current_event_type = None
         data_str = stripped[len("data:") :].strip()
+        if not data_str.startswith("{"):
+            continue
         try:
             data = as_str_mapping(_DECODED_JSON.validate_python(json.loads(data_str)))
         except (json.JSONDecodeError, ValueError):
             continue
         if data is None:
             continue
-        event_type = current_event_type or data.get("type", "")
-        current_event_type = None
-        events.append((event_type, data))
+        events.append((named_event_type or data.get("type", ""), data))
     return events
 
 

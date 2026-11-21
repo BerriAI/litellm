@@ -17,6 +17,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
@@ -98,6 +99,9 @@ _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _loads_stream_chunk(payload: str) -> dict[str, object] | None:
+    if not payload.lstrip().startswith("{"):
+        verbose_logger.debug("Skipping an Anthropic stream data line that is not a JSON object: %.100s", payload)
+        return None
     decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
     return decoded if is_str_keyed_dict(decoded) else None
 

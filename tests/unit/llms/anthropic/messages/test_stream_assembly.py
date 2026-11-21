@@ -240,7 +240,16 @@ TOOL_USE_STREAM: Final = (
 
 @pytest.mark.parametrize(
     "non_object_frame",
-    [b"data: 5\n\n", b"event: ping\ndata: null\n\n", b'data: "x"\n\n', b"data: [1]\n\n", b"data: some words\n\n"],
+    [
+        b"data: 5\n\n",
+        b"event: ping\ndata: null\n\n",
+        b'data: "x"\n\n',
+        b"data: [1]\n\n",
+        b"data: some words\n\n",
+        b"data: " + b"9" * 5000 + b"\n\n",
+        b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+    ],
+    ids=["number", "null", "string", "array", "not-json", "huge-number", "deep-array"],
 )
 def test_assembling_a_tool_use_stream_skips_a_data_line_that_is_not_a_json_object(non_object_frame: bytes):
     assembled: Final = assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], non_object_frame, *TOOL_USE_STREAM[3:]))
