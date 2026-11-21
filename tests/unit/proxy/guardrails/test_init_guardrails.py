@@ -565,6 +565,54 @@ async def test_presidio_initialized_output_dispatch(
     assert len(selected) == expected_calls
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filter_scope", [None, "output"])
+async def test_presidio_logging_only_masks_logged_output_without_changing_live_response(
+    filter_scope: Literal["output"] | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    original: Final = "TC kimlik no 10000000146"
+    masked: Final = "TC kimlik no <TR_NATIONAL_ID>"
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode="logging_only",
+        default_on=True,
+        presidio_filter_scope=filter_scope,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        mock_redacted_text={"text": masked, "items": []},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "logging_only_output"})
+    request_data: Final = {"metadata": {}, "messages": [{"role": "user", "content": original}]}
+    post_call_callbacks: Final = tuple(
+        callback for callback in callbacks if callback.should_run_guardrail(request_data, GuardrailEventHooks.post_call)
+    )
+
+    assert post_call_callbacks == ()
+
+    logged_response: Final = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=original), index=0)]
+    )
+    logging_callbacks: Final = tuple(
+        callback
+        for callback in callbacks
+        if callback.should_run_guardrail(request_data, GuardrailEventHooks.logging_only)
+    )
+    assert len(logging_callbacks) == 1
+    _, logged_response_result = await logging_callbacks[0].async_logging_hook(
+        kwargs=request_data,
+        result=logged_response,
+        call_type="acompletion",
+    )
+
+    assert logged_response_result.choices[0].message.content == masked
+
+
 def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

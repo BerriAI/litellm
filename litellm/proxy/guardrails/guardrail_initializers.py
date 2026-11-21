@@ -121,11 +121,23 @@ def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
-def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) -> str | list[str] | Mode:
+def _presidio_output_mode(
+    mode: str | list[str] | Mode,
+    *,
+    include_mcp: bool,
+    include_logging_only: bool,
+) -> str | list[str] | Mode:
     def output_hooks(hooks: str | list[str]) -> list[str]:
-        if not hooks or (not include_mcp and _is_mcp_only_mode(hooks)):
-            return []
-        return [GuardrailEventHooks.post_call.value]
+        configured: Final = (hooks,) if isinstance(hooks, str) else tuple(hooks)
+
+        def output_hook(hook: str) -> str | None:
+            if not include_mcp and hook in _MCP_EVENT_HOOKS:
+                return None
+            if hook == GuardrailEventHooks.logging_only.value:
+                return hook if include_logging_only else None
+            return GuardrailEventHooks.post_call.value
+
+        return list(dict.fromkeys(output for output in map(output_hook, configured) if output is not None))
 
     if isinstance(mode, Mode):
         return Mode(
@@ -177,7 +189,11 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     unmask_output_callback: Final = (
         _make_presidio_callback(
             output_parse_pii=True,
-            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=True),
+            event_hook=_presidio_output_mode(
+                litellm_params.mode,
+                include_mcp=True,
+                include_logging_only=False,
+            ),
             _callback_role="restore",
         )
         if run_input and litellm_params.output_parse_pii
@@ -186,7 +202,11 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     mask_output_callback: Final = (
         _make_presidio_callback(
             apply_to_output=True,
-            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=explicit_filter_scope is not None),
+            event_hook=_presidio_output_mode(
+                litellm_params.mode,
+                include_mcp=explicit_filter_scope is not None,
+                include_logging_only=not run_input,
+            ),
             output_parse_pii=False,
             mask_response_content=True,
         )
