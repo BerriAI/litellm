@@ -121,9 +121,9 @@ mod tests {
     #[tokio::test]
     async fn a_master_key_caller_of_messages_is_deferred_when_customer_headers_are_required(
         #[case] credential: (&str, &str),
-        #[case] required: &str,
+        #[case] _required: &str,
         #[case] expected: Option<Refused>,
-        #[with(required)] admit: Admit,
+        #[with(_required)] admit: Admit,
     ) {
         assert_eq!(refusal(admit, messages(Some(credential))).await, expected);
     }
