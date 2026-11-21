@@ -1283,11 +1283,19 @@ def _halves(arguments: str) -> tuple[str, ...]:
 
 
 class _ToolCallProviderStream(httpx.AsyncByteStream):
-    def __init__(self, shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]) -> None:
+    def __init__(
+        self,
+        shape: _ToolCallStreamShape,
+        split_arguments: Callable[[str], tuple[str, ...]],
+        created: bytes = _RESPONSE_CREATED,
+        hangs_before_completing: bool = False,
+    ) -> None:
         self._shape: Final = shape
         self._split_arguments: Final = split_arguments
+        self._created: Final = created
+        self._hangs_before_completing: Final = hangs_before_completing
 
-    def _call_events(
+    def call_events(
         self, output_index: int, item_id: str, call_id: str, name: str, arguments: str
     ) -> Iterator[Mapping[str, object]]:
         item: Final = {"type": "function_call", "id": item_id, "call_id": call_id, "name": name}
@@ -1321,10 +1329,12 @@ class _ToolCallProviderStream(httpx.AsyncByteStream):
         }
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        yield _RESPONSE_CREATED
+        yield self._created
         for output_index, call in enumerate(_PARALLEL_CALLS):
-            for event in self._call_events(output_index, *call):
+            for event in self.call_events(output_index, *call):
                 yield f"data: {json.dumps(event)}\n\n".encode()
+        if self._hangs_before_completing:
+            await asyncio.Event().wait()
         yield _RESPONSE_COMPLETED
 
 
@@ -1430,3 +1440,73 @@ def test_each_parallel_tool_use_streams_its_arguments_exactly_once(
     tool_uses: Final = _streamed_tool_uses(_ToolCallProviderStream(shape, split_arguments))
 
     assert tool_uses == tuple((call_id, name, arguments) for _, call_id, name, arguments in _PARALLEL_CALLS)
+
+
+_CREATED_TOOL_RESPONSE_EVENT: Final[Mapping[str, object]] = {
+    "type": "response.created",
+    "sequence_number": 0,
+    "response": {
+        "id": "resp_tools",
+        "object": "response",
+        "created_at": 1700000000.0,
+        "model": "gpt-5.4-nano",
+        "status": "in_progress",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    },
+}
+
+
+async def _read_until_blocks_close(sse: AnthropicResponsesSSEByteStream, open_blocks: int) -> None:
+    if open_blocks == 0:
+        return
+    frame: Final = await sse.__anext__()
+    await _read_until_blocks_close(sse, open_blocks - (b'"content_block_stop"' in frame))
+
+
+def _output_tokens_billed_on_disconnect(
+    shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]
+) -> int | None:
+    async def _disconnect_after_the_tool_calls() -> int | None:
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(
+                200,
+                stream=_ToolCallProviderStream(
+                    shape,
+                    split_arguments,
+                    created=f"data: {json.dumps(_CREATED_TOOL_RESPONSE_EVENT)}\n\n".encode(),
+                    hangs_before_completing=True,
+                ),
+            ),
+            model="gpt-5.4-nano",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+            request_data={"model": "gpt-5.4-nano", "input": "read the notes and list the files"},
+            custom_llm_provider="openai",
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        await _read_until_blocks_close(sse, len(_PARALLEL_CALLS))
+        partial: Final = sse.partial_response_on_disconnect()
+        await sse.aclose()
+        return partial.response.usage.output_tokens if partial is not None and partial.response.usage else None
+
+    return asyncio.run(_disconnect_after_the_tool_calls())
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        _ToolCallStreamShape(),
+        _ToolCallStreamShape(sends_arguments_done=False),
+        _ToolCallStreamShape(output_item_done_carries_arguments=False),
+    ],
+    ids=["done_events_only", "output_item_done_only", "arguments_done_only"],
+)
+def test_a_disconnect_after_done_only_tool_calls_bills_the_arguments_the_client_received(shape: _ToolCallStreamShape):
+    billed_for_done_only: Final = _output_tokens_billed_on_disconnect(shape, _no_deltas)
+    billed_for_deltas: Final = _output_tokens_billed_on_disconnect(_ToolCallStreamShape(), _halves)
+
+    assert billed_for_deltas
+    assert billed_for_done_only == billed_for_deltas

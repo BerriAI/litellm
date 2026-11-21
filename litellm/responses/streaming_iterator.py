@@ -1148,6 +1148,9 @@ class BaseResponsesAPIStreamingIterator:
         """Whether the stream began a tool call, which a text continuation could never finish."""
         return self._started_tool_call
 
+    def record_relayed_tool_arguments(self, arguments: str) -> None:
+        self._generated_tool_arguments += arguments
+
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream,

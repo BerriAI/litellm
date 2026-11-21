@@ -116,6 +116,11 @@ def _anthropic_error_chunk(status_code: int, message: str) -> dict[str, object]:
     )
 
 
+@runtime_checkable
+class _RecordsRelayedToolArguments(Protocol):
+    def record_relayed_tool_arguments(self, arguments: str) -> None: ...
+
+
 class AnthropicResponsesStreamWrapper:
     """
     Wraps a Responses API streaming iterator and re-emits events in Anthropic SSE format.
@@ -273,6 +278,8 @@ class AnthropicResponsesStreamWrapper:
                 "delta": {"type": "input_json_delta", "partial_json": arguments},
             }
         )
+        if isinstance(self.responses_stream, _RecordsRelayedToolArguments):
+            self.responses_stream.record_relayed_tool_arguments(arguments)
 
     def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
