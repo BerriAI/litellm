@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
+from litellm.constants import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_spend import customer_spend_counter
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.redis.stores._route import post_call_request
@@ -115,6 +117,7 @@ async def _stored_spend(counter: _EntitySpend | _WindowSpend) -> float | None:
 class _CounterHost:
     """The proxy's half of the counter step: the auth cache and the database, which only the proxy holds."""
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def budget_windows(self, request: object) -> tuple[tuple[_BudgetWindow, ...] | None, ...]:
         from litellm.proxy.proxy_server import (
             _cached_budget_limits,  # pyright: ignore[reportPrivateUsage]  # the proxy's cached budget-limit reader
