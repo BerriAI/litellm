@@ -609,13 +609,11 @@ class BedrockRealtime(BaseAWSLLM):
         if aws_region_name is None:
             aws_region_name = await run_aws_signing(self.get_aws_region_name, {}, model)
 
-        # Get endpoint URL
-        if api_base is not None:
-            endpoint_uri = api_base
-        elif aws_bedrock_runtime_endpoint is not None:
-            endpoint_uri = aws_bedrock_runtime_endpoint
-        else:
-            endpoint_uri = f"https://bedrock-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+        endpoint_uri: Final = (
+            api_base
+            or aws_bedrock_runtime_endpoint
+            or f"https://bedrock-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+        )
 
         verbose_proxy_logger.debug("Bedrock Realtime: Connecting to %s with model %s", endpoint_uri, model)
 
