@@ -9,9 +9,10 @@ export interface EntityUsageExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   entityType: EntityType;
-  onExport: (exportType: ExportType, format: ExportFormat) => Promise<Blob>;
+  onExport: (exportType: ExportType, format: ExportFormat, includeMetadata: boolean) => Promise<Blob>;
   dateRange: DateRangePickerValue;
   selectedFilters?: readonly string[];
   customTitle?: string;
   teams?: Team[];
+  canIncludeMetadata: boolean;
 }

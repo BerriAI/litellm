@@ -8,8 +8,11 @@
 //! | [`StrBool`] | a bool as is, or `str_to_bool(text) is True` for text |
 //! | [`Lenient`] | the value when it has the expected shape, otherwise ignored |
 //! | [`LaxBoolOr`] | `TypeAdapter(bool).validate_python(value)`, or the fallback where pydantic raises |
+//! | [`LaxBool`] | `core_helpers.lax_bool(value)` |
+//! | [`UintOrUnset`] | `get_env_int_or_none(name)`, unset for a negative value too |
 //!
-//! The bool rules are `serde_with` adapters, used as `#[serde_as(as = "IsTrue")]` on a `bool`.
+//! The bool rules are `serde_with` adapters, used as `#[serde_as(as = "IsTrue")]` on a `bool`, and
+//! [`LaxBool`] on an `Option<bool>`.
 
 use std::fmt;
 
@@ -19,7 +22,7 @@ use serde::{
 };
 use serde_with::DeserializeAs;
 
-use crate::{Value, flags::str_to_bool, pydantic::lax_bool};
+use crate::{Value, flags, flags::str_to_bool, number::int, pydantic::lax_bool};
 
 /// `value is True`: only a boolean `true` is true. `"true"`, `1` and anything else are false.
 pub struct IsTrue;
@@ -46,6 +49,28 @@ impl<'de, const FALLBACK: bool> DeserializeAs<'de, bool> for LaxBoolOr<FALLBACK>
             .ok()
             .and_then(|value| lax_bool(&value))
             .unwrap_or(FALLBACK))
+    }
+}
+
+/// [`flags::lax_bool`]: `None` for `None` and for a value pydantic refuses.
+pub struct LaxBool;
+
+impl<'de> DeserializeAs<'de, Option<bool>> for LaxBool {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<Option<bool>, D::Error> {
+        Ok(Value::deserialize(deserializer)
+            .ok()
+            .and_then(|value| flags::lax_bool(&value)))
+    }
+}
+
+/// `get_env_int_or_none`, which reads text that `int(text)` refuses as unset. A negative value is
+/// unset too, where Python keeps it.
+pub struct UintOrUnset;
+
+impl<'de> DeserializeAs<'de, Option<u64>> for UintOrUnset {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(int(&text).and_then(|value| u64::try_from(value).ok()))
     }
 }
 

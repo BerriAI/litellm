@@ -1,11 +1,16 @@
 mod admission;
+mod charge;
 mod checks;
+mod counters;
 mod engine;
 mod plan;
+pub mod post_call;
 mod window;
 
 pub use admission::{Admission, Budgets};
+pub use charge::{CounterError, CounterOutcome, CounterStep, Failure, charge_counters};
 pub use checks::{Check, Decision, Refusal, decide};
+pub use counters::{CustomerScopeSpend, CustomerWindow};
 pub use engine::{
     BudgetCounterSpend, EngineError, Entry, Exceeded, PendingIncrement, Reseed, Reservation,
     Settle, Settlement, UNAVAILABLE, reserve, settle,

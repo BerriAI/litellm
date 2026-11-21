@@ -30,7 +30,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.repositories.accounting_delivery_repository import AccountingDeliveryRepository
-from litellm.repositories.table_repositories import SpendLogsRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.utils import ModelResponse, Usage
 from tests.integration._support.database import scratch_database

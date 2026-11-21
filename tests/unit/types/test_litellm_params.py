@@ -9,6 +9,7 @@ import httpx
 import pytest
 from aiohttp import ClientSession
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
@@ -265,7 +266,9 @@ INTERNAL_STATE_NAMES: Final = (
     "preset_cache_key",
     "cache_key",
     "stream_response",
+    "parent_otel_span",
     "_context_compaction_state",
+    "_litellm_prompt_management_applied",
     *AGENTIC_LOOP_STATE_NAMES,
     "_skip_mcp_handler",
     "skip_mcp_handler",
@@ -546,6 +549,7 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "HeadroomRequestContext": HeadroomRequestContext,
     "RouterWeights": RouterWeights,
     "AttemptedFallbackTargets": AttemptedFallbackTargets,
+    "Span": Span,
 }
 
 LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {

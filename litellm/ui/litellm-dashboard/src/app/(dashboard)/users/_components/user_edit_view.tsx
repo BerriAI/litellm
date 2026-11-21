@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
-import { all_admin_roles, isProxyAdminRole } from "@/utils/roles";
+import { availableRoleDisplayLabel, all_admin_roles, isProxyAdminRole } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
@@ -222,7 +222,7 @@ export function UserEditView({
 
   const roleOptions = Object.entries(possibleUIRoles ?? {}).map(([role, { ui_label, description }]) => ({
     value: role,
-    label: ui_label,
+    label: availableRoleDisplayLabel(role, ui_label),
     description,
   }));
 

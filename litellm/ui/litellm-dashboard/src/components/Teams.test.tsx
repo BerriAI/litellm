@@ -1560,7 +1560,7 @@ describe("Teams - the exact bytes the create call sends", () => {
 
     await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
     await chooseSelectOption(user, screen.getByPlaceholderText("Select model"), "gpt-4");
-    fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "3" } });
+    fireEvent.change(screen.getByPlaceholderText("Max Budget"), { target: { value: "3" } });
 
     const payload = await submit();
 
