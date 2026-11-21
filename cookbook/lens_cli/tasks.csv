@@ -1,0 +1,4 @@
+id,prompt,expected
+billing-ticket,"Classify this ticket as billing, technical, or sales. Reply with only the category. Ticket: I was charged twice.",billing
+technical-ticket,"Classify this ticket as billing, technical, or sales. Reply with only the category. Ticket: The app crashes on sign-in.",technical
+sales-ticket,"Classify this ticket as billing, technical, or sales. Reply with only the category. Ticket: Can I get a quote for twenty seats?",sales

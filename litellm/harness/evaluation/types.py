@@ -13,7 +13,16 @@ from types import MappingProxyType
 from typing import Final, TypeAlias
 
 from litellm.harness.options import HarnessOptions
-from litellm.harness.types import Harness, Result, StopReason, ToolCall, Usage, require_harness
+from litellm.harness.sandbox.base import Sandbox
+from litellm.harness.types import (
+    Event,
+    Harness,
+    Result,
+    StopReason,
+    ToolCall,
+    Usage,
+    require_harness,
+)
 
 
 def _require_text(value: object, name: str) -> None:
@@ -89,7 +98,11 @@ class EvalTask:
         _require_text(self.prompt, "prompt")
         _require_check(self.check)
         object.__setattr__(self, "files", MappingProxyType(dict(self.files)))
-        object.__setattr__(self, "setup", tuple(tuple(CommandCheck(command).command) for command in self.setup))
+        object.__setattr__(
+            self,
+            "setup",
+            tuple(tuple(CommandCheck(command).command) for command in self.setup),
+        )
         if self.workspace is not None:
             object.__setattr__(self, "workspace", Path(self.workspace))
 
@@ -101,17 +114,39 @@ class EvalTarget:
     label: str | None = None
     options: HarnessOptions | None = None
     tools: Sequence[Callable[..., object]] = ()
+    runner: Callable[[EvalContext], Awaitable[Result]] | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         require_harness(self.harness)
         _require_text(self.model, "target model")
         if self.label is not None:
             _require_text(self.label, "target label")
+        if self.runner is not None and not callable(self.runner):
+            raise TypeError("runner must be callable")
         object.__setattr__(self, "tools", tuple(self.tools))
 
     @property
     def name(self) -> str:
         return self.label if self.label is not None else f"{self.harness.value}:{self.model}"
+
+
+@dataclass(frozen=True, slots=True)
+class EvalContext:
+    task: EvalTask
+    target: EvalTarget
+    sandbox: Sandbox
+    metadata: Mapping[str, object]
+    emit: Callable[[Event], None]
+
+
+@dataclass(frozen=True, slots=True)
+class EvalProgress:
+    suite_id: str
+    run_id: str
+    task_id: str
+    target: str
+    trial: int
+    event: Event | None = None
 
 
 class EvalStatus(Enum):

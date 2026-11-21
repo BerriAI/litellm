@@ -14,13 +14,15 @@ from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, TypeVar
 
 from litellm.harness.errors import OutputInvalid
 from litellm.harness.evaluation.checks import run_check
 from litellm.harness.evaluation.types import (
     CheckResult,
     CommandCheck,
+    EvalContext,
+    EvalProgress,
     EvalRun,
     EvalScorecard,
     EvalStatus,
@@ -32,9 +34,25 @@ from litellm.harness.runtime import aagent, aagent_session
 from litellm.harness.sandbox import local
 from litellm.harness.sandbox.base import Sandbox
 from litellm.harness.sync import run_sync
-from litellm.harness.types import Result
+from litellm.harness.types import Done, Event, Result
 
 SandboxFactory: TypeAlias = Callable[[Path], Sandbox]
+_T: Final = TypeVar("_T")
+
+
+class _CallbackError(Exception):
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        super().__init__(str(error))
+
+
+def _notify(callback: Callable[[_T], None] | None, value: _T) -> None:
+    if callback is None:
+        return
+    try:
+        callback(value)
+    except Exception as error:  # noqa: BLE001  # Caller failures must stop the suite rather than become case errors.
+        raise _CallbackError(error) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +64,8 @@ class _Settings:
     metadata: Mapping[str, object]
     api_base: str | None
     api_key: str | None = field(repr=False)
+    on_progress: Callable[[EvalProgress], None] | None = None
+    on_result: Callable[[EvalRun], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +108,8 @@ async def _validate_targets(targets: Sequence[EvalTarget], settings: _Settings) 
         box: Final = local(directory)
         try:
             for target in targets:
+                if target.runner is not None:
+                    continue
                 session = aagent_session(
                     target.harness,
                     sandbox=box,
@@ -150,7 +172,14 @@ async def _agent_result(
     box: Sandbox,
     metadata: Mapping[str, object],
     settings: _Settings,
+    progress: EvalProgress,
 ) -> Result:
+    def emit(event: Event) -> None:
+        _notify(settings.on_progress, replace(progress, event=event))
+
+    if target.runner is not None:
+        context: Final = EvalContext(task, target, box, metadata, emit)
+        return await asyncio.wait_for(target.runner(context), timeout=settings.timeout)
     pending: Final = aagent(
         target.harness,
         task.prompt,
@@ -163,10 +192,18 @@ async def _agent_result(
         metadata=metadata,
         api_key=settings.api_key,
         api_base=settings.api_base,
+        stream=settings.on_progress is not None,
     )
-    if not isinstance(pending, Coroutine):
-        raise TypeError("agent evaluation requires a non-streaming agent result")
-    return await pending
+    if isinstance(pending, Coroutine):
+        return await pending
+    try:
+        async for event in pending:
+            emit(event)
+            if isinstance(event, Done):
+                return event.result
+    finally:
+        await pending.aclose()
+    raise RuntimeError("agent evaluation stream ended without a result")
 
 
 def _failure(stage: str, error: Exception, result: Result | None = None) -> _Outcome:
@@ -179,6 +216,7 @@ async def _execute(
     box: Sandbox,
     metadata: Mapping[str, object],
     settings: _Settings,
+    progress: EvalProgress,
 ) -> _Outcome:
     try:
         setup_error: Final = await asyncio.wait_for(_setup(task, box), timeout=settings.setup_timeout)
@@ -187,7 +225,9 @@ async def _execute(
     if setup_error is not None:
         return _Outcome(EvalStatus.ERROR, setup_error)
     try:
-        result: Final = await _agent_result(task, target, box, metadata, settings)
+        result: Final = await _agent_result(task, target, box, metadata, settings, progress)
+    except _CallbackError:
+        raise
     except OutputInvalid as error:
         return _failure("agent", error, error.result)
     except Exception as error:  # noqa: BLE001  # Harness failures must not abort sibling runs.
@@ -215,7 +255,12 @@ async def _execute(
         return failure
     if checked.error is not None:
         return _Outcome(EvalStatus.ERROR, checked.error, result, checked)
-    return _Outcome(EvalStatus.PASS if checked.passed else EvalStatus.FAIL, checked.detail, result, checked)
+    return _Outcome(
+        EvalStatus.PASS if checked.passed else EvalStatus.FAIL,
+        checked.detail,
+        result,
+        checked,
+    )
 
 
 async def _close(box: Sandbox) -> str | None:
@@ -231,6 +276,7 @@ async def _attempt(
     target: EvalTarget,
     metadata: Mapping[str, object],
     settings: _Settings,
+    progress: EvalProgress,
 ) -> _Outcome:
     with tempfile.TemporaryDirectory(prefix="litellm-eval-") as directory:
         try:
@@ -239,7 +285,7 @@ async def _attempt(
         except Exception as error:  # noqa: BLE001  # Custom sandbox factories can raise arbitrary exceptions.
             return _failure("workspace", error)
         try:
-            outcome: Final = await _execute(task, target, box, metadata, settings)
+            outcome: Final = await _execute(task, target, box, metadata, settings, progress)
         finally:
             close_error: Final = await _close(box)
         return replace(outcome, status=EvalStatus.ERROR, detail=close_error) if close_error else outcome
@@ -255,7 +301,8 @@ async def _run(
 ) -> EvalRun:
     async with semaphore:
         started: Final = time.perf_counter()
-        run_id: Final = uuid.uuid4().hex
+        run_id: Final = uuid.uuid5(uuid.NAMESPACE_URL, json.dumps((suite_id, task.id, target.name, trial))).hex
+        progress: Final = EvalProgress(suite_id, run_id, task.id, target.name, trial)
         metadata: Final = MappingProxyType(
             {
                 **settings.metadata,
@@ -266,11 +313,14 @@ async def _run(
                 "agent_eval_trial": trial,
             }
         )
+        _notify(settings.on_progress, progress)
         try:
-            outcome: Final = await _attempt(task, target, metadata, settings)
+            outcome: Final = await _attempt(task, target, metadata, settings, progress)
+        except _CallbackError:
+            raise
         except Exception as error:  # noqa: BLE001  # Workspace cleanup failures must not abort the suite.
             failed: Final = _failure("workspace cleanup", error)
-            return EvalRun(
+            failed_run: Final = EvalRun(
                 run_id,
                 task.id,
                 target.name,
@@ -281,7 +331,9 @@ async def _run(
                 time.perf_counter() - started,
                 failed.detail,
             )
-        return EvalRun(
+            _notify(settings.on_result, failed_run)
+            return failed_run
+        completed_run: Final = EvalRun(
             run_id,
             task.id,
             target.name,
@@ -292,6 +344,8 @@ async def _run(
             time.perf_counter() - started,
             outcome.detail,
         )
+        _notify(settings.on_result, completed_run)
+        return completed_run
 
 
 async def aagent_eval(
@@ -307,6 +361,10 @@ async def aagent_eval(
     metadata: Mapping[str, object] | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    suite_id: str | None = None,
+    completed: frozenset[tuple[str, str, int]] = frozenset(),
+    on_progress: Callable[[EvalProgress], None] | None = None,
+    on_result: Callable[[EvalRun], None] | None = None,
 ) -> EvalScorecard:
     """Compare harness/model targets on independent, graded task attempts."""
     _positive_integer("trials", trials)
@@ -327,22 +385,37 @@ async def aagent_eval(
         _validate_task(task)
     copied_metadata: Final = MappingProxyType(dict(metadata or {}))
     json.dumps(dict(copied_metadata), allow_nan=False)
-    settings: Final = _Settings(max_turns, timeout, setup_timeout, sandbox, copied_metadata, api_base, api_key)
+    if suite_id is not None and not suite_id.strip():
+        raise ValueError("suite_id must be a non-empty string")
+    settings: Final = _Settings(
+        max_turns,
+        timeout,
+        setup_timeout,
+        sandbox,
+        copied_metadata,
+        api_base,
+        api_key,
+        on_progress,
+        on_result,
+    )
     await _validate_targets(target_items, settings)
-    suite_id: Final = uuid.uuid4().hex
+    resolved_suite_id: Final = suite_id if suite_id is not None else uuid.uuid4().hex
     semaphore: Final = asyncio.Semaphore(max_concurrency)
     pending: Final = tuple(
-        asyncio.create_task(_run(task, target, trial, suite_id, semaphore, settings))
+        asyncio.create_task(_run(task, target, trial, resolved_suite_id, semaphore, settings))
         for task, target, trial in itertools.product(task_items, target_items, range(1, trials + 1))
+        if (task.id, target.name, trial) not in completed
     )
     try:
         runs: Final = await asyncio.gather(*pending)
-    except BaseException:
+    except BaseException as error:
         for attempt in pending:
             attempt.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
+        if isinstance(error, _CallbackError):
+            raise error.error from None
         raise
-    return EvalScorecard(suite_id, tuple(runs))
+    return EvalScorecard(resolved_suite_id, tuple(runs))
 
 
 def agent_eval(
@@ -358,6 +431,10 @@ def agent_eval(
     metadata: Mapping[str, object] | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    suite_id: str | None = None,
+    completed: frozenset[tuple[str, str, int]] = frozenset(),
+    on_progress: Callable[[EvalProgress], None] | None = None,
+    on_result: Callable[[EvalRun], None] | None = None,
 ) -> EvalScorecard:
     """Synchronous counterpart of aagent_eval."""
     return run_sync(
@@ -373,6 +450,10 @@ def agent_eval(
             metadata=metadata,
             api_base=api_base,
             api_key=api_key,
+            suite_id=suite_id,
+            completed=completed,
+            on_progress=on_progress,
+            on_result=on_result,
         ),
         "agent_eval",
     )

@@ -17,10 +17,11 @@ from litellm import (
     agent_eval,
 )
 from litellm.harness.errors import SandboxError
+from litellm.harness.evaluation import EvalContext, EvalProgress, EvalRun
 from litellm.harness.options import ToolLoopOptions
 from litellm.harness.sandbox.base import CompletedRun, Process
 from litellm.harness.sandbox.local import LocalSandbox
-from litellm.harness.types import Harness, Result
+from litellm.harness.types import Done, Harness, Result, ToolCall, ToolResult, Usage
 from litellm.types.utils import ModelResponse
 
 CommandHandler = Callable[["RecordingSandbox", Sequence[str]], Awaitable[CompletedRun]]
@@ -118,7 +119,9 @@ async def test_should_evaluate_a_text_task_with_default_execution_settings() -> 
     assert report.summaries[0].total == 1
 
 
-async def test_should_copy_each_workspace_and_run_setup_and_checks_in_the_same_sandbox(tmp_path: Path) -> None:
+async def test_should_copy_each_workspace_and_run_setup_and_checks_in_the_same_sandbox(
+    tmp_path: Path,
+) -> None:
     original: Final = tmp_path / "project"
     original.mkdir()
     (original / "state.txt").write_text("original")
@@ -143,7 +146,11 @@ async def test_should_copy_each_workspace_and_run_setup_and_checks_in_the_same_s
         setup=(("prepare",),),
     )
     report: Final = await aagent_eval(
-        (task,), (_target("first"), _target("second")), trials=2, max_concurrency=2, sandbox=factory
+        (task,),
+        (_target("first"), _target("second")),
+        trials=2,
+        max_concurrency=2,
+        sandbox=factory,
     )
 
     assert tuple(run.status for run in report.runs) == (EvalStatus.PASS,) * 4
@@ -214,7 +221,11 @@ async def test_should_preserve_failed_and_error_rows_and_finish_the_other_tasks(
     )
     report: Final = await aagent_eval(tasks, (_target(),), sandbox=factory)
 
-    assert tuple(run.status for run in report.runs) == (EvalStatus.PASS, EvalStatus.FAIL, EvalStatus.ERROR)
+    assert tuple(run.status for run in report.runs) == (
+        EvalStatus.PASS,
+        EvalStatus.FAIL,
+        EvalStatus.ERROR,
+    )
     assert report.runs[0].result is not None
     assert report.runs[1].result is not None
     assert report.runs[2].result is None
@@ -234,7 +245,9 @@ async def test_should_run_async_predicates_before_closing_the_sandbox() -> None:
         return result.text == "done"
 
     report: Final = await aagent_eval(
-        (EvalTask("async", "Answer", check=PredicateCheck(check)),), (_target(),), sandbox=factory
+        (EvalTask("async", "Answer", check=PredicateCheck(check)),),
+        (_target(),),
+        sandbox=factory,
     )
 
     assert report.runs[0].status is EvalStatus.PASS
@@ -262,7 +275,13 @@ async def test_should_not_pass_an_agent_that_reaches_its_turn_limit() -> None:
     )
     factory: Final = RecordingFactory()
     report: Final = await aagent_eval(
-        (EvalTask("limited", "Keep calling tools", check=PredicateCheck(lambda result: True)),),
+        (
+            EvalTask(
+                "limited",
+                "Keep calling tools",
+                check=PredicateCheck(lambda result: True),
+            ),
+        ),
         (_target(response=response),),
         max_turns=1,
         sandbox=factory,
@@ -291,7 +310,10 @@ async def test_should_record_sandbox_startup_failure_without_aborting_other_targ
         sandbox=StartupFactory(),
     )
 
-    assert tuple(run.status for run in report.runs) == (EvalStatus.ERROR, EvalStatus.PASS)
+    assert tuple(run.status for run in report.runs) == (
+        EvalStatus.ERROR,
+        EvalStatus.PASS,
+    )
     assert report.runs[0].result is None
     assert "workspace unavailable" in report.runs[0].detail
     assert all(box.close_count == 1 for box in factory.boxes)
@@ -364,10 +386,20 @@ async def test_should_bound_concurrency_across_grading_and_propagate_suite_cance
 
 @pytest.mark.parametrize(
     ("trials", "concurrency", "turns", "timeout", "setup_timeout"),
-    ((0, 1, None, 1, 1), (1, 0, None, 1, 1), (1, 1, 0, 1, 1), (1, 1, None, 0, 1), (1, 1, None, 1, 0)),
+    (
+        (0, 1, None, 1, 1),
+        (1, 0, None, 1, 1),
+        (1, 1, 0, 1, 1),
+        (1, 1, None, 0, 1),
+        (1, 1, None, 1, 0),
+    ),
 )
 async def test_should_reject_invalid_limits_before_creating_a_sandbox(
-    trials: int, concurrency: int, turns: int | None, timeout: float, setup_timeout: float
+    trials: int,
+    concurrency: int,
+    turns: int | None,
+    timeout: float,
+    setup_timeout: float,
 ) -> None:
     factory: Final = RecordingFactory()
     with pytest.raises(ValueError, match=r"positive|greater than zero"):
@@ -385,7 +417,9 @@ async def test_should_reject_invalid_limits_before_creating_a_sandbox(
 
 
 @pytest.mark.parametrize("duplicate", ("task", "target"))
-async def test_should_reject_duplicate_identifiers_before_creating_a_sandbox(duplicate: str) -> None:
+async def test_should_reject_duplicate_identifiers_before_creating_a_sandbox(
+    duplicate: str,
+) -> None:
     task: Final = EvalTask("answer", "Answer", check=PredicateCheck(_passes))
     target: Final = _target()
     factory: Final = RecordingFactory()
@@ -407,16 +441,19 @@ async def test_should_reject_invalid_workspace_inputs_before_creating_a_sandbox(
     files: Final[Mapping[str, str]] = (
         {"../outside.txt": "invalid"}
         if invalid == "parent-file"
-        else {str(tmp_path / "outside.txt"): "invalid"}
-        if invalid == "absolute-file"
-        else {}
+        else ({str(tmp_path / "outside.txt"): "invalid"} if invalid == "absolute-file" else {})
     )
     setup: Final = ("not an argument vector",) if invalid == "setup" else ()
     with pytest.raises(ValueError, match=r"workspace|relative|command"):
         await aagent_eval(
             (
                 EvalTask(
-                    "answer", "Answer", check=PredicateCheck(_passes), workspace=workspace, files=files, setup=setup
+                    "answer",
+                    "Answer",
+                    check=PredicateCheck(_passes),
+                    workspace=workspace,
+                    files=files,
+                    setup=setup,
                 ),
             ),
             (_target(),),
@@ -435,9 +472,15 @@ def test_should_expose_sync_execution_with_the_same_results() -> None:
         sandbox=RecordingFactory(),
     )
 
-    assert tuple(run.status for run in report.runs) == (EvalStatus.PASS, EvalStatus.PASS)
+    assert tuple(run.status for run in report.runs) == (
+        EvalStatus.PASS,
+        EvalStatus.PASS,
+    )
     assert report.summaries[0].pass_rate == 1
-    assert tuple(run.result.text for run in report.runs if run.result is not None) == ("done", "done")
+    assert tuple(run.result.text for run in report.runs if run.result is not None) == (
+        "done",
+        "done",
+    )
 
 
 async def test_should_direct_async_callers_to_the_async_entrypoint() -> None:
@@ -447,3 +490,135 @@ async def test_should_direct_async_callers_to_the_async_entrypoint() -> None:
             (_target(),),
             sandbox=RecordingFactory(),
         )
+
+
+def _custom_result(context: EvalContext) -> Result:
+    return Result(
+        "done",
+        None,
+        [],
+        [],
+        Usage(),
+        0.0,
+        "done",
+        str(context.metadata["agent_eval_run"]),
+    )
+
+
+async def test_should_run_custom_harness_with_live_events_and_checkpoint_after_cleanup() -> None:
+    factory: Final = RecordingFactory()
+    progress: Final[asyncio.Queue[EvalProgress]] = asyncio.Queue()
+    checkpoints: Final[asyncio.Queue[EvalRun]] = asyncio.Queue()
+
+    async def runner(context: EvalContext) -> Result:
+        assert context.task.prompt == "Answer"
+        assert await context.sandbox.read("input.txt") == b"prepared"
+        context.emit(ToolCall("lookup", "lookup", "lookup", {"query": "billing"}))
+        context.emit(ToolResult("lookup", "billing"))
+        assert checkpoints.empty()
+        assert progress.qsize() == 3
+        return _custom_result(context)
+
+    def checkpoint(run: EvalRun) -> None:
+        assert factory.boxes[0].close_count == 1
+        assert not Path(factory.boxes[0].workdir).exists()
+        checkpoints.put_nowait(run)
+
+    target: Final = EvalTarget(Harness.TOOL_LOOP, "custom/model", label="custom", runner=runner)
+    report: Final = await aagent_eval(
+        (
+            EvalTask(
+                "answer",
+                "Answer",
+                check=PredicateCheck(_passes),
+                files={"input.txt": "prepared"},
+            ),
+        ),
+        (target,),
+        sandbox=factory,
+        on_progress=progress.put_nowait,
+        on_result=checkpoint,
+        suite_id="local-run",
+    )
+
+    started: Final = progress.get_nowait()
+    called: Final = progress.get_nowait()
+    finished: Final = progress.get_nowait()
+    assert started.event is None
+    assert isinstance(called.event, ToolCall)
+    assert isinstance(finished.event, ToolResult)
+    assert started.run_id == called.run_id == report.runs[0].run_id
+    assert checkpoints.get_nowait() is report.runs[0]
+    assert report.runs[0].status is EvalStatus.PASS
+
+
+async def test_should_resume_only_missing_attempts_with_stable_identifiers() -> None:
+    calls: Final[asyncio.Queue[tuple[str, str, object]]] = asyncio.Queue()
+
+    async def runner(context: EvalContext) -> Result:
+        calls.put_nowait((context.task.id, context.target.name, context.metadata["agent_eval_trial"]))
+        return _custom_result(context)
+
+    tasks: Final = tuple(EvalTask(name, "Answer", check=PredicateCheck(_passes)) for name in ("a", "b"))
+    targets: Final = tuple(EvalTarget(Harness.TOOL_LOOP, name, label=name, runner=runner) for name in ("one", "two"))
+    original: Final = await aagent_eval(tasks, targets, trials=2, suite_id="checkpointed")
+    while not calls.empty():
+        calls.get_nowait()
+    completed: Final = frozenset((run.task_id, run.target, run.trial) for run in original.runs[:-1])
+    resumed: Final = await aagent_eval(tasks, targets, trials=2, suite_id="checkpointed", completed=completed)
+
+    assert calls.qsize() == 1
+    assert calls.get_nowait() == ("b", "two", 2)
+    assert len(resumed.runs) == 1
+    assert resumed.runs[0].run_id == original.runs[-1].run_id
+    assert resumed.suite_id == original.suite_id
+    fully_completed: Final = frozenset((run.task_id, run.target, run.trial) for run in original.runs)
+    empty: Final = await aagent_eval(tasks, targets, trials=2, suite_id="checkpointed", completed=fully_completed)
+    assert empty.runs == ()
+    assert calls.empty()
+
+
+@pytest.mark.parametrize("stage", ("start", "event", "result"))
+async def test_should_propagate_callback_failures_and_close_the_attempt(
+    stage: str,
+) -> None:
+    factory: Final = RecordingFactory()
+
+    async def runner(context: EvalContext) -> Result:
+        context.emit(ToolCall("lookup", "lookup", "lookup", {}))
+        return _custom_result(context)
+
+    def on_progress(progress: EvalProgress) -> None:
+        if stage == "start" and progress.event is None:
+            raise OSError("checkpoint unavailable")
+        if stage == "event" and progress.event is not None:
+            raise OSError("checkpoint unavailable")
+
+    def on_result(run: EvalRun) -> None:
+        if stage == "result":
+            raise OSError("checkpoint unavailable")
+
+    with pytest.raises(OSError, match="checkpoint unavailable"):
+        await aagent_eval(
+            (EvalTask("answer", "Answer", check=PredicateCheck(_passes)),),
+            (EvalTarget(Harness.TOOL_LOOP, "custom/model", runner=runner),),
+            sandbox=factory,
+            on_progress=on_progress,
+            on_result=on_result,
+        )
+
+    assert all(box.close_count == 1 for box in factory.boxes)
+
+
+async def test_should_stream_builtin_harness_through_the_eval_runner() -> None:
+    progress: Final[asyncio.Queue[EvalProgress]] = asyncio.Queue()
+    report: Final = await aagent_eval(
+        (EvalTask("answer", "Answer", check=PredicateCheck(_passes)),),
+        (_target(),),
+        on_progress=progress.put_nowait,
+    )
+
+    assert report.runs[0].status is EvalStatus.PASS
+    assert progress.get_nowait().event is None
+    events: Final = tuple(progress.get_nowait().event for _ in range(progress.qsize()))
+    assert any(isinstance(event, Done) and event.result is report.runs[0].result for event in events)
