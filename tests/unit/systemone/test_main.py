@@ -78,6 +78,99 @@ async def test_should_authenticate_databricks_systemone_with_oauth_m2m(
     assert token.call_count == 1
 
 
+@responses.activate
+@pytest.mark.parametrize("use_async", (True, False), ids=("asystemone", "systemone"))
+async def test_should_authenticate_databricks_systemone_with_deployment_oauth_m2m(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    use_async: bool,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    token: Final = responses.post(
+        "https://workspace.example/oidc/v1/token",
+        json={"access_token": "deploy-oauth-token", "expires_in": 3600},
+    )
+    url: Final = "https://workspace.example/api/2.0/ai-functions/ai-decide"
+    upstream_response: Final = {"answers": {"is_refund": {"type": "noul", "noul": 0.93}}}
+    route: Final = respx_mock.post(url).respond(json={"response": upstream_response})
+
+    kwargs: Final[Mapping[str, object]] = {
+        "model": "databricks/ai_decide",
+        "state": _STATE,
+        "questions": _SYSTEMONE_QUESTIONS,
+        "api_base": "https://workspace.example/serving-endpoints",
+        "client_id": "sysone-dep-client",
+        "client_secret": f"sysone-dep-secret-{uuid4().hex}",
+    }
+
+    for _ in range(2):
+        result: Final = await litellm.asystemone(**kwargs) if use_async else litellm.systemone(**kwargs)
+        assert isinstance(result, DecisionsResponse)
+        assert result.answers["is_refund"].model_dump(mode="json") == {"type": "noul", "noul": 0.93}
+        assert route.calls.last.request.headers["Authorization"] == "Bearer deploy-oauth-token"
+    assert route.call_count == 2
+    assert token.call_count == 1
+
+
+@responses.activate
+@pytest.mark.asyncio
+async def test_systemone_router_multi_deployment_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+
+    token_a: Final = responses.post(
+        "https://workspace-a.example/oidc/v1/token",
+        json={"access_token": "token-a", "expires_in": 3600},
+    )
+    token_b: Final = responses.post(
+        "https://workspace-b.example/oidc/v1/token",
+        json={"access_token": "token-b", "expires_in": 3600},
+    )
+
+    url_a: Final = "https://workspace-a.example/api/2.0/ai-functions/ai-decide"
+    url_b: Final = "https://workspace-b.example/api/2.0/ai-functions/ai-decide"
+    upstream_response: Final = {"answers": {"is_refund": {"type": "noul", "noul": 0.93}}}
+    route_a: Final = respx_mock.post(url_a).respond(json={"response": upstream_response})
+    route_b: Final = respx_mock.post(url_b).respond(json={"response": upstream_response})
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider-a",
+                "litellm_params": {
+                    "model": "databricks/ai_decide",
+                    "api_base": "https://workspace-a.example/serving-endpoints",
+                    "client_id": "client-a",
+                    "client_secret": "secret-a",
+                },
+            },
+            {
+                "model_name": "decider-b",
+                "litellm_params": {
+                    "model": "databricks/ai_decide",
+                    "api_base": "https://workspace-b.example/serving-endpoints",
+                    "client_id": "client-b",
+                    "client_secret": "secret-b",
+                },
+            },
+        ]
+    )
+
+    res_a: Final = await router.asystemone(model="decider-a", state=_STATE, questions=_SYSTEMONE_QUESTIONS)
+    assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-a"
+    assert token_a.call_count == 1
+
+    res_b: Final = await router.asystemone(model="decider-b", state=_STATE, questions=_SYSTEMONE_QUESTIONS)
+    assert route_b.calls.last.request.headers["Authorization"] == "Bearer token-b"
+    assert token_b.call_count == 1
+
+
 @pytest.fixture(autouse=True)
 def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

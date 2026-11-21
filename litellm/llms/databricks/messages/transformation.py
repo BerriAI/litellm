@@ -131,13 +131,17 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         client_anthropic_headers: Final = {
             key: value for key, value in headers.items() if key.lower() in ANTHROPIC_API_HEADERS
         }
+        client_id: Final = litellm_params.get("client_id")
+        client_secret: Final = litellm_params.get("client_secret")
         messages_api_base, auth_headers = self.databricks_validate_environment(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
-            api_key=self.resolve_api_key(api_key),
+            api_key=self.resolve_api_key(api_key, client_id, client_secret),
             api_base=self.resolve_api_base(api_base),
             endpoint_type="anthropic_messages",
             custom_endpoint=False,
             headers={key: value for key, value in headers.items() if key not in client_anthropic_headers},
             custom_user_agent=self.configured_user_agent(litellm_params),
+            client_id=client_id,
+            client_secret=client_secret,
         )
         workspace_api_base: Final = messages_api_base.removesuffix(DATABRICKS_ANTHROPIC_MESSAGES_PATH)
         normalized_headers: Final = {

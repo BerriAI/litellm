@@ -1,9 +1,11 @@
-
+from typing import Final
 import pytest
+import responses
 
 from unittest.mock import patch
 
 import litellm
+from litellm.llms.databricks.common_utils import DatabricksException
 from litellm.llms.databricks.responses.transformation import (
     DatabricksResponsesAPIConfig,
 )
@@ -25,10 +27,7 @@ class TestDatabricksResponsesAPIConfig:
             api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
             litellm_params={},
         )
-        assert (
-            url
-            == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
-        )
+        assert url == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
 
     def test_get_complete_url_strips_trailing_slash(self):
         config = DatabricksResponsesAPIConfig()
@@ -36,10 +35,7 @@ class TestDatabricksResponsesAPIConfig:
             api_base="https://my-workspace.cloud.databricks.com/serving-endpoints/",
             litellm_params={},
         )
-        assert (
-            url
-            == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
-        )
+        assert url == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
 
     def test_transform_request_strips_provider_prefix(self):
         config = DatabricksResponsesAPIConfig()
@@ -99,6 +95,75 @@ class TestDatabricksResponsesAPIConfig:
         )
         assert headers["Authorization"] == "Bearer dapi_test_key"
         assert headers["Content-Type"] == "application/json"
+
+    @responses.activate
+    def test_validate_environment_with_deployment_oauth(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_API_KEY", "ambient-env-pat")
+        config: Final = DatabricksResponsesAPIConfig()
+        responses.post(
+            "https://my-workspace.cloud.databricks.com/oidc/v1/token",
+            json={"access_token": "responses-oauth-token", "expires_in": 3600},
+        )
+        headers: Final = config.validate_environment(
+            headers={},
+            model="databricks-gpt-5-nano",
+            litellm_params=GenericLiteLLMParams(
+                client_id="resp-client-id",
+                client_secret="resp-client-secret",
+                api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
+            ),
+        )
+        assert headers["Authorization"] == "Bearer responses-oauth-token"
+        assert headers["Content-Type"] == "application/json"
+
+    @responses.activate
+    def test_validate_environment_static_api_key_precedence(self):
+        config: Final = DatabricksResponsesAPIConfig()
+        headers: Final = config.validate_environment(
+            headers={},
+            model="databricks-gpt-5-nano",
+            litellm_params=GenericLiteLLMParams(
+                api_key="static-responses-key",
+                client_id="resp-client-id",
+                client_secret="resp-client-secret",
+                api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
+            ),
+        )
+        assert headers["Authorization"] == "Bearer static-responses-key"
+        assert len(responses.calls) == 0
+
+    @responses.activate
+    def test_validate_environment_global_fallback(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-resp-cid")
+        monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-resp-csec")
+
+        config: Final = DatabricksResponsesAPIConfig()
+        responses.post(
+            "https://my-workspace.cloud.databricks.com/oidc/v1/token",
+            json={"access_token": "global-responses-token", "expires_in": 3600},
+        )
+        headers: Final = config.validate_environment(
+            headers={},
+            model="databricks-gpt-5-nano",
+            litellm_params=GenericLiteLLMParams(
+                api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
+            ),
+        )
+        assert headers["Authorization"] == "Bearer global-responses-token"
+
+    def test_validate_environment_partial_deployment_credentials_raises(self):
+        config: Final = DatabricksResponsesAPIConfig()
+        with pytest.raises(DatabricksException) as exc_info:
+            config.validate_environment(
+                headers={},
+                model="databricks-gpt-5-nano",
+                litellm_params=GenericLiteLLMParams(
+                    client_id="only-client-id",
+                    api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
+                ),
+            )
+        assert exc_info.value.status_code == 400
+        assert "client_secret" in str(exc_info.value.message)
 
 
 class TestProviderConfigManagerDatabricks:

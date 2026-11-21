@@ -153,3 +153,102 @@ def test_classifier_response_unwraps_the_ai_decide_envelope_and_accounts_the_con
     body: Final = {"response": {"answers": {"tier": choice}}, "metadata": {"version": "1.0"}}
     normalized: Final = _CONFIG.classifier_response(body, "ai_decide")
     assert dict(normalized) == {"answers": {"tier": choice}, "metadata": {"version": "1.0"}, "model": "ai_decide"}
+
+
+@responses.activate
+def test_should_resolve_deployment_oauth_credentials_in_litellm_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    token: Final = responses.post(f"{_HOST}/oidc/v1/token", json={"access_token": "deploy-token", "expires_in": 3600})
+
+    assert (
+        DatabricksDecisionsConfig().resolve_credential(
+            None, _BASE, {"client_id": "dep-dec-client", "client_secret": "dep-dec-secret"}
+        )
+        == "deploy-token"
+    )
+    assert token.call_count == 1
+
+
+@responses.activate
+def test_deployment_oauth_overrides_global_env_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import base64
+
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
+    token: Final = responses.post(f"{_HOST}/oidc/v1/token", json={"access_token": "override-token", "expires_in": 3600})
+
+    assert (
+        DatabricksDecisionsConfig().resolve_credential(
+            None, _BASE, {"client_id": "override-client", "client_secret": "override-secret"}
+        )
+        == "override-token"
+    )
+    assert token.call_count == 1
+    auth_header: Final = token.calls[0].request.headers["Authorization"]
+    basic_creds: Final = base64.b64decode(auth_header.split(" ")[1]).decode()
+    assert basic_creds.startswith("override-client:")
+
+
+@responses.activate
+def test_deployment_oauth_overrides_global_pat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_KEY", "global-pat-key")
+    token: Final = responses.post(f"{_HOST}/oidc/v1/token", json={"access_token": "oauth-over-pat", "expires_in": 3600})
+
+    config: Final = DatabricksDecisionsConfig()
+    _, key = config.resolve_connection(_BASE, None)
+
+    result: Final = config.resolve_credential(
+        key, _BASE, {"client_id": "pat-override-client", "client_secret": "pat-override-secret"}
+    )
+    assert result == "oauth-over-pat"
+    assert token.call_count == 1
+
+
+@responses.activate
+def test_deployment_static_api_key_takes_precedence_over_deployment_oauth() -> None:
+    result: Final = DatabricksDecisionsConfig().resolve_credential(
+        "deployment-pat-wins",
+        _BASE,
+        {"client_id": "unused-client", "client_secret": "unused-secret"},
+    )
+    assert result == "deployment-pat-wins"
+    assert len(responses.calls) == 0
+
+
+def test_deployment_incomplete_oauth_credentials_raises_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.databricks.common_utils import DatabricksException
+
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
+    with pytest.raises(DatabricksException, match="Incomplete Databricks OAuth credentials") as exc_info:
+        DatabricksDecisionsConfig().resolve_credential(None, _BASE, {"client_id": "lone-client"})
+    assert exc_info.value.status_code == 400
+
+
+@responses.activate
+def test_deployment_oauth_token_cache_isolation() -> None:
+    token: Final = responses.post(
+        f"{_HOST}/oidc/v1/token", json={"access_token": "cached-dec-token", "expires_in": 3600}
+    )
+    config: Final = DatabricksDecisionsConfig()
+
+    t1: Final = config.resolve_credential(None, _BASE, {"client_id": "dec-client-1", "client_secret": "dec-secret-1"})
+    assert t1 == "cached-dec-token"
+    assert token.call_count == 1
+
+    t2: Final = config.resolve_credential(None, _BASE, {"client_id": "dec-client-1", "client_secret": "dec-secret-1"})
+    assert t2 == "cached-dec-token"
+    assert token.call_count == 1
+
+    t3: Final = config.resolve_credential(None, _BASE, {"client_id": "dec-client-2", "client_secret": "dec-secret-1"})
+    assert t3 == "cached-dec-token"
+    assert token.call_count == 2
