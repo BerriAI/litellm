@@ -43,6 +43,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    _model_access_groups_serving_model,
     _team_soft_budget_check,
     can_object_call_model,
     can_team_access_model,
@@ -3021,3 +3022,19 @@ def test_a_litellm_model_name_grants_nothing_when_routing_would_not_pick_its_dep
     key_model_aliases: Final = {"openai/granted-raw": "openai/routed-elsewhere"} if routing == "key_alias" else None
 
     assert _can_call(router, ["group-a"], "openai/granted-raw", "team-1", key_model_aliases) is allowed
+
+
+@pytest.mark.parametrize(
+    "requested,served_by",
+    [
+        ("openai/split-a", {"group-a"}),
+        ("openai/shared-raw", {"group-a", "group-b"}),
+        (("openai/split-a", "openai/split-b"), {"group-a", "group-b"}),
+        ("split", {"group-a", "group-b"}),
+        ("openai/routed-elsewhere", set()),
+    ],
+)
+def test_a_litellm_model_name_is_served_by_the_access_groups_of_its_own_deployments(
+    requested: str | tuple[str, ...], served_by: set[str]
+) -> None:
+    assert _model_access_groups_serving_model(requested, _namesake_router(), team_id=None) == served_by

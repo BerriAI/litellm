@@ -5019,6 +5019,29 @@ def _deployment_granted(
     )
 
 
+def _deployments_routed_by_litellm_model(
+    model: str, llm_router: Router, team_id: str | None
+) -> tuple[DeploymentTypedDict, ...]:
+    if not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
+        return ()
+    return tuple(
+        deployment
+        for deployment in llm_router.registry().deployments() or ()
+        if "model" in deployment["litellm_params"] and deployment["litellm_params"]["model"] == model
+    )
+
+
+def _access_groups_of_deployments_routed_by_litellm_model(
+    model: str, llm_router: Router, team_id: str | None
+) -> frozenset[str]:
+    return frozenset[str]().union(
+        *(
+            deployment_access_groups(deployment)
+            for deployment in _deployments_routed_by_litellm_model(model, llm_router, team_id)
+        )
+    )
+
+
 def _every_deployment_with_litellm_model_granted(
     model: str,
     llm_router: RegistryReader | None,
@@ -5026,13 +5049,9 @@ def _every_deployment_with_litellm_model_granted(
     team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
 ) -> bool:
-    if not isinstance(llm_router, Router) or not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
+    if not isinstance(llm_router, Router):
         return False
-    namesakes: Final = tuple(
-        deployment
-        for deployment in llm_router.registry().deployments() or ()
-        if "model" in deployment["litellm_params"] and deployment["litellm_params"]["model"] == model
-    )
+    namesakes: Final = _deployments_routed_by_litellm_model(model, llm_router, team_id)
     return bool(namesakes) and all(
         _deployment_granted(deployment, llm_router, models, team_model_aliases, team_id) for deployment in namesakes
     )
@@ -5390,7 +5409,10 @@ def _model_access_groups_serving_model(
     return frozenset(
         group
         for requested_model in requested
-        for group in llm_router.registry().access_groups(model_name=requested_model, team_id=team_id)
+        for group in (
+            *llm_router.registry().access_groups(model_name=requested_model, team_id=team_id),
+            *_access_groups_of_deployments_routed_by_litellm_model(requested_model, llm_router, team_id),
+        )
     )
 
 
