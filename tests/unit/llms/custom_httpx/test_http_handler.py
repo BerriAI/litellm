@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from contextvars import Context
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1561,6 +1562,58 @@ async def test_connection_error_retry_forwards_content(method: str):
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
         assert captured == [(method.upper(), body)]
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_post_connection_error_not_retried_when_retries_explicitly_zero():
+    """max_retries=0 / num_retries=0 must leave exactly one transport attempt (#52773).
+
+    The stale-session ConnectError retry rebuilds the client under the SDK retry
+    configuration; an explicit zero has to win over it.
+    """
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    retried: Final[list[int]] = []  # mutable-ok: counts attempts against the retry client
+
+    async def count_and_succeed(request: httpx.Request) -> httpx.Response:
+        retried.append(1)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(count_and_succeed))
+    logging_obj: Final = SimpleNamespace(litellm_params={"max_retries": 0, "num_retries": 0})
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        with pytest.raises(httpx.ConnectError):
+            await handler.post("https://api.example.com/runs/batch", json={"a": 1}, logging_obj=logging_obj)
+
+        assert retried == []
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_post_connection_error_still_retried_when_retries_unset():
+    """Without an explicit zero, the stale-session refresh keeps working."""
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def succeed(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        response: Final = await handler.post(
+            "https://api.example.com/runs/batch", json={"a": 1}, logging_obj=SimpleNamespace(litellm_params={})
+        )
+        assert response.status_code == 200
         await handler.close()
 
 
