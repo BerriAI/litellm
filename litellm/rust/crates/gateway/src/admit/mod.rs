@@ -21,24 +21,37 @@ pub enum Refused {
     #[error("the gateway cannot check this caller's credential")]
     #[strum(serialize = "credential")]
     Credential,
+    #[error("the Python proxy checks required customer headers")]
+    #[strum(serialize = "required_customer_headers")]
+    RequiredCustomerHeaders,
 }
 
 /// Admits the requests the gateway serves the way the Python proxy would, and refuses every other
 /// one, giving it back as the client sent it, with why.
 #[derive(Clone)]
-pub struct Admit(Option<Auth>);
+pub struct Admit {
+    auth: Option<Auth>,
+    requires_customer_headers: bool,
+}
 
 impl Admit {
     /// Refuses every request, for a gateway that is not running the config Python runs with.
     pub fn unconfigured() -> Self {
-        Self(None)
+        Self {
+            auth: None,
+            requires_customer_headers: false,
+        }
     }
 
     /// By the `config` the native app is built from.
     pub fn new(config: &Config) -> Self {
-        Self(Some(
-            Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey)),
-        ))
+        Self {
+            auth: Some(Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey))),
+            requires_customer_headers: !config
+                .general_settings
+                .required_customer_headers
+                .is_empty(),
+        }
     }
 
     pub async fn admit(self, request: Request) -> Result<Request, (Box<Request>, Refused)> {
@@ -52,13 +65,16 @@ impl Admit {
     }
 
     async fn check(&self, request: &Parts) -> Result<(), Refused> {
-        let auth = self.0.as_ref().ok_or(Refused::Configuration)?;
+        let auth = self.auth.as_ref().ok_or(Refused::Configuration)?;
         if (&request.method, request.uri.path()) != (&Method::POST, "/v1/messages") {
             return Err(Refused::Route);
         }
         auth.authenticate_parts(request)
             .await
             .map_err(|_| Refused::Credential)?;
+        if self.requires_customer_headers {
+            return Err(Refused::RequiredCustomerHeaders);
+        }
         // TODO: judge the config's settings and the request's headers and body before admitting, since a setting or parameter only Python honors is served natively until then
         Ok(())
     }
@@ -72,10 +88,12 @@ mod tests {
     use super::*;
 
     #[fixture]
-    fn admit() -> Admit {
+    fn admit(#[default("[]")] required: &str) -> Admit {
         Admit::new(
-            &Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
-                .unwrap(),
+            &Config::from_yaml(&format!(
+                "model_list: []\ngeneral_settings:\n  master_key: gateway-key\n  required_customer_headers: {required}\n"
+            ))
+            .unwrap(),
         )
     }
 
@@ -85,6 +103,8 @@ mod tests {
             .fold(Request::post("/v1/messages"), |request, (name, value)| {
                 request.header(name, value)
             })
+            .header("x-tenant-id", "tenant")
+            .header("x-user-id", "member")
             .body(Body::empty())
             .unwrap()
     }
@@ -94,14 +114,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::bearer(("authorization", "Bearer gateway-key"))]
-    #[case::x_api_key(("x-api-key", "gateway-key"))]
+    #[case::bearer(("authorization", "Bearer gateway-key"), "[]", None)]
+    #[case::x_api_key(("x-api-key", "gateway-key"), "[]", None)]
+    #[case::one_header(("authorization", "Bearer gateway-key"), "[X-Tenant-ID]", Some(Refused::RequiredCustomerHeaders))]
+    #[case::multiple_headers(("x-api-key", "gateway-key"), "[X-Tenant-ID, X-User-ID]", Some(Refused::RequiredCustomerHeaders))]
     #[tokio::test]
-    async fn a_master_key_caller_of_messages_is_admitted(
-        admit: Admit,
+    async fn a_master_key_caller_of_messages_is_deferred_when_customer_headers_are_required(
         #[case] credential: (&str, &str),
+        #[case] _required: &str,
+        #[case] expected: Option<Refused>,
+        #[with(_required)] admit: Admit,
     ) {
-        assert_eq!(refusal(admit, messages(Some(credential))).await, None);
+        assert_eq!(refusal(admit, messages(Some(credential))).await, expected);
     }
 
     #[rstest]
