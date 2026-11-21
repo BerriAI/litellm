@@ -610,6 +610,14 @@ class TestManagedWebSocketHandlerIntegration:
             {"type": "reasoning", "id": "rs_1", "summary": []},
             {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search", "query": "x"}},
             {"type": "mcp_list_tools", "id": "mcpl_1", "server_label": "deepwiki", "tools": []},
+            {
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "server_label": "deepwiki",
+                "name": "read_wiki_structure",
+                "arguments": "{}",
+                "output": "1 Overview",
+            },
         )
         provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
             side_effect=[_provider_turn_answering(unanswerable), _provider_turn_answering(())]
@@ -630,6 +638,58 @@ class TestManagedWebSocketHandlerIntegration:
 
         second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
         assert [item.get("type") for item in second_turn_input] == ["message", "message"]
+
+    @pytest.mark.asyncio
+    async def test_turn_after_an_approved_mcp_call_sends_the_call_that_used_the_approval(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        approval_request: Final = {
+            "type": "mcp_approval_request",
+            "id": "mcpr_1",
+            "server_label": "deepwiki",
+            "name": "read_wiki_structure",
+            "arguments": "{}",
+        }
+        approval: Final = {"type": "mcp_approval_response", "approval_request_id": "mcpr_1", "approve": True}
+        approved_call: Final = {
+            "type": "mcp_call",
+            "id": "mcp_1",
+            "approval_request_id": "mcpr_1",
+            "server_label": "deepwiki",
+            "name": "read_wiki_structure",
+            "arguments": "{}",
+            "output": "1 Overview",
+        }
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[
+                _provider_turn_answering((approval_request,)),
+                _provider_turn_answering((approved_call,)),
+                _provider_turn_answering(()),
+            ]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "read the wiki"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": [approval]}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "thanks"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        third_turn_input: Final = json.loads(provider.calls[2].request.read())["input"]
+        assert third_turn_input[1:4] == [approval_request, approval, approved_call]
 
     @pytest.mark.asyncio
     async def test_next_turn_keeps_the_tool_search_the_provider_already_ran(
