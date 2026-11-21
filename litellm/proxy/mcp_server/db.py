@@ -1972,7 +1972,7 @@ async def get_user_oauth_credential(
 
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
     """Note on the saved grant that the provider refused a call for ``scope``, so the connect page sends the user
-    back to the provider. The next save of the grant drops the note; a grant saved since the read is left alone."""
+    back to the provider. The next sign-in drops the note; a grant saved since the read is left alone."""
     row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
     await _record_oauth_scope_refusal(prisma_client, row, scope)
 
