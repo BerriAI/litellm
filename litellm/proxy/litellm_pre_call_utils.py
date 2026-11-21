@@ -14,6 +14,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
@@ -95,7 +96,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_request_route, get_request_route_template
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
-    decrypt_callback_vars,
+    decrypted_callback_metadata,
     get_metadata_variable_name_from_kwargs,
     key_logging_entries,
     strip_callback_config,
@@ -652,6 +653,8 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
+        "client_seen_attempt",
+        "failed_fallback_attempts",
         "original_model_group",
         "previous_models",
         "rate_limit_fallback",
@@ -1428,7 +1431,7 @@ class KeyAndTeamLoggingSettings:
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> object:
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata)).get("logging")
+            return decoded_json_object(decrypted_callback_metadata(user_api_key_dict.team_metadata)).get("logging")
         return None
 
 
@@ -1477,7 +1480,7 @@ def get_dynamic_logging_metadata(
         }
         }
         """
-        team_metadata: Final = decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata))
+        team_metadata: Final = decoded_json_object(decrypted_callback_metadata(user_api_key_dict.team_metadata))
         callback_settings: Final = team_metadata.get("callback_settings", None) or {}
         callback_settings_obj = TeamCallbackMetadata(
             **_CallbackModelFields(**keyword_arguments(callback_settings, TeamCallbackMetadata))
@@ -1720,9 +1723,13 @@ def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
     )
 
 
+class _SupportsLower(Protocol):
+    def lower(self) -> object: ...
+
+
 def clean_headers(
     headers: Headers,
-    litellm_key_header_name: str | None = None,
+    litellm_key_header_name: object = None,
     forward_llm_provider_auth_headers: bool = False,
     authenticated_with_header: str | None = None,
 ) -> dict[str, str]:
@@ -1743,7 +1750,11 @@ def clean_headers(
     from litellm.llms.chatgpt.common_utils import is_chatgpt_oauth_key
 
     clean_headers: Final = {}
-    litellm_key_lower: Final = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
+    litellm_key_lower: Final = (
+        require_attributes(litellm_key_header_name, _SupportsLower, "lower").lower()
+        if litellm_key_header_name is not None
+        else None
+    )
     for header, value in headers.items():
         header_lower = header.lower()
 
@@ -1920,7 +1931,7 @@ class LiteLLMProxyRequestSetup:
 
         spend_logs_metadata_header: Final = headers.get("x-litellm-spend-logs-metadata", None)
         if spend_logs_metadata_header is not None:
-            return safe_json_loads(spend_logs_metadata_header)
+            return _DECODED_JSON.validate_python(safe_json_loads(spend_logs_metadata_header))
         return None
 
     @staticmethod
@@ -2921,7 +2932,7 @@ async def add_litellm_data_to_request(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
     proxy_config: ProxyConfig,
-    general_settings: dict[str, Any] | None = None,
+    general_settings: dict[str, object] | None = None,
     version: str | None = None,
     pricing_rates: ReferenceRateLookup = reference_rates,
 ):

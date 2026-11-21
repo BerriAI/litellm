@@ -9,7 +9,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -617,7 +617,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         *,
         drop_params: bool = True,
         preserve_system_instructions: bool = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.

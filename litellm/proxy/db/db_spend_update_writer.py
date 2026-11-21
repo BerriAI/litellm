@@ -37,7 +37,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
-from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
+from litellm.litellm_core_utils.core_helpers import finite_cost, require_attributes, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -58,7 +58,7 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
@@ -100,6 +100,7 @@ from litellm.proxy.spend_tracking.savings import (
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -309,6 +310,26 @@ class _SpendBatch(Protocol):
     @property
     def litellm_modelaccessgroupbudgettable(self) -> BatchTable: ...
 
+    @property
+    def litellm_customerorganizationtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customerteamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customermembertable(self) -> BatchTable: ...
+
+
+class _AppSpendBatch(Protocol):
+    @property
+    def litellm_apptable(self) -> BatchTable: ...
+
+    @property
+    def litellm_appcustomerorgtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_appcustomermembertable(self) -> BatchTable: ...
+
 
 _EntitySpendTable: TypeAlias = Literal[
     "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
@@ -417,43 +438,52 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
 class _CustomerHierarchyLevel:
     transactions: _SpendTableName
     table: str
-    prisma_table: str
+    batch_table: Callable[[_SpendBatch], BatchTable]
     id_column: str
     customer_column: str | None = None
 
 
 _CUSTOMER_HIERARCHY_LEVELS: Final = (
-    _CustomerHierarchyLevel("app_list_transactions", "LiteLLM_AppTable", "litellm_apptable", "app_id"),
+    _CustomerHierarchyLevel(
+        "app_list_transactions",
+        "LiteLLM_AppTable",
+        lambda batcher: require_attributes(batcher, _AppSpendBatch, "litellm_apptable").litellm_apptable,
+        "app_id",
+    ),
     _CustomerHierarchyLevel(
         "app_customer_org_list_transactions",
         "LiteLLM_AppCustomerOrgTable",
-        "litellm_appcustomerorgtable",
+        lambda batcher: (
+            require_attributes(batcher, _AppSpendBatch, "litellm_appcustomerorgtable").litellm_appcustomerorgtable
+        ),
         "app_id",
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
         "app_customer_member_list_transactions",
         "LiteLLM_AppCustomerMemberTable",
-        "litellm_appcustomermembertable",
+        lambda batcher: (
+            require_attributes(batcher, _AppSpendBatch, "litellm_appcustomermembertable").litellm_appcustomermembertable
+        ),
         "app_id",
         "customer_member_id",
     ),
     _CustomerHierarchyLevel(
         "customer_org_list_transactions",
         "LiteLLM_CustomerOrganizationTable",
-        "litellm_customerorganizationtable",
+        lambda batcher: batcher.litellm_customerorganizationtable,
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
         "customer_team_list_transactions",
         "LiteLLM_CustomerTeamTable",
-        "litellm_customerteamtable",
+        lambda batcher: batcher.litellm_customerteamtable,
         "customer_team_id",
     ),
     _CustomerHierarchyLevel(
         "customer_member_list_transactions",
         "LiteLLM_CustomerMemberTable",
-        "litellm_customermembertable",
+        lambda batcher: batcher.litellm_customermembertable,
         "customer_member_id",
     ),
 )
@@ -2574,7 +2604,9 @@ class DBSpendUpdateWriter:
                 for item in contributions:
                     if item.table == "LiteLLM_TeamMembership":
                         await user_api_key_cache.async_delete_cache(
-                            key=f"team_membership:{dict(item.key)['user_id']}:{dict(item.key)['team_id']}"
+                            key=AuthObject.team_membership_reservation(
+                                user_id=dict(item.key)["user_id"], team_id=dict(item.key)["team_id"]
+                            ).key
                         )
 
     async def apply_accounting_entities(
@@ -2793,8 +2825,9 @@ class DBSpendUpdateWriter:
                 if user_api_key_cache is not None:
                     with service_target(AUTH_OBJECTS_TARGET):
                         for user_id, team_id in team_memberships_to_invalidate:
-                            cache_key = f"team_membership:{user_id}:{team_id}"
-                            await user_api_key_cache.async_delete_cache(key=cache_key)
+                            await user_api_key_cache.async_delete_cache(
+                                key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key
+                            )
                             verbose_proxy_logger.debug(
                                 "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
                             )
@@ -2988,7 +3021,7 @@ class DBSpendUpdateWriter:
                 tx.batch_() as batcher,
             ):
                 for entity_id, response_cost in sorted(transactions.items()):
-                    getattr(batcher, level.prisma_table).update_many(
+                    level.batch_table(batcher).update_many(
                         where=_customer_spend_where(level, entity_id),
                         data={"spend": {"increment": response_cost}},
                     )
@@ -3014,7 +3047,7 @@ class DBSpendUpdateWriter:
         if user_api_key_cache is None:
             return
         for project_id in project_ids:
-            await user_api_key_cache.async_delete_cache(key=project_cache_key(project_id))
+            await user_api_key_cache.async_delete_cache(key=AuthObject.project(project_id).key)
 
     @staticmethod
     async def _update_entity_spend_in_db(

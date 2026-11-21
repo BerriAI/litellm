@@ -137,7 +137,7 @@ if TYPE_CHECKING:
     from litellm.integrations.lens import TraceReceiver
     from litellm.repositories.database import Database
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -3655,6 +3655,20 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
 
 
+def masked_audit_log_value(value: object) -> object:
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
+
+    def decoded() -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+
+    return mask_credentials_in_payload(decoded(), SensitiveDataMasker(sensitive_patterns={"key"}))
+
+
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
@@ -3675,25 +3689,10 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
-
-        masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
-
-        def decoded(value: object) -> object:
-            if not isinstance(value, str):
-                return value
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                return value
-
-        def masked_json(value: object) -> str:
-            return json.dumps(mask_credentials_in_payload(decoded(value), masker), default=str)
-
         if self.before_value is not None:
-            self.before_value = masked_json(self.before_value)
+            self.before_value = json.dumps(masked_audit_log_value(self.before_value), default=str)
         if self.updated_values is not None:
-            self.updated_values = masked_json(self.updated_values)
+            self.updated_values = json.dumps(masked_audit_log_value(self.updated_values), default=str)
 
         return self
 
@@ -3780,7 +3779,7 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
-    field_value: Any
+    field_value: object
     source: Literal["config", "db", "env", "default", "unset"] = "unset"
     editable: bool = True
 
@@ -5046,8 +5045,9 @@ class JWTIssuerConfig(LiteLLMBaseModel):
     When a token's unverified `iss` claim matches an entry in
     ``LiteLLM_JWTAuth.issuers``, LiteLLM validates it only against that
     issuer's JWKS and audience. Tokens whose `iss` does not match any
-    configured issuer fall back to the global JWT_AUDIENCE/JWT_ISSUER
-    validation path; `issuers` is additive routing, not an allow-list.
+    configured issuer fall back to the global validation path (`audience` and
+    `public_key_url`, else JWT_AUDIENCE and JWT_PUBLIC_KEY_URL, plus JWT_ISSUER);
+    `issuers` is additive routing, not an allow-list.
     """
 
     issuer: str = Field(description="Exact expected JWT issuer (`iss`) value.")
@@ -5227,6 +5227,23 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "agent_id_jwt_field, which identifies an AI agent rather than the client software."
         ),
     )
+    public_key_url: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"[^,\s]",
+        description=(
+            "JWKS URL for tokens whose `iss` matches no `issuers` entry. Separate several URLs with commas. "
+            "Takes precedence over the JWT_PUBLIC_KEY_URL environment variable."
+        ),
+    )
+    audience: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Expected `aud` claim for tokens whose `iss` matches no `issuers` entry. "
+            "Takes precedence over the JWT_AUDIENCE environment variable."
+        ),
+    )
     public_key_ttl: float = 600
     public_key_stale_ttl: float = Field(
         default=DEFAULT_JWKS_STALE_TTL,
@@ -5329,7 +5346,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     issuers: list[JWTIssuerConfig] | None = Field(
         default=None,
-        description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
+        description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global validation path, which reads `audience` and `public_key_url` before JWT_AUDIENCE and JWT_PUBLIC_KEY_URL, plus JWT_ISSUER. This is additive routing, not an allow-list.",
     )
     id_jag_requesting_apps: tuple[IdJagRequestingApp, ...] | None = Field(
         default=None,
@@ -5388,6 +5405,16 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             raise ValueError("scope_mappings must be set if enforce_scope_based_access is true.")
 
         super().__init__(**kwargs)
+
+    @field_validator("public_key_url", "audience", mode="before")
+    @classmethod
+    def refuse_a_null_global_jwks_url_or_audience(cls, value: object) -> object:
+        if value is None:
+            raise ValueError(
+                "must not be null. An os.environ/ reference to an unset variable resolves to null, "
+                "so set that variable or remove the key"
+            )
+        return value
 
     def get_issuer_config(self, issuer: str | None) -> JWTIssuerConfig | None:
         if issuer is None or self.issuers is None:

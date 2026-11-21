@@ -3,7 +3,7 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, Protocol, TypeVar
+from typing import Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     load_cli_token_left_in_keychain,
     save_cli_token,
 )
+from litellm.litellm_core_utils.core_helpers import joined, length_of, require_get, subscript
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
@@ -147,6 +148,7 @@ class CliAuthResult(TypedDict):
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 3
 _PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403})
@@ -335,6 +337,23 @@ def _login_command(renews: bool) -> str:
     return "lite login --pkce" if renews else "lite login"
 
 
+def sized_len(value: object) -> int:
+    return length_of(value)
+
+
+def joined_names(names: object) -> str:
+    return joined(", ", names)
+
+
+def models_summary(models: object) -> str:
+    if not models:
+        return "All models"
+    count: Final = length_of(models)
+    if count > 3:
+        return joined_names(subscript(models, slice(None, 3))) + f" (+{count - 3} more)"
+    return joined_names(models)
+
+
 # Team selection utilities
 def display_teams_table(teams: list[CliTeam]) -> None:
     """Display teams in a formatted table"""
@@ -424,7 +443,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: Sequence[Mapping[str, object]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console: Final = Console()
 
@@ -436,17 +455,10 @@ def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selec
     for i, team in enumerate(teams):
         team_alias = team.get("team_alias") or "N/A"
         team_id = team.get("team_id", "N/A")
-        models: list[str] = team.get("models", [])
+        models = team.get("models", [])
         max_budget = team.get("max_budget")
 
-        # Format models list
-        if models:
-            if len(models) > 3:
-                models_str = ", ".join(models[:3]) + f" (+{len(models) - 3} more)"
-            else:
-                models_str = ", ".join(models)
-        else:
-            models_str = "All models"
+        models_str = models_summary(models)
 
         # Format budget
         budget_str = f"${max_budget}" if max_budget else "Unlimited"
@@ -658,7 +670,7 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
         )
 
     try:
-        data: Final[CliSsoStartData] = response.json()
+        decoded: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError:
         content_type: Final = response.headers.get("content-type", "unknown")
         raise ValueError(
@@ -667,14 +679,26 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
             f"Response starts with: {response.text[:200]!r}"
         )
 
+    data: Final = require_get(decoded)
+    login_id: Final = data.get("login_id")
+    poll_secret: Final = data.get("poll_secret")
+    user_code: Final = data.get("user_code")
+    if isinstance(login_id, str) and isinstance(poll_secret, str) and isinstance(user_code, str):
+        verification_uri_complete: Final = data.get("verification_uri_complete")
+        if isinstance(verification_uri_complete, str):
+            return {
+                "login_id": login_id,
+                "poll_secret": poll_secret,
+                "user_code": user_code,
+                "verification_uri_complete": verification_uri_complete,
+            }
+        return {"login_id": login_id, "poll_secret": poll_secret, "user_code": user_code}
     required_fields: Final[tuple[str, ...]] = ("login_id", "poll_secret", "user_code")
     missing_fields: Final = tuple(field for field in required_fields if not isinstance(data.get(field), str))
-    if missing_fields:
-        raise ValueError(
-            f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
-            "The proxy version may not match this CLI; upgrade whichever is older."
-        )
-    return data
+    raise ValueError(
+        f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
+        "The proxy version may not match this CLI; upgrade whichever is older."
+    )
 
 
 def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
