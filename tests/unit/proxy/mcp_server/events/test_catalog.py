@@ -16,7 +16,7 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.types.mcp_server.events import EventsErrorCode, EventType
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
-from .fakes import BUILD_FAILED, CALLER, SETTINGS, context, runtime, server
+from .fakes import JWT, admitted_subject, BUILD_FAILED, CALLER, SETTINGS, context, runtime, server
 
 DEPLOY: Final = EventType(name="deploy.done", delivery=("poll",))
 BAD_HEADER: Final = EventType(
@@ -51,6 +51,8 @@ def test_resolution_picks_the_longest_matching_prefix() -> None:
         (SETTINGS, CALLER, ("poll", "push", "webhook")),
         (EventsSettings(enabled=True), CALLER, ("poll", "push")),
         (SETTINGS, UserAPIKeyAuth(), ("poll", "push")),
+        (SETTINGS, UserAPIKeyAuth(api_key=JWT, user_id="u"), ("poll", "push")),
+        (SETTINGS, admitted_subject("u"), ("poll", "push", "webhook")),
     ),
 )
 def test_webhook_is_offered_only_with_a_public_url_and_an_authenticated_caller(

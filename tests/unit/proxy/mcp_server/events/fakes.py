@@ -40,6 +40,15 @@ def server(
     )
 
 
+JWT: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJlLWE"
+
+
+def admitted_subject(user_id: str) -> UserAPIKeyAuth:
+    subject: Final = UserAPIKeyAuth(user_id=user_id)
+    subject.mcp_admitted_user_subject = True
+    return subject
+
+
 def context(caller: UserAPIKeyAuth | None = CALLER) -> OperationContext:
     return OperationContext(_caller=caller, protocol_version="2026-07-28")
 

@@ -8,7 +8,7 @@ from mcp.shared.exceptions import MCPError
 from pydantic import ValidationError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
-from litellm.proxy.mcp_server.events.access import principal_of, stored_key_hash
+from litellm.proxy.mcp_server.events.access import holds_webhooks, principal_of, stored_key_hash
 from litellm.proxy.mcp_server.events.admission import admit, binding_for, check_routing_headers
 from litellm.proxy.mcp_server.events.catalog import PreparedEvent, prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
@@ -76,8 +76,8 @@ def _validate(
     if settings.public_base_url is None:
         return Error(unsupported("webhook"))
     principal: Final = principal_of(context.user_api_key_auth)
-    if principal is None:
-        return Error(forbidden("Webhook subscriptions require an authenticated caller"))
+    if principal is None or not holds_webhooks(context.user_api_key_auth):
+        return Error(forbidden("Webhook subscriptions need a virtual key or a gateway OAuth sign-in"))
     if not is_https_callback(params.delivery.url):
         return Error(invalid_params("delivery.url must be an https URL"))
     secret: Final = parse_secret(params.delivery.secret)

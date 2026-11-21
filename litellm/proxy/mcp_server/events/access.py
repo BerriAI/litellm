@@ -10,11 +10,16 @@ EventGrant: TypeAlias = frozenset[str] | None
 
 
 _TOKEN_HASH: Final = re.compile(r"[0-9a-f]{64}")
+_JWT_TOKEN_PREFIX: Final = "hashed-jwt-"
 
 
 def stored_key_hash(caller: UserAPIKeyAuth | None) -> str | None:
     token: Final = caller.token if caller is not None else None
     return token if token is not None and _TOKEN_HASH.fullmatch(token) else None
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def principal_of(caller: UserAPIKeyAuth | None) -> str | None:
@@ -24,8 +29,19 @@ def principal_of(caller: UserAPIKeyAuth | None) -> str | None:
     if key is not None:
         return "key:" + key
     if caller.user_id:
-        return "user:" + hashlib.sha256(caller.user_id.encode()).hexdigest()
-    return None
+        return "user:" + _digest(caller.user_id)
+    if caller.team_id:
+        return "team:" + _digest(caller.team_id)
+    token: Final = caller.token
+    return "token:" + _digest(token) if token and not token.startswith(_JWT_TOKEN_PREFIX) else None
+
+
+def holds_webhooks(caller: UserAPIKeyAuth | None) -> bool:
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import is_mcp_admitted_user_subject
+
+    if caller is None:
+        return False
+    return stored_key_hash(caller) is not None or (is_mcp_admitted_user_subject(caller) and bool(caller.user_id))
 
 
 async def _caller_permissions(caller: UserAPIKeyAuth) -> Sequence[LiteLLM_ObjectPermissionTable | None]:

@@ -23,7 +23,7 @@ from litellm.types.mcp_server.events import (
     WebhookDelivery,
 )
 
-from ..fakes import CALLER, SETTINGS, FakeUpstream, context, runtime, server
+from ..fakes import CALLER, JWT, SETTINGS, FakeUpstream, context, runtime, server
 from .memory_store import MemoryStore
 
 SECRET: Final = "whsec_" + base64.b64encode(bytes(range(32))).decode()
@@ -134,6 +134,7 @@ def test_no_expiry_is_written_as_an_explicit_null() -> None:
     (
         ({"settings": EventsSettings(enabled=True)}, EventsErrorCode.UNSUPPORTED),
         ({"context": context(UserAPIKeyAuth())}, EventsErrorCode.FORBIDDEN),
+        ({"context": context(UserAPIKeyAuth(api_key=JWT, user_id="u"))}, EventsErrorCode.FORBIDDEN),
         ({"params": _params(url="http://client.example/hook")}, EventsErrorCode.INVALID_PARAMS),
         ({"params": _params(secret="whsec_short")}, EventsErrorCode.INVALID_PARAMS),
         ({"settings": EventsSettings(enabled=True, public_base_url="https://gw", max_subscriptions_per_key=1)}, None),

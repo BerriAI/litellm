@@ -229,7 +229,6 @@ async def send_test_event(
             name=gateway_name(server, row.event_name) if server is not None else row.event_name,
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             data=(request or TestEventRequest()).data,
-            cursor=row.cursor,
         )
         .model_dump_json(by_alias=True, exclude_none=True)
         .encode()

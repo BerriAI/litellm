@@ -38,6 +38,7 @@ def _row(subscription_id: str, owner: UserAPIKeyAuth, status: SubscriptionStatus
         event_name="build.failed",
         client_url="https://client.example/hook",
         client_secret=SECRET,
+        cursor="mcp_state_v1.subscribe-time",
         upstream_secret=new_secret(),
         status=status,
         user_id=owner.user_id,
@@ -115,6 +116,7 @@ async def test_a_test_event_is_signed_with_the_subscription_secret_and_carries_t
     assert verify((secret,), headers, body, int(time.time()))
     assert json.loads(body)["data"] == {"build": 7}
     assert json.loads(body)["name"] == "ci-build.failed"
+    assert "cursor" not in json.loads(body)
 
 
 async def test_a_test_event_without_a_body_sends_the_default_payload() -> None:

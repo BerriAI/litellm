@@ -9,11 +9,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.events.access import (
     EventGrant,
     grant_allows,
+    holds_webhooks,
     intersect_grants,
     principal_of,
     stored_key_hash,
 )
 from litellm.types.proxy.auth.user_api_key_auth import hash_token
+
+from .fakes import JWT, admitted_subject
 
 
 def _identity(permissions: Mapping[str, Sequence[str]]) -> Mapping[str, Sequence[str]]:
@@ -69,7 +72,7 @@ def test_grant_allows(grant: EventGrant, name: str, allowed: bool) -> None:
     assert grant_allows(grant, name) is allowed
 
 
-_JWT_A: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJlLWE"
+_JWT_A: Final = JWT
 _JWT_B: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiaWF0IjoyfQ.c2lnbmF0dXJlLWI"
 
 
@@ -81,6 +84,10 @@ _JWT_B: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiaWF0IjoyfQ.c2lnbmF0dXJlLWI
         (UserAPIKeyAuth(user_id="u"), UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), True),
         (UserAPIKeyAuth(api_key="sk-a"), UserAPIKeyAuth(api_key="sk-b"), False),
         (UserAPIKeyAuth(user_id="u1"), UserAPIKeyAuth(user_id="u2"), False),
+        (UserAPIKeyAuth(api_key=_JWT_A, team_id="t1"), UserAPIKeyAuth(api_key=_JWT_B, team_id="t1"), True),
+        (UserAPIKeyAuth(api_key=_JWT_A, team_id="t1"), UserAPIKeyAuth(api_key=_JWT_A, team_id="t2"), False),
+        (UserAPIKeyAuth(api_key="custom-a"), UserAPIKeyAuth(api_key="custom-a"), True),
+        (UserAPIKeyAuth(api_key="custom-a"), UserAPIKeyAuth(api_key="custom-b"), False),
     ),
 )
 def test_the_principal_survives_token_refresh_and_tracks_the_database_key(
@@ -101,3 +108,29 @@ def test_the_principal_survives_token_refresh_and_tracks_the_database_key(
 )
 def test_only_database_keys_are_stored_as_key_hashes(caller: UserAPIKeyAuth | None, key_hash: str | None) -> None:
     assert stored_key_hash(caller) == key_hash
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (UserAPIKeyAuth(api_key="custom-a"), UserAPIKeyAuth(api_key=_JWT_A, team_id="t1"), UserAPIKeyAuth(user_id="u")),
+)
+def test_callers_without_a_database_key_never_share_the_anonymous_principal(caller: UserAPIKeyAuth) -> None:
+    assert principal_of(caller) is not None
+    assert principal_of(UserAPIKeyAuth(api_key=_JWT_A)) is None
+
+
+@pytest.mark.parametrize(
+    ("caller", "holds"),
+    (
+        (UserAPIKeyAuth(api_key="sk-a"), True),
+        (admitted_subject("u"), True),
+        (UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), False),
+        (UserAPIKeyAuth(api_key="custom-a", user_id="u"), False),
+        (UserAPIKeyAuth(api_key=_JWT_A, team_id="t1"), False),
+        (None, False),
+    ),
+)
+def test_only_callers_the_worker_can_reauthorize_exactly_hold_webhooks(
+    caller: UserAPIKeyAuth | None, holds: bool
+) -> None:
+    assert holds_webhooks(caller) is holds

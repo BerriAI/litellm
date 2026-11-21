@@ -6,7 +6,7 @@ from mcp.shared.inbound import find_invalid_x_mcp_header
 
 from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.contracts import OperationContext
-from litellm.proxy.mcp_server.events.access import EventGrant, grant_allows, principal_of
+from litellm.proxy.mcp_server.events.access import EventGrant, grant_allows, holds_webhooks
 from litellm.proxy.mcp_server.events.config import EventsSettings, server_allows_event, server_events
 from litellm.proxy.mcp_server.events.errors import EventsFailure, event_not_found
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
@@ -63,7 +63,7 @@ def resolve(name: str, servers: tuple[EventServer, ...]) -> ResolvedEvent | None
 def offered_modes(
     descriptor: EventType, settings: EventsSettings, context: OperationContext
 ) -> tuple[DeliveryMode, ...]:
-    webhook_ready: Final = settings.public_base_url is not None and principal_of(context.user_api_key_auth) is not None
+    webhook_ready: Final = settings.public_base_url is not None and holds_webhooks(context.user_api_key_auth)
     return tuple(mode for mode in descriptor.delivery if mode != "webhook" or webhook_ready)
 
 
