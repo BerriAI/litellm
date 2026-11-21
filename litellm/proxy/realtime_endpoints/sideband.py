@@ -91,4 +91,5 @@ async def join_sideband(
     if await client.joined(timeout):
         return True
     await client.close()
+    _ = task.cancel()
     return False

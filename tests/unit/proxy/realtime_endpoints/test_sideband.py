@@ -65,14 +65,18 @@ async def test_a_sideband_has_joined_once_the_relay_to_the_provider_runs(
 
 
 @pytest.mark.asyncio
-async def test_a_sideband_that_never_reaches_the_provider_is_given_up_on_and_disconnected() -> None:
+async def test_a_sideband_that_never_reaches_the_provider_is_given_up_on_and_stopped() -> None:
     client: Final = SidebandClientWebSocket("/v1/realtime")
-    released: Final = asyncio.Event()
+    outcome: Final[asyncio.Future[str]] = asyncio.get_running_loop().create_future()
 
     async def _session() -> None:
-        await released.wait()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            outcome.set_result("stopped")
+            raise
 
     assert await join_sideband(client, _session(), timeout=0) is False
     with pytest.raises(WebSocketDisconnect):
         await client.receive_text()
-    released.set()
+    assert await asyncio.wait_for(outcome, 1) == "stopped"
