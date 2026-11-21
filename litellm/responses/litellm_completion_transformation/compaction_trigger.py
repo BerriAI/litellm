@@ -14,7 +14,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.messages.context_management.constants import (
     COMPACT_DEFAULT_INSTRUCTIONS,
     COMPACT_NO_TOOL_CALLS_SUFFIX,
-    COMPACT_SUMMARY_TAG_RE,
+    text_in_summary_tags,
 )
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 from litellm.types.utils import Choices, Message, ModelResponse, ModelResponseStream
@@ -57,8 +57,8 @@ def summary_from_reply(text: str | None) -> str | None:
     """The text inside the reply's ``<summary>`` block, or the whole reply when the model left the tags out"""
     if not text:
         return None
-    match: Final = COMPACT_SUMMARY_TAG_RE.search(text)
-    summary: Final = (text if match is None else match.group(1)).strip()
+    tagged: Final = text_in_summary_tags(text)
+    summary: Final = (text if tagged is None else tagged).strip()
     return summary or None
 
 

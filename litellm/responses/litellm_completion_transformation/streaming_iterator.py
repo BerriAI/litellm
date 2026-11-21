@@ -773,11 +773,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
 
     def _ordered_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
-        answered: Final = chunk if self._compaction_summary is None else self._compaction_summary.take(chunk)
-        ordered: Final = self._reasoning_part_first(answered)
+        ordered: Final = self._reasoning_part_first(chunk)
         if not _streams_compaction(ordered):
             self._queue_compaction_item_added()
         return ordered
+
+    def _received_and_client_chunks(
+        self, chunk: ModelResponseStream
+    ) -> tuple[ModelResponseStream, ModelResponseStream]:
+        received: Final = self._ordered_chunk(chunk)
+        return received, received if self._compaction_summary is None else self._compaction_summary.take(received)
 
     def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
         return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
@@ -1384,7 +1389,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             raise StopAsyncIteration
                         chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
-                        chunk = self._ordered_chunk(cast(ModelResponseStream, chunk))
+                        received, chunk = self._received_and_client_chunks(cast(ModelResponseStream, chunk))
                         for src in (
                             getattr(chunk, "provider_specific_fields", None),
                             getattr(
@@ -1400,7 +1405,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
-                            self._snapshot_chunk_for_stream_chunk_builder(chunk)
+                            self._snapshot_chunk_for_stream_chunk_builder(received)
                         )
                         self._queue_reasoning_done_events_on_reasoning_end(chunk)
                         self._queue_chunk_events(chunk)
@@ -1443,12 +1448,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return self._pending_tool_events.pop(0)
                 try:
                     buffered_chunk = self._take_buffered_chunk()
-                    if buffered_chunk is not None:
-                        chunk = self._ordered_chunk(buffered_chunk)
-                    elif self._upstream_exhausted:
+                    if buffered_chunk is None and self._upstream_exhausted:
                         raise StopIteration
-                    else:
-                        chunk = self._ordered_chunk(self.litellm_custom_stream_wrapper.__next__())
+                    received, chunk = self._received_and_client_chunks(
+                        self.litellm_custom_stream_wrapper.__next__() if buffered_chunk is None else buffered_chunk
+                    )
                     for src in (
                         getattr(chunk, "provider_specific_fields", None),
                         getattr(
@@ -1467,7 +1471,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     # _ensure_output_item_for_chunk queues events on the same chunk.
                     # This mirrors the async path (see __anext__).
                     self.collected_chat_completion_chunks.append(
-                        self._snapshot_chunk_for_stream_chunk_builder(cast(ModelResponseStream, chunk))
+                        self._snapshot_chunk_for_stream_chunk_builder(received)
                     )
                     self._queue_reasoning_done_events_on_reasoning_end(chunk)
                     self._queue_chunk_events(chunk)

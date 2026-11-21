@@ -1,5 +1,6 @@
 import json
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final, cast
 
 import httpx
@@ -87,10 +88,22 @@ def test_input_without_a_trigger_is_returned_as_is(input: str | list[object]) ->
         pytest.param("", None, id="empty"),
         pytest.param(" \n ", None, id="whitespace"),
         pytest.param("<summary> </summary>", None, id="empty_tags"),
+        pytest.param("<SUMMARY>first</Summary> <summary>second</summary>", "first", id="first_pair_any_case"),
+        pytest.param("<summary>open <summary>inner</summary>", "open <summary>inner", id="nested_opening"),
     ],
 )
 def test_summary_from_reply(text: str | None, summary: str | None) -> None:
     assert summary_from_reply(text) == summary
+
+
+def test_a_reply_full_of_unclosed_summary_tags_is_read_in_linear_time() -> None:
+    reply: Final = "<summary>" * 20_000
+    started: Final = time.perf_counter()
+
+    summary: Final = summary_from_reply(reply)
+
+    assert summary == reply
+    assert time.perf_counter() - started < 1.0
 
 
 def _chat_reply(message: Mapping[str, object]) -> ModelResponse:
@@ -292,7 +305,11 @@ def test_a_compaction_trigger_with_a_forced_tool_lets_the_model_write_the_summar
     )
 
     response: Final = litellm.responses(
-        model=_FORCED_TOOL_MODEL, api_key="mock_api_key", input=_trigger_request(), tools=list(_TOOLS), tool_choice=tool_choice
+        model=_FORCED_TOOL_MODEL,
+        api_key="mock_api_key",
+        input=_trigger_request(),
+        tools=list(_TOOLS),
+        tool_choice=tool_choice,
     )
 
     assert _sent_body(route)["tool_choice"] == {"type": "auto"}
@@ -308,7 +325,11 @@ def test_a_forced_tool_without_a_trigger_is_still_forced(respx_mock: respx.MockR
     )
 
     _ = litellm.responses(
-        model=_FORCED_TOOL_MODEL, api_key="mock_api_key", input=list(_HISTORY), tools=list(_TOOLS), tool_choice="required"
+        model=_FORCED_TOOL_MODEL,
+        api_key="mock_api_key",
+        input=list(_HISTORY),
+        tools=list(_TOOLS),
+        tool_choice="required",
     )
 
     assert _sent_body(route)["tool_choice"] == {"type": "any"}
@@ -350,6 +371,53 @@ def test_a_streamed_compaction_trigger_over_anthropic_streams_one_compaction_ite
         completed.response.usage.output_tokens,
         completed.response.usage.total_tokens,
     ) == (30, 12, 42)
+
+
+class _StreamThatDropsAfter(httpx.SyncByteStream):
+    def __init__(self, text: str) -> None:
+        self._text: Final = text
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _anthropic_sse(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_dropped",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [],
+                    "usage": {"input_tokens": 30, "output_tokens": 1},
+                },
+            },
+            *_anthropic_block_events(0, {"type": "text", "text": self._text})[:2],
+        )
+        raise httpx.ReadError("connection dropped")
+
+
+def _output_tokens_billed_on_disconnect(respx_mock: respx.MockRouter, input: list[object]) -> int:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_StreamThatDropsAfter(_SUMMARY_REPLY)
+        )
+    )
+    stream: Final = litellm.responses(
+        model=_MODEL, api_key="mock_api_key", input=input, tools=list(_TOOLS), stream=True
+    )
+    with pytest.raises(Exception):
+        _ = tuple(stream)
+    partial: Final = stream.partial_response_on_disconnect()
+    assert partial is not None and partial.response.usage is not None
+    return partial.response.usage.output_tokens
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_a_summary_turn_cut_off_mid_stream_bills_the_summary_written_so_far(respx_mock: respx.MockRouter) -> None:
+    summary_turn: Final = _output_tokens_billed_on_disconnect(respx_mock, _trigger_request())
+    normal_turn: Final = _output_tokens_billed_on_disconnect(respx_mock, list(_HISTORY))
+
+    assert normal_turn > 1
+    assert summary_turn == normal_turn
 
 
 @pytest.mark.usefixtures(httpx_transport.__name__)

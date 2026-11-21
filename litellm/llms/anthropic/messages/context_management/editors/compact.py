@@ -57,8 +57,8 @@ from ..constants import (
     COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY,
     COMPACT_SUMMARY_MODEL_SETTING_KEY,
     COMPACT_SUMMARY_SYSTEM_PREFIX,
-    COMPACT_SUMMARY_TAG_RE,
     COMPACT_SUMMARY_TIMEOUT_SECONDS,
+    text_in_summary_tags,
 )
 from ..errors import AnthropicContextManagementError
 from ..result import PolyfillResult
@@ -401,10 +401,10 @@ def _select_last_user_question(
 def _extract_summary_text(raw: str | None) -> str | None:
     if not raw:
         return None
-    match: Final = COMPACT_SUMMARY_TAG_RE.search(raw)
-    if match is None:
+    tagged: Final = text_in_summary_tags(raw)
+    if tagged is None:
         return None
-    summary: Final = match.group(1).strip()
+    summary: Final = tagged.strip()
     return summary or None
 
 

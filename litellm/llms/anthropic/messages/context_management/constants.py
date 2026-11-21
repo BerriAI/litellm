@@ -45,4 +45,12 @@ COMPACT_DEFAULT_INSTRUCTIONS: Final = (
 # Anthropic docs under "Compaction might fail when tools are defined".
 COMPACT_NO_TOOL_CALLS_SUFFIX: Final = " Do not call any tools while writing this summary; respond with text only."
 
-COMPACT_SUMMARY_TAG_RE: Final = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
+_SUMMARY_OPEN_TAG_RE: Final = re.compile(r"<summary>", re.IGNORECASE)
+_SUMMARY_CLOSE_TAG_RE: Final = re.compile(r"</summary>", re.IGNORECASE)
+
+
+def text_in_summary_tags(raw: str) -> str | None:
+    """The text between the first ``<summary>`` and the next ``</summary>``, found in linear time"""
+    opening: Final = _SUMMARY_OPEN_TAG_RE.search(raw)
+    closing: Final = None if opening is None else _SUMMARY_CLOSE_TAG_RE.search(raw, opening.end())
+    return None if opening is None or closing is None else raw[opening.end() : closing.start()]
