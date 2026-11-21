@@ -2027,14 +2027,25 @@ def completion_cost(
             explicit_pricing,
         )
         requested_model: Final = model
-        request_pricing_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        request_pricing_provider: Final = (
+            custom_llm_provider if isinstance(custom_llm_provider, str) else _get_provider_for_cost_calc(model)
+        )
         raw_candidates: Final = (
             (
                 selected_model,
                 pricing_provider_override or request_pricing_provider,
             ),
             (_get_response_model(completion_response), request_pricing_provider),
-            *(((model, request_pricing_provider),) if model is not None else ()),
+            *(
+                (
+                    (
+                        model,
+                        request_pricing_provider or _get_provider_for_cost_calc(model),
+                    ),
+                )
+                if model is not None
+                else ()
+            ),
         )
         potential_model_names: Final = (
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
@@ -2044,6 +2055,7 @@ def completion_cost(
         for idx, (candidate_model, candidate_pricing_provider) in enumerate(potential_model_names):
             model = candidate_model
             try:
+                candidate_custom_llm_provider: str | None = candidate_pricing_provider or request_pricing_provider
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
 
@@ -2113,8 +2125,13 @@ def completion_cost(
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
-                        custom_llm_provider = pricing_provider or hidden_params.get(
-                            "custom_llm_provider", custom_llm_provider or None
+                        custom_llm_provider = (
+                            candidate_pricing_provider
+                            or pricing_provider
+                            or hidden_params.get(
+                                "custom_llm_provider",
+                                candidate_custom_llm_provider or custom_llm_provider or None,
+                            )
                         )
                         hidden_region_name = require_attributes(
                             _ATTRIBUTE_VALUE.validate_python(hidden_params), _SupportsGetWithDefault, "get"
