@@ -34,8 +34,8 @@ from litellm.proxy.proxy_server import (
     custom_openapi,
     ensure_unique_openapi_operation_ids,
     get_openapi_schema,
-    mount_swagger_ui,
 )
+from litellm.proxy.swagger_reference import mount_swagger_ui
 from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 from .conftest import normalize
@@ -424,13 +424,9 @@ def test_mount_swagger_ui_mounts_static_route():
 
 def test_mount_swagger_ui_missing_directory_raises_error(monkeypatch, tmp_path):
     """If the swagger directory is missing, StaticFiles raises RuntimeError."""
-    import litellm.proxy.proxy_server as ps
+    from litellm.proxy import swagger_reference
 
-    fresh_app = FastAPI()
-    monkeypatch.setattr(ps, "app", fresh_app, raising=True)
-    monkeypatch.setattr(
-        ps, "current_dir", str(tmp_path / "does_not_exist"), raising=True
-    )
+    monkeypatch.setattr(swagger_reference, "SWAGGER_ASSET_DIR", tmp_path / "does_not_exist")
     with pytest.raises(RuntimeError):
         mount_swagger_ui(FastAPI(docs_url=None), "/swagger")
 

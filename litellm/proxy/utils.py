@@ -9953,26 +9953,6 @@ def get_error_message_str(e: Exception) -> str:
     return error_message
 
 
-def get_redoc_url() -> str | None:
-    """
-    Get the Redoc URL from the environment variables.
-
-    - If REDOC_URL is set, return it.
-    - If NO_REDOC is True, return None.
-    - Otherwise, default to "/redoc".
-    """
-    if redoc_url := os.getenv("REDOC_URL"):
-        return redoc_url
-
-    if str_to_bool(os.getenv("NO_REDOC")) is True:
-        return None
-
-    return "/redoc"
-
-
-_get_redoc_url: Final = get_redoc_url
-
-
 def get_docs_url() -> str | None:
     """
     Get the default API reference URL from the environment variables.
@@ -10000,7 +9980,7 @@ def get_swagger_url() -> str | None:
     docs_url: Final = get_docs_url()
     if docs_url is None or str_to_bool(os.getenv("NO_SWAGGER")) is True:
         return None
-    if "/swagger" in (docs_url, get_redoc_url(), get_openapi_url()):
+    if "/swagger" in (docs_url, get_openapi_url()):
         return "/swagger/ui"
     return "/swagger"
 

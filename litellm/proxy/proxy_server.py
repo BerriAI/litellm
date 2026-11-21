@@ -1089,7 +1089,6 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     _get_docs_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_openapi_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _get_redoc_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_valid_team_configs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     cache_user_row,
@@ -1100,7 +1099,6 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     get_error_message_str,
     get_openapi_url,
     get_projected_spend_over_limit,
-    get_redoc_url,
     get_server_root_path,
     get_swagger_url,
     handle_exception_on_proxy,
@@ -1229,7 +1227,6 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
@@ -1245,6 +1242,7 @@ from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 from litellm.proxy.scalar_reference import mount_scalar_reference
+from litellm.proxy.swagger_reference import mount_swagger_ui
 
 # import enterprise folder
 enterprise_router = APIRouter()
@@ -1356,10 +1354,6 @@ ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
-custom_swagger_message: Final = (
-    "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/enterprise#operations--branding)"
-)
-
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
 title: Final = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM API"
 
@@ -1367,10 +1361,10 @@ _title: Final = title
 _description: Final = (
     os.getenv(
         "DOCS_DESCRIPTION",
-        f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}",
+        f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format.\n\n{ui_message}",
     )
     if premium_user
-    else f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}"
+    else f"Proxy Server to call 100+ LLMs in the OpenAI format.\n\n{ui_message}"
 )
 
 
@@ -2256,7 +2250,7 @@ def ensure_unique_openapi_operation_ids(
 docs_url: Final = get_docs_url()
 app = FastAPI(
     docs_url=None,
-    redoc_url=get_redoc_url(),
+    redoc_url=None,
     openapi_url=get_openapi_url(),
     title=title,
     description=_description,
@@ -3171,106 +3165,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
 
-def mount_swagger_ui(application: FastAPI, swagger_url: str | None) -> None:
-    openapi_url: Final = application.openapi_url
-    if not swagger_url or not openapi_url:
-        return
-    swagger_static: Final = StaticFiles(directory=os.path.join(current_dir, "swagger"))
-
-    # On dropdown expand: one-time fetch to the prefix (triggers lazy load),
-    # then spec re-download so real routes replace the stub. Raw JS (no
-    # <script> tag) since it's injected inside the existing inline script.
-    from litellm.proxy._lazy_features import lazy_tag_to_prefix
-
-    _lazy_plugin_js: Final = (
-        "const TAG_TO_PREFIX = " + json.dumps(lazy_tag_to_prefix()) + ";"
-        "const warmedTags = new Set();"
-        "const LAZY_TAGS = new Set(Object.keys(TAG_TO_PREFIX));"
-        "const hideStubRows = () => {"
-        "document.querySelectorAll('.opblock').forEach(op => {"
-        "const d = op.querySelector('.opblock-summary-description');"
-        "if (d && LAZY_TAGS.has(d.textContent.trim())) op.style.display = 'none';"
-        "});};"
-        "const annotateLazyHeaders = () => {"
-        "document.querySelectorAll('.opblock-tag').forEach(tagEl => {"
-        "const m = (tagEl.id || '').match(/^operations-tag-(.+)$/);"
-        "if (!m || !LAZY_TAGS.has(m[1])) return;"
-        "const existing = tagEl.querySelector('.lazy-load-hint');"
-        "if (warmedTags.has(m[1])) { if (existing) existing.remove(); return; }"
-        "if (existing) return;"
-        "const hint = document.createElement('small');"
-        "hint.className = 'lazy-load-hint';"
-        "hint.textContent = ' (expand to load routes)';"
-        "hint.style.opacity = '0.6';"
-        "hint.style.marginLeft = '6px';"
-        "const target = tagEl.querySelector('a span') || tagEl.querySelector('span') || tagEl;"
-        "target.appendChild(hint);"
-        "});};"
-        "setInterval(() => { hideStubRows(); annotateLazyHeaders(); }, 200);"
-        "const LazyLoadPlugin = () => ({"
-        "afterLoad:function(system){setTimeout(()=>{"
-        "for(const tag of LAZY_TAGS)system.layoutActions.show(['operations-tag',tag],false);"
-        "},200);},"
-        "statePlugins:{layout:{wrapActions:{show:(ori,sys)=>(...args)=>{"
-        "const thing=args[0];const shown=args[1];let tag=null;"
-        "if(Array.isArray(thing)){for(const t of thing)if(TAG_TO_PREFIX[t])tag=t;}"
-        "if(shown!==false&&tag&&!warmedTags.has(tag)){warmedTags.add(tag);"
-        "fetch(LAZY_WARM_URL+tag,{method:'POST',credentials:'include'}).then(r=>r.json()).then(d=>{"
-        "if(!d.paths||Object.keys(d.paths).length===0)return;"
-        "const cur=sys.specSelectors.specJson().toJS();"
-        "const merged={};let inserted=false;"
-        "for(const k in (cur.paths||{})){"
-        "if(k===d.stub_path){for(const nk in d.paths)merged[nk]=d.paths[nk];inserted=true;}"
-        "else{merged[k]=cur.paths[k];}}"
-        "if(!inserted)Object.assign(merged,d.paths);"
-        "cur.paths=merged;"
-        "cur.components=cur.components||{};"
-        "cur.components.schemas=Object.assign(cur.components.schemas||{},(d.components||{}).schemas||{});"
-        "sys.specActions.updateSpec(JSON.stringify(cur));"
-        "}).catch(()=>{});}"
-        "return ori(...args);}}}}});"
-    )
-
-    oauth2_redirect_url: Final = application.swagger_ui_oauth2_redirect_url
-
-    async def swagger_ui_html(request: Request) -> HTMLResponse:
-        scope_root_path: Final[object] = request.scope.get("root_path")
-        root_path: Final = scope_root_path.rstrip("/") if isinstance(scope_root_path, str) else ""
-        assets: Final = f"{root_path}/swagger"
-        response: Final = get_swagger_ui_html(
-            openapi_url=f"{root_path}{openapi_url}",
-            title=f"{application.title} - Swagger UI",
-            oauth2_redirect_url=f"{root_path}{oauth2_redirect_url}" if oauth2_redirect_url else None,
-            init_oauth=application.swagger_ui_init_oauth,
-            swagger_ui_parameters=application.swagger_ui_parameters,
-            swagger_js_url=f"{assets}/swagger-ui-bundle.js",
-            swagger_css_url=f"{assets}/swagger-ui.css",
-            swagger_favicon_url=f"{assets}/favicon.png",
-        )
-        warm_url: Final = json.dumps(f"{root_path}/lazy/warm/").replace("<", "\\u003c")
-        body: Final = (
-            bytes(response.body)
-            .decode("utf-8")
-            .replace(
-                "const ui = SwaggerUIBundle({",
-                f"const LAZY_WARM_URL = {warm_url};"
-                + _lazy_plugin_js
-                + 'const ui = SwaggerUIBundle({plugins:[LazyLoadPlugin],tagsSorter:"alpha",',
-                1,
-            )
-        )
-        return HTMLResponse(content=body)
-
-    async def swagger_ui_redirect(_request: Request) -> HTMLResponse:
-        return get_swagger_ui_oauth2_redirect_html()
-
-    application.add_route(swagger_url, swagger_ui_html, include_in_schema=False)
-    if oauth2_redirect_url:
-        application.add_route(oauth2_redirect_url, swagger_ui_redirect, include_in_schema=False)
-    application.mount("/swagger", swagger_static, name="swagger")
-
-
-mount_swagger_ui(app, get_swagger_url())
+mount_swagger_ui(app, get_swagger_url(), lazy_features=True)
 
 root_redirect_url: Final[str | None] = os.getenv("ROOT_REDIRECT_URL")
 if docs_url != "/" and root_redirect_url is not None:

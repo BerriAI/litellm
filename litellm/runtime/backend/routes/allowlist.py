@@ -159,7 +159,6 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",
-        "/redoc",
         "/fallback/login",
         "/mcp",  # bare spelling of the aggregate MCP endpoint; /mcp/ prefix covers the rest
     }

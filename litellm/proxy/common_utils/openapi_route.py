@@ -14,9 +14,7 @@ from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
 OpenAPISchema: TypeAlias = JsonObject
 Inputs: Final = TypeVar("Inputs")
 _SERVERS: Final = TypeAdapter(list[dict[str, object]])
-_DOCUMENTATION_ROUTE_NAMES: Final = frozenset(
-    {"openapi", "redoc_html", "scalar_reference", "swagger_ui_html", "swagger_ui_redirect"}
-)
+_DOCUMENTATION_ROUTE_NAMES: Final = frozenset({"openapi", "scalar_reference", "swagger_ui_html", "swagger_ui_redirect"})
 
 
 def is_proxy_documentation_route(route: object) -> bool:
