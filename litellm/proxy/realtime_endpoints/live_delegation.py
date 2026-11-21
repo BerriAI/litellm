@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import accumulate, chain, takewhile
 from typing import Final
 
 from fastapi import HTTPException
@@ -17,6 +18,7 @@ from litellm.proxy.auth.auth_checks import (
 _DELEGATION_KEY: Final = "delegation"
 _JSON_ESCAPE: Final = "\\u"
 _DELEGATED_TOOLS_ROUTE: Final = "/v1/responses"
+_MAX_DELEGATION_DEPTH: Final = 64
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
@@ -33,24 +35,30 @@ def _strings(value: JsonValue) -> Iterator[str]:
         yield from filter(lambda item: isinstance(item, str), value)  # pyright: ignore[reportReturnType]  # filter keeps only str items
 
 
-def _named(value: JsonValue, key: str) -> Iterator[str]:
+def _children(value: JsonValue) -> Iterator[JsonValue]:
     if isinstance(value, dict):
-        for name, nested in value.items():
-            yield from _strings(nested) if name == key else _named(nested, key)
+        yield from value.values()
     elif isinstance(value, list):
-        for nested in value:
-            yield from _named(nested, key)
+        yield from value
+
+
+def _next_level(level: tuple[JsonValue, ...], _depth: int) -> tuple[JsonValue, ...]:
+    return tuple(chain.from_iterable(map(_children, level)))
+
+
+def _mappings(value: JsonValue) -> Iterator[Mapping[str, JsonValue]]:
+    levels: Final = takewhile(bool, accumulate(range(_MAX_DELEGATION_DEPTH), _next_level, initial=(value,)))
+    return (node for node in chain.from_iterable(levels) if isinstance(node, dict))
+
+
+def _named(value: JsonValue, key: str) -> Iterator[str]:
+    for mapping in _mappings(value):
+        if key in mapping:
+            yield from _strings(mapping[key])
 
 
 def _tool_requests(value: JsonValue) -> Iterator[Mapping[str, JsonValue]]:
-    if isinstance(value, dict):
-        if "tools" in value:
-            yield value
-        for nested in value.values():
-            yield from _tool_requests(nested)
-    elif isinstance(value, list):
-        for nested in value:
-            yield from _tool_requests(nested)
+    return (mapping for mapping in _mappings(value) if "tools" in mapping)
 
 
 def _delegated_tool_requests(session: object) -> tuple[Mapping[str, JsonValue], ...]:
