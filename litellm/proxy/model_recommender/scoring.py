@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from math import log
 from typing import Final
 
 from .benchmarks import BenchmarkScore, intelligence_score
@@ -34,6 +35,14 @@ def normalize(value: float | None, values: tuple[float | None, ...], invert: boo
     high: Final = max(known)
     scaled: Final = (value - low) / (high - low) if high != low else 0.5
     return Signal(raw=value, normalized=1 - scaled if invert else scaled, unknown=False)
+
+
+def cost_signal(value: float | None, values: tuple[float | None, ...]) -> Signal:
+    positive: Final = tuple(item for item in values if item is not None and item > 0)
+    floor: Final = min(positive) / 10 if positive else 1.0
+    transformed: Final = tuple(log(max(item, floor)) if item is not None else None for item in values)
+    scaled: Final = normalize(log(max(value, floor)) if value is not None else None, transformed, invert=True)
+    return scaled.model_copy(update={"raw": value})
 
 
 def reasons(signals: Signals, count: int) -> tuple[str, ...]:
@@ -90,10 +99,15 @@ def recommendation(
     latency: tuple[float | None, ...],
     speeds: Mapping[str, Speed],
 ) -> Recommendation:
+    benchmark: Final = intelligence[index]
     signals: Final = Signals(
-        intelligence=normalize(intelligence[index], intelligence),
+        intelligence=Signal(
+            raw=benchmark,
+            normalized=benchmark if benchmark is not None else 0.5,
+            unknown=benchmark is None,
+        ),
         speed=normalize(latency[index], latency, invert=True),
-        cost=normalize(costs[index], costs, invert=True),
+        cost=cost_signal(costs[index], costs),
     )
     weights: Final = request.priorities
     total: Final = weights.intelligence + weights.speed + weights.cost

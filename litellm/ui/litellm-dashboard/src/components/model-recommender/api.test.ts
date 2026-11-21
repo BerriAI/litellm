@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
-import { buildRequest, metricValue, recommenderParsers, requestRecommendations } from "./api";
+import { buildRequest, compactNumber, metricValue, recommenderParsers, requestRecommendations } from "./api";
 
 beforeEach(() => registerBaseUrlGetter(() => "http://localhost:4000"));
 afterEach(() => {
@@ -37,8 +37,10 @@ describe("recommender request state", () => {
   it("labels unknown signals and formats raw metrics", () => {
     expect(metricValue("intelligence", null)).toBe("Unknown");
     expect(metricValue("intelligence", 0.71)).toBe("71% benchmark score");
-    expect(metricValue("cost", 2)).toBe("$2.00 / 1M tokens");
-    expect(metricValue("speed", 1.25)).toBe("1.25s median");
+    expect(metricValue("cost", 0.2)).toBe("$0.20 / 1M");
+    expect(metricValue("speed", 1.24)).toBe("1.2s");
+    expect(compactNumber(922000)).toBe("922K");
+    expect(compactNumber(1000000)).toBe("1M");
   });
   it("returns an empty shortlist without inventing results", async () => {
     const response = { recommendations: [], candidates_considered: 2, candidates_filtered: 2, data_sources: [] };

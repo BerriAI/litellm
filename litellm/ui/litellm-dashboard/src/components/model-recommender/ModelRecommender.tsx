@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   buildRequest,
   FOCUS,
@@ -201,13 +202,26 @@ export default function ModelRecommender() {
           {loading && (
             <div role="status" className="space-y-4">
               <p className="text-sm text-muted-foreground">{t("loading")}</p>
-              {[0, 1].map((index) => (
-                <div key={index} className="h-64 animate-pulse rounded-xl bg-muted" />
-              ))}
+              <div className="space-y-5 rounded-2xl border border-blue-200/60 bg-blue-50/30 p-7 dark:border-blue-900/60 dark:bg-blue-950/20">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-3">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-8 w-48" />
+                  </div>
+                  <Skeleton className="size-20 rounded-full" />
+                </div>
+                <div className="grid grid-cols-3 gap-5">
+                  {[0, 1, 2].map((index) => (
+                    <Skeleton key={index} className="h-10" />
+                  ))}
+                </div>
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-1/2" />
+              </div>
             </div>
           )}
           {!loading && !!result?.recommendations.length && (
-            <>
+            <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
               <RecommendationCard model={result.recommendations[0]} position={0} />
               <div className="grid gap-5 lg:grid-cols-2">
                 {result.recommendations.slice(1).map((model, index) => (
@@ -215,7 +229,7 @@ export default function ModelRecommender() {
                 ))}
               </div>
               <p className="text-xs leading-relaxed text-muted-foreground">{t("relativeScores")}</p>
-            </>
+            </div>
           )}
           {!loading && !result?.recommendations.length && (
             <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed bg-muted/20 px-8 text-center">

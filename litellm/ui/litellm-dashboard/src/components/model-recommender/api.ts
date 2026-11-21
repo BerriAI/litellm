@@ -70,7 +70,11 @@ export async function requestRecommendations(
 
 export function metricValue(kind: (typeof PRIORITIES)[number], raw: number | null): string {
   if (raw === null) return "Unknown";
-  if (kind === "cost") return `$${raw.toFixed(2)} / 1M tokens`;
-  if (kind === "speed") return `${raw.toFixed(2)}s median`;
+  if (kind === "cost") return `$${raw.toFixed(2)} / 1M`;
+  if (kind === "speed") return `${raw.toFixed(1)}s`;
   return `${Math.round(raw * 100)}% benchmark score`;
+}
+
+export function compactNumber(value: number): string {
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }

@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from litellm.proxy.model_recommender.benchmarks import BenchmarkScore
 from litellm.proxy.model_recommender.models import Candidate, Priorities, RecommendationRequest, Requirements, Speed
-from litellm.proxy.model_recommender.scoring import blended_cost, matches, normalize, rank
+from litellm.proxy.model_recommender.scoring import blended_cost, cost_signal, matches, normalize, rank
 
 
 def test_cost_weight_ranks_cheapest_and_reports_unknown_neutrally() -> None:
@@ -104,5 +104,40 @@ def test_intelligence_priority_outweighs_cost_with_exact_underlying_model_match(
         ),
         {},
     )
-    assert tuple((row.model_group, row.score) for row in result) == (("capable", 75), ("economical", 25))
+    assert tuple((row.model_group, row.score) for row in result) == (("capable", 60), ("economical", 40))
     assert result[0].signals.intelligence.raw == 0.8
+    assert result[0].signals.intelligence.normalized == 0.8
+    assert result[1].signals.intelligence.normalized == 0.2
+
+
+def test_intelligence_is_absolute_even_for_one_candidate() -> None:
+    result: Final = rank(
+        (Candidate(model_group="only", underlying_models=("example",)),),
+        RecommendationRequest(priorities=Priorities(intelligence=3, speed=0, cost=0)),
+        (BenchmarkScore(model="example", focus="general", score=0.9),),
+        {},
+    )
+    assert result[0].score == 90
+    assert result[0].signals.intelligence.normalized == 0.9
+
+
+def test_cost_uses_logarithmic_distance_and_preserves_raw_prices() -> None:
+    signal: Final = cost_signal(10, (1, 10, 100, None))
+    assert signal.normalized == pytest.approx(0.5)
+    assert signal.raw == 10
+    assert signal.unknown is False
+    assert cost_signal(0, (0, 1, 100)).normalized == 1
+    assert cost_signal(0, (0, 0)).normalized == 0.5
+    assert cost_signal(None, (1, 100)).unknown is True
+    assert cost_signal(None, (None,)).normalized == 0.5
+
+    candidates: Final = tuple(
+        Candidate(model_group=str(price), input_cost_per_token=price / 1_000_000, output_cost_per_token=price / 1_000_000)
+        for price in (1, 10, 100)
+    )
+    result: Final = rank(
+        candidates, RecommendationRequest(priorities=Priorities(intelligence=0, speed=0, cost=3)), (), {}
+    )
+    assert result[1].model_group == "10"
+    assert result[1].signals.cost.normalized == pytest.approx(0.5)
+    assert result[1].score == 50
