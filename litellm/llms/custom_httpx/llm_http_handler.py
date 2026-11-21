@@ -7344,19 +7344,20 @@ class BaseLLMHTTPHandler:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        ws_url: str = responses_api_provider_config.get_websocket_url(
+        provider_ws_url: Final[str] = responses_api_provider_config.get_websocket_url(
             api_base=api_base,
             litellm_params=dict(litellm_params),
         )
         # Some providers (e.g. OpenAI) require ?model= in the WebSocket URL.
         # Providers that send the model in the request body (e.g. Azure) set
         # model_in_websocket_url() to False to suppress this append.
-        if responses_api_provider_config.model_in_websocket_url():
-            _parsed: Final = urlparse(ws_url)
-            _qs: Final = parse_qs(_parsed.query)
-            if "model" not in _qs:
-                _qs["model"] = [model]
-                ws_url = urlunparse(_parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()})))
+        _parsed: Final = urlparse(provider_ws_url)
+        _qs: Final = parse_qs(_parsed.query)
+        ws_url: Final = (
+            urlunparse(_parsed._replace(query=urlencode({k: v[0] for k, v in {**_qs, "model": [model]}.items()})))
+            if responses_api_provider_config.model_in_websocket_url() and "model" not in _qs
+            else provider_ws_url
+        )
 
         try:
             ssl_context: Final = realtime_ssl_for_url(ws_url)
