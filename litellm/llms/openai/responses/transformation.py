@@ -515,10 +515,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
-        drops_unsupported_params: Final = drop_params or litellm.drop_params
+        drops_openai_unsupported_params: Final = self.custom_llm_provider == LlmProviders.OPENAI and (
+            drop_params or litellm.drop_params
+        )
         if (
-            self.custom_llm_provider == LlmProviders.OPENAI
-            and drops_unsupported_params
+            drops_openai_unsupported_params
             and params.get("temperature") not in (None, 1)
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
