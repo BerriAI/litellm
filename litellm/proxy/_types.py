@@ -5225,6 +5225,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     public_key_url: str | None = Field(
         default=None,
         min_length=1,
+        pattern=r"[^,\s]",
         description=(
             "JWKS URL for tokens whose `iss` matches no `issuers` entry. Separate several URLs with commas. "
             "Takes precedence over the JWT_PUBLIC_KEY_URL environment variable."
@@ -5399,6 +5400,16 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             raise ValueError("scope_mappings must be set if enforce_scope_based_access is true.")
 
         super().__init__(**kwargs)
+
+    @field_validator("public_key_url", "audience", mode="before")
+    @classmethod
+    def refuse_a_null_global_jwks_url_or_audience(cls, value: object) -> object:
+        if value is None:
+            raise ValueError(
+                "must not be null. An os.environ/ reference to an unset variable resolves to null, "
+                "so set that variable or remove the key"
+            )
+        return value
 
     def get_issuer_config(self, issuer: str | None) -> JWTIssuerConfig | None:
         if issuer is None or self.issuers is None:
