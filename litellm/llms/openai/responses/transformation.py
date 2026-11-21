@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
@@ -79,6 +80,20 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_ERROR_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _openai_sdk_error_body(
+    error_message: str,
+) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
+    try:
+        decoded: Final = _ERROR_BODY.validate_json(error_message)
+    except ValidationError:
+        return None
+    nested: Final = decoded.get("error")
+    return _ERROR_BODY.validate_python(nested) if isinstance(nested, dict) else decoded
+
 
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
@@ -1402,6 +1417,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response.hidden_params["headers"] = raw_response_headers
 
         return response
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+    ) -> BaseLLMException:
+        raise BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+            body=_openai_sdk_error_body(error_message),
+        )
 
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########

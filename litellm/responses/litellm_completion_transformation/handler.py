@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.model_param_helper import embeds_thought_signatu
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
+from litellm.responses.litellm_completion_transformation.error_param import error_param_named_as_a_responses_field
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -157,9 +158,10 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
-        )
+        with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):
+            litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
+                **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            )
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
@@ -259,9 +261,12 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=request_input,
             )
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
-        )
+        with error_param_named_as_a_responses_field(
+            _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request
+        ):
+            litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
+                **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(

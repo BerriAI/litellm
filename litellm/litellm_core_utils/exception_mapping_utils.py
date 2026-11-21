@@ -154,7 +154,7 @@ class ExceptionCheckers:
         return False
 
 
-def get_error_message(error_obj) -> str | None:
+def get_error_message(error_obj: object) -> str | None:
     """
     OpenAI Returns Error message that is nested, this extract the message
 
@@ -182,16 +182,20 @@ def get_error_message(error_obj) -> str | None:
             return None
 
         if hasattr(error_obj, "body"):
-            _error_obj_body: Final = attribute_or_none(error_obj, "body")
-            if isinstance(_error_obj_body, dict):
+            _error_obj_body: Final = as_str_mapping(attribute_or_none(error_obj, "body"))
+            if _error_obj_body is not None:
                 # OpenAI-style: {"message": "...", "type": "...", ...}
-                if _error_obj_body.get("message"):
-                    return _error_obj_body.get("message")
+                top_level_message: Final = _error_obj_body.get("message")
+                if isinstance(top_level_message, str) and top_level_message:
+                    return top_level_message
+                if top_level_message:
+                    return json.dumps(_error_obj_body, default=str)
 
                 # Azure-style: {"error": {"message": "...", ...}}
-                nested_error: Final = _error_obj_body.get("error")
-                if isinstance(nested_error, dict):
-                    return nested_error.get("message")
+                nested_error: Final = as_str_mapping(_error_obj_body.get("error"))
+                if nested_error is not None:
+                    nested_message: Final = nested_error.get("message")
+                    return nested_message if isinstance(nested_message, str) else None
 
         # If all else fails, return None
         return None
@@ -341,18 +345,22 @@ def _github_copilot_custom_app_hint(custom_llm_provider: str, request_kwargs: Ma
     return github_copilot_sign_in_app_hint(request_kwargs).strip() or None
 
 
-def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | None:
-    message: Final = attribute_or_none(original_exception, "message")
-    if isinstance(attribute_or_none(original_exception, "body"), dict) or not isinstance(message, str):
-        return None
+def _decoded_openai_error(text: str) -> Mapping[str, object] | None:
     try:
-        decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(message)))
+        decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(text)))
     except ValueError:
         return None
     if decoded is None or decoded.get("type") == "error":
         return None
     relayed: Final = as_str_mapping(decoded.get("error"))
     return relayed if relayed is not None and isinstance(relayed.get("message"), str) else None
+
+
+def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | None:
+    message: Final = attribute_or_none(original_exception, "message")
+    if isinstance(attribute_or_none(original_exception, "body"), dict) or not isinstance(message, str):
+        return None
+    return _decoded_openai_error(message)
 
 
 def _map_openai_exception(
@@ -2329,6 +2337,7 @@ def _map_azure_exception(
                 llm_provider="azure",
                 litellm_debug_info=extra_information,
                 response=response,
+                body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
@@ -2376,6 +2385,37 @@ def _map_azure_exception(
         )
 
 
+def _openai_style_error_message_and_body(
+    original_exception: _ProviderHTTPException, error_str: str
+) -> tuple[str, dict[str, object] | None]:  # mutable-ok: litellm exceptions take the error body as a dict
+    relayed_error: Final = _relayed_openai_error(original_exception)
+    if relayed_error is not None:
+        return str(relayed_error["message"]), dict(relayed_error)
+    carried_body: Final = as_str_mapping(getattr(original_exception, "body", None))
+    if carried_body is None:
+        return error_str, None
+    return get_error_message(error_obj=original_exception) or error_str, dict(carried_body)
+
+
+def _openrouter_upstream_reason(raw: object) -> str | None:
+    match raw:
+        case None | "":
+            return None
+        case str():
+            upstream_error: Final = _decoded_openai_error(raw)
+            return raw if upstream_error is None else str(upstream_error.get("message"))
+        case _:
+            return json.dumps(raw, default=str)
+
+
+def _openrouter_error_message(provider_message: str, body: Mapping[str, object] | None) -> str:
+    metadata: Final = as_str_mapping(body.get("metadata")) if body is not None else None
+    upstream_reason: Final = _openrouter_upstream_reason(metadata.get("raw") if metadata is not None else None)
+    if upstream_reason is None or upstream_reason == provider_message:
+        return provider_message
+    return f"{provider_message} - {upstream_reason}"
+
+
 def _map_openrouter_exception(
     *,
     model: str,
@@ -2389,57 +2429,64 @@ def _map_openrouter_exception(
     received_status: Final = hasattr(original_exception, "status_code") and not getattr(
         original_exception, "status_code_is_synthesized", False
     )
+    provider_message, body = _openai_style_error_message_and_body(original_exception, error_str)
+    message: Final = _openrouter_error_message(provider_message, body)
     if received_status:
         if original_exception.status_code == 400:
             raise BadRequestError(
-                message=f"{exception_provider} - {error_str}",
+                message=f"{exception_provider} - {message}",
                 llm_provider=custom_llm_provider,
                 model=model,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 401:
             raise AuthenticationError(
-                message=f"AuthenticationError: {exception_provider} - {error_str}",
+                message=f"AuthenticationError: {exception_provider} - {message}",
                 llm_provider=custom_llm_provider,
                 model=model,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(
-                message=f"NotFoundError: {exception_provider} - {error_str}",
+                message=f"NotFoundError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 408:
             raise Timeout(
-                message=f"Timeout Error: {exception_provider} - {error_str}",
+                message=f"Timeout Error: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
-                message=f"BadRequestError: {exception_provider} - {error_str}",
+                message=f"BadRequestError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 429:
             raise RateLimitError(
-                message=f"RateLimitError: {exception_provider} - {error_str}",
+                message=f"RateLimitError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
         elif original_exception.status_code == 503:
             raise ServiceUnavailableError(
-                message=f"ServiceUnavailableError: {exception_provider} - {error_str}",
+                message=f"ServiceUnavailableError: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
@@ -2447,7 +2494,7 @@ def _map_openrouter_exception(
             )
         elif original_exception.status_code == 504:  # gateway timeout error
             raise Timeout(
-                message=f"Timeout Error: {exception_provider} - {error_str}",
+                message=f"Timeout Error: {exception_provider} - {message}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
@@ -2456,16 +2503,17 @@ def _map_openrouter_exception(
         else:
             raise APIError(
                 status_code=original_exception.status_code,
-                message=f"APIError: {exception_provider} - {error_str}",
+                message=f"APIError: {exception_provider} - {message}",
                 llm_provider=custom_llm_provider,
                 model=model,
                 request=getattr(original_exception, "request", None),
                 litellm_debug_info=extra_information,
+                body=body,
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         raise APIConnectionError(
-            message=f"APIConnectionError: {exception_provider} - {error_str}",
+            message=f"APIConnectionError: {exception_provider} - {message}",
             llm_provider=custom_llm_provider,
             model=model,
             litellm_debug_info=extra_information,

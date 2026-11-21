@@ -146,12 +146,16 @@ _CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
 _CLIENT_ITEMS: Final = TypeAdapter(list[object])
 
 
+def _redacted_client_key(key: str) -> str:
+    return redact_internal_details(redact_structured_value(None, key))
+
+
 def _redacted_client_field(key: str | None, value: object) -> object:
     if isinstance(value, str):
         return redact_internal_details(redact_structured_value(key, value))
     if isinstance(value, dict):
         return {
-            child_key: _redacted_client_field(child_key, child)
+            _redacted_client_key(child_key): _redacted_client_field(child_key, child)
             for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
         }
     if isinstance(value, (list, tuple)):
