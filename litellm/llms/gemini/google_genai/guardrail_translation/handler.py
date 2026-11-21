@@ -11,9 +11,11 @@ guardrail raises) without rewriting the frames.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
 from pydantic import TypeAdapter
 
@@ -23,7 +25,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
 )
-from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines, split_sse_lines_keepends
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -206,6 +208,178 @@ def _sse_line_carries_function_call(line: str) -> bool:
         return False
     parsed: Final = _parse_json_dict_or_none(payload)
     return parsed is None or _response_carries_function_call(parsed)
+
+
+@dataclass(frozen=True, slots=True)
+class PartLocation:
+    line: int
+    candidate: int
+    part: int
+
+
+@dataclass(frozen=True, slots=True)
+class StreamedFunctionCall:
+    location: PartLocation
+    name: str
+    args: Mapping[str, object]
+
+
+_FUNCTION_CALL_FIELDS: Final = ("functionCall", "function_call")
+_FUNCTION_CALL_KEYS: Final = frozenset({"id", "name", "args"})
+_NO_ARGS: Final[Mapping[str, object]] = MappingProxyType({})
+_StreamedCalls: TypeAlias = tuple[StreamedFunctionCall, ...]
+
+
+def _all_calls(results: Iterable[_StreamedCalls | None]) -> _StreamedCalls | None:
+    collected: Final = tuple(results)
+    if any(result is None for result in collected):
+        return None
+    return tuple(chain.from_iterable(result for result in collected if result is not None))
+
+
+def _function_call(location: PartLocation, value: object) -> StreamedFunctionCall | None:
+    fields: Final = as_str_mapping(value)
+    if fields is None or not fields.keys() <= _FUNCTION_CALL_KEYS:
+        return None
+    name: Final = fields.get("name")
+    raw_args: Final = fields.get("args")
+    args: Final = _NO_ARGS if raw_args is None else as_str_mapping(raw_args)
+    if not isinstance(name, str) or args is None:
+        return None
+    return StreamedFunctionCall(location=location, name=name, args=args)
+
+
+def _part_function_calls(location: PartLocation, part: object) -> _StreamedCalls | None:
+    fields: Final = as_str_mapping(part)
+    if fields is None:
+        return None
+    present: Final = tuple(fields[key] for key in _FUNCTION_CALL_FIELDS if fields.get(key) is not None)
+    match present:
+        case ():
+            return ()
+        case (function_call,):
+            call: Final = _function_call(location, function_call)
+            return None if call is None else (call,)
+        case _:
+            return None
+
+
+def _candidate_parts(candidate: Mapping[str, object]) -> Sequence[object] | None:
+    content: Final = candidate.get("content")
+    if content is None:
+        return ()
+    content_fields: Final = as_str_mapping(content)
+    if content_fields is None:
+        return None
+    parts: Final = content_fields.get("parts")
+    return () if parts is None else _object_sequence(parts)
+
+
+def _candidate_function_calls(line: int, position: int, candidate: object) -> _StreamedCalls | None:
+    fields: Final = as_str_mapping(candidate)
+    parts: Final = None if fields is None else _candidate_parts(fields)
+    if parts is None:
+        return None
+    return _all_calls(
+        _part_function_calls(PartLocation(line, position, index), part) for index, part in enumerate(parts)
+    )
+
+
+def _response_function_calls(line: int, response: Mapping[str, object]) -> _StreamedCalls | None:
+    candidates: Final = response.get("candidates")
+    if candidates is None:
+        return ()
+    candidate_list: Final = _object_sequence(candidates)
+    if candidate_list is None:
+        return None
+    return _all_calls(
+        _candidate_function_calls(line, position, candidate) for position, candidate in enumerate(candidate_list)
+    )
+
+
+def _without_line_break(line: str) -> str:
+    return line.removesuffix("\n").removesuffix("\r")
+
+
+def _data_payload(line: str) -> str | None:
+    payload: Final = line[len("data:") :].strip()
+    return None if not payload or payload == "[DONE]" else payload
+
+
+def _starts_a_line_for_wider_readers(line: str) -> bool:
+    """Whether ``str.splitlines``, which also breaks on U+2028 and the like, reads a ``data`` line inside it."""
+    return any(piece.lstrip().startswith("data") for piece in line.splitlines()[1:])
+
+
+def _sse_line_function_calls(index: int, line: str) -> _StreamedCalls | None:
+    if _starts_a_line_for_wider_readers(line):
+        return None
+    if not line.strip() or line.startswith(_SSE_FIELD_PREFIXES):
+        return ()
+    if not line.startswith("data:"):
+        return None
+    payload: Final = _data_payload(line)
+    if payload is None:
+        return ()
+    parsed: Final = _parse_json_dict_or_none(payload)
+    return None if parsed is None else _response_function_calls(index, parsed)
+
+
+def generate_content_sse_function_calls(sse_text: str) -> _StreamedCalls | None:
+    """Every ``functionCall`` part of a raw ``:streamGenerateContent`` SSE stream, in stream order.
+
+    None when a line cannot be read the way any client could read it, so a caller can refuse a stream
+    that may carry a call it did not see.
+    """
+    lines: Final = tuple(map(_without_line_break, split_sse_lines_keepends(sse_text)))
+    return _all_calls(_sse_line_function_calls(index, line) for index, line in enumerate(lines))
+
+
+def _part_or_text(location: PartLocation, part: object, texts: Mapping[PartLocation, str]) -> object:
+    text: Final = texts.get(location)
+    return part if text is None else {"text": text}
+
+
+def _candidate_with_texts(line: int, position: int, candidate: object, texts: Mapping[PartLocation, str]) -> object:
+    fields: Final = as_str_mapping(candidate)
+    parts: Final = None if fields is None else _candidate_parts(fields)
+    content: Final = None if fields is None else as_str_mapping(fields.get("content"))
+    if fields is None or content is None or not parts:
+        return candidate
+    return {
+        **fields,
+        "content": {
+            **content,
+            "parts": [
+                _part_or_text(PartLocation(line, position, index), part, texts) for index, part in enumerate(parts)
+            ],
+        },
+    }
+
+
+def _line_with_texts(index: int, line: str, texts: Mapping[PartLocation, str]) -> str:
+    if not any(location.line == index for location in texts):
+        return line
+    body: Final = _without_line_break(line)
+    payload: Final = _data_payload(body) if body.startswith("data:") else None
+    response: Final = None if payload is None else _parse_json_dict_or_none(payload)
+    candidates: Final = None if response is None else _object_sequence(response.get("candidates"))
+    if response is None or candidates is None:
+        return line
+    rewritten: Final = {
+        **response,
+        "candidates": [
+            _candidate_with_texts(index, position, candidate, texts) for position, candidate in enumerate(candidates)
+        ],
+    }
+    return f"data: {json.dumps(rewritten)}{line.removeprefix(body)}"
+
+
+def generate_content_sse_with_parts_replaced(sse_text: str, texts: Mapping[PartLocation, str]) -> str:
+    """The stream with the part at each location replaced by a text part, every other byte kept."""
+    return "".join(
+        _line_with_texts(index, line, texts) for index, line in enumerate(split_sse_lines_keepends(sse_text))
+    )
 
 
 class GoogleGenAIGenerateContentHandler(BaseTranslation):
