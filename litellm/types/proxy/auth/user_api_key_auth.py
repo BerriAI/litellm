@@ -142,6 +142,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     """
 
     api_key: str | None = None
+    agent_binding_revision: str | None = None
     _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
     _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
     _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)

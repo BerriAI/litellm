@@ -31,6 +31,7 @@ from litellm.proxy.mcp_server.gateway_dcr_flow import (
     ConsentTeam,
     LookupServerReachability,
     MintedProxyCredential,
+    ProxyCredentialMintFailure,
     SubjectIdentity,
     SubjectTokenRefusal,
     _ConnectFlow,
@@ -66,6 +67,7 @@ from litellm.proxy.mcp_server.outbound_credentials.session_token import (
     mint_session_token,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.proxy.agent_identity import AgentStamp
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
@@ -1775,14 +1777,22 @@ CONSENT_TEAMS = (ConsentTeam(team_id="team-a", team_alias="Team A"), ConsentTeam
 
 
 class _Minter:
-    def __init__(self, result=None):
-        self.calls = []
-        self.allowed_routes = []
-        self.result = result
+    def __init__(self, result: "MintedProxyCredential | ProxyCredentialMintFailure | None" = None) -> None:
+        self.calls: Final[list[tuple[str, str | None]]] = []
+        self.allowed_routes: Final[list[Sequence[str] | None]] = []
+        self.agents: Final[list[AgentStamp | None]] = []
+        self.result: Final = result
 
-    async def __call__(self, user_id, team_id, allowed_routes=None):
+    async def __call__(
+        self,
+        user_id: str,
+        team_id: str | None,
+        allowed_routes: Sequence[str] | None = None,
+        agent: AgentStamp | None = None,
+    ) -> "MintedProxyCredential | ProxyCredentialMintFailure":
         self.calls.append((user_id, team_id))
         self.allowed_routes.append(allowed_routes)
+        self.agents.append(agent)
         if self.result is not None:
             return self.result
         return MintedProxyCredential(key=f"sk-cli-{user_id}", expires_in=3600, user_id=user_id, team_id=team_id)
@@ -3832,3 +3842,38 @@ async def test_a_picked_code_redeems_only_for_the_resource_it_was_authorized_for
     assert (redeemed.status_code, json.loads(redeemed.body).get("error")) == (
         (200, None) if error is None else (400, error)
     )
+
+
+@pytest.mark.asyncio
+async def test_a_stamped_assertion_mints_for_its_agent_and_names_it_in_the_response() -> None:
+    stamp: Final = AgentStamp(agent_id="invoice-bot", binding_revision="r1")
+    minter: Final = _Minter()
+    response: Final = await _redeem_assertion_native(
+        minter, _Redeemer(ASSERTED.model_copy(update={"agent": stamp})), cache=DualCache()
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["agent_id"] == "invoice-bot"
+    assert minter.agents == [stamp]
+
+
+@pytest.mark.asyncio
+async def test_an_unstamped_assertion_response_is_unchanged() -> None:
+    minter: Final = _Minter()
+    response: Final = await _redeem_assertion_native(minter, _Redeemer(), cache=DualCache())
+
+    assert set(json.loads(response.body)) == {"access_token", "token_type", "expires_in", "user_id", "team_id", "scope"}
+    assert minter.agents == [None]
+
+
+@pytest.mark.asyncio
+async def test_an_agent_refusal_at_redemption_leaves_the_assertion_unused() -> None:
+    cache: Final = DualCache()
+    refused: Final = await _redeem_assertion_native(
+        _Minter(),
+        _Redeemer(SubjectTokenRefusal(error="invalid_grant", description="the assertion could not be redeemed")),
+        cache=cache,
+    )
+    served: Final = await _redeem_assertion_native(_Minter(), _Redeemer(), cache=cache)
+
+    assert (refused.status_code, served.status_code) == (400, 200)
