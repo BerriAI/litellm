@@ -5,7 +5,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -93,7 +93,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route, get_request_route_template
+from litellm.proxy.auth.auth_utils import get_request_route, get_request_route_template, iter_request_fallback_targets
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypted_callback_metadata,
@@ -910,15 +910,32 @@ def _opts_out_of_message_redaction(fields: Mapping[str, object]) -> bool:
     return "turn_off_message_logging" in fields and _is_false_like(fields["turn_off_message_logging"])
 
 
-def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
-    stripped: Final[list[str]] = []
-    if _opts_out_of_message_redaction(data):
-        stripped.append("turn_off_message_logging")
-        data.pop("turn_off_message_logging", None)
-    for slot_label, metadata in iter_client_callback_metadata_dicts(data):
+def _strip_message_redaction_opt_out_slots(
+    fields: dict[str, object],  # mutable-ok: strips in place on the request body or one of its fallback targets
+    prefix: str,
+) -> Iterator[str]:
+    if _opts_out_of_message_redaction(fields):
+        fields.pop("turn_off_message_logging", None)
+        yield f"{prefix}turn_off_message_logging"
+    for slot_label, metadata in iter_client_callback_metadata_dicts(fields):
         if _opts_out_of_message_redaction(metadata):
-            stripped.append(f"{slot_label}.turn_off_message_logging")
             metadata.pop("turn_off_message_logging", None)
+            yield f"{prefix}{slot_label}.turn_off_message_logging"
+
+
+def _strip_request_message_redaction_opt_out(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the caller is about to dispatch
+) -> Iterator[str]:
+    fallback_targets: Final = tuple(
+        target for target in iter_request_fallback_targets(data) if isinstance(target, dict)
+    )
+    yield from _strip_message_redaction_opt_out_slots(data, "")
+    for target in fallback_targets:
+        yield from _strip_message_redaction_opt_out_slots(target, "fallbacks[].")
+
+
+def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
+    stripped: Final = tuple(_strip_request_message_redaction_opt_out(data))
     if stripped:
         verbose_proxy_logger.debug(
             "Stripped client-supplied message-redaction opt-out fields from request body: %s. "
@@ -926,6 +943,16 @@ def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
             "to keep these values.",
             ", ".join(stripped),
         )
+
+
+def strip_unapproved_client_message_redaction_opt_out(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the caller is about to dispatch
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if litellm.turn_off_message_logging is True and not _key_or_team_allows_client_message_redaction_opt_out(
+        user_api_key_dict
+    ):
+        _strip_client_message_redaction_opt_out(data)
 
 
 def _strip_client_callback_credentials(
@@ -3189,8 +3216,7 @@ async def add_litellm_data_to_request(
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
     _strip_client_callback_credentials(data)
 
-    if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
-        _strip_client_message_redaction_opt_out(data)
+    strip_unapproved_client_message_redaction_opt_out(data, user_api_key_dict)
 
     # Fill in the proxy_server_request body snapshot now that metadata has
     # been parsed. Consumers (standard_logging_payload, lago,

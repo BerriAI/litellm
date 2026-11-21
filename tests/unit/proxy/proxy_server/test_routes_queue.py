@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from queue import SimpleQueue
@@ -118,6 +118,33 @@ def test_queue_chat_completions_drops_client_sent_stream_usage_flags(
     assert "_litellm_strip_stream_usage" not in forwarded
     assert "_litellm_stream_usage_injected" not in forwarded
     assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "dispatched"),
+    [({}, None), ({"allow_client_message_redaction_opt_out": True}, False)],
+)
+def test_queue_chat_completions_keeps_a_message_redaction_opt_out_only_when_the_key_allows_it(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_queue: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: Mapping[str, object],
+    dispatched: bool | None,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    payload: Final = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "turn_off_message_logging": False,
+        "litellm_metadata": {"turn_off_message_logging": False},
+    }
+    with auth_as(metadata=key_metadata):
+        response: Final = client.post("/queue/chat/completions", json=payload)
+    assert response.status_code == 200
+    forwarded: Final = patched_queue.schedule_acompletion.call_args.kwargs
+    assert forwarded.get("turn_off_message_logging") is dispatched
+    assert forwarded["metadata"].get("turn_off_message_logging") is dispatched
 
 
 def test_queue_chat_completions_no_router_error(client, auth_as, queue_no_router):
@@ -376,7 +403,7 @@ def test_a_queued_call_with_a_litellm_metadata_bucket_still_routes_by_its_tags(
     client: TestClient,
     auth_as: Callable[..., AbstractContextManager[None]],
     monkeypatch: pytest.MonkeyPatch,
-    key_metadata: dict[str, object],
+    key_metadata: Mapping[str, object],
     litellm_metadata: dict[str, object],
 ) -> None:
     deployments: Final = [

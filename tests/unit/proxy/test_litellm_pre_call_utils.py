@@ -62,6 +62,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
+    strip_unapproved_client_message_redaction_opt_out,
     clean_headers,
     forwarded_anthropic_oauth_token,
     get_dynamic_logging_metadata,
@@ -2150,6 +2151,30 @@ async def test_add_litellm_data_to_request_admin_callback_vars_turn_off_message_
         assert should_redact_message_logging({"standard_callback_dynamic_params": dynamic_params}) is True
     finally:
         litellm.turn_off_message_logging = original_turn_off_message_logging
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "kept"),
+    [({}, None), ({"allow_client_message_redaction_opt_out": True}, False)],
+)
+def test_strip_unapproved_message_redaction_opt_out_covers_fallback_targets(
+    monkeypatch: pytest.MonkeyPatch, key_metadata: Mapping[str, object], kept: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    fallback: Final[dict[str, object]] = {"model": "b", "turn_off_message_logging": False}  # mutable-ok: stripped
+    nested_metadata: Final[dict[str, object]] = {"turn_off_message_logging": False}  # mutable-ok: stripped
+    router_target: Final[dict[str, object]] = {"model": "r", "turn_off_message_logging": False}  # mutable-ok: stripped
+    data: Final[dict[str, object]] = {  # mutable-ok: the strip helper takes the request body it edits
+        "model": "primary",
+        "fallbacks": [fallback, {"model": "chained", "fallbacks": [{"model": "last", "metadata": nested_metadata}]}],
+        "router_settings_override": {"fallbacks": [{"primary": [router_target]}]},
+    }
+    strip_unapproved_client_message_redaction_opt_out(
+        data, UserAPIKeyAuth(api_key="hashed-key", metadata=dict(key_metadata))
+    )
+    assert fallback.get("turn_off_message_logging") is kept
+    assert nested_metadata.get("turn_off_message_logging") is kept
+    assert router_target.get("turn_off_message_logging") is kept
 
 
 @pytest.mark.parametrize(
@@ -12132,7 +12157,10 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_served_model
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)
