@@ -460,7 +460,7 @@ async def read_raw_json_body(request: Request | None) -> bytes | None:
         return None
 
 
-def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
+def _safe_get_request_parsed_body(request: Request | None) -> dict[str, object] | None:
     if request is None:
         return None
     if hasattr(request, "scope") and "parsed_body" in request.scope and isinstance(request.scope["parsed_body"], tuple):
