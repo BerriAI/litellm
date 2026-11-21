@@ -1,7 +1,9 @@
+import asyncio
 from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 
+import anyio
 from mcp.shared.inbound import find_invalid_x_mcp_header
 
 from litellm._logging import verbose_logger
@@ -20,6 +22,8 @@ from litellm.proxy.mcp_server.utils import (
 )
 from litellm.types.mcp_server.events import DeliveryMode, EventType
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
+
+LIST_DEADLINE_SECONDS: Final = 10.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,18 +106,23 @@ async def server_catalog(
 
 
 async def list_events(
-    context: OperationContext, settings: EventsSettings, runtime: EventsRuntime
+    context: OperationContext,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+    deadline: float = LIST_DEADLINE_SECONDS,
 ) -> tuple[EventType, ...]:
+    """Every reachable server's catalog, fetched concurrently; a server that fails or misses the deadline is skipped."""
     allowed: Final = await runtime.allowed_servers(context)
 
     async def safe(server: EventServer) -> tuple[EventType, ...]:
         try:
-            return await server_catalog(context, server, allowed, settings, runtime)
+            with anyio.fail_after(deadline):
+                return await server_catalog(context, server, allowed, settings, runtime)
         except Exception as error:  # noqa: BLE001  # one failing upstream must not hide the other servers' events
             verbose_logger.warning("MCP events/list failed for server %s: %s", server.server.server_id, error)
             return ()
 
-    pages: Final = tuple([await safe(server) for server in event_servers(allowed)])
+    pages: Final = await asyncio.gather(*(safe(server) for server in event_servers(allowed)))
     return tuple(sorted(chain.from_iterable(pages), key=lambda item: item.name))
 
 

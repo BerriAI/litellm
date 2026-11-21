@@ -1,8 +1,11 @@
+import asyncio
+from dataclasses import replace
 from typing import Final
 
 import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.mcp_server.events.access import EventGrant
 from litellm.proxy.mcp_server.events.catalog import (
     event_servers,
     list_events,
@@ -11,8 +14,9 @@ from litellm.proxy.mcp_server.events.catalog import (
     resolve,
 )
 from litellm.proxy.mcp_server.events.config import EventsSettings
-from litellm.proxy.mcp_server.events.runtime import EventsRuntime
+from litellm.proxy.mcp_server.events.runtime import DescriptorCache, EventsRuntime
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
+from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget
 from litellm.types.mcp_server.events import EventsErrorCode, EventType
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
@@ -102,18 +106,43 @@ async def test_a_failing_upstream_does_not_hide_other_servers() -> None:
     (
         ("other-build.failed", (server(),), None),
         ("ci-missing.event", (server(),), None),
-        ("ci-build.failed", (server(),), frozenset({"deploy.done"})),
+        ("ci-build.failed", (server(),), (frozenset({"deploy.done"}),)),
         ("ci-build.failed", (server(events=MCPServerEventsConfig(enabled=True, allowed_events=("deploy.*",))),), None),
         ("ci-build.failed", (), None),
     ),
 )
 @pytest.mark.asyncio
 async def test_every_unavailable_event_looks_the_same(
-    name: str, servers: tuple[MCPServer, ...], grant: frozenset[str] | None
+    name: str, servers: tuple[MCPServer, ...], grant: EventGrant
 ) -> None:
     prepared: Final = await prepare_event(context(), name, runtime(servers, grant=grant))
     assert isinstance(prepared, Error)
     assert (prepared.error.code, prepared.error.data) == (EventsErrorCode.NOT_FOUND, {"kind": "event"})
+
+
+@pytest.mark.parametrize("grant", (None, (frozenset({"build.failed"}),), (frozenset({"build.*"}), frozenset({"*"}))))
+@pytest.mark.asyncio
+async def test_a_granted_event_is_prepared(grant: EventGrant) -> None:
+    prepared: Final = await prepare_event(context(), "ci-build.failed", runtime((server(),), grant=grant))
+    assert isinstance(prepared, Ok)
+
+
+@pytest.mark.asyncio
+async def test_server_catalogs_are_fetched_concurrently_under_one_deadline() -> None:
+    second_started: Final = asyncio.Event()
+    deploy: Final = BUILD_FAILED.model_copy(update={"name": "deploy.done"})
+
+    async def listing(target: SubscriptionTarget) -> tuple[EventType, ...]:
+        if target.server.server_id == "srv-b":
+            second_started.set()
+            return (deploy,)
+        await asyncio.wait_for(second_started.wait(), timeout=5)
+        return (BUILD_FAILED,)
+
+    servers: Final = (server(), server(server_id="srv-b", alias="cd"))
+    events_runtime: Final = replace(runtime(servers), list_upstream=listing, descriptor_cache=DescriptorCache())
+    listed: Final = await list_events(context(), SETTINGS, events_runtime, deadline=1.0)
+    assert [item.name for item in listed] == ["cd-deploy.done", "ci-build.failed"]
 
 
 @pytest.mark.asyncio

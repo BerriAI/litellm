@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 
+from litellm.proxy.mcp_server.events.access import EventGrant
 from litellm.proxy.mcp_server.events.admission import admit, check_routing_headers, still_authorized
 from litellm.proxy.mcp_server.events.catalog import prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
@@ -69,13 +70,14 @@ async def test_the_server_rate_limit_applies_to_events() -> None:
     (
         ((server(),), None, True),
         ((), None, False),
-        ((server(),), frozenset({"deploy.done"}), False),
+        ((server(),), (frozenset({"deploy.done"}),), False),
+        ((server(),), (frozenset({"build.*"}),), True),
         ((server(events=MCPServerEventsConfig(enabled=True, allowed_events=("deploy.*",))),), None, False),
     ),
 )
 @pytest.mark.asyncio
 async def test_reauthorization_follows_server_access_and_event_grants(
-    servers: tuple[object, ...], grant: frozenset[str] | None, authorized: bool
+    servers: tuple[object, ...], grant: EventGrant, authorized: bool
 ) -> None:
     prepared: Final = await prepare_event(context(), "ci-build.failed", runtime((server(),)))
     assert isinstance(prepared, Ok)
