@@ -81,6 +81,8 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         "alaw_8000": "audio/x-alaw-basic",
     }
 
+    UNLABELED_AUDIO_MEDIA_TYPES: ClassVar[frozenset[str]] = frozenset({"application/octet-stream"})
+
     UNSUPPORTED_OPENAI_PARAMS: ClassVar[frozenset[str]] = frozenset({"speed", "instructions"})
     NO_OP_VALUES: ClassVar[Mapping[str, object]] = {"speed": 1.0}
     CALLER_REQUEST_FIELDS: ClassVar[frozenset[str]] = frozenset({"json_config"})
@@ -245,7 +247,18 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
             )
 
         sent: Final = _GradiumSpeechRequest.model_validate_json(raw_response.request.content)
-        if not any(value.startswith("audio/") for value in raw_response.headers.get_list("content-type")):
+        media_types: Final = frozenset(
+            value.split(";")[0].strip().lower() for value in raw_response.headers.get_list("content-type")
+        )
+        is_labeled_audio: Final = any(value.startswith("audio/") for value in media_types)
+        if not is_labeled_audio and not media_types <= self.UNLABELED_AUDIO_MEDIA_TYPES:
+            raise GradiumException(
+                message=f"Gradium answered {raw_response.status_code} with "
+                f"{', '.join(sorted(media_types))} instead of audio",
+                status_code=502,
+                headers=raw_response.headers,
+            )
+        if not is_labeled_audio:
             media_type: Final = self.RAW_AUDIO_MEDIA_TYPES.get(sent.output_format, "audio/pcm")
             raw_response.headers["content-type"] = media_type  # rebind-ok: httpx exposes headers only as mutable
 
