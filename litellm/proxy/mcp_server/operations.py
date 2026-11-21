@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
-from typing import Any, Final, NoReturn, TypeAlias, overload
+from typing import Final, NoReturn, TypeAlias, overload
 
 import anyio
 from fastapi import HTTPException
@@ -88,6 +88,7 @@ from litellm.proxy.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
     ProgressCallback,
+    ToolCallLoggingData,
 )
 from litellm.proxy.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.mcp_server.exceptions import (
@@ -2163,7 +2164,7 @@ async def execute_mcp_tool(
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     flatten_url_elicitation: bool = False,
-    **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
+    **kwargs: Unpack[ToolCallLoggingData],  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
         user_api_key_auth=user_api_key_auth,
@@ -2183,7 +2184,7 @@ async def execute_mcp_tool(
         host_progress_callback=host_progress_callback,
         guardrail_context=guardrail_context,
         guardrail_auth=guardrail_auth,
-        logging_data=types.MappingProxyType(kwargs),
+        logging_data=kwargs,
         input_responses=input_responses,
         request_state=request_state,
         flatten_url_elicitation=flatten_url_elicitation,
@@ -2210,7 +2211,7 @@ async def _execute_mcp_tool(
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     flatten_url_elicitation: bool = False,
-    **kwargs: Any,
+    **kwargs: Unpack[ToolCallLoggingData],
 ) -> CallToolResult | InputRequiredResult:
     """
     Execute MCP tool.

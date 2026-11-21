@@ -130,6 +130,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
+    CustomerIdentityHeaderNames,
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
@@ -225,6 +226,8 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
     from litellm.proxy.auth.host.python import PythonAuthHost
     from litellm.rust_bridge._native import RustAuthOutcome, RustAuthSettings
 
@@ -1678,7 +1681,8 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
 
     if open_telemetry_logger is None:
         return
-    if (existing_span := getattr(request.state, "parent_otel_span", None)) is not None:
+    existing_span: Final[_Span | None] = getattr(request.state, "parent_otel_span", None)
+    if existing_span is not None:
         set_request_parent_otel_span(existing_span)
         return
     parent_otel_span: Final = open_telemetry_logger.create_litellm_proxy_request_started_span(
@@ -1808,8 +1812,9 @@ def _team_fields_newer_than_key(key: UserAPIKeyAuth, team: LiteLLM_TeamTableCach
     if team.last_refreshed_at <= key.last_refreshed_at:
         return MappingProxyType({})
     key_fields: Final = type(key).model_fields
+    team_fields: Final[Mapping[str, object]] = MappingProxyType(team.__dict__)
     return MappingProxyType(
-        {f"team_{name}": value for name, value in team.__dict__.items() if f"team_{name}" in key_fields}
+        {f"team_{name}": value for name, value in team_fields.items() if f"team_{name}" in key_fields}
     )
 
 
@@ -3210,13 +3215,14 @@ async def _authorize_authenticated_request_checks(
         )
 
         request_headers: Final = _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request))
+        customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(
+            cast("Mapping[str, object]", general_settings),  # cast-ok: proxy settings are a string-keyed dict
+        )
         customer_identity: Final = customer_identity_from_request(
             request_headers,
             user_api_key_auth_obj.jwt_claims,
             litellm_jwtauth,
-            general_settings=cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
-                "Mapping[str, object]", general_settings
-            ),
+            names=customer_header_names,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)
@@ -3249,7 +3255,9 @@ async def _authorize_authenticated_request_checks(
                                 key_metadata=key_metadata,
                                 register=register,
                                 register_organization=register_organization,
+                                header_names=customer_header_names,
                             ),
+                            header_names=customer_header_names,
                         )
                     user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
                 if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):

@@ -2295,6 +2295,8 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    _PATH_PARAM_VALUE: Final = TypeAdapter(object)
+
     @public_catalog_operation
     async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
         """
@@ -2352,7 +2354,8 @@ if MCP_AVAILABLE:
                 global_mcp_server_manager,
             )
 
-            server_id: Final[str] = request.path_params.get("server_id", "")
+            raw_server_id: Final = _PATH_PARAM_VALUE.validate_python(request.path_params.get("server_id", ""))
+            server_id: Final = raw_server_id if isinstance(raw_server_id, str) else ""
             if server_id:
                 _s = await global_mcp_server_manager.catalog.resolve(server_id)
                 if (
@@ -3037,10 +3040,12 @@ if MCP_AVAILABLE:
             if not is_set:
                 missing_count += 1
             required.append(
-                MCPUserEnvVarSpec(
-                    name=name,
-                    description=spec.get("description"),
-                    is_set=is_set,
+                MCPUserEnvVarSpec.model_validate(
+                    {
+                        "name": name,
+                        "description": spec.get("description"),
+                        "is_set": is_set,
+                    }
                 )
             )
 

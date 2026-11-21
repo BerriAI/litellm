@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 # against them and ``Router.__init__`` reports them. The body is never run.
 def _router_init(
     self: object,
-    model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
+    model_list: list[DeploymentTypedDict] | Sequence[Mapping[str, object]] | None = None,
     ## ASSISTANTS API ##
     assistants_config: AssistantsTypedDict | None = None,
     ## SEARCH API ##
@@ -325,6 +325,7 @@ if TYPE_CHECKING:
         afile_delete: Callable[..., Awaitable[FileDeleted]]
         avector_store_create: Callable[..., Awaitable[VectorStoreCreateResponse]]
         allm_passthrough_route: Callable[..., Awaitable[httpx.Response | AsyncGenerator[bytes, bytes]]]
+        schedule_acompletion: Callable[..., Awaitable[object]]
 
         def __getattr__(self, name: str) -> Any: ...  # the endpoints served by name
 
