@@ -4107,6 +4107,7 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            custom_metadata_labels=_get_fallback_custom_metadata_labels(_metadata),
         )
         PrometheusLogger._inc_labeled_counter(
             self,
@@ -4148,6 +4149,7 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            custom_metadata_labels=_get_fallback_custom_metadata_labels(_metadata),
         )
 
         PrometheusLogger._inc_labeled_counter(
@@ -5391,6 +5393,16 @@ def prometheus_label_factory(
             filtered_labels[label] = None
 
     return filtered_labels
+
+
+def _get_fallback_custom_metadata_labels(metadata: dict) -> dict[str, str]:
+    """
+    Custom metadata labels for the fallback metrics, read from the request metadata the
+    same way the request metrics read them from the standard logging payload.
+    """
+    return get_custom_labels_from_metadata(
+        metadata=_get_combined_custom_metadata_from_standard_logging_payload({"metadata": metadata})
+    )
 
 
 def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
