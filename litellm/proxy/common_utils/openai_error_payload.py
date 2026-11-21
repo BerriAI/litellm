@@ -237,6 +237,7 @@ def route_failure_proxy_exception(
         headers=headers,
         openai_code=openai_code,
         code=answered_status,
+        provider_specific_fields=relayed_provider_specific_fields(exc),
     )
 
 

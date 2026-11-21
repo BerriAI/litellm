@@ -182,6 +182,8 @@ def get_error_message(error_obj: object) -> str | None:
                 top_level_message: Final = _error_obj_body.get("message")
                 if isinstance(top_level_message, str) and top_level_message:
                     return top_level_message
+                if top_level_message:
+                    return json.dumps(_error_obj_body, default=str)
 
                 # Azure-style: {"error": {"message": "...", ...}}
                 nested_error: Final = as_str_mapping(_error_obj_body.get("error"))

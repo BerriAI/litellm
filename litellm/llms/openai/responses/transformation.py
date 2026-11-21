@@ -1404,7 +1404,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         status_code: int,
         headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
     ) -> BaseLLMException:
-        return BaseLLMException(
+        raise BaseLLMException(
             status_code=status_code,
             message=error_message,
             headers=headers,
