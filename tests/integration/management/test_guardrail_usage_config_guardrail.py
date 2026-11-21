@@ -169,6 +169,7 @@ def test_usage_detail_serves_the_stored_runs_of_a_guardrail_removed_from_config(
                     seconds=70,
                 )
                 assert before.get(f"/guardrails/usage/detail/{guardrail_name}", window) == stored
+                assert before.get("/guardrails/usage/logs", {"guardrail_id": guardrail_name})["total"] == runs
         removed: Final = _config_file(tmp_path / "removed", None)
         with owned_proxy(gateway, removed.parent, one_database, config=removed) as after:
             listed: Final = after.get("/v2/guardrails/list")["guardrails"]

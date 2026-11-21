@@ -562,6 +562,33 @@ async def test_logs_resolves_config_guardrail_logical_name():
     assert where["guardrail_id"] == {"in": ["yaml-uuid", "yaml-pii"]}
 
 
+@pytest.mark.asyncio
+async def test_logs_by_name_return_the_runs_stored_under_the_defined_guardrails_id() -> None:
+    stored: Final = [_index_row("under-id", guardrail_id="yaml-uuid"), _index_row("other", guardrail_id="other-uuid")]
+    prisma: Final = _prisma()
+    prisma.db.litellm_spendlogguardrailindex.find_many = AsyncMock(
+        side_effect=lambda where, **_: [
+            r for r in stored if r.guardrail_id in (where["guardrail_id"].get("in") or [where["guardrail_id"]])
+        ]
+    )
+    prisma.db.litellm_spendlogs.find_many = AsyncMock(
+        return_value=[_spend_log("under-id", "success", guardrail_id="yaml-uuid")]
+    )
+    p1, p2 = _patches(prisma, _config_handler(_yaml_guardrail(guardrail_id="yaml-uuid", name="yaml-pii")))
+    with p1, p2:
+        resp: Final = await guardrails_usage_logs(
+            guardrail_id="yaml-pii",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action=None,
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+    assert [log.id for log in resp.logs] == ["under-id"]
+
+
 def _index_row(request_id: str, guardrail_id: str = "cc-flag") -> Any:
     r = MagicMock(spec=["request_id", "guardrail_id", "policy_id", "start_time"])
     r.request_id = request_id

@@ -416,14 +416,13 @@ def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailObje
 
 
 def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailStrField | _GuardrailObjectField) -> object:
-    """Read `field` off a guardrail whether it's a Prisma row (attr) or a dict/TypedDict (key); None has no fields."""
+    """Read `field` off a guardrail whether it's a Prisma row (attr) or a dict/TypedDict (key)."""
     if isinstance(g, dict):
         return g.get(field)
     return getattr(g, field, None)
 
 
 async def _defined_guardrail(prisma_client: "PrismaClient", id_or_name: str) -> "_DbOrConfigGuardrail | None":
-    """Find the guardrail defined in the DB or config.yaml with this id, or else with this name."""
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
     find_in_db: Final = _guardrails_table(prisma_client).find_unique
@@ -926,15 +925,13 @@ async def guardrails_usage_logs(
         # Query by both so we match regardless of which was written.
         effective_guardrail_ids: Final[list[str]] = [guardrail_id] if guardrail_id else []
         if guardrail_id:
-            from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-
-            guardrail = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
-            if guardrail is None:
-                guardrail = IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=guardrail_id)
-            if guardrail:
-                logical_name: Final = _get_guardrail_field(guardrail, "guardrail_name")
-                if logical_name and logical_name not in effective_guardrail_ids:
-                    effective_guardrail_ids.append(logical_name)
+            guardrail: Final = await _defined_guardrail(prisma_client, guardrail_id)
+            for stored_under in (
+                _get_guardrail_field(guardrail, "guardrail_name"),
+                _get_guardrail_field(guardrail, "guardrail_id"),
+            ):
+                if stored_under and stored_under not in effective_guardrail_ids:
+                    effective_guardrail_ids.append(stored_under)
 
         where: Final = _build_usage_logs_where(effective_guardrail_ids or None, policy_id, start_date, end_date)
         index_rows: Sequence[prisma_models.LiteLLM_SpendLogGuardrailIndex] = await SpendLogGuardrailIndexRepository(
