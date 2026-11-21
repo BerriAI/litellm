@@ -19,6 +19,7 @@ _RESPONSES_FIELD_BY_BRIDGED_FIELD: Final[Mapping[str, str]] = MappingProxyType(
         "reasoning_effort": "reasoning.effort",
         "reasoning_summary": "reasoning.summary",
         "response_format": "text.format",
+        "verbosity": "text.verbosity",
         "web_search_options": "tools",
     }
 )

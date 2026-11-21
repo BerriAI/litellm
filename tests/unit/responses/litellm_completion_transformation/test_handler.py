@@ -37,6 +37,7 @@ _UPSTREAM_PARAM_CASES: Final = [
     pytest.param("max_completion_tokens", "max_output_tokens", id="renamed_twice"),
     pytest.param("reasoning_effort", "reasoning.effort", id="moved_under_reasoning"),
     pytest.param("response_format.json_schema.schema", "text.format", id="moved_under_text"),
+    pytest.param("verbosity", "text.verbosity", id="verbosity_moved_under_text"),
     pytest.param("tools[0].function.name", "tools", id="reshaped_tool"),
     pytest.param("messages.[0].content", None, id="chat_only_path"),
     pytest.param("stream_options", None, id="sent_only_by_the_bridge"),
