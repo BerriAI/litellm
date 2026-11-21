@@ -35574,7 +35574,7 @@
     },
     "chatgpt/gpt-5.3-codex": {
         "litellm_provider": "chatgpt",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -35636,7 +35636,7 @@
     },
     "chatgpt/gpt-5.2-codex": {
         "litellm_provider": "chatgpt",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -35650,7 +35650,7 @@
     },
     "chatgpt/gpt-5.2": {
         "litellm_provider": "chatgpt",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 64000,
         "mode": "responses",
         "supported_endpoints": [
@@ -35669,7 +35669,7 @@
     },
     "chatgpt/gpt-5.1-codex-max": {
         "litellm_provider": "chatgpt",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -35683,7 +35683,7 @@
     },
     "chatgpt/gpt-5.1-codex-mini": {
         "litellm_provider": "chatgpt",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 64000,
         "mode": "responses",
         "supported_endpoints": [
