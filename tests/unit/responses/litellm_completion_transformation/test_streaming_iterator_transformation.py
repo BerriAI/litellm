@@ -1654,3 +1654,23 @@ def test_a_cut_stream_bills_the_relayed_text_when_the_wrapper_kept_no_chunks_of_
     assert incomplete.response.usage.output_tokens == litellm.token_counter(
         model="claude-haiku-4-5", text=first_delta.delta
     )
+
+
+def test_a_cut_stream_still_bills_the_relayed_text_when_the_kept_chunks_cannot_be_rebuilt() -> None:
+    wrapper: Final = _FakeStreamWrapper([_chunk("Hello"), _chunk(" world", finish_reason="stop")])
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,  # pyright: ignore[reportArgumentType]  # the fake stands in for CustomStreamWrapper, as in _build_iterator
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+    )
+    first_delta: Final = next(event for event in iterator if isinstance(event, OutputTextDeltaEvent))
+    wrapper.chunks.append(object())  # pyright: ignore[reportArgumentType]  # a kept chunk the builder cannot read
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None and incomplete.response.usage is not None
+    assert incomplete.response.usage.output_tokens == litellm.token_counter(
+        model="claude-haiku-4-5", text=first_delta.delta
+    )

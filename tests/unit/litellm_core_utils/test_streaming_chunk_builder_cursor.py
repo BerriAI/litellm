@@ -39,11 +39,12 @@ def _make_chunk(
     usage: Usage = None,
     finish_reason: str = None,
     custom_llm_provider: str = "anthropic",
+    model: str = "claude-sonnet-4-6",
 ) -> ModelResponseStream:
     chunk = ModelResponseStream(
         id="msg_test",
         created=1738900000,
-        model="claude-sonnet-4-6",
+        model=model,
         object="chat.completion.chunk",
         choices=[
             StreamingChoices(
@@ -384,6 +385,39 @@ class TestProviderGuard:
         chunk._hidden_params = {}
         processor = ChunkProcessor(chunks=[chunk], messages=[])
         result = processor._calculate_usage_per_chunk(chunks=[chunk])
+        assert result["completion_tokens"] == 1
+
+
+    @pytest.mark.parametrize(
+        ("custom_llm_provider", "model"),
+        [
+            ("vertex_ai", "claude-sonnet-4-6@20250514"),
+            ("bedrock", "us.anthropic.claude-sonnet-4-6-v1:0"),
+            ("azure_ai", "claude-sonnet-4-6"),
+        ],
+    )
+    def test_claude_relayed_as_anthropic_events_resets_the_cut_placeholder(self, custom_llm_provider: str, model: str):
+        chunks = [
+            _make_chunk(
+                usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025),
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+            ),
+            _make_chunk(content="partial answer", custom_llm_provider=custom_llm_provider, model=model),
+        ]
+        result = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(chunks=chunks)
+        assert result["prompt_tokens"] == 1024
+        assert result["completion_tokens"] is None
+
+    def test_non_claude_model_on_a_claude_relaying_provider_keeps_its_lone_usage(self):
+        chunks = [
+            _make_chunk(
+                usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+                custom_llm_provider="vertex_ai",
+                model="gemini-3-pro",
+            ),
+        ]
+        result = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(chunks=chunks)
         assert result["completion_tokens"] == 1
 
 

@@ -172,8 +172,14 @@ class _ToolCallChunk(TypedDict):
     choices: ReadOnly[Sequence[_ToolCallChoice]]
 
 
+_PROVIDERS_STREAMING_CLAUDE_AS_ANTHROPIC_EVENTS: Final = frozenset(
+    {"vertex_ai", "vertex_ai_beta", "azure_ai", "bedrock", "bedrock_mantle", "snowflake"}
+)
+
+
 class _UsageBearingChunk(TypedDict, total=False):
     usage: Usage | None
+    model: ReadOnly[str]
     _hidden_params: Mapping[str, str]
     choices: ReadOnly[Sequence[StreamingChoices | Mapping[str, object]]]
 
@@ -1062,28 +1068,34 @@ class ChunkProcessor:
         Anthropic ``message_start`` cursor, a small placeholder whose magnitude
         varies per request (1 and 8 both observed live), so reset to None and let
         ``calculate_usage()``'s ``token_counter(...)`` fallback estimate from
-        the actually-received text and reasoning instead. Gated on
-        ``custom_llm_provider == "anthropic"`` so the heuristic (which encodes
-        Anthropic's specific message_start SSE shape) does not silently affect
-        other providers that legitimately report usage from a single event.
+        the actually-received text and reasoning instead. Gated on streams
+        parsed from Anthropic's message_start SSE shape (``anthropic``, or a
+        Claude model on a provider that relays Anthropic's events) so the
+        heuristic does not silently affect other providers that legitimately
+        report usage from a single event.
         """
         saw_non_cursor_completion: Final = completion_usage_updates >= 2 or ChunkProcessor._saw_finish_reason(chunks)
         if saw_non_cursor_completion:
             return completion_tokens
 
-        custom_llm_provider: str | None = None
-        if chunks:
-            first_chunk: Final = chunks[0]
-            if isinstance(first_chunk, dict):
-                hp = first_chunk.get("_hidden_params")
-            else:
-                hp = getattr(first_chunk, "_hidden_params", None)
-            if isinstance(hp, dict):
-                custom_llm_provider = hp.get("custom_llm_provider")
-
-        if custom_llm_provider == "anthropic":
+        if chunks and ChunkProcessor._streamed_anthropic_message_start(chunks[0]):
             return None
         return completion_tokens
+
+    @staticmethod
+    def _streamed_anthropic_message_start(chunk: "_UsageBearingChunk | ModelResponse") -> bool:
+        hidden_params: Final = object_mapping(
+            chunk.get("_hidden_params") if isinstance(chunk, dict) else getattr(chunk, "_hidden_params", None)
+        )
+        provider: Final = hidden_params.get("custom_llm_provider") if hidden_params is not None else None
+        if provider == "anthropic":
+            return True
+        model: Final[object] = chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
+        return (
+            provider in _PROVIDERS_STREAMING_CLAUDE_AS_ANTHROPIC_EVENTS
+            and isinstance(model, str)
+            and "claude" in model.lower()
+        )
 
     def calculate_usage(
         self,

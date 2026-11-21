@@ -8,6 +8,7 @@ from typing import Any, Final, cast
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.main import stream_chunk_builder
@@ -1398,11 +1399,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return not any(getattr(part, "text", None) for part in getattr(item, "content", None) or ())
 
     def _with_usage_of_every_streamed_chunk(self, built: ModelResponse, messages: Sequence[object]) -> ModelResponse:
-        every_chunk: Final = stream_chunk_builder(
-            chunks=self.litellm_custom_stream_wrapper.chunks,
-            messages=messages,
-            logging_obj=self.litellm_logging_obj,
-        )
+        try:
+            every_chunk: Final = stream_chunk_builder(
+                chunks=self.litellm_custom_stream_wrapper.chunks,
+                messages=messages,
+                logging_obj=self.litellm_logging_obj,
+            )
+        except Exception as e:  # noqa: BLE001  # the bill built from the relayed chunks still stands
+            verbose_logger.debug("Billing a cut stream from its relayed chunks, the full rebuild failed: %s", e)
+            return built
         usage: Final[object] = getattr(every_chunk, "usage", None)
         if not isinstance(usage, Usage):
             return built
