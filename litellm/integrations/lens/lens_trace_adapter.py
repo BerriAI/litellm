@@ -480,6 +480,8 @@ class _Placement:
 
 def _span_context(turn: Interaction, span_id: int) -> SpanContext:
     return SpanContext(turn.trace_id, span_id, is_remote=True, trace_flags=TraceFlags(TraceFlags.SAMPLED))
+
+
 LENS_TRACE_PATH: Final = "/v1/traces"
 
 
@@ -615,9 +617,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         finally:
             _NEXT_SPAN_ID.reset(pinned)
 
-    def _emit_tool_steps(
-        self, made_by: AgentCall, session_id: str, placement: _Placement, at_ns: int | None
-    ) -> None:
+    def _emit_tool_steps(self, made_by: AgentCall, session_id: str, placement: _Placement, at_ns: int | None) -> None:
         """One zero-length step per tool result, at the start of the model call whose prompt carries it."""
         tracer: Final = self.tracer_provider.get_tracer(_TOOL_STEP_TRACER)
         context: Final = set_span_in_context(NonRecordingSpan(placement.parent)) if placement.parent else None
