@@ -1574,6 +1574,20 @@ class MCPRequestHandler:
             refreshed.org_id = current.org_id
         elif auth.via_virtual_key and auth.api_key and auth.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS:
             current = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=requires_fresh_policy)
+            if current.object_permission_id and current.object_permission is None:
+                from litellm.proxy.proxy_server import prisma_client
+
+                if prisma_client is None:
+                    raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
+                try:
+                    current.object_permission = await MCPRequestHandler._load_named_object_permission(
+                        principal="MCP virtual key",
+                        object_permission_id=current.object_permission_id,
+                        prisma_client=prisma_client,
+                        user_api_key_auth=refreshed,
+                    )
+                except UnloadableEntitlementError:
+                    raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
             refreshed.object_permission = current.object_permission
             refreshed.object_permission_id = current.object_permission_id
             refreshed.team_id = current.team_id
