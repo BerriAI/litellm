@@ -105,14 +105,14 @@ from litellm.proxy.auth.model_access_denied import (
     model_access_denied_client_message,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipients as _parse_email_list
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     evict_local,
     evict_shared,
-    publish_auth_cache_invalidation,
+    publish_cache_invalidation,
 )
-from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipients as _parse_email_list
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -3363,9 +3363,9 @@ async def invalidate_team_member_spend_state(
     first, so returning success would leave the old value authoritative for
     every worker despite the DB write having committed.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
-        publish_auth_cache_invalidation,
+        publish_cache_invalidation,
     )
 
     await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
@@ -3411,8 +3411,8 @@ async def invalidate_team_member_spend_state(
             value=new_spend,
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
         )
-        await publish_auth_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
-        await publish_auth_cache_invalidation(
+        await publish_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
+        await publish_cache_invalidation(
             cache_key=spend_db_floor_key,
             new_value=new_spend,
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
@@ -3467,7 +3467,7 @@ async def delete_cache_team_object(
                 key,
                 e,
             )
-        await publish_auth_cache_invalidation(cache_key=key)
+        await publish_cache_invalidation(cache_key=key)
 
 
 async def cache_key_object(
@@ -3529,7 +3529,7 @@ async def delete_cache_key_object(
             e,
         )
 
-    await publish_auth_cache_invalidation(cache_key=key)
+    await publish_cache_invalidation(cache_key=key)
     await evict_and_broadcast((AuthObject.customer_app_key_resource(hashed_token).key,), user_api_key_cache)
     await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.KEY, entity_id=hashed_token)
 
@@ -3542,7 +3542,7 @@ async def evict_budget_windows_absent_marker(entity_type: Litellm_EntityType, en
 
     marker: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
     budget_windows_absent_cache.delete_cache(marker)
-    await publish_auth_cache_invalidation(cache_key=marker)
+    await publish_cache_invalidation(cache_key=marker)
 
 
 async def delete_cache_key_objects(
@@ -7864,7 +7864,7 @@ async def delete_cached_project_object(
     Every endpoint that mutates litellm_projecttable must call this, or a stale project (e.g. a
     pre-update empty model allowlist) keeps being enforced until the TTL expires (LIT-3803).
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
         cache_keys=(AuthObject.project(project_id).key, AuthObject.customer_app("project", project_id).key),

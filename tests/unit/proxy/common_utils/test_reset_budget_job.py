@@ -2373,6 +2373,7 @@ def _make_counter_invalidation_job(monkeypatch):
     fake_module.spend_counter_store = spend_counter_cache.store()
     fake_module.user_api_key_cache = user_api_key_cache
     fake_module.redis_usage_cache = None
+    fake_module.proxy_config = types.SimpleNamespace(cache_invalidation=None)
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
     spend_counter_cache.user_api_key_cache = user_api_key_cache  # pyright: ignore[reportAttributeAccessIssue]  # the test reads both caches off one handle

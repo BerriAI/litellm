@@ -13562,7 +13562,7 @@ class TestMemberAutoRouterInference:
     async def test_access_group_grants_are_cached_and_revoked(
         self, group_owner: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+        from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
             access_group_id="router-group",

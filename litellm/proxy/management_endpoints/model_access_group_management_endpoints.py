@@ -265,7 +265,7 @@ async def _evict_model_access_group_cache_keys(access_group: str, auth_cache: Us
     unenforced until the TTL expires: auth gates the feature on a cached registry of the groups
     that have a budget row, read cache-first with no freshness check.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
 

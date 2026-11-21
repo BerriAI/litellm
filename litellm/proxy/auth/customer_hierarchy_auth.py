@@ -25,7 +25,7 @@ from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
 from litellm.proxy.auth.customer_spend import current_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.customer_usage import CustomerIdentifier
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (

@@ -549,10 +549,7 @@ from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_internal_server_error_response,
     uses_anthropic_error_envelope,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    AuthCacheInvalidationSubscriber,
-    publish_auth_cache_invalidation,
-)
+from litellm.proxy.common_utils.cache_invalidation_pubsub import publish_cache_invalidation
 from litellm.proxy.common_utils.callback_lifecycle import (
     CALLBACK_CLOSE_TIMEOUT_SECONDS,
     close_proxy_callbacks,
@@ -934,6 +931,7 @@ from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.cache_invalidation import CacheInvalidation, PythonCaches, connect_invalidation
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -2193,7 +2191,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
             await proxy_config.stop_config_sync_subscriber()
 
-            await proxy_config.stop_auth_cache_invalidation_subscriber()
+            proxy_config.stop_cache_invalidation_subscriber()
 
             await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
@@ -4288,8 +4286,8 @@ async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: fl
     floor_key: Final = f"spend_db_floor:{counter_key}"
     spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
 
-    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
-    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+    await publish_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
+    await publish_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
 
 
 async def _apply_spend_counter_increments(  # pyright: ignore[reportUnusedFunction]  # called by legacy_spend_counters
@@ -5843,7 +5841,7 @@ class ProxyConfig:
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
-        self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
+        self.cache_invalidation: CacheInvalidation | None = None
         from litellm.litellm_core_utils.get_model_cost_map import (
             get_model_cost_map_loaded_at,
         )
@@ -8873,38 +8871,41 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping config sync subscriber: %s", e)
 
-    def start_auth_cache_invalidation_subscriber(
+    def start_cache_invalidation_subscriber(
         self,
         redis_cache: RedisCache | None,
         user_api_key_cache: UserApiKeyCache,
     ) -> None:
-        if redis_cache is None or self.auth_cache_invalidation_subscriber is not None:
+        if redis_cache is None or self.cache_invalidation is not None:
             return
-        subscriber: Final = AuthCacheInvalidationSubscriber(
-            redis_cache=redis_cache,
-            user_api_key_cache=user_api_key_cache,
-            additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
-            evicted_caches=(
-                budget_windows_absent_cache.in_memory_cache,
-                hook_cache.in_memory_cache,
-                mcp_state_cache.in_memory_cache,
-                jwks_cache.in_memory_cache,
-                ui_settings_cache.in_memory_cache,
+        channel: Final = connect_invalidation(
+            connect(redis_cache),
+            redis_cache.namespace,
+            user_api_key_cache.store,
+            spend_counter_store,
+            PythonCaches(
+                copies=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+                evicted=(
+                    budget_windows_absent_cache.in_memory_cache,
+                    hook_cache.in_memory_cache,
+                    mcp_state_cache.in_memory_cache,
+                    jwks_cache.in_memory_cache,
+                    ui_settings_cache.in_memory_cache,
+                ),
+                on_eviction=(user_api_key_cache.void_lease,),
             ),
-            spend_counters=spend_counter_store,
         )
-        self.auth_cache_invalidation_subscriber = subscriber
-        subscriber.start()
-
-    async def stop_auth_cache_invalidation_subscriber(self) -> None:
-        subscriber: Final = self.auth_cache_invalidation_subscriber
-        if subscriber is None:
+        if channel is None:
             return
-        self.auth_cache_invalidation_subscriber = None
-        try:
-            await subscriber.stop()
-        except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
-            verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
+        self.cache_invalidation = channel
+        channel.start()
+
+    def stop_cache_invalidation_subscriber(self) -> None:
+        channel: Final = self.cache_invalidation
+        if channel is None:
+            return
+        self.cache_invalidation = None
+        channel.stop()
 
     async def _init_non_llm_objects_in_db(
         self, prisma_client: PrismaClient, *, refresh_pass_through_endpoints: bool = True
@@ -11660,7 +11661,7 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
-        proxy_config.start_auth_cache_invalidation_subscriber(
+        proxy_config.start_cache_invalidation_subscriber(
             redis_cache=redis_usage_cache,
             user_api_key_cache=user_api_key_cache,
         )
