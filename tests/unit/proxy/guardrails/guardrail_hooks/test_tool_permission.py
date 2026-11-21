@@ -4162,3 +4162,70 @@ class TestToolPermissionGuardrailAnthropicMessages:
         with patch.object(self.blocking, "should_run_guardrail", return_value=True):
             with pytest.raises(GuardrailRaisedException):
                 await self._drain(self.blocking, [b"data: not-json\n\n", b"event: weird\n\n"])
+
+
+class TestToolPermissionGuardrailRawFramesInAChatStream:
+    def setup_method(self):
+        self.blocking = ToolPermissionGuardrail(
+            guardrail_name="chat-block",
+            rules=[
+                {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "allow"},
+                {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"},
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+
+    @staticmethod
+    def _tool_call_stream(tool_name: str) -> list[ModelResponseStream]:
+        def chunk(delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-raw-frame",
+                created=1,
+                model="gpt-5.4-mini",
+                choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+            )
+
+        call: Final = {
+            "index": 0,
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": tool_name, "arguments": '{"file_path": "/etc/passwd"}'},
+        }
+        return [chunk(Delta(role="assistant", tool_calls=[call])), chunk(Delta(), finish_reason="tool_calls")]
+
+    async def _drain(self, items: list[object]) -> list[object]:
+        async def _stream():
+            for item in items:
+                yield item
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            return [
+                chunk
+                async for chunk in self.blocking.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(), response=_stream(), request_data={}
+                )
+            ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("position", [0, 1, 2])
+    async def test_denied_tool_call_is_blocked_whichever_way_a_raw_frame_sits_in_the_stream(self, position: int):
+        parsed: Final = self._tool_call_stream("Read")
+
+        with pytest.raises(GuardrailRaisedException, match="denied by rule 'deny_read'"):
+            await self._drain([*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]])
+
+    @pytest.mark.asyncio
+    async def test_allowed_tool_call_is_delivered_when_a_raw_frame_sits_in_the_stream(self):
+        parsed: Final = self._tool_call_stream("Bash")
+
+        delivered: Final = await self._drain([parsed[0], b"data: [DONE]\n\n", parsed[1]])
+
+        names: Final = [
+            call.function.name
+            for chunk in delivered
+            if isinstance(chunk, ModelResponseStream)
+            for call in (chunk.choices[0].delta.tool_calls or ())
+            if call.function.name
+        ]
+        assert names == ["Bash"]
