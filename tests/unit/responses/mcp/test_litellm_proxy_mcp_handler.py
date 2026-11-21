@@ -26,7 +26,7 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTableCachedObj
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, Member
 from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds, granted_toolset_ids
 from litellm.types.mcp_server.mcp_toolset import MCPToolset
 from litellm.proxy.utils import ProxyLogging
@@ -2265,3 +2265,169 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
     assert scoped.object_permission is not None
     assert scoped.object_permission.mcp_servers == ["srv-1"]
     assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+async def _setup_dashboard_team_mcp_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    user_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    member_teams: Sequence[str] = ("normal-team",),
+) -> MCPServerManager:
+    async def upstream_listing(_client: object, server_name: str) -> ListToolsResult:
+        return ListToolsResult(tools=list(UPSTREAM_TOOLS[server_name]))
+
+    manager: Final = MCPServerManager()
+    manager.registry = {server.server_id: server for server in GATEWAY_SERVERS}
+    manager.config_mcp_servers = dict(manager.registry)
+    manager.create_mcp_client = AsyncMock(return_value=_listing_client())
+    manager._fetch_tools_with_timeout = AsyncMock(side_effect=upstream_listing)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"supported_db_objects": []})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        types.SimpleNamespace(db=types.SimpleNamespace(), writer_db=types.SimpleNamespace()),
+    )
+
+    cache: Final = UserApiKeyCache()
+    viewer: Final = LiteLLM_UserTable(
+        user_id="viewer-1",
+        user_role=user_role.value,
+        teams=list(member_teams),
+    )
+    normal_team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="normal-team",
+        members_with_roles=[Member(user_id="viewer-1", role="user")],
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-normal-team",
+            mcp_servers=["srv-1"],
+            mcp_tool_permissions={"srv-1": ["add"]},
+        ),
+    )
+    model_only_team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="model-only-team",
+        members_with_roles=[Member(user_id="viewer-1", role="user")],
+    )
+    await cache.async_set_cache(key=AuthObject.user("viewer-1"), value=viewer)
+    await cache.async_set_cache(key=AuthObject.team("normal-team"), value=normal_team)
+    await cache.async_set_cache(key=AuthObject.team("model-only-team"), value=model_only_team)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    return manager
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billing_team_id", [UI_TEAM_ID, "model-only-team"], ids=["ui_team", "rebound_billing_team"])
+async def test_dashboard_non_admin_session_uses_team_granted_mcp_on_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    billing_team_id: str,
+) -> None:
+    manager: Final = await _setup_dashboard_team_mcp_env(monkeypatch)
+    origin: Final = UserAPIKeyAuth(
+        api_key="sk-ui-session",
+        user_id="viewer-1",
+        team_id=UI_TEAM_ID,
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+    session_auth: UserAPIKeyAuth = origin
+    if billing_team_id != UI_TEAM_ID:
+        session_auth = origin.model_copy(update={"team_id": billing_team_id})
+    session_auth.bind_dashboard_session(origin, model="qwen3:0.6b")
+
+    try:
+        tools, tool_server_map = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
+            user_api_key_auth=session_auth,
+            mcp_tools_with_litellm_proxy=[
+                {
+                    "type": "mcp",
+                    "server_label": "calc",
+                    "server_url": "litellm_proxy/mcp/calc",
+                    "require_approval": "never",
+                }
+            ],
+        )
+        assert [t.name for t in tools] == ["calc-add"]
+        assert tool_server_map == {"calc-add": "calc"}
+
+        with pytest.raises(HTTPException) as denial:
+            await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
+                user_api_key_auth=session_auth,
+                mcp_tools_with_litellm_proxy=[
+                    {
+                        "type": "mcp",
+                        "server_label": "docs",
+                        "server_url": "litellm_proxy/mcp/docs",
+                        "require_approval": "never",
+                    }
+                ],
+            )
+        assert denial.value.status_code == 403
+        assert denial.value.detail == {"error": "The key is not allowed to access the requested MCP servers: docs"}
+    finally:
+        for server in GATEWAY_SERVERS:
+            manager._drop_listed_tools(server.server_id)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_non_admin_execute_tool_calls_resolves_admitted_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _setup_dashboard_team_mcp_env(monkeypatch)
+    call_tool_mock: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="pong")]))
+    from litellm.proxy.mcp_server import mcp_server_manager
+
+    monkeypatch.setattr(mcp_server_manager.global_mcp_server_manager, "call_tool", call_tool_mock)
+
+    session_auth: Final = UserAPIKeyAuth(
+        api_key="sk-ui-session",
+        user_id="viewer-1",
+        team_id=UI_TEAM_ID,
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+    results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={"calc-add": "calc"},
+        tool_calls=[{"type": "function_call", "name": "calc-add", "arguments": "{}", "call_id": "call-1"}],
+        user_api_key_auth=session_auth,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": "pong", "name": "calc-add"}]
+    passed_auth: Final = call_tool_mock.call_args.kwargs["user_api_key_auth"]
+    assert passed_auth is not None
+    assert passed_auth.mcp_admitted_user_subject is True
+    assert passed_auth.user_id == "viewer-1"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_admin_viewer_keeps_unscoped_mcp_access_when_rebound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager: Final = await _setup_dashboard_team_mcp_env(
+        monkeypatch,
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        member_teams=("model-only-team",),
+    )
+    origin: Final = UserAPIKeyAuth(
+        api_key="sk-ui-admin-viewer",
+        user_id="viewer-1",
+        team_id=UI_TEAM_ID,
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+    rebound: Final = origin.model_copy(update={"team_id": "model-only-team"})
+    rebound.bind_dashboard_session(origin, model="qwen3:0.6b")
+
+    try:
+        tools, tool_server_map = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
+            user_api_key_auth=rebound,
+            mcp_tools_with_litellm_proxy=[
+                {
+                    "type": "mcp",
+                    "server_label": "docs",
+                    "server_url": "litellm_proxy/mcp/docs",
+                    "require_approval": "never",
+                }
+            ],
+        )
+        assert [t.name for t in tools] == ["docs-lookup"]
+        assert tool_server_map == {"docs-lookup": "docs"}
+    finally:
+        for server in GATEWAY_SERVERS:
+            manager._drop_listed_tools(server.server_id)
