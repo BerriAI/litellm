@@ -1670,11 +1670,14 @@ def _drops_scanned_arguments(guardrailed: object, scanned: ChatCompletionAssista
 def _guardrailed_function(guardrailed: object) -> ChatCompletionToolCallFunctionChunk | None:
     function: Final = stream_item_field(guardrailed, "function")
     try:
-        return _TOOL_CALL_FUNCTION_ADAPTER.validate_python(
+        validated: Final = _TOOL_CALL_FUNCTION_ADAPTER.validate_python(
             function.model_dump(exclude_none=True) if isinstance(function, BaseModel) else function
         )
     except ValidationError:
         return None
+    return _TOOL_CALL_FUNCTION_ADAPTER.validate_python(
+        {field: value for field, value in validated.items() if value is not None}
+    )
 
 
 def _server_tool_call_tasks(
