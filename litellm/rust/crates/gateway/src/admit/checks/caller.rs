@@ -6,12 +6,13 @@ use super::{Admit, Authentication, Reason, Refused};
 /// host learns to serve does not compile here until it is named native or not. A credential the
 /// core did not authenticate is over the error's name.
 pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
-    let over: &'static str = match authentication {
+    match authentication {
         Ok(caller) => match &**caller {
-            Caller::MasterKey => return None,
-            Caller::Key(context) => match context.key.row {},
+            Caller::MasterKey | Caller::Key(_) => None,
         },
-        Err(error) => error.into(),
-    };
-    Some(Reason::new(Refused::Credential, over))
+        Err(error) => Some(Reason::new(
+            Refused::Credential,
+            <&'static str>::from(error),
+        )),
+    }
 }

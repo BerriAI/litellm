@@ -15,7 +15,7 @@ Axum wiring for `gateway-auth-core`, and nothing else: it reads a credential off
 
 ## Requests
 
-The Axum `authenticate` middleware runs the route profile's extractor. Missing, duplicate, empty, or malformed credentials fail. Authentication replaces any preexisting caller extension. Handlers extract `Authenticated<R>`, and missing authenticated context fails closed. There is no fallback chain after an authenticator fails
+The Axum `authenticate` middleware runs the route profile's extractor. Missing, duplicate, empty, or malformed credentials fail. Authentication replaces any preexisting caller extension. A `Preauthenticated` extension, which a server layer in front puts on a request it already authenticated with the same `Auth`, is taken in place of reading the credential again. Handlers extract `Authenticated<R>`, and missing authenticated context fails closed. There is no fallback chain after an authenticator fails
 
 `RequireMasterKey` admits the master key alone. A request with no usable bearer is still put to the authenticator, with no token, so a server with no master key answers 500 before it calls a token missing
 
@@ -24,3 +24,5 @@ The Axum `authenticate` middleware runs the route profile's extractor. Missing, 
 Failures distinguish invalid or expired credentials, forbidden operations, unavailable authentication services, and missing server configuration/context. Every credential fails with the one `Error`, classified once by `status()`, and `is_denied()` tells a rejected caller from an auth failure. Inference keeps its API-specific error envelopes
 
 The plain-text rejection body is the top-level message only, never the `Report` chain, because the caller is unauthenticated and the sources carry secret-manager and backend detail. That stays reachable through `source()` for logs
+
+A host declines a key that holds what the server does not serve (`HostDeclined`), which is answered `NotNative`, and so is an identity the core authenticated that this server serves no request for, so no such caller ever reaches a route. Where the keys are stored, and which of the core's host steps are answered, belong to the mounting server

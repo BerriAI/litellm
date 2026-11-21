@@ -13,8 +13,7 @@ use std::sync::Arc;
 use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_env::Lookup;
-use litellm_gateway_auth::Auth;
+use litellm_gateway_auth::{Auth, Preauthenticated};
 use litellm_gateway_inference::JsonObject;
 use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
@@ -65,9 +64,6 @@ pub struct Admit {
     config: Config,
     /// The variables only the environment holds, as `main` read them.
     environment: Environment,
-    /// What gives the proxy a database, which it writes a spend log and key spend to after every
-    /// call, the master key's included.
-    database: Option<Box<str>>,
     /// The variable that has the proxy serve models and settings from its database on top of the
     /// config. `general_settings.store_model_in_db` is a setting of the config itself.
     stored_models: Option<Box<str>>,
@@ -83,29 +79,7 @@ pub struct Admit {
     auth: Auth<NativeRows>,
 }
 
-/// The variables the proxy builds a database from when `database_url` names none.
-const DATABASE_VARIABLES: [&str; 4] = [
-    "DATABASE_URL",
-    "DATABASE_HOST",
-    "IAM_TOKEN_DB_AUTH",
-    "AZURE_POSTGRESQL_AUTH",
-];
-
 const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
-
-fn database(config: &Config, environment: &dyn Lookup) -> Option<Box<str>> {
-    config
-        .general_settings
-        .database_url
-        .as_ref()
-        .map(|_| "general_settings.database_url".into())
-        .or_else(|| {
-            DATABASE_VARIABLES
-                .into_iter()
-                .find(|variable| environment.get(variable).is_some())
-                .map(Box::from)
-        })
-}
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
@@ -147,7 +121,6 @@ impl Admit {
             .collect();
         Self {
             environment: environment.clone(),
-            database: database(config, &*state.environment),
             stored_models: state
                 .environment
                 .get(STORE_MODEL_IN_DB)
@@ -166,10 +139,9 @@ impl Admit {
     fn built(config: &Config, router: Router, deployed: Vec<Deployed>) -> Self {
         Self {
             router,
-            auth: host::auth::auth(config),
+            auth: host::auth::auth(config, None),
             config: config.clone(),
             environment: Environment::default(),
-            database: None,
             stored_models: None,
             deployed,
             aliased: Vec::new(),
@@ -208,6 +180,9 @@ impl Admit {
             return Err(refused(parts, body, reason));
         }
         parts.extensions.insert(JsonObject(fields));
+        if let Ok(caller) = authenticated {
+            parts.extensions.insert(Preauthenticated(caller));
+        }
         Ok(Request::from_parts(parts, body))
     }
 }
@@ -216,8 +191,10 @@ impl Admit {
 mod tests {
     use axum::http::Method;
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
+    use crate::host::auth::keys;
 
     const CONFIG: &str = "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n  - model_name: gpt\n    litellm_params:\n      model: openai/gpt-5.5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n";
     const MASTER_KEY: (&str, &str) = ("authorization", "Bearer gateway-key");
@@ -229,6 +206,73 @@ mod tests {
             ("gpt".to_owned(), Ok(LlmProviders::Openai)),
         ];
         Arc::new(Admit::over(&config, deployed))
+    }
+
+    const VIRTUAL_KEY: (&str, &str) = ("authorization", "Bearer sk-virtual");
+
+    /// What the database holds for [`VIRTUAL_KEY`], the only key it holds.
+    #[derive(Clone, Copy)]
+    enum Stored {
+        Active,
+        Revoked,
+        Owned,
+        Unreachable,
+    }
+
+    /// The admit over a database storing the key as `stored` says, with that database.
+    async fn holding(stored: Stored) -> (Arc<Admit>, Option<keys::Held>) {
+        let columns = match stored {
+            Stored::Active => Some(json!({})),
+            Stored::Revoked => Some(json!({"blocked": true})),
+            Stored::Owned => Some(json!({"user_id": "owner"})),
+            Stored::Unreachable => None,
+        };
+        let held = match columns {
+            Some(columns) => Some(keys::Held::holding("sk-virtual", columns).await),
+            None => None,
+        };
+        let database = held
+            .as_ref()
+            .map_or_else(keys::unreachable, keys::Held::database);
+        let config = Config::from_yaml(CONFIG).unwrap();
+        let admit = Arc::new(Admit {
+            auth: host::auth::auth(&config, Some(Arc::new(database))),
+            ..Admit::over(
+                &config,
+                vec![("claude".to_owned(), Ok(LlmProviders::Anthropic))],
+            )
+        });
+        (admit, held)
+    }
+
+    #[rstest]
+    #[case::active(Stored::Active, VIRTUAL_KEY, None)]
+    #[case::revoked(Stored::Revoked, VIRTUAL_KEY, Some("invalid_token"))]
+    #[case::holding_what_the_native_app_does_not_serve(
+        Stored::Owned,
+        VIRTUAL_KEY,
+        Some("not_native")
+    )]
+    #[case::unreadable(Stored::Unreachable, VIRTUAL_KEY, Some("unavailable"))]
+    #[case::unknown(
+        Stored::Active,
+        ("authorization", "Bearer sk-someone-else"),
+        Some("invalid_token")
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_virtual_key_is_admitted_only_when_the_native_app_authenticates_it(
+        #[case] stored: Stored,
+        #[case] credential: (&str, &str),
+        #[case] over: Option<&str>,
+    ) {
+        let (admit, _held) = holding(stored).await;
+
+        let refused = admit
+            .admit(messages(&[credential], "claude"))
+            .await
+            .err()
+            .map(|(_, reason)| (reason.why, reason.over));
+        assert_eq!(refused, over.map(|over| (Refused::Credential, over.into())));
     }
 
     fn messages(headers: &[(&str, &str)], model: &str) -> Request {

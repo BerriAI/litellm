@@ -7,5 +7,6 @@ pub use authentication::{
 };
 pub use error::Error;
 pub use http::{
-    Authenticated, Bearer, BearerOrXApiKey, CredentialExtractor, RequireMasterKey, authenticate,
+    Authenticated, Bearer, BearerOrXApiKey, CredentialExtractor, Preauthenticated,
+    RequireMasterKey, authenticate,
 };
