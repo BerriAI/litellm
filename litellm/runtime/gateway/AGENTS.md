@@ -4,6 +4,7 @@
 
 - Importing `launch.py` stays cheap. Every uvicorn worker imports it again before it can answer its first health ping, so LiteLLM imports wait until `main` or `worker_app` runs
 - PgBouncer starts exactly once per pod, before the workers start, and the workers inherit the loopback URL through `DATABASE_URL`. `configure_database` is the only place that does this
+- The orphaned query-engine reaper starts only in a process that supervises several uvicorn workers, and `serve_with_reaper` is the only place that starts it. `supervises_workers` takes the worker count from uvicorn's own CLI parser and `Config`. With one worker uvicorn serves in the launcher's own process, where the engine is a legitimate child that a reaper would kill on every scan
 
 ## Rust forwarding
 

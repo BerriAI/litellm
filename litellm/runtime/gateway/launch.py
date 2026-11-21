@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import assert_never
+from uvicorn.config import Config
 from uvicorn.main import main as uvicorn_main
 
 if TYPE_CHECKING:
@@ -78,6 +79,37 @@ def _serve(argv: Sequence[str]) -> None:
     uvicorn_main(tuple(argv), prog_name="uvicorn")
 
 
+def supervises_workers(argv: Sequence[str]) -> bool:
+    """Whether uvicorn would run this process as the parent of several workers, by the count it resolves itself.
+
+    With one worker uvicorn serves in this process, which then owns its query engine as a legitimate child.
+    The flags are parsed resiliently, so ``--help`` and a bad flag are still reported once, by uvicorn's own CLI.
+    """
+    from pydantic import TypeAdapter
+
+    workers: Final = TypeAdapter[int | None](int | None).validate_python(
+        uvicorn_main.make_context("uvicorn", list(argv), resilient_parsing=True).params["workers"]
+    )
+    return Config(app="", log_config=None, workers=workers).workers > 1
+
+
+def _start_query_engine_reaper() -> None:
+    from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+
+    start_query_engine_reaper()
+
+
+def serve_with_reaper(
+    argv: Sequence[str],
+    serve: Callable[[Sequence[str]], None] = _serve,
+    start_reaper: Callable[[], None] = _start_query_engine_reaper,
+) -> None:
+    """Run uvicorn, with the orphaned query-engine reaper started first when this process only supervises workers."""
+    if supervises_workers(argv):
+        start_reaper()
+    serve(argv)
+
+
 def python_server(argv: Sequence[str]) -> "PythonServer":
     """What uvicorn would serve the public port with, read from the same flags and environment it reads."""
     from litellm.proxy.rust_forward.server import PythonServer, Server, UvicornCliParams, local_config_path
@@ -131,7 +163,7 @@ def _python_server_or_exit(argv: Sequence[str]) -> "PythonServer":
         sys.exit(error.exit_code)
 
 
-def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = serve_with_reaper) -> None:
     from pydantic import ValidationError
 
     from litellm.proxy.rust_forward.mode import (
