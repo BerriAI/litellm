@@ -340,6 +340,14 @@ def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]
     return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
 
 
+def streamed_reasoning_details_signature(delta: object) -> str:
+    return "".join(
+        signature
+        for item in attribute_items(delta, "reasoning_details")
+        if isinstance(signature := (as_str_mapping(item) or {}).get("signature"), str)
+    )
+
+
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
     if eager_input_streaming is None:
@@ -1865,7 +1873,9 @@ class LiteLLMAnthropicMessagesAdapter:
             # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
             # branch above is skipped entirely; open a ``thinking`` block here so the
             # matching ``thinking_delta`` stream is not emitted into a text block.
-            elif isinstance(choice, StreamingChoices) and getattr(choice.delta, "reasoning_content", None):
+            elif isinstance(choice, StreamingChoices) and (
+                getattr(choice.delta, "reasoning_content", None) or streamed_reasoning_details_signature(choice.delta)
+            ):
                 return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
 
         return "text", TextBlock(type="text", text="")
@@ -1903,6 +1913,10 @@ class LiteLLMAnthropicMessagesAdapter:
 
                         reasoning_content += thinking
                         reasoning_signature += signature
+            elif isinstance(choice, StreamingChoices) and (
+                details_signature := streamed_reasoning_details_signature(choice.delta)
+            ):
+                reasoning_signature += details_signature
             # Handle reasoning_content when thinking_blocks is not present
             # This handles providers like OpenRouter that return reasoning_content
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
