@@ -2913,8 +2913,8 @@ async def test_task_cancellation_during_cleanup_preserves_failure(
 async def test_session_bound_cleanup_does_not_follow_redirect(status_code: int) -> None:
     protocol_version: Final = "2025-11-25"
     session_id: Final = "redirect-session"
-    requests: list[httpx2.Request] = []
-    redirected: list[httpx2.Request] = []
+    requests: Final[list[httpx2.Request]] = []
+    redirected: Final[list[httpx2.Request]] = []
     message_adapter: Final = TypeAdapter(JSONRPCMessage)
 
     def respond(request: httpx2.Request) -> httpx2.Response:

@@ -23051,8 +23051,8 @@ class TestMCPUpstreamRateLimitRetry:
         protocol_version: Final = "2025-11-25"
         session_id: Final = "listing-session"
         message_adapter: Final = TypeAdapter(JSONRPCMessage)
-        requests: list[httpx2.Request] = []
-        continuation_requests: list[httpx2.Request] = []
+        requests: Final[list[httpx2.Request]] = []
+        continuation_requests: Final[list[httpx2.Request]] = []
 
         def respond(request: httpx2.Request) -> httpx2.Response:
             requests.append(request)
