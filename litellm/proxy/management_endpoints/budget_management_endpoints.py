@@ -48,9 +48,11 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    ROLLOVER_BUDGET_FIELDS,
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
     validate_budget_duration,
+    validate_rollover_budget_patch,
 )
 from litellm.proxy.management_helpers.customer_hierarchy import (
     BudgetGroupScope,
@@ -110,7 +112,8 @@ async def _write_budget_update(
     data: Mapping[str, object],
     limits: tuple[BudgetLimit, ...] | None,
 ) -> "prisma_models.LiteLLM_BudgetTable | None":
-    if not data.keys() & {"budget_limits", "budget_duration", "rollover_max_budget"}:
+    changes_rollover: Final = bool(data.keys() & ROLLOVER_BUDGET_FIELDS)
+    if not changes_rollover and "budget_limits" not in data:
         return await BudgetRepository(prisma_client).table.update(where={"budget_id": budget_id}, data=data)
     async with prisma_client.tx() as tx_ctx:
         tx: Final = cast("_BudgetUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
@@ -129,19 +132,16 @@ async def _write_budget_update(
         current: Final = await lock_budget_limits(tx, "LiteLLM_BudgetTable", budget_id)
         duration: Final = data.get("budget_duration")
         stored: Final = (
-            await tx.litellm_budgettable.find_unique(where={"budget_id": budget_id})
-            if (isinstance(duration, str) and "budget_reset_at" not in data) or "rollover_max_budget" in data
-            else None
+            await tx.litellm_budgettable.find_unique(where={"budget_id": budget_id}) if changes_rollover else None
         )
-        if "rollover_max_budget" in data and data["rollover_max_budget"] is not None and stored is not None:
-            _validate_member_rollover(
-                TeamMemberBudgetWrite.model_validate(
-                    {
-                        "max_budget": data.get("max_budget", stored.max_budget),
-                        "budget_duration": data.get("budget_duration", stored.budget_duration),
-                        "rollover_max_budget": data["rollover_max_budget"],
-                    }
-                )
+        if stored is not None and changes_rollover:
+            validate_rollover_budget_patch(
+                data,
+                {
+                    "max_budget": stored.max_budget,
+                    "rollover_max_budget": stored.rollover_max_budget,
+                    "budget_duration": stored.budget_duration,
+                },
             )
         reset_data: Final = (
             {"budget_reset_at": get_budget_reset_time(budget_duration=duration)}

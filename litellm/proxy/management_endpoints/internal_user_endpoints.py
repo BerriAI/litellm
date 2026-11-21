@@ -32,7 +32,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_get
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.models.budget import active_rollover_credit
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -75,11 +74,13 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     raise_public,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    ROLLOVER_BUDGET_FIELDS,
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     require_caller_user_id_for_non_admin,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_rollover_budget_patch,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -110,7 +111,10 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
     user_window_counter,
 )
-from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
+from litellm.repositories.budget_limits_repository import (
+    BudgetLimitsTransaction,
+    rebase_budget_limits_update,
+)
 from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -147,8 +151,6 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
-_USER_ROLLOVER_BASE: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
-_USER_ROLLOVER_PERIOD: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
@@ -156,6 +158,7 @@ _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _LOCK_ALL_USERS_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_UserTable" WHERE TRUE ORDER BY user_id COLLATE "C" FOR UPDATE'
 )
+_LOCK_USER_ROLLOVER_SQL: Final = 'SELECT max_budget, rollover_max_budget, budget_duration FROM "LiteLLM_UserTable" WHERE user_id = $1::text FOR UPDATE'
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -1478,22 +1481,9 @@ def _windows_by_user(
     )
 
 
-def _require_valid_rollover(base: float | None, cap: float | None, duration: str | None) -> None:
-    if cap is not None and active_rollover_credit(base, cap, duration, None) is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Budget rollover requires a reset period and a positive base budget below the rollover cap.",
-        )
-
-
 def _validate_new_user_rollover(data_json: object, cap: float | None) -> None:
     if cap is not None:
-        configured_budget: Final = as_str_mapping(data_json) or {}
-        _require_valid_rollover(
-            _USER_ROLLOVER_BASE.validate_python(configured_budget.get("max_budget")),
-            cap,
-            _USER_ROLLOVER_PERIOD.validate_python(configured_budget.get("budget_duration")),
-        )
+        validate_rollover_budget_patch({**(as_str_mapping(data_json) or {}), "rollover_max_budget": cap})
 
 
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
@@ -1677,14 +1667,19 @@ async def _write_user_update(
     data: Mapping[str, object],
     original: LiteLLM_UserTable | None,
 ) -> Mapping[str, object] | None:
-    if "budget_limits" not in data and "budget_duration" not in data:
+    changes_rollover: Final = bool(data.keys() & ROLLOVER_BUDGET_FIELDS)
+    if "budget_limits" not in data and not changes_rollover:
         return cast(  # cast-ok: the user branch returns a user_id/data dictionary
             "Mapping[str, object] | None",
             await prisma_client.update_data(user_id=user_id, data=data, table_name="user"),
         )
     async with prisma_client.tx() as transaction:
+        lock_tx: Final = cast("BudgetLimitsTransaction", transaction)  # cast-ok: Prisma implements raw queries
+        if changes_rollover:
+            rows: Final = await lock_tx.query_raw(_LOCK_USER_ROLLOVER_SQL, user_id)
+            validate_rollover_budget_patch(data, rows[0] if rows else {})
         rebased: Final = await rebase_budget_limits_update(
-            cast("BudgetLimitsTransaction", transaction),  # cast-ok: Prisma implements raw transaction queries
+            lock_tx,
             "LiteLLM_UserTable",
             user_id,
             original.budget_limits if original is not None else None,
@@ -1755,17 +1750,6 @@ async def _update_single_user_helper(
             non_default_values["budget_limits"] = budget_windows_json(
                 user_request.budget_limits, stored=existing_user_row.budget_limits
             )
-
-    if user_request.rollover_max_budget is not None:
-        _require_valid_rollover(
-            user_request.max_budget
-            if "max_budget" in non_default_values
-            else getattr(existing_user_row, "max_budget", None),
-            user_request.rollover_max_budget,
-            user_request.budget_duration
-            if "budget_duration" in non_default_values
-            else getattr(existing_user_row, "budget_duration", None),
-        )
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1872,6 +1856,7 @@ async def _update_single_user_helper(
                 break  # Update first matching user
         else:
             # Create new user if not found
+            _validate_new_user_rollover(non_default_values, user_request.rollover_max_budget)
             non_default_values["user_id"] = str(uuid.uuid4())
             non_default_values["user_email"] = user_request.user_email
             inserted_user_row: Final = await prisma_client.insert_data(data=non_default_values, table_name="user")
@@ -2254,16 +2239,15 @@ async def bulk_user_update(
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
                 locked_users: Final = await user_tx_db(transaction).find_many(order={"created_at": "desc"})
-                if data.user_updates.rollover_max_budget is not None:
+                if shared_values.keys() & ROLLOVER_BUDGET_FIELDS:
                     for stored_user in locked_users:
-                        _require_valid_rollover(
-                            data.user_updates.max_budget
-                            if "max_budget" in non_default_values
-                            else stored_user.max_budget,
-                            data.user_updates.rollover_max_budget,
-                            data.user_updates.budget_duration
-                            if "budget_duration" in non_default_values
-                            else stored_user.budget_duration,
+                        validate_rollover_budget_patch(
+                            shared_values,
+                            {
+                                "max_budget": stored_user.max_budget,
+                                "rollover_max_budget": stored_user.rollover_max_budget,
+                                "budget_duration": stored_user.budget_duration,
+                            },
                         )
                 windows_by_user: Final[Mapping[str, str]] = (
                     _windows_by_user(locked_users, data.user_updates.budget_limits)
@@ -2344,6 +2328,8 @@ async def bulk_user_update(
             except Exception as audit_error:
                 verbose_proxy_logger.warning("Failed to create bulk audit log: %s", audit_error)
 
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception("Failed to perform bulk update: %s", e)
             raise HTTPException(status_code=500, detail={"error": str(e)}) from e

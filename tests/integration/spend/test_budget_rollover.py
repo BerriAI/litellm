@@ -260,6 +260,54 @@ def test_rollover_requires_a_reset_period_and_cap_above_the_base(
     assert response.status_code == 400 and "rollover requires a reset period" in response.text, response.text
 
 
+@pytest.mark.parametrize("bulk", (False, True), ids=("single-user", "all-users"))
+def test_user_budget_edits_cannot_disable_saved_rollover_implicitly(rollover_proxy: Gateway, bulk: bool) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        user_id: Final = scenario.user(max_budget=100, budget_duration="monthly", rollover_max_budget=250)
+        rejected: Final = (
+            proxy.request("POST", "/user/bulk_update", {"all_users": True, "user_updates": {"budget_duration": None}})
+            if bulk
+            else proxy.request("POST", "/user/update", {"user_id": user_id, "max_budget": 300})
+        )
+        assert rejected.status_code == 400 and "rollover" in rejected.text, rejected.text
+
+        intact: Final = proxy.get("/v2/user/info", {"user_id": user_id})
+        assert (intact["rollover_max_budget"], intact["effective_max_budget"]) == (250, 100), intact
+        proxy.post("/user/update", {"user_id": user_id, "max_budget": 300, "rollover_max_budget": None})
+        updated: Final = proxy.get("/v2/user/info", {"user_id": user_id})
+        assert updated["max_budget"] == 300 and "rollover_credit" not in updated, updated
+
+
+@pytest.mark.parametrize("scope", ("team-default", "shared-membership", "private-membership"))
+def test_team_budget_edits_cannot_disable_saved_rollover_implicitly(rollover_proxy: Gateway, scope: str) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        team: Final = scenario.team(
+            team_member_budget=100, team_member_budget_duration="monthly", team_member_rollover_max_budget=250
+        )
+        member: Final = scenario.member(team)
+        if scope == "private-membership":
+            proxy.post("/team/member_update", {"team_id": team, "user_id": member, "rpm_limit": 20})
+        rejected: Final = (
+            proxy.request("POST", "/team/update", {"team_id": team, "team_member_budget": 300})
+            if scope == "team-default"
+            else proxy.request(
+                "POST", "/team/member_update", {"team_id": team, "user_id": member, "budget_duration": None}
+            )
+        )
+        assert rejected.status_code == 400 and "rollover" in rejected.text, rejected.text
+
+        intact: Final = _member_budget(proxy, team, member)
+        assert intact["effective_max_budget"] == 100, intact
+        if scope == "team-default":
+            proxy.post(
+                "/team/update", {"team_id": team, "team_member_budget": 300, "team_member_rollover_max_budget": None}
+            )
+            updated: Final = _member_budget(proxy, team, member)
+            assert "rollover_credit" not in updated, updated
+
+
 def test_management_responses_omit_rollover_cap_without_opt_in(rollover_proxy: Gateway) -> None:
     proxy: Final = rollover_proxy
     with proxy.scenario() as scenario:
