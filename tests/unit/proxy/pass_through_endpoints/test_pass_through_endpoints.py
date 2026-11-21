@@ -1452,6 +1452,39 @@ async def test_pass_through_handler_rejects_unregistered_method():
 
 
 @pytest.mark.asyncio
+async def test_oauth_passthrough_get_with_client_id_query_parameter():
+    """
+    Test that an OAuth GET request with client_id query param to a pass-through endpoint
+    passes auth checks and is not rejected as banned request body (#53185).
+    """
+    from litellm.proxy.auth.auth_utils import is_request_body_safe
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_route,
+    )
+
+    endpoint_func = create_pass_through_route(
+        endpoint="/MS_Office/upstream/authorize",
+        target="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.scope = {"endpoint": endpoint_func}
+
+    # populate_request_with_path_params copies query params into request_data
+    request_data = {"response_type": "code", "client_id": "test-client-id"}
+
+    safe = is_request_body_safe(
+        request_body=request_data,
+        general_settings={},
+        llm_router=None,
+        model="",
+        route="/MS_Office/upstream/authorize",
+        request=request,
+    )
+    assert safe is True
+
+
+@pytest.mark.asyncio
 async def test_initialize_pass_through_endpoints_with_include_subpath():
     """
     Test that initialize_pass_through_endpoints adds wildcard routes when include_subpath is True

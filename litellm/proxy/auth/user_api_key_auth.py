@@ -2560,6 +2560,7 @@ async def run_centralized_common_checks(
             route=route,
             team_id=user_api_key_auth_obj.team_id,
             defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
+            request=request,
         )
 
     # Public routes (e.g. /health/liveness) are exempt from
