@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     GeminiMediaSource,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
@@ -45,6 +46,7 @@ from litellm.types.files import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionTextObject,
     ChatCompletionUserMessage,
 )
@@ -670,6 +672,21 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
     return False
 
 
+def _explicit_tool_call_id(tool_call: ChatCompletionAssistantToolCall) -> str | None:
+    tool_call_id: Final = tool_call.get("id")
+    if not isinstance(tool_call_id, str):
+        return None
+    return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] or None
+
+
+def _function_tool_call_ids(tool_calls: Sequence[ChatCompletionAssistantToolCall]) -> tuple[str | None, ...]:
+    return tuple(_explicit_tool_call_id(tool_call) for tool_call in tool_calls if "function" in tool_call)
+
+
+def _is_unseen_tool_call_id(tool_call_id: str | None, seen_ids: Sequence[str | None]) -> bool:
+    return tool_call_id is not None and tool_call_id not in seen_ids
+
+
 def _collect_tool_call_thought_signatures(
     assistant_msg: ChatCompletionAssistantMessage,
 ) -> frozenset[str]:
@@ -798,6 +815,8 @@ def gemini_convert_messages_with_history(
     tool_call_responses = []
     vertex_project = None
     vertex_credentials = None
+    request_settings: Final = cast(Mapping[str, object], litellm_params or {})  # cast-ok: untyped shared signature
+    drop_params: Final = drops_unsupported_params(request_settings.get("drop_params"))
     if litellm_params:
         vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
@@ -857,6 +876,7 @@ def gemini_convert_messages_with_history(
                     )  # add a blank text, to ensure Gemini doesn't fail the request.
                 contents.append(ContentType(role="user", parts=user_content))
             assistant_content = []
+            turn_tool_calls: tuple[ChatCompletionAssistantToolCall, ...] = ()
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
                 if isinstance(messages[msg_i], BaseModel):
@@ -948,25 +968,32 @@ def gemini_convert_messages_with_history(
                         assistant_msg,
                         model=model,
                         forward_function_call_id=forward_function_call_id,
+                        custom_llm_provider=custom_llm_provider,
+                        drop_params=drop_params,
                     )
-                    ## check if gemini_tool_call already exists in assistant_content
-                    for gemini_tool_call_part in gemini_tool_call_parts:
-                        if not check_if_part_exists_in_parts(
+                    message_tool_calls = assistant_msg.get("tool_calls")
+                    tool_call_ids = (
+                        _function_tool_call_ids(message_tool_calls)
+                        if message_tool_calls is not None
+                        else (None,) * len(gemini_tool_call_parts)
+                    )
+                    earlier_turn_tool_call_ids = _function_tool_call_ids(turn_tool_calls)
+                    for index, (gemini_tool_call_part, tool_call_id) in enumerate(
+                        zip(gemini_tool_call_parts, tool_call_ids, strict=True)
+                    ):
+                        seen_tool_call_ids = (*earlier_turn_tool_call_ids, *tool_call_ids[:index])
+                        is_new_tool_call = _is_unseen_tool_call_id(tool_call_id, seen_tool_call_ids)
+                        if is_new_tool_call or not check_if_part_exists_in_parts(
                             assistant_content,
                             gemini_tool_call_part,
                             excluded_keys=["thoughtSignature"],
                         ):
                             assistant_content.append(gemini_tool_call_part)
-                    # Only record this as the active tool-call message when it actually
-                    # carries tool calls. The `if` guard above is also entered for a
-                    # text-only assistant message (`assistant_msg.get("tool_calls", [])
-                    # is not None` is True for an empty list), so without this check a
-                    # later assistant message with no tool calls would clobber the
-                    # reference. The following tool result would then be matched against
-                    # an assistant message that has no tool_calls, raising "Missing
-                    # corresponding tool call for tool response message".
+                    # Consecutive assistant messages become one model turn, so the tool
+                    # results that follow can answer a call from any of them, not only the last.
                     if assistant_msg.get("tool_calls") or assistant_msg.get("function_call") is not None:
-                        last_message_with_tool_calls = assistant_msg
+                        turn_tool_calls = (*turn_tool_calls, *(assistant_msg.get("tool_calls") or ()))
+                        last_message_with_tool_calls = {**assistant_msg, "tool_calls": list(turn_tool_calls)}
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
                 _psf = assistant_msg.get("provider_specific_fields")
@@ -1309,6 +1336,7 @@ def sync_transform_request_body(
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
+    request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
     (
         messages,
@@ -1330,6 +1358,7 @@ def sync_transform_request_body(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        drop_params=drops_unsupported_params(request_settings.get("drop_params")),
     )
 
     return _with_default_output_budget(
@@ -1445,6 +1474,7 @@ async def async_transform_request_body(
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
+    request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
     (
         messages,
@@ -1466,6 +1496,7 @@ async def async_transform_request_body(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        drop_params=drops_unsupported_params(request_settings.get("drop_params")),
     )
 
     inlined_messages: Final = await async_inline_remote_media(

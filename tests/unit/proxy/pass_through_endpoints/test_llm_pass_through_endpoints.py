@@ -24,33 +24,35 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
-
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm
+from litellm.caching.caching import DualCache
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
-from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
-from litellm.caching.caching import DualCache
-from litellm.types.utils import CallTypes, CallTypesLiteral
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
-from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
-from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
-from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
-from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
-from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
+from litellm.passthrough.main import raise_for_provider_status
+from litellm.proxy._types import (
+    AwsErrorTypeProxyException,
+    LiteLLM_JWTAuth,
+    LitellmUserRoles,
+    ProxyException,
+    SpecialHeaders,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
-    RouteChecks,
     _fal_target,
     _join_url_paths,
     _proxy_general_settings,
@@ -60,32 +62,33 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_llm_proxy_route,
     bedrock_passthrough_error_response,
     bedrock_proxy_route,
-    create_pass_through_route,
     cursor_proxy_route,
-    eu_jev_proxy_route,
     fal_ai_proxy_route,
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
-    is_azure_ai_search_service_level_index_create,
     gigachat_proxy_route,
     handle_bedrock_passthrough_router_model,
+    is_azure_ai_search_service_level_index_create,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
-    relay_nvidia_nim_request,
     openai_proxy_route,
     openrouter_proxy_route,
+    relay_nvidia_nim_request,
     typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
+from litellm.types.utils import CallTypes, CallTypesLiteral
+from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe, host_in_loop_probing_vault
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _assert_bedrock_processing_data_classification(data: dict[str, object], is_streaming: bool) -> None:
@@ -2117,7 +2120,7 @@ class TestBedrockPassthroughAwsErrors:
             ProxyBaseLLMRequestProcessing(data={}),
             error,
             UserAPIKeyAuth(api_key="test-key"),
-            ProxyLogging(user_api_key_cache=DualCache()),
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()),
         )
 
     @pytest.mark.asyncio
@@ -5272,8 +5275,8 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                     user_id="jwt-subject",
                     jwt_claims={
                         **LITELLM_JWT_CLAIMS,
-                        JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
-                        JWTHandler.LITELLM_USER_ID_CLAIM: "jwt-subject",
+                        "_litellm_jwt_issuer": "https://idp.example.com",
+                        "_litellm_user_id": "jwt-subject",
                     },
                 ),
                 id="multi-issuer-jwt-auth-normalized-claims",
@@ -7128,7 +7131,7 @@ class TestVertexAILiveWebsocketPassthrough:
         recorder: Final = _FailureRecorder()
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
         monkeypatch.setattr(
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         )
         monkeypatch.setattr(litellm, "callbacks", [recorder])
         monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
@@ -8219,12 +8222,12 @@ class TestRouterModelRelayUpstreamContract:
         assert (response.status_code, response.headers.get("retry-after")) == (429, "7")
         assert not deployment_route.called
 
-
     @pytest.mark.asyncio
     async def test_azure_relay_keeps_a_later_deployment_failure_after_an_entra_rejection(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from azure.core.exceptions import ClientAuthenticationError
+
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
         def rejected_token() -> str:
@@ -8259,9 +8262,9 @@ class TestRouterModelRelayUpstreamContract:
         self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
 
         with respx.mock:
-            unreachable_route: Final = respx.post(url__startswith="https://litellm-qa-unreachable.openai.azure.com").mock(
-                side_effect=httpx.ConnectError("Connection refused")
-            )
+            unreachable_route: Final = respx.post(
+                url__startswith="https://litellm-qa-unreachable.openai.azure.com"
+            ).mock(side_effect=httpx.ConnectError("Connection refused"))
             with pytest.raises(BaseLLMException) as excinfo:
                 await azure_proxy_route(
                     endpoint="openai/deployments/gpt-5/chat/completions",
@@ -8664,7 +8667,9 @@ async def test_bedrock_native_count_tokens_for_a_bare_region_prefix_answers_bedr
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path=f"/model/{model_id}/count-tokens").mock(
         return_value=httpx.Response(400, json=invalid_model)
     )
-    request: Final = Request({"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []})
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []}
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await handle_bedrock_count_tokens(
@@ -9549,11 +9554,11 @@ class TestAzureSpeechProxyRoutePathTraversal:
         assert AZURE_SPEECH_FAST_ENDPOINT in str(denied.value.detail)
 
 
-def _azure_speech_real_auth_attrs() -> dict[str, object]:
+def _azure_speech_real_auth_attrs(custom_auth: object | None = None) -> dict[str, object]:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     return {
         "prisma_client": None,
         "user_api_key_cache": user_api_key_cache,
@@ -9563,8 +9568,8 @@ def _azure_speech_real_auth_attrs() -> dict[str, object]:
         "llm_model_list": [],
         "llm_router": None,
         "open_telemetry_logger": None,
-        "user_custom_auth": None,
-        "jwt_handler": None,
+        "user_custom_auth": custom_auth,
+        "litellm_jwtauth": LiteLLM_JWTAuth(),
     }
 
 
@@ -9748,7 +9753,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         litellm.in_memory_llm_clients_cache.flush_cache()
         with (
             patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (custom auth, master_key, caches) that have no injection seam
-                "litellm.proxy.proxy_server", **{**_azure_speech_real_auth_attrs(), "user_custom_auth": custom_auth}
+                "litellm.proxy.proxy_server", **_azure_speech_real_auth_attrs(custom_auth)
             ),
             patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
                 "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
@@ -9885,11 +9890,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert recorder.served_user_ids == ()
         assert not google.called
 
-
     @pytest.mark.parametrize("path", [f"/vertex_ai/{GENERATE_CONTENT}", f"/vertex_ai/discovery/{DISCOVERY_SEARCH}"])
-    def test_request_without_a_key_hands_custom_auth_none(
-        self, monkeypatch: pytest.MonkeyPatch, path: str
-    ) -> None:
+    def test_request_without_a_key_hands_custom_auth_none(self, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
         custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
         with respx.mock(assert_all_called=False) as upstream:
             google: Final = upstream.route().mock(return_value=httpx.Response(200))
@@ -9900,6 +9902,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert custom_auth.api_keys_seen == (None,)
         assert recorder.served_user_ids == ()
         assert not google.called
+
 
 class TestTypeSafePassthroughRoute:
     @staticmethod
@@ -9993,15 +9996,12 @@ class TestTypeSafePassthroughRoute:
         from litellm.caching.caching import DualCache
         from litellm.proxy import proxy_server
         from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-            get_request_stash,
-        )
         from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter, get_request_stash
 
         cache: Final = DualCache()
-        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
-        monkeypatch.setattr(litellm, "callbacks", list((limiter, PROXY_CacheControlCheck())))
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
+        monkeypatch.setattr(litellm, "callbacks", list((limiter.native_logger, PROXY_CacheControlCheck())))
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
         monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
@@ -10240,9 +10240,7 @@ class TestEuJevPassthroughRoute:
         monkeypatch.setattr(proxy_server, "llm_router", team_router)
         with respx.mock(assert_all_called=False) as upstream:
             team_server: Final = upstream.route(host="team-a-server.example").respond(200, json={"answers": {}})
-            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
-                200, json={"answers": {}}
-            )
+            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"state": "team b data"})
 
         assert response.status_code == 200
@@ -10443,7 +10441,9 @@ class TestEuJevPassthroughRoute:
 
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, add_the_pass_through_after_routing)
         with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
-            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
+                200, json={"answers": {}}
+            )
             operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x"})
 
@@ -10562,12 +10562,12 @@ class TestOssDecisionPassthroughRoute:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str, provider: str, checkpoint: str
     ) -> None:
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
-        from litellm.proxy.utils import InternalUsageCache
         from litellm.proxy.proxy_server import app
+        from litellm.proxy.utils import InternalUsageCache
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
         cache: Final = DualCache()
-        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
         auth: Final = UserAPIKeyAuth(
             api_key="oss-native-rpm",
             metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
@@ -10774,6 +10774,85 @@ class TestFalAIPassthroughRoute:
             assert response.status_code == 400, response.text
             assert "no pricing entry" in response.text
             assert not route.calls
+
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model",
+            "/fal_ai/acme/unit-billed-model/requests/%2e%2e",
+            "/fal_ai/acme/unit-billed-model%3Fa=/requests/x",
+            "/fal_ai/acme/unit-billed-model%23/requests/x",
+        ),
+    )
+    def test_submit_gate_prices_the_upstream_path_not_the_spelling_of_the_request_path(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response: Final = client.post(path, json={"prompt": "a red boat"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_submit_gate_rejects_an_encoded_spelling_that_stays_encoded_upstream(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post(url__regex=r"https://queue\.fal\.run/.*").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            plain: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            encoded: Final = client.post(
+                "/fal_ai/fal-ai/trellis%2525252D2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+
+            assert plain.status_code == 200, plain.text
+            assert encoded.status_code == 400, encoded.text
+            assert [str(call.request.url) for call in route.calls] == ["https://queue.fal.run/fal-ai/trellis-2"]
+
+    @pytest.mark.parametrize(
+        ("queue_base", "sent_base"),
+        (
+            ("https://queue.example/base", "https://queue.example/base"),
+            ("https://queue.example/fal%2Dqueue", "https://queue.example/fal-queue"),
+            ("https://queue.example/fal%252Dqueue", "https://queue.example/fal%2Dqueue"),
+        ),
+    )
+    def test_submit_gate_strips_the_queue_base_path_before_pricing(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, queue_base: str, sent_base: str
+    ) -> None:
+        monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", queue_base)
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            priced_route: Final = upstream.post(f"{sent_base}/fal-ai/trellis-2").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            unit_billed_route: Final = upstream.post(f"{sent_base}/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-2"})
+            )
+            priced: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            unit_billed: Final = client.post(
+                "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model", json={"prompt": "a red boat"}
+            )
+
+            assert priced.status_code == 200, priced.text
+            assert unit_billed.status_code == 400, unit_billed.text
+            assert len(priced_route.calls) == 1
+            assert not unit_billed_route.calls
 
     def test_submit_gate_prices_the_request_body_not_an_empty_one(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -11737,7 +11816,11 @@ class TestOpenSearchProxyRoute:
                 id="multipart-parameter",
             ),
             pytest.param(
-                "_doc", "application/json; boundary=x", b'{"title":"a"}', "application/json", id="content-type-parameter"
+                "_doc",
+                "application/json; boundary=x",
+                b'{"title":"a"}',
+                "application/json",
+                id="content-type-parameter",
             ),
             pytest.param("_doc?pipeline=reroute", JSON_TYPE, b'{"title":"a"}', "pipeline", id="pipeline-query"),
             pytest.param("_search", JSON_TYPE, b'{/*c*/"query":{"match_all":{}}}', "could not parse", id="comment"),
@@ -11780,7 +11863,12 @@ class TestOpenSearchProxyRoute:
     )
     @pytest.mark.parametrize("content_type", [NDJSON_TYPE, "application/json"])
     def test_an_ndjson_body_without_index_references_is_sent_byte_for_byte(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes, content_type: str
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        api: str,
+        body: bytes,
+        content_type: str,
     ) -> None:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
         with respx.mock(assert_all_called=True) as upstream:
@@ -11808,18 +11896,22 @@ class TestOpenSearchProxyRoute:
         ids=["model", "api_base", "base_url"],
     )
     def test_a_document_field_named_like_an_llm_param_is_written_for_a_model_limited_key(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        document: bytes,
     ) -> None:
         from litellm.proxy import proxy_server
 
         key: Final = "sk-opensearch-model-limited-writer"
         grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
-        cache: Final = DualCache()
+        cache: Final = UserApiKeyCache()
         cache.set_cache(
-            key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant),
         )
         monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
-        monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
         monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
@@ -11907,10 +11999,10 @@ class TestOpenSearchProxyRoute:
     def test_document_fields_named_like_request_params_leave_the_rate_limiter_alone(
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
-        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
 
         class RateLimit(CustomLogger):
             async def async_pre_call_hook(

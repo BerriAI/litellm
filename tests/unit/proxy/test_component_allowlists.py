@@ -63,14 +63,14 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
-from litellm.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
-from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
+from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
     if _previous is None:

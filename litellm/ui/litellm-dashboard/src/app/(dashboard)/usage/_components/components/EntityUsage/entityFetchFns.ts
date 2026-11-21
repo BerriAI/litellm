@@ -27,7 +27,12 @@ export interface EntityApi {
     byModelGroup: boolean,
     limit?: number,
   ): Promise<ModelTopKeysResponse>;
-  exportRows(req: DailyActivityRequest, exportType: ExportType, format: ExportFormat): Promise<Blob>;
+  exportRows(
+    req: DailyActivityRequest,
+    exportType: ExportType,
+    format: ExportFormat,
+    includeMetadata: boolean,
+  ): Promise<Blob>;
 }
 
 const entityApi = (
@@ -39,7 +44,8 @@ const entityApi = (
   searchKeys: (req, search, limit) => dailyActivityKeySearchCall(entity, { ...defaults, ...req }, search, limit),
   modelTopKeys: (req, model, byModelGroup, limit) =>
     dailyActivityModelTopKeysCall(entity, { ...defaults, ...req }, model, byModelGroup, limit),
-  exportRows: (req, exportType, format) => dailyActivityExportCall(entity, { ...defaults, ...req }, exportType, format),
+  exportRows: (req, exportType, format, includeMetadata) =>
+    dailyActivityExportCall(entity, { ...defaults, ...req }, exportType, { format, includeMetadata }),
 });
 
 export const ENTITY_API: Record<EntityType, EntityApi> = {

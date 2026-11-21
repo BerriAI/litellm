@@ -1,0 +1,5 @@
+# Config load
+
+- This crate reads config files: the root file and every file its `include` names, merged breadth first, each file once. Each file is loaded with `litellm-yaml`, which reads YAML the way PyYAML's `safe_load` does. The typed `Config` lives in `litellm-config`, which reads no file and gets the merged document through `Config::from_value`
+- A data crate never depends on this one. Only a host that starts from a path on disk (the gateway) does
+- `load` resolves every `os.environ/` reference after the include merge and before `Config::from_value`, the way `ProxyConfig._check_for_os_environ_vars` does. It reads them through the `SecretResolver` the host injects, never from the process environment directly. The config's own `environment_variables` sit in front of that resolver's environment as a `Lookup`, so `oidc/` references and a secret manager see them the way they see `os.environ` in Python. A crate downstream of the gateway receives resolved values and does not strip `os.environ/` again. The walk leaves three things as written, as Python does: text directly inside a list, the secret pointer params, and anything nested past depth 100

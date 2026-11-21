@@ -77,13 +77,19 @@ def _profile_for_model(model: str) -> _ModelProfile:
     return _MINIMAX_PROFILE if replicate_model_owner(model) == "minimax" else _GENERIC_PROFILE
 
 
+def _invalid_seconds() -> ReplicateError:
+    return ReplicateError(status_code=400, message="Replicate seconds must be a finite number", headers={})
+
+
 def _duration_value(seconds: object) -> int | float:
     if isinstance(seconds, bool) or not isinstance(seconds, (int, float, str)):
-        raise TypeError("Replicate seconds must be a numeric value")
+        raise _invalid_seconds()
     try:
         duration: Final = float(seconds)
-    except ValueError as error:
-        raise ValueError("Replicate seconds must be a numeric value") from error
+    except (ValueError, OverflowError) as error:
+        raise _invalid_seconds() from error
+    if not math.isfinite(duration):
+        raise _invalid_seconds()
     return int(duration) if duration.is_integer() else duration
 
 
@@ -99,7 +105,7 @@ def _size_params(size: object, profile: _ModelProfile) -> Mapping[str, object]:
     if normalized.count("x") != 1:
         return MappingProxyType({})
     width_text, height_text = normalized.split("x")
-    if not (width_text.isdigit() and height_text.isdigit()) or int(width_text) <= 0 or int(height_text) <= 0:
+    if not (width_text.isdecimal() and height_text.isdecimal()) or int(width_text) <= 0 or int(height_text) <= 0:
         return MappingProxyType({})
     width: Final = int(width_text)
     height: Final = int(height_text)

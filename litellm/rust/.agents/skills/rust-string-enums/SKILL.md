@@ -37,7 +37,11 @@ pub enum EventType {
 }
 ```
 
-Spell each variant explicitly with `#[strum(serialize = "...")]`; do not use `serialize_all`. With multiple accepted aliases, set `to_string` to the existing canonical output: Strum Display otherwise selects the longest `serialize` spelling
+When every spelling follows one case rule, derive them with `#[strum(serialize_all = "...")]` so the variant name is the only place the name is written, as `Kwarg` in `crates/redis-resolve/src/keys.rs` does for the redis-py kwargs. Spell a variant explicitly with `#[strum(serialize = "...")]` only where the rule cannot produce its spelling, such as `event.created`, and never repeat a derived spelling as a string literal elsewhere: callers name the variant
+
+A derived spelling changes when a variant is renamed, so pin the set of spellings against the source that owns them. `tests/catalog.rs` in `redis-resolve` compares every `Kwarg` spelling with `redis-py-kwargs.json`
+
+With multiple accepted aliases, set `to_string` to the existing canonical output: Strum Display otherwise selects the longest `serialize` spelling
 
 Use only the derives the contract needs. A deserialize-only type should remain deserialize-only. Do not add an unknown variant to a closed enum, or derive Serde for a type that currently has no serialization contract
 

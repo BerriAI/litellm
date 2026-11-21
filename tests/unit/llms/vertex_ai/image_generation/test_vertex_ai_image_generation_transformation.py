@@ -131,11 +131,10 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert "size" in supported
 
     def test_map_openai_params_n(self):
-        """Test mapping n parameter to candidate_count"""
         non_default_params = {"n": 3}
         optional_params = {}
         result = self.config.map_openai_params(non_default_params, optional_params, "gemini-2.5-flash-image", False)
-        assert result.get("candidate_count") == 3
+        assert self.config.get_request_count("gemini-2.5-flash-image", result) == 3
 
     def test_map_openai_params_size(self):
         """Test mapping size parameter to aspectRatio"""
@@ -343,15 +342,14 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert request["generationConfig"]["candidateCount"] == 2
 
     def test_transform_image_generation_request_with_n(self):
-        """Test request transformation with n parameter"""
         request = self.config.transform_image_generation_request(
             model="gemini-2.5-flash-image",
             prompt="A nano banana",
-            optional_params={"n": 2},
+            optional_params=self.config.map_openai_params({"n": 2}, {}, "gemini-2.5-flash-image", False),
             litellm_params={},
             headers={},
         )
-        assert request["generationConfig"]["candidateCount"] == 2
+        assert "candidateCount" not in request["generationConfig"]
 
     def test_transform_image_generation_response(self):
         """Test response transformation"""
@@ -495,7 +493,12 @@ class TestVertexAIGeminiImageGenerationConfig:
         )
 
         assert result.usage.output_tokens == 1340
-        assert result.usage.input_tokens_details.model_dump() == {"text_tokens": 12, "image_tokens": 0}
+        assert result.usage.input_tokens_details.model_dump() == {
+            "text_tokens": 12,
+            "image_tokens": 0,
+            "cached_tokens": 0,
+            "cached_tokens_details": None,
+        }
         assert result.usage.completion_tokens_details == {
             "text_tokens": 10,
             "image_tokens": 1290,
