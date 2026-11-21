@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import itertools
 import json
@@ -457,19 +458,38 @@ def test_a_revision_inside_unspaced_text_emits_nothing_until_the_emitted_prefix_
     ]
 
 
-def test_a_turn_that_moves_between_unspaced_and_spaced_text_only_extends_the_emitted_text():
-    partials: Final = ("今天", "今天天气", "今天天气 很好 啊", "今天天气 很好 啊 吧", "今天天气很好啊吧呢")
+def _streamed_deltas(partials: tuple[str, ...], committed: str) -> tuple[str, ...]:
     events: Final = _events(
         ElevenLabsEventTransformer(new_item_id=_item_ids()),
         *(_frame("partial_transcript", text=text) for text in partials),
+        _frame("committed_transcript", text=committed),
     )
+    assert events[-1]["transcript"] == committed
+    deltas: Final = tuple(
+        str(event["delta"]) for event in events if event["type"] == "conversation.item.input_audio_transcription.delta"
+    )
+    assert committed.startswith("".join(deltas)), deltas
+    return deltas
 
-    assert _summary(events) == [
-        ("input_audio_buffer.speech_started", "item_0", None),
-        ("conversation.item.input_audio_transcription.delta", "item_0", "今天"),
-        ("conversation.item.input_audio_transcription.delta", "item_0", "天气 很好"),
-        ("conversation.item.input_audio_transcription.delta", "item_0", " 啊"),
-    ]
+
+def test_a_turn_that_moves_from_unspaced_to_spaced_text_only_extends_the_emitted_text():
+    partials: Final = ("我喜欢", "我喜欢用", "我喜欢用 LiteLLM 网关", "我喜欢用 LiteLLM 网关 很好")
+
+    assert _streamed_deltas(partials, "我喜欢用 LiteLLM 网关 很好。") == ("我喜欢", "用 LiteLLM", " 网关")
+
+
+@pytest.mark.parametrize(
+    ("partials", "committed", "expected"),
+    [
+        pytest.param(("今天天汽", "今天天汽", "今天天气很好"), "今天天气很好。", ("今天天",), id="repeated-unspaced"),
+        pytest.param(("Lite", "Lite", "Light LLM now"), "Light LLM now.", ("Light LLM",), id="repeated-ascii-word"),
+        pytest.param(("Hel", "Hello", "Hello world"), "Hello world.", ("Hello",), id="growing-ascii-word"),
+    ],
+)
+def test_a_repeated_or_growing_partial_never_emits_its_unconfirmed_last_character(
+    partials: tuple[str, ...], committed: str, expected: tuple[str, ...]
+):
+    assert _streamed_deltas(partials, committed) == expected
 
 
 def test_warnings_and_unknown_messages_are_not_forwarded():
@@ -839,6 +859,26 @@ async def test_health_check_raises_the_mapped_refusal_when_elevenlabs_rejects_th
     assert (refused.value.status_code, refused.value.message) == (
         401,
         "ElevenLabs realtime transcription failed: auth_error",
+    )
+    assert upstream.closed is True
+
+
+async def test_health_check_raises_a_gateway_timeout_when_elevenlabs_never_starts_the_session():
+    class _SilentUpstream(_ScriptedUpstream):
+        async def recv(self, decode: bool | None = None) -> str | bytes:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    upstream: Final = _SilentUpstream()
+
+    with pytest.raises(ElevenLabsException) as timed_out:
+        await elevenlabs_realtime_health_check(
+            SCRIBE_REALTIME_MODEL, None, "secret", NO_OPTIONS, connect=_RecordingConnect(upstream), start_timeout=0.01
+        )
+
+    assert (timed_out.value.status_code, timed_out.value.message) == (
+        504,
+        "ElevenLabs did not start the realtime session in time",
     )
     assert upstream.closed is True
 
