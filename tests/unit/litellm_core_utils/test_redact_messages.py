@@ -164,7 +164,14 @@ def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_
 
 
 @pytest.mark.parametrize("shape", ["object", "dict"])
-def test_redaction_hides_claude_mcp_call_inputs_and_results_but_keeps_the_calls(shape: str) -> None:
+def test_redaction_hides_claude_mcp_call_inputs_and_results_but_keeps_the_calls_and_other_tool_results(
+    shape: str,
+) -> None:
+    code_execution_result: Final = {
+        "type": "bash_code_execution_tool_result",
+        "tool_use_id": "srvtoolu_01Bash",
+        "content": {"type": "bash_code_execution_result", "stdout": "4\n", "stderr": "", "return_code": 0, "content": []},
+    }
     response: Final = ModelResponse(
         model="claude-opus-5-5",
         choices=[
@@ -190,7 +197,8 @@ def test_redaction_hides_claude_mcp_call_inputs_and_results_but_keeps_the_calls(
                                 "tool_use_id": "mcptoolu_01Wiki",
                                 "is_error": False,
                                 "content": [{"type": "text", "text": SECRET}],
-                            }
+                            },
+                            code_execution_result,
                         ],
                     },
                 }
@@ -209,6 +217,7 @@ def test_redaction_hides_claude_mcp_call_inputs_and_results_but_keeps_the_calls(
     assert [(call["id"], call["function"]["name"]) for call in fields["server_tool_calls"]] == [
         ("mcptoolu_01Wiki", "read_wiki_structure")
     ]
+    assert fields["tool_results"] == [code_execution_result]
 
 
 @pytest.fixture(autouse=True)
