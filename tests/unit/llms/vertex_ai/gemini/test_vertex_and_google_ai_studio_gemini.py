@@ -3,6 +3,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
+from itertools import chain
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
