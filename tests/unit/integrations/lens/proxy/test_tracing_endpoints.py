@@ -36,8 +36,9 @@ from litellm.integrations.lens.generated.models import TraceQueryHelp
 from litellm.integrations.lens.generated.responses import TraceSQLResponse
 from litellm.integrations.lens.generated.types import TraceScope
 from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy.buffering import FORWARD_BUFFER_BUDGET
 from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
-from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
+from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, RemoteTraceStore
 from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgent, TraceAgentList
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
@@ -298,6 +299,29 @@ def test_agent_spans_are_retried_later_when_lens_cannot_be_reached(client: TestC
         "Lens is unavailable. Please try again.",
         str(tracing_endpoints.OTLP_RETRY_AFTER_SECONDS),
     )
+
+
+def test_agent_spans_larger_than_the_forwarding_limit_are_refused_before_lens_sees_them(client: TestClient) -> None:
+    received: Final = Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return httpx.Response(200)
+
+    tracing: Final = TraceReceiver(
+        storage=LensTraceStorage(
+            RemoteTraceStore(httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)))
+        )
+    )
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+
+    response: Final = client.post(
+        "/v1/traces", content=bytes(MAX_RESPONSE_BYTES + 1), headers={"content-type": "application/x-protobuf"}
+    )
+
+    assert (response.status_code, received.empty()) == (413, True)
+    FORWARD_BUFFER_BUDGET.reserve(FORWARD_BUFFER_BUDGET.capacity)
+    FORWARD_BUFFER_BUDGET.release(FORWARD_BUFFER_BUDGET.capacity)
 
 
 def test_agent_spans_are_refused_on_a_gateway_without_tracing(client: TestClient) -> None:

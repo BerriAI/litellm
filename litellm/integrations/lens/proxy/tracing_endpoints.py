@@ -48,6 +48,7 @@ from litellm.integrations.lens.generated.types import (
     TraceScope,
 )
 from litellm.integrations.lens.otlp_http import encode_otlp_response
+from litellm.integrations.lens.proxy.buffering import FORWARD_BUFFER_BUDGET, BodyReservation, request_body
 from litellm.integrations.lens.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgentList
@@ -147,9 +148,14 @@ async def forward_otlp_traces(
         "content-type": content_type or "application/x-protobuf",
         "content-encoding": request.headers.get("content-encoding"),
     }
-    forwarded: Final = await tracing.storage.forward_spans(
-        await request.body(), {name: value for name, value in owner.items() if value}
-    )
+    reservation: Final = BodyReservation(FORWARD_BUFFER_BUDGET)
+    try:
+        forwarded: Final = await tracing.storage.forward_spans(
+            await request_body(request, reservation=reservation),
+            {name: value for name, value in owner.items() if value},
+        )
+    finally:
+        reservation.release()
     if forwarded is None:
         return _otlp_error(content_type, 503, "Lens is unavailable. Please try again.", retry=True)
     status_code, body = forwarded
