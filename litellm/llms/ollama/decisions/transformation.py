@@ -37,7 +37,6 @@ class OllamaDecisionsConfig(BaseDecisionsConfig):
         return {
             **body,
             "images": [
-                image.base64 if isinstance(image, DecisionsBase64Image) else image.partition(",")[2]
-                for image in images
+                image.base64 if isinstance(image, DecisionsBase64Image) else image.partition(",")[2] for image in images
             ],
         }
