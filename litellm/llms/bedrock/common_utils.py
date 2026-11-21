@@ -35,6 +35,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
@@ -48,6 +49,7 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
 )
 from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.chat.transformation import mapped_max_output_tokens
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -344,6 +346,31 @@ _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 def deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
     model_info: Final = (litellm_params or {}).get("model_info")
     return _DEPLOYMENT_MODEL_INFO.validate_python(model_info) if isinstance(model_info, Mapping) else {}
+
+
+_CLAUDE_GENERATION: Final = re.compile(r"claude-(?:[a-z]+-)?(\d+)(?:-(\d{1,2}))?(?!\d)")
+_LEGACY_CLAUDE_NAMES: Final = ("claude-v", "claude-instant")
+_FIRST_CLAUDE_CAPPED_AT_4096_ON_CONVERSE: Final = (4, 7)
+
+
+def _claude_keeps_bedrocks_converse_default(base_model: str) -> bool:
+    match _CLAUDE_GENERATION.search(base_model):
+        case None:
+            return any(name in base_model for name in _LEGACY_CLAUDE_NAMES)
+        case generation:
+            return (int(generation[1]), int(generation[2] or 0)) < _FIRST_CLAUDE_CAPPED_AT_4096_ON_CONVERSE
+
+
+def bedrock_converse_claude_default_max_tokens(base_model: str, model_info: Mapping[str, object] | None) -> int | None:
+    if not base_model.startswith("anthropic") or _claude_keeps_bedrocks_converse_default(base_model):
+        return None
+    mapped_max_tokens: Final = mapped_max_output_tokens(base_model)
+    model_max_tokens: Final = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if mapped_max_tokens is None else mapped_max_tokens
+    match (model_info or {}).get("max_output_tokens"):
+        case int() as deployment_max_tokens:
+            return min(deployment_max_tokens, model_max_tokens)
+        case _:
+            return model_max_tokens
 
 
 def _bedrock_native_output_opt_in(
