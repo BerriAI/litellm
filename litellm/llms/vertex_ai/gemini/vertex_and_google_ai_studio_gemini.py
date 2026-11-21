@@ -1295,6 +1295,38 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
+
+_GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS: Final = frozenset({
+    "uniqueItems",
+    "pattern",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minProperties",
+    "maxProperties",
+    "patternProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "$schema",
+})
+
+
+def _remove_unsupported_gemini_schema_keywords(schema: object) -> object:
+    """Recursively remove JSON Schema keywords unsupported by Gemini function declarations.
+
+    Keywords such as uniqueItems, pattern, exclusiveMinimum, etc. are valid JSON Schema but
+    rejected by Gemini function declarations with a 400 Bad Request.
+    """
+    if isinstance(schema, dict):
+        for keyword in _GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS:
+            schema.pop(keyword, None)
+        for value in schema.values():
+            _remove_unsupported_gemini_schema_keywords(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            _remove_unsupported_gemini_schema_keywords(item)
+    return schema
+
     def _map_function(
         self,
         value: list[dict],
@@ -1340,6 +1372,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
+        _remove_unsupported_gemini_schema_keywords(schema_value)
 
         inlined_tools: Final = _with_namespace_members_inlined(schema_value, outside_declarations)
         for index, parameters_json_schema in enumerate(parameters_json_schemas):
