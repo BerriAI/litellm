@@ -510,20 +510,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         'none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
-        params: Final = dict(response_api_optional_params)
+        drops_o_series_temperature: Final = (
+            self.custom_llm_provider == LlmProviders.OPENAI
+            and (drop_params or litellm.drop_params)
+            and response_api_optional_params.get("temperature") not in (None, 1)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+        )
+        params: Final = {
+            key: value
+            for key, value in response_api_optional_params.items()
+            if key != "temperature" or not drops_o_series_temperature
+        }
 
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
-
-        drops_openai_unsupported_params: Final = self.custom_llm_provider == LlmProviders.OPENAI and (
-            drop_params or litellm.drop_params
-        )
-        if (
-            drops_openai_unsupported_params
-            and params.get("temperature") not in (None, 1)
-            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
-        ):
-            params.pop("temperature")
 
         if (
             self.custom_llm_provider == LlmProviders.OPENAI
