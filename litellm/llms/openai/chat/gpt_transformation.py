@@ -576,6 +576,22 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
+    def _reads_prompt_cache_breakpoints(
+        self,
+        model: str,
+        prompt_cache_options: object,
+        litellm_params: Mapping[str, object],
+    ) -> bool:
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, routed_model_info
+
+        return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model,
+            _litellm_params_str(litellm_params, "custom_llm_provider"),
+            _litellm_params_str(litellm_params, "api_base"),
+            prompt_cache_options,
+            routed_model_info(litellm_params.get("model_info")),
+        )
+
     def _messages_and_tools_in_cache_mark_dialect(
         self,
         model: str,
@@ -594,17 +610,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         accepts. Any other endpoint keeps or strips the marks as before, and under
         drop_params also loses every ``prompt_cache_breakpoint`` it cannot read.
         """
-        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, routed_model_info
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
         custom_llm_provider: Final = _litellm_params_str(litellm_params, "custom_llm_provider")
         api_base: Final = _litellm_params_str(litellm_params, "api_base")
-        reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-            model,
-            custom_llm_provider,
-            api_base,
-            prompt_cache_options,
-            routed_model_info(litellm_params.get("model_info")),
-        )
+        reads_breakpoints: Final = self._reads_prompt_cache_breakpoints(model, prompt_cache_options, litellm_params)
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
             return (
                 _claude_messages_within_cache_control_cap(model, messages, tools, litellm_params, request_params),

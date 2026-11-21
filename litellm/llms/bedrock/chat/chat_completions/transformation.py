@@ -40,6 +40,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     BedrockError,
+    bedrock_gpt_supports_explicit_prompt_caching,
     bedrock_model_is_openai_gpt,
     bedrock_rejects_stop_sequences,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
@@ -485,6 +486,20 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                 ),
             )
         )
+
+    def _reads_prompt_cache_breakpoints(
+        self,
+        model: str,
+        prompt_cache_options: object,
+        litellm_params: Mapping[str, object],
+    ) -> bool:
+        from litellm.integrations.anthropic_cache_control_hook import (
+            declared_prompt_cache_breakpoint,
+            routed_model_info,
+        )
+
+        declared: Final = declared_prompt_cache_breakpoint(routed_model_info(litellm_params.get("model_info")))
+        return declared is not False and bedrock_gpt_supports_explicit_prompt_caching(model)
 
     def _inference_params(
         self, optional_params: Mapping[str, object]
