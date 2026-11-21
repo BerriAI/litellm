@@ -4,7 +4,7 @@ import json
 import os
 import struct
 import zlib
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -475,6 +475,7 @@ class Route:
     request: Mapping[str, object] = MappingProxyType({})
     protocol_fields: frozenset[str] = frozenset()
     streams: bool = True
+    async_only: bool = False
 
     def parameters(self, wire_url: str) -> dict[str, object]:
         return {
@@ -515,6 +516,23 @@ BEDROCK_ROUTES: Final = MappingProxyType(
         "converse_like": _bedrock("converse_like/anthropic.claude-haiku-4-5-20251001-v1:0"),
         "openai": _bedrock("openai/wire-model"),
         "chat_completions": _bedrock("chat_completions/openai.gpt-oss-120b-1:0"),
+        "responses": Route(
+            "bedrock/us.openai.gpt-5.6-sol",
+            AWS_CONNECTION,
+            AWS_BASE_PARAMS,
+            request=MappingProxyType(
+                {
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {"name": "lookup_invoice", "parameters": {"type": "object", "properties": {}}},
+                        }
+                    ],
+                    "reasoning_effort": "high",
+                }
+            ),
+            async_only=True,
+        ),
         "mantle": _bedrock("mantle/openai.gpt-oss-120b"),
         "claude_platform": _bedrock("claude_platform/claude-haiku-4-5", workspace_id="wrk_wire"),
         "agent": _bedrock("agent/AGENTID/ALIASID"),
@@ -657,6 +675,19 @@ def _complete(parameters: Mapping[str, object]) -> object:
     return litellm.completion(**{"messages": [{"role": "user", "content": WALK_TEXT}], **parameters})
 
 
+async def _acomplete_drained(parameters: Mapping[str, object]) -> None:
+    result: Final = await litellm.acompletion(**{"messages": [{"role": "user", "content": WALK_TEXT}], **parameters})
+    if isinstance(result, AsyncIterator):
+        async for _chunk in result:
+            pass
+
+
+def _chat_send(route: Route, stream: bool) -> Callable[[dict[str, object]], object]:
+    if route.async_only:
+        return lambda parameters: asyncio.run(_acomplete_drained({**parameters, "stream": stream}))
+    return lambda parameters: _complete({**parameters, "stream": stream})
+
+
 def _embed(parameters: Mapping[str, object]) -> object:
     return litellm.embedding(**{"input": [WALK_TEXT], **parameters})
 
@@ -724,9 +755,7 @@ def test_every_chat_route_keeps_internal_params_out_of_the_provider_body(
     if route_id in CHAT_ROUTE_BUGS:
         pytest.skip(CHAT_ROUTE_BUGS[route_id])
 
-    bodies: Final = _walked_bodies(
-        CHAT_ROUTES[route_id], WALK_SEEDS, lambda parameters: _complete({**parameters, "stream": stream})
-    )
+    bodies: Final = _walked_bodies(CHAT_ROUTES[route_id], WALK_SEEDS, _chat_send(CHAT_ROUTES[route_id], stream))
 
     _assert_only_provider_fields(bodies, WALK_SEEDS, CHAT_ROUTES[route_id])
 
@@ -791,7 +820,8 @@ def test_a_provider_without_an_embedding_route_has_no_embedding_handler(
 
 def test_every_bedrock_route_and_invoke_family_is_walked() -> None:
     routes: Final = {
-        route: BedrockModelInfo.get_bedrock_route(target.model) for route, target in BEDROCK_ROUTES.items()
+        route: BedrockModelInfo.get_bedrock_route(target.model, target.request)
+        for route, target in BEDROCK_ROUTES.items()
     }
     families: Final = {
         family: BaseAWSLLM.get_bedrock_invoke_provider(model=f"invoke/{model}")
