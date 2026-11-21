@@ -6,8 +6,17 @@
     "question2": "Additional requirements (optional, select any)",
     "question3": "Intelligence focus (select one or more)",
     "question4": "Providers (optional)",
-    "signalHints": { "intelligence": "Capability measured by exact-match benchmark scores.", "speed": "Median response latency observed on your gateway.", "cost": "Gateway pricing, blended 3:1 input to output." },
-    "benchmarkHints": { "general": "General knowledge and reasoning, GPQA Diamond.", "coding": "Software engineering, SWE-bench Verified.", "agentic": "Autonomous tool use, Terminal-Bench.", "math": "Mathematical reasoning, AIME." },
+    "signalHints": {
+      "intelligence": "Capability measured by exact-match benchmark scores.",
+      "speed": "Median response latency observed on your gateway.",
+      "cost": "Gateway pricing, blended 3:1 input to output."
+    },
+    "benchmarkHints": {
+      "general": "General knowledge and reasoning, GPQA Diamond.",
+      "coding": "Software engineering, SWE-bench Verified.",
+      "agentic": "Autonomous tool use, Terminal-Bench.",
+      "math": "Mathematical reasoning, AIME."
+    },
     "weightMix": "Relative priority weights",
     "neutralWeights": "All priorities are off. Models receive a neutral match score.",
     "providerHint": "Leave unselected to include all providers in your candidate pool.",

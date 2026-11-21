@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { visibleMenuGroups, type MenuGroup, menuGroups } from "@/components/LeftNav";
 import { toSiTerminology } from "@/lib/terminology";
 import { effectiveSessionRole, isViewOnlySessionRole } from "@/utils/roles";
-import { flattenNavItems, matchNavItems, paletteNavItems, paletteScopeForRoute, shortcutLabel, type PaletteNavItem } from "./utils";
+import {
+  flattenNavItems,
+  matchNavItems,
+  paletteNavItems,
+  paletteScopeForRoute,
+  shortcutLabel,
+  type PaletteNavItem,
+} from "./utils";
 
 describe("paletteScopeForRoute", () => {
   it.each([

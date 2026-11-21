@@ -227,7 +227,8 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
     authState.userRole = "Internal User";
     renderWithProviders(<ModelsAndEndpointsPage />);
     expect(screen.getByRole("link", { name: "Recommend a model" })).toHaveAttribute(
-      "href", expect.stringMatching(/model-recommender$/),
+      "href",
+      expect.stringMatching(/model-recommender$/),
     );
   });
 

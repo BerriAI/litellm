@@ -202,7 +202,9 @@ export default function ModelsAndEndpointsPage() {
               <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.userDescription")}</p>
             )}
           </div>
-          <Button variant="outline" nativeButton={false} role="link" render={<a href={uiHref(recommenderHref())} />}>{t("modelRecommender.recommendModel")}</Button>
+          <Button variant="outline" nativeButton={false} role="link" render={<a href={uiHref(recommenderHref())} />}>
+            {t("modelRecommender.recommendModel")}
+          </Button>
         </div>
 
         {modelId ? (

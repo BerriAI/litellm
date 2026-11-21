@@ -61,7 +61,10 @@ export const matchNavItems = (items: readonly PaletteNavItem[], query: string): 
 export const paletteNavItems = (groups: readonly MenuGroup[], term: Term = keepTerminology): PaletteNavItem[] => [
   ...flattenNavItems(groups, term),
   ...searchOnlyPages.map((page) => ({
-    key: page.page, route: page.page, label: term(i18n.t(page.label)), section: term(i18n.t("modelRecommender.badge")),
+    key: page.page,
+    route: page.page,
+    label: term(i18n.t(page.label)),
+    section: term(i18n.t("modelRecommender.badge")),
   })),
 ];
 
