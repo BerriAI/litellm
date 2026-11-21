@@ -8,7 +8,7 @@ sensitive information like SSNs, credit cards, API keys, etc.
 import json
 import os
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from enum import Enum
 from re import Pattern
 from types import MappingProxyType
@@ -18,6 +18,8 @@ from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
+
+from .validators import validate_iban, validate_luhn
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -76,6 +78,18 @@ for pattern_data in _PATTERNS_DATA["patterns"]:
 PREBUILT_PATTERNS: Final[dict[str, str]] = {
     pattern_data["name"]: pattern_data["pattern"] for pattern_data in _PATTERNS_DATA["patterns"]
 }
+
+PATTERN_VALIDATORS: Final[Mapping[str, Callable[[str], bool]]] = MappingProxyType(
+    {
+        "credit_card": validate_luhn,
+        "visa": validate_luhn,
+        "mastercard": validate_luhn,
+        "amex": validate_luhn,
+        "discover": validate_luhn,
+        "iban": validate_iban,
+        "eu_iban_enhanced": validate_iban,
+    }
+)
 
 
 # Capture any extra configuration declared per pattern (e.g., contextual keywords)
