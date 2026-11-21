@@ -360,6 +360,23 @@ def test_key_logging_metadata_rejects_non_string_destination_callback_vars(callb
     )
     assert error == f"{callback_var} must be a string, got NoneType"
 
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize("callback_var", ["langfuse_public_key", "langfuse_secret_key"])
+def test_key_logging_metadata_rejects_null_string_callback_vars(callback_var: str) -> None:
+    error: Final = logging_metadata_config_error(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "callback_type": "success_and_failure",
+                    "callback_vars": {callback_var: None},
+                }
+            ]
+        }
+    )
+    assert error == f"{callback_var} must be a string, got NoneType"
+
+
 
 @pytest.mark.usefixtures("otel_v2_on")
 def test_key_logging_metadata_with_non_string_callback_var_key_does_not_raise() -> None:
