@@ -2998,6 +2998,91 @@ _FILL_FORM: Final = {
         "required": list(_FORM_FIELDS),
     },
 }
+_DEPLOYMENT_TOOLS: Final = (
+    {
+        "name": "configure_deployment",
+        "description": (
+            "Configure a model deployment with routing, limits, retries, fallbacks and observability settings for a "
+            "production gateway"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Deployment name"},
+                "provider": {
+                    "type": "string",
+                    "enum": ["openai", "azure", "anthropic", "bedrock", "vertex_ai", "xai"],
+                    "description": "Upstream provider",
+                },
+                "limits": {
+                    "type": "object",
+                    "description": "Rate limits",
+                    "properties": {
+                        "rpm": {"type": "integer", "description": "Requests per minute"},
+                        "tpm": {"type": "integer", "description": "Tokens per minute"},
+                        "max_parallel": {"type": "integer", "description": "Max parallel requests"},
+                    },
+                },
+                "retries": {
+                    "type": "object",
+                    "description": "Retry policy",
+                    "properties": {
+                        "count": {"type": "integer"},
+                        "backoff_seconds": {"type": "number"},
+                        "retry_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Error classes to retry",
+                        },
+                    },
+                },
+                "fallbacks": {
+                    "type": "array",
+                    "description": "Ordered fallback deployments",
+                    "items": {
+                        "type": "object",
+                        "properties": {"model": {"type": "string"}, "weight": {"type": "number"}},
+                    },
+                },
+                "observability": {
+                    "type": "object",
+                    "properties": {
+                        "log_requests": {"type": "boolean"},
+                        "callbacks": {"type": "array", "items": {"type": "string"}},
+                        "sample_rate": {"type": "number", "description": "Fraction of requests to trace"},
+                    },
+                },
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags"},
+            },
+            "required": ["name", "provider"],
+        },
+    },
+    {
+        "name": "search_docs",
+        "description": "Search the internal documentation",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "description": "Max results"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email to a recipient",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient address"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain text body"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+)
 _WEATHER_SYSTEM: Final = "You are a helpful assistant that answers weather questions briefly."
 _AZURE_GROK_4_1: Final = "azure_ai/grok-4-1-fast-reasoning"
 _FIREWORKS_DEEPSEEK_V4_1: Final = "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"
@@ -3287,12 +3372,15 @@ async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_
         (_MANTLE_GROK_4_3, False, (_GET_WEATHER,), 114, 180),
         (_MANTLE_GROK_4_3, False, _THREE_TOOLS, 256, 180),
         (_MANTLE_GROK_4_3, False, (_FILL_FORM,), 424, 180),
+        (_MANTLE_GROK_4_3, False, _DEPLOYMENT_TOOLS, 789, 180),
         (_PERPLEXITY_GROK_4_3, True, (_GET_WEATHER,), 308, 110),
         (_PERPLEXITY_GROK_4_3, True, _THREE_TOOLS, 442, 110),
         (_PERPLEXITY_GROK_4_3, True, (_FILL_FORM,), 555, 110),
+        (_PERPLEXITY_GROK_4_3, True, _DEPLOYMENT_TOOLS, 913, 110),
         (_AZURE_GROK_4_1_NON_REASONING, True, (_GET_WEATHER,), 178, 80),
         (_AZURE_GROK_4_1_NON_REASONING, True, _THREE_TOOLS, 276, 80),
         (_AZURE_GROK_4_1_NON_REASONING, True, (_FILL_FORM,), 371, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _DEPLOYMENT_TOOLS, 614, 80),
     ],
 )
 async def test_a_host_whose_tool_prompt_grows_with_the_schema_counts_at_or_a_bounded_amount_over_the_bill(
