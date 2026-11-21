@@ -47,7 +47,7 @@ UNAVAILABLE_DELAY_SECONDS: Final = 30
 SUSPEND_AFTER_FAILURES: Final = 20
 CLAIM_BATCH: Final = 16
 CONCURRENCY: Final = 8
-LEASE_SECONDS: Final = 60
+LEASE_SECONDS: Final = 300
 DELIVERED_RETENTION: Final = timedelta(minutes=10)
 _IDLE_SECONDS: Final = 1.0
 _HOUSEKEEPING_SECONDS: Final = 30.0
@@ -119,16 +119,16 @@ class DeliveryWorker:
     async def process(self, delivery: QueuedDelivery) -> None:
         row: Final = await self._store.get(delivery.subscription_id)
         if row is None or not self._deliverable(row, delivery):
-            await self._store.finish(delivery.delivery_id, self._clock())
+            await self._store.finish(delivery, self._clock())
             return
         authorization: Final = await authorize_row(row, self._runtime, self._load_caller)
         if isinstance(authorization, Revoked):
-            await self._store.finish(delivery.delivery_id, self._clock())
+            await self._store.finish(delivery, self._clock())
             await terminate(row, forbidden("Access revoked"), self._store, self._settings(), self._runtime, self._post)
             return
         if not isinstance(authorization, Authorized):
             await self._store.reschedule(
-                delivery.delivery_id, delivery.attempt, self._clock() + timedelta(seconds=UNAVAILABLE_DELAY_SECONDS)
+                delivery, delivery.attempt, self._clock() + timedelta(seconds=UNAVAILABLE_DELAY_SECONDS)
             )
             return
         server: Final = self._lookup(row.server_id)
@@ -142,7 +142,7 @@ class DeliveryWorker:
         )
         outgoing: Final = await self._outgoing(context)
         if outgoing is None:
-            await self._store.finish(delivery.delivery_id, self._clock())
+            await self._store.finish(delivery, self._clock())
             return
         await self._send(context, outgoing)
 
@@ -160,14 +160,14 @@ class DeliveryWorker:
             return prepared_outgoing(context.delivery)
         built: Final = await build_outgoing(context, self._runtime)
         if built is not None:
-            await self._store.prepare(context.delivery.delivery_id, built.body.decode(), built.webhook_id)
+            await self._store.prepare(context.delivery, built.body.decode(), built.webhook_id)
         return built
 
     async def _send(self, context: DeliveryContext, outgoing: Outgoing) -> None:
         row: Final = context.row
         secret: Final = parse_secret(row.client_secret)
         if secret is None:
-            await self._store.finish(context.delivery.delivery_id, self._clock())
+            await self._store.finish(context.delivery, self._clock())
             return
         started: Final = time.monotonic()
         attributes: Final = {"mcp.event.name": context.gateway_name, "mcp.subscription.id": row.id}
@@ -187,7 +187,7 @@ class DeliveryWorker:
 
     async def _settled(self, context: DeliveryContext, outgoing: Outgoing, status: int | None, elapsed: float) -> None:
         row: Final = context.row
-        await self._store.finish(context.delivery.delivery_id, self._clock())
+        await self._store.finish(context.delivery, self._clock())
         accepted: Final = status is not None and 200 <= status < 300
         if outgoing.terminal:
             await self._store.terminate(row.id)
@@ -215,11 +215,11 @@ class DeliveryWorker:
         attempt: Final = delivery.attempt + 1
         if attempt <= len(RETRY_DELAYS_SECONDS):
             delay: Final = timedelta(seconds=RETRY_DELAYS_SECONDS[attempt - 1])
-            await self._store.reschedule(delivery.delivery_id, attempt, self._clock() + delay)
+            await self._store.reschedule(delivery, attempt, self._clock() + delay)
             return
         if outgoing.event_id is not None:
             await self._report_abandoned(row, outgoing)
-        await self._store.finish(delivery.delivery_id, self._clock())
+        await self._store.finish(delivery, self._clock())
         await self._store.mark_failed(row.id, failure, self._clock(), SUSPEND_AFTER_FAILURES)
 
     async def _report_abandoned(self, row: SubscriptionRow, outgoing: Outgoing) -> None:

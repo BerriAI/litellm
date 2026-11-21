@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_MCPEventDelivery" (
     "attempt" INTEGER NOT NULL DEFAULT 0,
     "next_attempt_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "claimed_until" TIMESTAMP(3),
+    "claim_id" TEXT,
     "prepared" BOOLEAN NOT NULL DEFAULT false,
     "delivered_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

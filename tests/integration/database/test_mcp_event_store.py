@@ -172,9 +172,9 @@ async def test_a_delivered_message_is_never_claimed_again_and_its_replay_stays_a
         delivery: Final = _delivery(row.id)
         assert await store.enqueue(delivery)
         claimed: Final = await store.claim(NOW, NOW + timedelta(seconds=60), 100)
-        assert delivery.delivery_id in {item.delivery_id for item in claimed}
-        await store.prepare(delivery.delivery_id, '{"eventId":"evt_1","name":"ci-build.failed"}', "msg_built")
-        await store.finish(delivery.delivery_id, NOW)
+        (mine,) = [item for item in claimed if item.delivery_id == delivery.delivery_id]
+        await store.prepare(mine, '{"eventId":"evt_1","name":"ci-build.failed"}', "msg_built")
+        await store.finish(mine, NOW)
         later: Final = await store.claim(NOW + timedelta(minutes=5), NOW + timedelta(minutes=6), 100)
         assert delivery.delivery_id not in {item.delivery_id for item in later}
         assert await store.enqueue(delivery) is False
@@ -189,8 +189,13 @@ async def test_a_prepared_delivery_is_claimed_with_its_built_body() -> None:
         row: Final = await _active(store)
         delivery: Final = _delivery(row.id)
         assert await store.enqueue(delivery)
-        await store.prepare(delivery.delivery_id, '{"eventId":"evt_1","name":"ci-build.failed"}', "msg_built")
-        await store.reschedule(delivery.delivery_id, 1, NOW)
+        (first,) = [
+            item
+            for item in await store.claim(NOW, NOW + timedelta(seconds=60), 100)
+            if item.delivery_id == delivery.delivery_id
+        ]
+        await store.prepare(first, '{"eventId":"evt_1","name":"ci-build.failed"}', "msg_built")
+        await store.reschedule(first, 1, NOW)
         (claimed,) = [
             item
             for item in await store.claim(NOW, NOW + timedelta(seconds=60), 100)
@@ -224,3 +229,28 @@ async def test_ending_and_deleting_only_touch_the_upstream_subscription_that_was
         assert await store.get(row.id) is not None
         await store.delete_ended(row.id, "up_1")
         assert await store.get(row.id) is None
+
+
+@pytest.mark.asyncio
+async def test_only_the_current_claim_can_finish_or_reschedule_a_delivery() -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        delivery: Final = _delivery(row.id)
+        assert await store.enqueue(delivery)
+        (stale,) = [
+            item
+            for item in await store.claim(NOW, NOW + timedelta(seconds=1), 100)
+            if item.delivery_id == delivery.delivery_id
+        ]
+        later: Final = NOW + timedelta(seconds=5)
+        (current,) = [
+            item
+            for item in await store.claim(later, later + timedelta(seconds=300), 100)
+            if item.delivery_id == delivery.delivery_id
+        ]
+        assert stale.claim_id and current.claim_id and stale.claim_id != current.claim_id
+        await store.finish(stale, NOW)
+        await store.reschedule(stale, 3, NOW)
+        await store.finish(current, NOW)
+        assert await store.enqueue(delivery) is False
+        await store.delete(row.id)

@@ -637,6 +637,7 @@ model LiteLLM_MCPEventDelivery {
   attempt         Int       @default(0)
   next_attempt_at DateTime  @default(now())
   claimed_until   DateTime?
+  claim_id        String?
   prepared        Boolean   @default(false)
   delivered_at    DateTime?
   created_at      DateTime  @default(now())

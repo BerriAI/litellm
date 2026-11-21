@@ -375,3 +375,15 @@ async def test_an_abandoned_event_stays_queued_when_its_gap_cannot_be_written() 
     with pytest.raises(ConnectionError):
         await _worker(store, _Client("timeout")).process(store.queue["d1"])
     assert "d1" in store.queue
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_claim_was_taken_over_cannot_change_the_delivery() -> None:
+    store: Final = _store()
+    (stale,) = await store.claim(NOW, NOW + timedelta(seconds=1), 16)
+    (current,) = await store.claim(NOW + timedelta(seconds=2), NOW + timedelta(seconds=300), 16)
+    await store.finish(stale, NOW)
+    await store.reschedule(stale, 3, NOW)
+    assert ("d1" in store.queue, store.queue["d1"].attempt, store.queue["d1"].claim_id) == (True, 0, current.claim_id)
+    await store.finish(current, NOW)
+    assert "d1" not in store.queue

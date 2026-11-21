@@ -1,3 +1,4 @@
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final
@@ -19,6 +20,7 @@ class MemoryStore:
     queue: dict[str, QueuedDelivery] = field(default_factory=dict)  # mutable-ok: in-memory queue
     finished: list[str] = field(default_factory=list)  # mutable-ok: records completed deliveries
     delivered: dict[str, datetime] = field(default_factory=dict)  # mutable-ok: delivered tombstones
+    leases: dict[str, datetime] = field(default_factory=dict)  # mutable-ok: claimed-until per delivery
     fail_enqueue: bool = False
 
     async def get(self, subscription_id: str) -> SubscriptionRow | None:
@@ -141,27 +143,45 @@ class MemoryStore:
         return True
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]:
-        return tuple(item for item in self.queue.values() if item.next_attempt_at <= now)[:limit]
+        due: Final = [
+            item
+            for item in self.queue.values()
+            if item.next_attempt_at <= now and self.leases.get(item.delivery_id, now) <= now
+        ][:limit]
+        claimed: Final = tuple(item.model_copy(update={"claim_id": uuid.uuid4().hex}) for item in due)
+        for item in claimed:
+            self.queue[item.delivery_id] = item
+            self.leases[item.delivery_id] = lease_until
+        return claimed
 
-    async def prepare(self, delivery_id: str, body: str, webhook_id: str) -> None:
-        if delivery_id in self.queue:
-            self.queue[delivery_id] = self.queue[delivery_id].model_copy(
+    def _holds(self, delivery: QueuedDelivery) -> bool:
+        current: Final = self.queue.get(delivery.delivery_id)
+        return current is not None and current.claim_id == delivery.claim_id
+
+    async def prepare(self, delivery: QueuedDelivery, body: str, webhook_id: str) -> None:
+        if self._holds(delivery):
+            self.queue[delivery.delivery_id] = self.queue[delivery.delivery_id].model_copy(
                 update={"body": body, "webhook_id": webhook_id, "prepared": True}
             )
 
-    async def finish(self, delivery_id: str, at: datetime) -> None:
-        self.queue.pop(delivery_id, None)
-        self.delivered[delivery_id] = at
-        self.finished.append(delivery_id)
+    async def finish(self, delivery: QueuedDelivery, at: datetime) -> None:
+        if not self._holds(delivery):
+            return
+        self.queue.pop(delivery.delivery_id, None)
+        self.leases.pop(delivery.delivery_id, None)
+        self.delivered[delivery.delivery_id] = at
+        self.finished.append(delivery.delivery_id)
 
     async def purge_delivered(self, before: datetime) -> None:
         for key in [key for key, at in self.delivered.items() if at < before]:
             self.delivered.pop(key)
 
-    async def reschedule(self, delivery_id: str, attempt: int, next_attempt_at: datetime) -> None:
-        self.queue[delivery_id] = self.queue[delivery_id].model_copy(
-            update={"attempt": attempt, "next_attempt_at": next_attempt_at}
-        )
+    async def reschedule(self, delivery: QueuedDelivery, attempt: int, next_attempt_at: datetime) -> None:
+        if self._holds(delivery):
+            self.queue[delivery.delivery_id] = self.queue[delivery.delivery_id].model_copy(
+                update={"attempt": attempt, "next_attempt_at": next_attempt_at, "claim_id": None}
+            )
+            self.leases.pop(delivery.delivery_id, None)
 
     async def drop_deliveries(self, subscription_id: str) -> None:
         for key in [key for key, item in self.queue.items() if item.subscription_id == subscription_id]:

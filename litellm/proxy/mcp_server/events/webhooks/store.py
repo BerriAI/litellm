@@ -1,4 +1,5 @@
 import json
+import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
@@ -53,6 +54,7 @@ class QueuedDelivery(BaseModel):
     attempt: int = 0
     next_attempt_at: datetime
     prepared: bool = False
+    claim_id: str | None = None
 
 
 class Activation(BaseModel):
@@ -123,13 +125,13 @@ class EventStore(Protocol):
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]: ...
 
-    async def prepare(self, delivery_id: str, body: str, webhook_id: str) -> None: ...
+    async def prepare(self, delivery: QueuedDelivery, body: str, webhook_id: str) -> None: ...
 
-    async def finish(self, delivery_id: str, at: datetime) -> None:
+    async def finish(self, delivery: QueuedDelivery, at: datetime) -> None:
         """Keep the row as a tombstone so a replay of the same upstream message is still a duplicate."""
         ...
 
-    async def reschedule(self, delivery_id: str, attempt: int, next_attempt_at: datetime) -> None: ...
+    async def reschedule(self, delivery: QueuedDelivery, attempt: int, next_attempt_at: datetime) -> None: ...
 
     async def drop_deliveries(self, subscription_id: str) -> None: ...
 
@@ -178,6 +180,11 @@ def _record_from_row(row: SubscriptionRow) -> Mapping[str, object]:
 
 def pending_row(row: SubscriptionRow) -> SubscriptionRow:
     return row.model_copy(update={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL})
+
+
+def _claimed(delivery: QueuedDelivery) -> Mapping[str, object]:
+    """Fence every write to the worker that holds the claim, so one whose lease expired changes nothing."""
+    return {"delivery_id": delivery.delivery_id, "claim_id": delivery.claim_id}
 
 
 class _RawQueries(Protocol):
@@ -328,33 +335,35 @@ class PrismaEventStore:
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]:
         rows: Final = await self._raw.query_raw(
-            'UPDATE "LiteLLM_MCPEventDelivery" SET "claimed_until" = $1::timestamp '
+            'UPDATE "LiteLLM_MCPEventDelivery" SET "claimed_until" = $1::timestamp, "claim_id" = $4 '
             'WHERE "delivery_id" IN ('  # bounded-ok: the subquery LIMITs the claimed batch
             'SELECT "delivery_id" FROM "LiteLLM_MCPEventDelivery" '
             'WHERE "delivered_at" IS NULL AND "next_attempt_at" <= $2::timestamp '
             'AND ("claimed_until" IS NULL OR "claimed_until" < $2::timestamp) '
             'ORDER BY "next_attempt_at" LIMIT $3 FOR UPDATE SKIP LOCKED) '
-            'RETURNING "delivery_id", "subscription_id", "body", "webhook_id", "attempt", "next_attempt_at", "prepared"',
+            'RETURNING "delivery_id", "subscription_id", "body", "webhook_id", "attempt", "next_attempt_at", "prepared", '
+            '"claim_id"',
             lease_until.isoformat(),
             now.isoformat(),
             limit,
+            uuid.uuid4().hex,
         )
         return tuple(QueuedDelivery.model_validate(row) for row in rows)
 
-    async def prepare(self, delivery_id: str, body: str, webhook_id: str) -> None:
+    async def prepare(self, delivery: QueuedDelivery, body: str, webhook_id: str) -> None:
         await self._deliveries.update_many(
-            where={"delivery_id": delivery_id}, data={"body": body, "webhook_id": webhook_id, "prepared": True}
+            where=_claimed(delivery), data={"body": body, "webhook_id": webhook_id, "prepared": True}
         )
 
-    async def finish(self, delivery_id: str, at: datetime) -> None:
+    async def finish(self, delivery: QueuedDelivery, at: datetime) -> None:
         await self._deliveries.update_many(
-            where={"delivery_id": delivery_id}, data={"delivered_at": at, "body": "", "claimed_until": None}
+            where=_claimed(delivery), data={"delivered_at": at, "body": "", "claimed_until": None, "claim_id": None}
         )
 
-    async def reschedule(self, delivery_id: str, attempt: int, next_attempt_at: datetime) -> None:
+    async def reschedule(self, delivery: QueuedDelivery, attempt: int, next_attempt_at: datetime) -> None:
         await self._deliveries.update_many(
-            where={"delivery_id": delivery_id},
-            data={"attempt": attempt, "next_attempt_at": next_attempt_at, "claimed_until": None},
+            where=_claimed(delivery),
+            data={"attempt": attempt, "next_attempt_at": next_attempt_at, "claimed_until": None, "claim_id": None},
         )
 
     async def drop_deliveries(self, subscription_id: str) -> None:
