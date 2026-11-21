@@ -5963,6 +5963,37 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
 
 
+@pytest.mark.asyncio
+async def test_responses_count_on_claude_rejects_a_previous_response_id_with_no_stored_turns_on_that_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with (
+        patch.object(
+            ResponsesSessionHandler,
+            "get_all_spend_logs_for_previous_response_id",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        pytest.raises(ProxyException) as rejected,
+    ):
+        await _claude_count(
+            monkeypatch,
+            {},
+            {
+                "input": "And in 1999?",
+                "previous_response_id": "chatcmpl-lost",
+                ADDRESSED_RESPONSE_ID_FIELD: "resp_client_form",
+            },
+        )
+
+    assert (rejected.value.code, rejected.value.type, rejected.value.param) == (
+        "400",
+        "invalid_request_error",
+        "previous_response_id",
+    )
+    assert "'resp_client_form' not found" in rejected.value.message
+
+
 _MULTILINGUAL_TEXT: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
 
 
