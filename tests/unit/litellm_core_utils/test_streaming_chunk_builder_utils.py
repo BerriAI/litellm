@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Callable, Mapping, Sequence
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -30,6 +31,141 @@ from litellm.types.utils import (
     TextCompletionResponse,
     Usage,
 )
+
+
+@pytest.mark.parametrize(
+    ("reasoning_parts", "expected"),
+    [
+        (("plain ", None, "reasoning"), "plain reasoning"),
+        (([{"content": "", "signature": "private-signature"}],), ""),
+        (([],), ""),
+        (
+            ([{"thinking": "think"}, {"content": " content"}, {"text": " text"}],),
+            "think content text",
+        ),
+        (
+            ([{"thinking": "first", "content": "unused", "text": "unused"}, {"content": " second", "text": "unused"}],),
+            "first second",
+        ),
+        (([{"thinking": "", "content": "unused"}, {"content": "", "text": "unused"}],), ""),
+        (
+            ([SimpleNamespace(thinking="object "), SimpleNamespace(signature="sig", text="blocks")],),
+            "object blocks",
+        ),
+        (
+            ("before ", [{"thinking": "a"}, {"content": "b"}], None, [{"text": "c"}], " after"),
+            "before abc after",
+        ),
+        (
+            (
+                [
+                    {"thinking": None, "content": "fallback"},
+                    {"thinking": 42, "content": None, "text": " text"},
+                    {"signature": "private-signature"},
+                    {"content": {"text": "not-readable"}},
+                    "not-a-block",
+                    None,
+                    42,
+                ],
+            ),
+            "fallback text",
+        ),
+    ],
+    ids=[
+        "strings",
+        "signed-empty-block",
+        "empty-list",
+        "text-fields",
+        "field-priority",
+        "empty-string-priority",
+        "object-blocks",
+        "mixed-chunks",
+        "non-text-blocks",
+    ],
+)
+def test_stream_chunk_builder_combines_structured_reasoning(reasoning_parts: tuple[object, ...], expected: str) -> None:
+    chunks: Final = [
+        {
+            "id": "chatcmpl-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-6.1-sol",
+            "choices": [{"index": 0, "delta": {"reasoning_content": part}, "finish_reason": None}],
+        }
+        for part in reasoning_parts
+    ] + [
+        {
+            "id": "chatcmpl-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-6.1-sol",
+            "choices": [{"index": 0, "delta": {"content": "done"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        }
+    ]
+
+    response: Final = stream_chunk_builder(chunks)
+
+    assert response is not None
+    assert response.choices[0].message.reasoning_content == expected
+    assert response.choices[0].message.content == "done"
+    assert response.choices[0].finish_reason == "stop"
+    assert response.usage.total_tokens == 5
+
+
+def test_stream_chunk_builder_keeps_tools_and_signed_thinking_with_structured_reasoning() -> None:
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-reasoning",
+            created=0,
+            model="gpt-6.1-sol",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        thinking_blocks=[{"type": "thinking", "thinking": "", "signature": "signed-thinking"}],
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                index=0,
+                                id="call_lookup",
+                                type="function",
+                                function=Function(name="lookup", arguments='{"q":'),
+                            )
+                        ],
+                    ).model_copy(update={"reasoning_content": [{"text": "before", "signature": "private-signature"}]}),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-reasoning",
+            created=0,
+            model="gpt-6.1-sol",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" after",
+                        tool_calls=[ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"value"}'))],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks)
+
+    assert response is not None
+    message: Final = response.choices[0].message
+    assert message.reasoning_content == "before after"
+    assert message.content is None
+    assert message.thinking_blocks == [{"type": "thinking", "thinking": "", "signature": "signed-thinking"}]
+    assert message.tool_calls is not None
+    assert [tool.to_dict() for tool in message.tool_calls] == [
+        {"id": "call_lookup", "type": "function", "function": {"name": "lookup", "arguments": '{"q":"value"}'}}
+    ]
+    assert response.choices[0].finish_reason == "tool_calls"
 
 
 @pytest.mark.parametrize("routed_provider", (False, True))
