@@ -724,7 +724,7 @@ class RejectedRequestError(BadRequestError):
     def __init__(
         self,
         message,
-        model,
+        model: str,
         llm_provider,
         request_data: dict,
         litellm_debug_info: str | None = None,
