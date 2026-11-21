@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
     without,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.interactions import (
@@ -166,6 +166,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
         return headers
 
+    def _collection_url(self, api_base: str | None) -> str:
+        resolved_base: Final = GeminiModelInfo.get_api_base(api_base).removesuffix("?alt=sse")
+        return ensure_api_route(resolved_base, f"{self.api_version}/interactions")
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -176,13 +180,12 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     ) -> str:
         """POST /{api_version}/interactions"""
         litellm_params = litellm_params or {}
-        api_base = GeminiModelInfo.get_api_base(api_base)
         api_key: Final = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
 
         if not api_key:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.")
 
-        collection_url: Final = join_api_base(api_base, f"{self.api_version}/interactions")
+        collection_url: Final = self._collection_url(api_base)
         return f"{collection_url}?alt=sse" if stream else collection_url
 
     def transform_request(
@@ -332,14 +335,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """GET /{api_version}/interactions/{interaction_id}"""
-        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
-        return (
-            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
-            {},
-        )
+        return f"{self._collection_url(api_base)}/{encoded_interaction_id}", {}
 
     def transform_get_interaction_response(
         self,
@@ -372,14 +371,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """DELETE /{api_version}/interactions/{interaction_id}"""
-        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
-        return (
-            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
-            {},
-        )
+        return f"{self._collection_url(api_base)}/{encoded_interaction_id}", {}
 
     def transform_delete_interaction_response(
         self,
@@ -403,14 +398,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """POST /{api_version}/interactions/{interaction_id}/cancel"""
-        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
-        return (
-            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}/cancel"),
-            {},
-        )
+        return f"{self._collection_url(api_base)}/{encoded_interaction_id}/cancel", {}
 
     def transform_cancel_interaction_response(
         self,

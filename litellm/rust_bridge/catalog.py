@@ -98,6 +98,8 @@ class Feature(str, Enum):
     MODEL_ALIAS_MAP = "model_alias_map"
     """A model that litellm.model_alias_map rewrites before the call."""
     LATEST_ALIAS = "latest_alias"
+    INTERACTIONS_API_BRIDGE = "interactions_api_bridge"
+    """Chat completions routed through Python's Gemini/Vertex Interactions API bridge."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +159,7 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.MODEL_PARAM_GATING,
     Feature.MODEL_LIST,
     Feature.MODEL_ALIAS_MAP,
+    Feature.INTERACTIONS_API_BRIDGE,
 }
 
 MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES - {
