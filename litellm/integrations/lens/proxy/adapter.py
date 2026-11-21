@@ -3,6 +3,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
+from types import MappingProxyType
 from typing import Annotated, Final
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -37,6 +38,12 @@ _REQUEST_AUDIENCE: Final = "litellm-lens"
 _LOGIN_AUDIENCE: Final = "litellm-lens-login"
 _LOGIN_TOKEN_SECONDS: Final = 60
 _PASSWORD_CHANGE_ROUTE: Final = "/user/password/change"
+_UI_MOUNT_HEADER: Final = "x-lens-ui-mount"
+_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options"})
+_UI_SAME_ORIGIN_FRAME: Final = MappingProxyType(
+    {"x-frame-options": "SAMEORIGIN", "content-security-policy": "frame-ancestors 'self'"}
+)
+_UI_UNAVAILABLE: Final = "The connected Lens does not serve a workspace for the dashboard"
 _LOGIN_UNAVAILABLE: Final = (
     "Configure LITELLM_LENS_URL, LENS_GATEWAY_SECRET and LITELLM_LENS_PUBLIC_URL to sign in to Lens"
 )
@@ -248,6 +255,56 @@ async def lens_login(request: Request, log_team_lookup: LogTeamLookupDependency)
         f"{base_url}/ui/login?{urlencode({'redirect_to': route})}",
         int(time.time()),
     )
+
+
+def ui_mount(root_path: str) -> str:
+    return root_path.rstrip("/") + "/lens/ui"
+
+
+async def lens_ui_asset(
+    path: str, remote: LensConnection | None, client: httpx.AsyncClient | None, mount: str
+) -> Response:
+    """The Lens workspace is served by the connected Lens, so it follows that Lens's version and not the gateway's."""
+    if remote is None or client is None or any(part in (".", "..") for part in path.split("/")) or "\\" in path:
+        raise HTTPException(404, _UI_UNAVAILABLE)
+    try:
+        async with client.stream(
+            "GET", remote.endpoint("/embedded/" + quote(path, safe="/")), headers={_UI_MOUNT_HEADER: mount}
+        ) as response:
+            if response.status_code == 404:
+                raise HTTPException(404, _UI_UNAVAILABLE)
+            if response.status_code != 200:
+                raise HTTPException(503, "Lens service is unavailable")
+            return Response(
+                await bounded_response(response, MAX_RESPONSE_BYTES),
+                headers={
+                    **{name: value for name, value in response.headers.items() if name in _UI_RESPONSE_HEADERS},
+                    **_UI_SAME_ORIGIN_FRAME,
+                },
+            )
+    except (httpx.HTTPError, RuntimeError) as error:
+        raise HTTPException(503, "Lens service is unavailable") from error
+
+
+def _remote() -> LensConnection | None:
+    try:
+        return LensConnection.from_env()
+    except ValueError:
+        return None
+
+
+@router.get("/ui", include_in_schema=False)
+async def lens_ui_entry(request: Request) -> Response:
+    return RedirectResponse(str(request.url.replace(path=request.url.path + "/")), status_code=307)
+
+
+@router.get("/ui/{path:path}", include_in_schema=False)
+async def lens_ui(path: str = "") -> Response:
+    from litellm.proxy.utils import get_server_root_path
+
+    remote: Final = _remote()
+    client: Final = remote.control_client() if remote else None
+    return await lens_ui_asset(path, remote, client, ui_mount(get_server_root_path()))
 
 
 async def forward(

@@ -21547,5 +21547,18 @@
       "member": "Customer member",
       "members": "Customer members"
     }
+  },
+  "lensWorkspace": {
+    "opening": "Opening Lens…",
+    "frameTitle": "Lens",
+    "unsupported": {
+      "title": "Update Lens to use it here",
+      "body": "This page shows the workspace served by the Lens service this gateway is connected to. The connected Lens is an older version that does not serve one yet. Update Lens, or open it at its own address.",
+      "open": "Open Lens"
+    },
+    "unavailable": {
+      "title": "Lens is not reachable",
+      "body": "This page shows the workspace served by the Lens service this gateway is connected to. The gateway could not load it. Check that LITELLM_LENS_URL is set and that Lens is running."
+    }
   }
 }

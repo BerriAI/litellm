@@ -13,12 +13,14 @@ from litellm.integrations.lens.proxy.adapter import (
     delegated_identity,
     forward,
     lens_request,
+    lens_ui_asset,
     login_redirect,
     login_user_name,
     password_change_redirect,
     request_body,
     service_connection,
     service_status,
+    ui_mount,
 )
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -496,3 +498,95 @@ def test_lens_login_honours_admin_only_routes(monkeypatch: pytest.MonkeyPatch) -
         password_change_redirect(member, "/lens/login", "http://gateway.test")
     assert error.value.status_code == 403
     assert password_change_redirect(admin, "/lens/login", "http://gateway.test") is None
+
+
+LENS: Final = LensConnection("http://lens.test", SECRET)
+
+
+@pytest.mark.asyncio
+async def test_workspace_files_come_from_the_connected_lens_and_only_the_dashboard_may_frame_them() -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://lens.test/embedded/_next/static/app%20v2.js"
+        assert request.headers["x-lens-ui-mount"] == "/team-a/lens/ui"
+        assert "authorization" not in request.headers
+        return httpx.Response(
+            200,
+            content=b"console.log('lens')",
+            headers={
+                "content-type": "text/javascript",
+                "cache-control": "no-cache",
+                "x-content-type-options": "nosniff",
+                "set-cookie": "lens_session=leaked",
+                "x-internal": "private",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        response: Final = await lens_ui_asset("_next/static/app v2.js", LENS, client, ui_mount("/team-a/"))
+    assert response.status_code == 200
+    assert response.body == b"console.log('lens')"
+    assert {name: value for name, value in response.headers.items() if name != "content-length"} == {
+        "content-type": "text/javascript",
+        "cache-control": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "SAMEORIGIN",
+        "content-security-policy": "frame-ancestors 'self'",
+    }
+
+
+@pytest.mark.parametrize(("root_path", "mount"), (("", "/lens/ui"), ("/", "/lens/ui"), ("/team-a", "/team-a/lens/ui")))
+def test_workspace_mount_follows_the_gateway_root_path(root_path: str, mount: str) -> None:
+    assert ui_mount(root_path) == mount
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "reported", "detail"),
+    (
+        (404, 404, "The connected Lens does not serve a workspace for the dashboard"),
+        (401, 503, "Lens service is unavailable"),
+        (302, 503, "Lens service is unavailable"),
+        (500, 503, "Lens service is unavailable"),
+    ),
+    ids=("older_lens", "refused", "redirect", "broken"),
+)
+async def test_only_a_lens_with_no_workspace_route_reads_as_older_and_its_body_is_dropped(
+    status: int, reported: int, detail: str
+) -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=b"lens internal detail", headers={"location": "http://lens.test/ui/"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await lens_ui_asset("", LENS, client, "/lens/ui")
+    assert (error.value.status_code, error.value.detail) == (reported, detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("../internal/spend", "_next/../../auth/session", "a/./b", "..\\internal"))
+async def test_workspace_path_cannot_reach_another_lens_route(path: str) -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Lens was asked for {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await lens_ui_asset(path, LENS, client, "/lens/ui")
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_workspace_is_not_served_by_a_gateway_with_no_lens_connection() -> None:
+    with pytest.raises(HTTPException) as error:
+        await lens_ui_asset("", None, None, "/lens/ui")
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_workspace_reports_an_unreachable_lens_apart_from_an_older_one() -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Fixture Lens is down", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await lens_ui_asset("", LENS, client, "/lens/ui")
+    assert error.value.status_code == 503
