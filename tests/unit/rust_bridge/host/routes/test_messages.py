@@ -5,6 +5,7 @@ import functools
 import json
 import logging
 import os
+from pathlib import Path
 import queue
 import socket
 import ssl
@@ -3117,16 +3118,45 @@ def _credential_failure(kind: str) -> RuntimeError:
 
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize("kind", ("no_credentials", "replay"))
-def test_a_bedrock_credential_failure_raises_what_python_signing_raises(kind: str) -> None:
+def test_a_bedrock_credential_failure_answers_401_with_what_python_signing_raises(kind: str) -> None:
     from botocore.exceptions import NoCredentialsError
 
     mapped: Final = messages_host.map_failure(
         _credential_failure(kind), {"model": _BEDROCK_INVOKE, "messages": [], "aws_region_name": "us-east-1"}, "bedrock"
     )
 
-    assert type(mapped) is NoCredentialsError
-    assert str(mapped) == "Unable to locate credentials"
+    assert type(mapped) is litellm.AuthenticationError
+    assert mapped.status_code == 401
+    assert "Unable to locate credentials" in mapped.message
+    assert type(mapped.__context__) is NoCredentialsError
     assert mapped.__traceback__ is not None
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config: Final = tmp_path / "config"
+    config.write_text(
+        "[profile logged-out-sso]\n"
+        "sso_session = litellm-unit-test-session-never-logged-in\n"
+        "sso_account_id = 111111111111\n"
+        "sso_role_name = Dev\n"
+        "[sso-session litellm-unit-test-session-never-logged-in]\n"
+        "sso_start_url = https://example.awsapps.com/start\n"
+        "sso_region = us-west-2\n"
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("replay"),
+        {"model": _BEDROCK_INVOKE, "messages": [], "aws_region_name": "us-east-1", "aws_profile_name": "logged-out-sso"},
+        "bedrock",
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert mapped.status_code == 401
+    assert "Error loading SSO Token" in mapped.message
 
 
 @pytest.mark.parametrize(
@@ -3168,7 +3198,7 @@ def test_a_bedrock_mantle_sts_failure_raises_the_class_the_mantle_signer_lets_th
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
-def test_an_access_key_without_its_secret_raises_the_partial_credentials_error_python_signing_raises(
+def test_an_access_key_without_its_secret_answers_401_with_the_partial_credentials_error_python_signing_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from botocore.exceptions import PartialCredentialsError
@@ -3181,8 +3211,9 @@ def test_an_access_key_without_its_secret_raises_the_partial_credentials_error_p
         "bedrock",
     )
 
-    assert type(mapped) is PartialCredentialsError
-    assert str(mapped) == "Partial credentials found in env, missing: AWS_SECRET_ACCESS_KEY"
+    assert type(mapped) is litellm.AuthenticationError
+    assert "Partial credentials found in env, missing: AWS_SECRET_ACCESS_KEY" in mapped.message
+    assert type(mapped.__context__) is PartialCredentialsError
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
@@ -3612,7 +3643,7 @@ def test_a_bedrock_mantle_web_identity_failure_keeps_the_aws_auth_error(kind: st
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
-def test_a_bedrock_mantle_route_credential_failure_raises_botocores_error_unwrapped() -> None:
+def test_a_bedrock_mantle_route_credential_failure_answers_401() -> None:
     from botocore.exceptions import NoCredentialsError
 
     mapped: Final = messages_host.map_failure(
@@ -3621,13 +3652,14 @@ def test_a_bedrock_mantle_route_credential_failure_raises_botocores_error_unwrap
         "bedrock",
     )
 
-    assert type(mapped) is NoCredentialsError
+    assert type(mapped) is litellm.AuthenticationError
+    assert type(mapped.__context__) is NoCredentialsError
 
 
 @pytest.mark.parametrize(
     ("model", "request_provider", "raised"),
     (
-        pytest.param(_MANTLE_ROUTE, "bedrock", "ProfileNotFound", id="mantle-route"),
+        pytest.param(_MANTLE_ROUTE, "bedrock", "AuthenticationError", id="mantle-route"),
         pytest.param(_BEDROCK_MANTLE, "bedrock_mantle", "ValueError", id="bedrock-mantle"),
     ),
 )
@@ -3642,8 +3674,8 @@ def test_a_mantle_missing_profile_raises_what_python_signing_raises(
     )
 
     assert type(mapped).__name__ == raised
-    if raised == "ProfileNotFound":
-        assert getattr(mapped, "kwargs", None) == {"profile": "absent-profile"}
+    if raised == "AuthenticationError":
+        assert "The config profile (absent-profile) could not be found" in str(mapped)
 
 
 def _refused(text: str, **markers: object) -> ValueError:
@@ -3798,7 +3830,7 @@ def test_a_mantle_route_credential_failure_logs_the_model_id_rust_names() -> Non
 @pytest.mark.parametrize(
     ("sts_failure", "raised"),
     (
-        pytest.param(None, "NoCredentialsError", id="no-credentials"),
+        pytest.param(None, "AuthenticationError", id="no-credentials"),
         pytest.param(("rejected", "AssumeRole", "AccessDenied", "denied"), "ClientError", id="assume-role-denied"),
         pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", id="sts-unreachable"),
     ),
