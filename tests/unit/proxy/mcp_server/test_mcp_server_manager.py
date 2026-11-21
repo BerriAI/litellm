@@ -23042,6 +23042,122 @@ class TestMCPUpstreamRateLimitRetry:
         assert client.list_tools_page.await_count == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("rate_limited_attempts", [1, MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES + 1])
+    async def test_get_tools_page_retries_429_before_session_cleanup(self, rate_limited_attempts: int) -> None:
+        from mcp.types import JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
+
+        from litellm.mcp_client.client import ToolListingSession
+
+        protocol_version: Final = "2025-11-25"
+        session_id: Final = "listing-session"
+        message_adapter: Final = TypeAdapter(JSONRPCMessage)
+        requests: list[httpx2.Request] = []
+        continuation_requests: list[httpx2.Request] = []
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            requests.append(request)
+            assert request.headers.get("authorization") == "Bearer listing-test"
+            if request.method == "DELETE":
+                assert request.headers.get("mcp-session-id") == session_id
+                assert request.headers.get("mcp-protocol-version") == protocol_version
+                return httpx2.Response(200)
+
+            message: Final = message_adapter.validate_json(request.content)
+            if isinstance(message, JSONRPCNotification):
+                assert message.method == "notifications/initialized"
+                return httpx2.Response(202)
+            assert isinstance(message, JSONRPCRequest)
+            if message.method == "initialize":
+                return httpx2.Response(
+                    200,
+                    headers={"mcp-session-id": session_id},
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": message.id,
+                        "result": {
+                            "protocolVersion": protocol_version,
+                            "capabilities": {},
+                            "serverInfo": {"name": "retry-test", "version": "1"},
+                        },
+                    },
+                )
+            assert message.method == "tools/list"
+            if (message.params or {}).get("cursor") is None:
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": message.id,
+                        "result": {"tools": [], "nextCursor": "next"},
+                    },
+                )
+
+            continuation_requests.append(request)
+            assert request.headers.get("mcp-session-id") == session_id
+            assert request.headers.get("mcp-protocol-version") == protocol_version
+            if len(continuation_requests) <= rate_limited_attempts:
+                assert not any(item.method == "DELETE" for item in requests)
+                return httpx2.Response(429, headers={"Retry-After": "0"})
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": message.id,
+                    "result": {"tools": [], "nextCursor": None},
+                },
+            )
+
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(server_id="notes", name="notes", transport=MCPTransport.http)
+        client: Final = MCPClient(
+            server_url="https://example.com/mcp",
+            protocol_version=protocol_version,
+            extra_headers={"Authorization": "Bearer listing-test"},
+            upstream_transport=httpx2.MockTransport(respond),
+        )
+        listing_session: Final = ToolListingSession()
+
+        first_page: Final = await manager._tools_fetch(client, server, PaginatedRequestParams(), listing_session)()
+        assert first_page.next_cursor == "next"
+        assert not any(request.method == "DELETE" for request in requests)
+
+        fetch_next: Final = manager._tools_fetch(
+            client, server, PaginatedRequestParams(cursor="next"), listing_session
+        )
+        if rate_limited_attempts > MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES:
+            with pytest.raises(httpx2.HTTPStatusError) as failed:
+                await fetch_next()
+            assert failed.value.response.status_code == 429
+            assert len(continuation_requests) == MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES + 1
+        else:
+            last_page: Final = await fetch_next()
+            assert last_page.next_cursor is None
+            assert len(continuation_requests) == rate_limited_attempts + 1
+
+        posted: Final = tuple(
+            (request, message_adapter.validate_json(request.content))
+            for request in requests
+            if request.method == "POST"
+        )
+        initialized: Final = tuple(
+            message for _, message in posted if isinstance(message, JSONRPCRequest) and message.method == "initialize"
+        )
+        tools_list: Final = tuple(
+            (request, message)
+            for request, message in posted
+            if isinstance(message, JSONRPCRequest) and message.method == "tools/list"
+        )
+        deletes: Final = tuple(request for request in requests if request.method == "DELETE")
+        assert len(initialized) == 1
+        assert len(tools_list) == 1 + len(continuation_requests)
+        assert len(deletes) == 1
+        assert requests[-1] is deletes[0]
+        continuation_ids: Final = tuple(message.id for _, message in tools_list[1:])
+        assert len(set(continuation_ids)) == 1
+        assert tools_list[0][1].id != continuation_ids[0]
+        assert tools_list[0][0].headers.get("authorization") == "Bearer listing-test"
+
+    @pytest.mark.asyncio
     async def test_get_tools_page_retry_attempt_is_bounded_by_listing_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -37,6 +37,7 @@ _TransportStreams: TypeAlias = tuple[
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_callback", "logging_callback"]
+_ResponseRetry: TypeAlias = Callable[[Callable[[], Awaitable[httpx2.Response]]], Awaitable[httpx2.Response]]
 
 
 SESSION_CLEANUP_TIMEOUT_MESSAGE: Final = "MCP session cleanup timed out"
@@ -298,6 +299,7 @@ class ToolListingSession:
         self.protocol_version = protocol_version
         self.initialized = False
         self.keep_alive = False
+        self.response_retry: _ResponseRetry | None = None
 
     @property
     def headers(self) -> Mapping[str, str]:
@@ -324,10 +326,20 @@ class _MCPHTTPClient(httpx2.AsyncClient):
     cleanup_scope: anyio.CancelScope | None = None
     cleanup_errors: tuple[Exception, ...] = ()
     post_failure: asyncio.Future[Exception] | None = None
+    response_retry: _ResponseRetry | None = None
 
     def _record_cleanup_error(self, error: Exception) -> None:
         if self.cleanup_scope is not None and self.cleanup_scope.shield:
             self.cleanup_errors += (error,)
+
+    def _record_post_failure(self, request: httpx2.Request, error: Exception) -> None:
+        if request.method != "POST":
+            return
+        if not isinstance(error, httpx2.HTTPStatusError):
+            return
+        if self.post_failure is None or self.post_failure.done():
+            return
+        self.post_failure.set_result(error)
 
     async def send(
         self,
@@ -347,22 +359,29 @@ class _MCPHTTPClient(httpx2.AsyncClient):
                 return termination
 
             return await _run_bounded_cleanup(terminate, self.cleanup_scope.deadline)
-        try:
-            response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+
+        async def send_once() -> httpx2.Response:
+            response: Final = await super(_MCPHTTPClient, self).send(
+                request, stream=stream, auth=auth, follow_redirects=follow_redirects
+            )
             if request.method == "POST" and response.is_error and response.status_code != 404:
                 await response.aclose()
-                try:
-                    response.raise_for_status()
-                except httpx2.HTTPStatusError as error:
-                    if self.post_failure is not None and not self.post_failure.done():
-                        self.post_failure.set_result(error)
-                    raise
+                response.raise_for_status()
             if stream:
                 response.stream = _MCPResponseStream(
                     cast(httpx2.AsyncByteStream, response.stream), self._record_cleanup_error
                 )
             return response
+
+        try:
+            response: Final = (
+                await self.response_retry(send_once)
+                if request.method == "POST" and self.response_retry is not None
+                else await send_once()
+            )
+            return response
         except Exception as error:
+            self._record_post_failure(request, error)
             self._record_cleanup_error(error)
             raise
 
@@ -1071,7 +1090,7 @@ class MCPClient:
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
             guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
-            return _MCPHTTPClient(
+            http_client: Final = _MCPHTTPClient(
                 transport=transport,
                 headers=headers,
                 timeout=timeout,
@@ -1090,6 +1109,8 @@ class MCPClient:
                     }
                 ),
             )
+            http_client.response_retry = listing_session.response_retry if listing_session is not None else None
+            return http_client
 
         return factory
 

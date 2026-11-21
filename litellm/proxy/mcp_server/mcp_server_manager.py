@@ -4852,9 +4852,19 @@ class MCPServerManager:
     ) -> Callable[[], Awaitable[ListToolsResult]]:
         if params is None:
             return partial(self._fetch_tools_with_timeout, client, server.name)
+        fetch_page: Final = partial(
+            self._fetch_tools_page_with_timeout, client, server, params, listing_session=listing_session
+        )
+        if listing_session is not None and server.transport == MCPTransport.http:
+            listing_session.response_retry = partial(  # rebind-ok: the request-local session owns this retry callback
+                retry_upstream_rate_limit,
+                server_name=server.name,
+                deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+            )
+            return fetch_page
         return partial(
             retry_upstream_rate_limit,
-            partial(self._fetch_tools_page_with_timeout, client, server, params, listing_session=listing_session),
+            fetch_page,
             server.name,
             deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
         )
@@ -4877,7 +4887,7 @@ class MCPServerManager:
         listing: Final = await self._cached_or_upstream_tools(
             server, client, params, key_for_credential, fetch, use_cache
         )
-        if _needs_initial_page_refetch(listing_session, client.transport_type, params, listing.page):
+        if _needs_initial_page_refetch(listing_session, server.transport, params, listing.page):
             return (await fetch()).page_to_serve()
         self._remember_instructions_if_missing(server, listing.upstream_instructions)
         return listing.page_to_serve()
