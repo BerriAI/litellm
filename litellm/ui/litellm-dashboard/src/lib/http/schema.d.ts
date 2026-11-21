@@ -22469,8 +22469,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_logs_post"];
+        /** Ingest Otlp Logs */
+        post: operations["ingest_otlp_logs_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24604,8 +24604,11 @@ export interface paths {
         /** List Agent Traces */
         get: operations["list_agent_traces_v1_traces_get"];
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_traces_post"];
+        /**
+         * Forward Otlp Traces
+         * @description An agent that traces itself sends its spans here with its gateway key; they go to Lens as sent, filed under that key's owner.
+         */
+        post: operations["forward_otlp_traces_v1_traces_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -26745,6 +26748,68 @@ export interface paths {
          *         POST /watsonx/ml/v1/text/generation
          */
         patch: operations["watsonx_proxy_route_watsonx__endpoint__patch"];
+        trace?: never;
+    };
+    "/what_if/cache_miss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Explain Cache Misses
+         * @description For every turn of every session, say why the prompt cache was or was not read: the client changed
+         *     the prefix, the gateway moved the session to another deployment, or the provider dropped it.
+         */
+        get: operations["explain_cache_misses_what_if_cache_miss_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/canaries/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Control Canaries
+         * @description Fire a real probe at every configured control on every LLM route, using a 5 minute shadow key
+         *     that copies the control from the real key, and report whether the control actually fired.
+         */
+        post: operations["run_control_canaries_what_if_canaries_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/plan_lab/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay Draft Plan
+         * @description Replay the real spend logs of the last ``days`` against a draft plan and report margin per customer.
+         */
+        post: operations["replay_draft_plan_what_if_plan_lab_replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/{mcp_server_name}/authorize": {
@@ -31140,6 +31205,17 @@ export interface components {
             /** Api Keys */
             api_keys: components["schemas"]["KeySpendActivityRow"][];
         };
+        /** CacheMissResponse */
+        CacheMissResponse: {
+            /** Turns */
+            turns: components["schemas"]["CacheTurn"][];
+            /** Wasted Usd By Cause */
+            wasted_usd_by_cause: {
+                [key: string]: number;
+            };
+            /** Wasted Usd Per Day */
+            wasted_usd_per_day: number;
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -31314,6 +31390,43 @@ export interface components {
              */
             uncached_input_tokens: number;
         };
+        /** CacheTurn */
+        CacheTurn: {
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Changed Text */
+            changed_text?: string | null;
+            /** Key Alias */
+            key_alias: string;
+            /** Missed Tokens */
+            missed_tokens: number;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Reusable Tokens */
+            reusable_tokens: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "hit" | "client" | "gateway" | "provider" | "first";
+            /** Wasted Usd */
+            wasted_usd: number;
+        };
         /** CacheWriteTokensDetails */
         CacheWriteTokensDetails: {
             /** Ttl 12H Tokens */
@@ -31398,6 +31511,52 @@ export interface components {
             success: string[];
             /** Success And Failure */
             success_and_failure: string[];
+        };
+        /** CanaryCell */
+        CanaryCell: {
+            /** Detail */
+            detail: string;
+            /** Enforced */
+            enforced: boolean;
+            /** Route */
+            route: string;
+            /** Status Code */
+            status_code: number;
+        };
+        /** CanaryRequest */
+        CanaryRequest: {
+            /** Forbidden Model */
+            forbidden_model?: string | null;
+            /** Guardrail Probes */
+            guardrail_probes?: {
+                [key: string]: string;
+            };
+        };
+        /** CanaryResponse */
+        CanaryResponse: {
+            /**
+             * Ran At
+             * Format: date-time
+             */
+            ran_at: string;
+            /** Results */
+            results: components["schemas"]["CanaryResult"][];
+        };
+        /** CanaryResult */
+        CanaryResult: {
+            /** Cells */
+            cells: components["schemas"]["CanaryCell"][];
+            /** Configured */
+            configured: string;
+            /**
+             * Control
+             * @enum {string}
+             */
+            control: "model_access" | "rpm_limit" | "guardrail";
+            /** Key Alias */
+            key_alias: string;
+            /** Probe */
+            probe: string;
         };
         /**
          * CancelEvalResponse
@@ -35131,6 +35290,26 @@ export interface components {
             y: number;
         } & {
             [key: string]: unknown;
+        };
+        /** DraftPlan */
+        DraftPlan: {
+            /**
+             * Days
+             * @default 30
+             */
+            days: number;
+            /** Fallback Model */
+            fallback_model?: string | null;
+            /** Included Spend */
+            included_spend: number;
+            /** Monthly Price */
+            monthly_price: number;
+            /**
+             * Over Budget
+             * @default block
+             * @enum {string}
+             */
+            over_budget: "block" | "fallback" | "allow";
         };
         /**
          * Drag
@@ -44765,6 +44944,46 @@ export interface components {
             test_messages: {
                 [key: string]: string;
             }[];
+        };
+        /** PlanCustomer */
+        PlanCustomer: {
+            /** Blocked Requests */
+            blocked_requests: number;
+            /** Cost Today */
+            cost_today: number;
+            /** Cost Under Plan */
+            cost_under_plan: number;
+            /** Customer */
+            customer: string;
+            /** Margin */
+            margin: number;
+            /** Requests */
+            requests: number;
+            /** Rerouted Requests */
+            rerouted_requests: number;
+        };
+        /** PlanReplay */
+        PlanReplay: {
+            /** Blocked Requests */
+            blocked_requests: number;
+            /** Cost Today */
+            cost_today: number;
+            /** Cost Under Plan */
+            cost_under_plan: number;
+            /** Customers */
+            customers: components["schemas"]["PlanCustomer"][];
+            /** Customers Losing Money */
+            customers_losing_money: number;
+            /** Margin */
+            margin: number;
+            /** Margin Pct */
+            margin_pct: number;
+            /** Requests Replayed */
+            requests_replayed: number;
+            /** Rerouted Requests */
+            rerouted_requests: number;
+            /** Revenue */
+            revenue: number;
         };
         /**
          * PluginAuthor
@@ -89108,7 +89327,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_logs_post: {
+    ingest_otlp_logs_v1_logs_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -92225,7 +92444,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_traces_post: {
+    forward_otlp_traces_v1_traces_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -95727,6 +95946,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    explain_cache_misses_what_if_cache_miss_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CacheMissResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_control_canaries_what_if_canaries_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CanaryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CanaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replay_draft_plan_what_if_plan_lab_replay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftPlan"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanReplay"];
                 };
             };
             /** @description Validation Error */
