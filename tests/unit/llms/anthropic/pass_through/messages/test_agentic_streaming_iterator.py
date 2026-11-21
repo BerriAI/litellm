@@ -649,6 +649,36 @@ class TestAgenticStreamingIteratorPhase1:
         assert captured_response["stop_reason"] == "tool_use"
         assert captured_response["content"][1]["name"] == "litellm_content_retrieve"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "non_object_frame", [b"data: 5\n\n", b"event: content_block_delta\ndata: [1]\n\n", b"data: null\n\n"]
+    )
+    async def test_should_skip_a_data_line_that_is_not_an_object(self, non_object_frame: bytes):
+        text_stream = _build_simple_text_stream()
+        chunks = [*text_stream[:2], non_object_frame, *text_stream[2:]]
+        hooks = AsyncMock(return_value=None)
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = hooks
+
+        iterator = AgenticAnthropicStreamingIterator(
+            completion_stream=MockAsyncStream(chunks),
+            http_handler=mock_handler,
+            model="claude-sonnet-4-20250514",
+            messages=[],
+            anthropic_messages_provider_config=MagicMock(),
+            anthropic_messages_optional_request_params={},
+            logging_obj=MagicMock(),
+            custom_llm_provider="anthropic",
+            kwargs={},
+        )
+
+        collected = [chunk async for chunk in iterator]
+
+        assert collected == chunks
+        rebuilt = hooks.await_args.kwargs["response"]
+        assert rebuilt["id"] == "msg_123"
+        assert [(block["type"], block["text"]) for block in rebuilt["content"]] == [("text", "Hello, world!")]
+
 
 class TestAgenticStreamingIteratorPhase2:
     @pytest.mark.asyncio
