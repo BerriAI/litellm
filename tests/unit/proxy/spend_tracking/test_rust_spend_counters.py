@@ -14,9 +14,12 @@ from fakeredis import TcpFakeServer
 from pydantic import TypeAdapter
 
 import litellm.proxy.proxy_server as ps
+from litellm._internal_context import current_service_target
 from litellm.caching.redis_cache import RedisCache
+from litellm.constants import AUTH_OBJECTS_TARGET
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.spend_tracking import rust_spend_counters
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SpendCounterStore,
@@ -248,3 +251,27 @@ async def test_on_redis_every_bucket_is_charged_in_the_shared_counters(
         dict.fromkeys(_EVERY_BUCKET, 1.5)
     )
     assert installed.snapshot() == dict.fromkeys(_EVERY_BUCKET, 1.5)
+
+
+class _AuthCache:
+    def __init__(self) -> None:
+        self.read_under: list[str | None] = []
+
+    async def async_get_cache(self, key: str) -> object:
+        self.read_under.append(current_service_target())
+        return {"token": key}
+
+
+@pytest.mark.asyncio
+async def test_budget_windows_read_the_auth_cache_under_the_auth_objects_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = _AuthCache()
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    windows: Final = await rust_spend_counters._HOST.budget_windows(  # pyright: ignore[reportPrivateUsage]  # the host Rust calls back into
+        {"entities": [{"entity_type": "key", "entity_id": "hashed", "cache_key": "hashed"}], "stored": False}
+    )
+
+    assert windows == ((),)
+    assert cache.read_under == [AUTH_OBJECTS_TARGET]

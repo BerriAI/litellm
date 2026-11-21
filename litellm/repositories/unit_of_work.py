@@ -379,7 +379,11 @@ async def customer_spend_reset_unit_of_work(
     """One page of customer team or member spend resets, committed on its own like end users: an aliased request
     can register a member, so the rows a template governs are unbounded."""
     batch: Final = new_batch()
-    yield WindowedSpendResetWrites(table=getattr(batch, table))
+    yield WindowedSpendResetWrites(
+        table=batch.litellm_customerteamtable
+        if table == "litellm_customerteamtable"
+        else batch.litellm_customermembertable
+    )
     await batch.commit()
 
 

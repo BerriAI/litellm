@@ -143,6 +143,15 @@ async def _write_budget_update(
         )
 
 
+class _FieldWithDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+
+
+def _field_default(field: _FieldWithDefault) -> object:
+    return field.default
+
+
 async def new_budget(
     budget_obj: BudgetNewRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -474,7 +483,7 @@ async def budget_settings(
                 field_description=field_info.description or "",
                 field_value=db_budget_row_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
-                field_default_value=field_info.default,
+                field_default_value=_field_default(field_info),
             )
             return_val.append(_response_obj)
 

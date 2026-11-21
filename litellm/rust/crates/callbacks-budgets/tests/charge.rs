@@ -294,7 +294,7 @@ async fn a_warm_counter_takes_the_charge_without_asking_the_proxy_for_spend() {
 async fn a_raw_key_is_charged_on_its_hashed_counter() {
     let store = memory(&[]);
     let charged = CounterStep {
-        token: Some("sk-1234".into()),
+        token: Some("sk-raw-key".into()),
         ..step(1.0)
     };
 
@@ -303,7 +303,7 @@ async fn a_raw_key_is_charged_on_its_hashed_counter() {
     assert_eq!(
         snapshot(&store),
         values(&[(
-            "spend:key:88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "spend:key:7e829077433c1b2fa414ae023e40914235063fcb5cf3cb0797e835c509a9b02a",
             1.0
         )])
     );
