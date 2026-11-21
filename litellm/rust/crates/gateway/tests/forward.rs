@@ -12,8 +12,8 @@ use axum::{
 use flate2::{Compression, write::GzEncoder};
 use http_body_util::BodyExt;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
-use litellm_auth_store::KeyDatabase;
 use litellm_config::{Config, Environment};
+use litellm_gateway::host::auth::AuthStore;
 use litellm_gateway::middleware;
 use litellm_gateway_forward::ANSWERED_BY_HEADER;
 use litellm_license::Entitlements;
@@ -228,7 +228,7 @@ async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
 }
 
 /// [`configured_gateway`] whose database holds `keys`.
-async fn holding_keys(python: SocketAddr, config: &str, keys: Option<KeyDatabase>) -> SocketAddr {
+async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>) -> SocketAddr {
     litellm_gateway::install_crypto_provider();
     let config = Config::from_yaml(config).unwrap();
     let resources =
@@ -603,7 +603,8 @@ async fn an_admitted_virtual_key_is_looked_up_once() {
     let (python, mut received) = python().await;
     let provider = provider().await;
     let held = keys::Held::holding("sk-virtual", serde_json::json!({})).await;
-    let gateway = holding_keys(python, &serving(&provider, ""), Some(held.database())).await;
+    let keys = AuthStore::new(keys::memory_cache(), held.database());
+    let gateway = holding_keys(python, &serving(&provider, ""), Some(keys)).await;
 
     let response = post_as(gateway, "/v1/messages", "Bearer sk-virtual").await;
 

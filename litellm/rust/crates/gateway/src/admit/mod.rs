@@ -194,7 +194,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::host::auth::keys;
+    use crate::host::auth::{AuthStore, keys};
 
     const CONFIG: &str = "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n  - model_name: gpt\n    litellm_params:\n      model: openai/gpt-5.5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n";
     const MASTER_KEY: (&str, &str) = ("authorization", "Bearer gateway-key");
@@ -236,7 +236,10 @@ mod tests {
             .map_or_else(keys::unreachable, keys::Held::database);
         let config = Config::from_yaml(CONFIG).unwrap();
         let admit = Arc::new(Admit {
-            auth: host::auth::auth(&config, Some(Arc::new(database))),
+            auth: host::auth::auth(
+                &config,
+                Some(Arc::new(AuthStore::new(keys::memory_cache(), database))),
+            ),
             ..Admit::over(
                 &config,
                 vec![("claude".to_owned(), Ok(LlmProviders::Anthropic))],

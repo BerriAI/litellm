@@ -234,6 +234,8 @@ pub struct LiteLlmSettings {
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
     pub cache_params: Option<CacheSettings>,
+    #[serde_as(as = "LaxBool")]
+    pub enable_redis_auth_cache: Option<bool>,
     #[serde(deserialize_with = "one_or_many")]
     #[redact(fixed = 3)]
     pub callbacks: Option<Vec<Value>>,
