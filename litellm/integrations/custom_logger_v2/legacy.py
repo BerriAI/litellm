@@ -68,7 +68,9 @@ def legacy_subscription(hook: Hook, parallel: bool) -> Subscription:
         hook=hook,
         handler="call",
         reads=LEGACY_READS,
-        writes=frozenset({Field.deprecated_kwargs}) if spec.writes and not gathered else frozenset(),
+        writes=frozenset({Field.deprecated_kwargs})
+        if spec.writes and spec.legacy_rewrites and not gathered
+        else frozenset(),
         may_abort=may_abort,
         parallel=gathered,
         legacy=True,

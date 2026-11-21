@@ -1,6 +1,9 @@
-import asyncio, gzip, importlib, os
+import asyncio
+import gzip
+import importlib
 import io
 import json
+import os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,21 +11,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import orjson
 import pytest
 from fastapi import HTTPException
+from fastapi import Request as Request_http_parsing
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData, Headers, UploadFile
 from starlette.requests import Request
-
+from starlette.types import Message
+from starlette.websockets import WebSocket
 
 import litellm
 import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
-    read_request_body,
-    safe_get_request_headers,
     _safe_get_request_parsed_body,
-    safe_get_request_query_params,
-    safe_set_request_parsed_body,
     coerce_numeric_form_fields,
     convert_upload_files_to_file_data,
     get_form_data,
@@ -31,13 +34,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     numeric_form_fields,
     populate_request_with_path_params,
     read_raw_json_body,
+    read_request_body,
     read_request_path_params,
+    safe_get_request_headers,
+    safe_get_request_query_params,
+    safe_set_request_parsed_body,
 )
-from fastapi import Request as Request_http_parsing
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.litellm_core_utils.model_cost_table import publish
-from starlette.types import Message
-from starlette.websockets import WebSocket
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -130,8 +132,9 @@ async def test_read_request_body_rejects_non_objects_from_json_fallback(body: by
 @pytest.mark.parametrize("dispatch", ["custom", "provider", "lens"])
 async def test_pass_through_body_validation_preserves_bytes(dispatch: str, body: bytes, invalid_unicode: bool) -> None:
     from fastapi.routing import APIRoute
-    from litellm.proxy.lens.adapter import lens_request
-    from litellm.proxy.lens.buffering import LensRoute
+
+    from litellm.integrations.lens.proxy.adapter import lens_request
+    from litellm.integrations.lens.proxy.buffering import LensRoute
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import vertex_proxy_route
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_route
 
@@ -160,6 +163,7 @@ async def test_pass_through_body_validation_preserves_bytes(dispatch: str, body:
 @pytest.mark.parametrize("body", [b"null", b" \nnull\t", b"[]", b'"value"'])
 async def test_null_body_respects_the_dispatched_body_requirement(optional: bool, body: bytes) -> None:
     from fastapi.routing import APIRoute
+
     from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
     from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_end_users
 
@@ -1487,7 +1491,7 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
 @pytest.mark.asyncio
 async def test_auth_and_retired_trace_handler_never_consume_upload_body() -> None:
     from litellm.constants import OTLP_MAX_BODY_BYTES
-    from litellm.proxy import tracing_endpoints
+    from litellm.integrations.lens.proxy import tracing_endpoints
     from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
 
     chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)

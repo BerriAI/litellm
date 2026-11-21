@@ -177,7 +177,7 @@ describe("customer organization overview", () => {
     });
     const row = await screen.findByRole("row", { name: /Customer 00/ });
     await user.click(within(row).getByRole("button", { name: "Edit", exact: true }));
-    const limit = await screen.findByRole("spinbutton", { name: "Spend limit (USD)" });
+    const limit = await screen.findByRole("spinbutton", { name: "Max Budget (USD)" });
     expect(limit).toHaveValue(10);
     fireEvent.change(limit, { target: { value: "25" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
