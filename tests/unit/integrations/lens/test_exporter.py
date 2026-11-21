@@ -1132,3 +1132,44 @@ async def test_a_record_the_committed_owner_grows_past_the_event_limit_is_counte
     rows: Final = TypeAdapter(list[dict[str, object]]).validate_json(body)
     assert [(row["request_id"], row["spend"]) for row in rows] == [("after", 0.25)]
     assert (exporter.rows_written, exporter.rows_dropped, sent.empty(), len(handoff.held)) == (1, 1, True, 0)
+
+
+def _metadata_only(request_id: str, padding: str) -> dict[str, object]:
+    return {
+        "response_cost": 9.0,
+        "litellm_call_id": request_id,
+        "standard_logging_object": {
+            "id": request_id,
+            "status": "success",
+            "response_cost": 9.0,
+            "metadata": {"padding": padding},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_held_records_are_charged_their_retained_metadata_so_the_handoff_budget_evicts_them() -> None:
+    sent: Final = asyncio.Queue[bytes]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        sent.put_nowait(request.content)
+        return httpx.Response(204)
+
+    handoff: Final = LedgerHandoff(max_bytes=50_000)
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(
+            client, ledger=handoff, ledger_key=lambda kwargs, response: str(kwargs.get("litellm_call_id"))
+        )
+        exporter.start()
+        try:
+            for request_id in ("first", "second"):
+                await exporter.async_log_success_event(_metadata_only(request_id, "界" * 5000), None, None, None)
+            assert (tuple(handoff.held), exporter.rows_dropped, sent.empty()) == (("second",), 1, True)
+            assert 30_000 < handoff.held_bytes <= handoff.max_bytes
+            exporter.ledger_committed(({"request_id": "second", "delivery_id": "d-second", "spend": 0.25},))
+            body: Final = await asyncio.wait_for(sent.get(), timeout=5)
+        finally:
+            await exporter.aclose()
+    rows: Final = _ROWS.validate_json(body)
+    assert [(row["request_id"], row["spend"]) for row in rows] == [("second", 0.25)]
+    assert (exporter.rows_written, exporter.rows_dropped, handoff.held_bytes) == (1, 1, 0)

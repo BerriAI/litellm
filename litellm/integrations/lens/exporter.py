@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import sys
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
@@ -47,7 +48,6 @@ MAX_BATCH_BYTES: Final = 4 * 1024 * 1024
 SHUTDOWN_SECONDS: Final = 3.0
 SMALL_CONTENT_BYTES: Final = 64 * 1024
 MAX_PENDING_COMMITS: Final = 10_000
-_HELD_ROW_BYTES: Final = 4096
 _CONTENT_STATE: Final = "_lens_content_state"
 _PAYLOAD: Final = TypeAdapter(SpendLogPayload)
 _METADATA: Final = TypeAdapter(dict[str, JsonValue])
@@ -194,12 +194,25 @@ def _owner(row: SpendLogRecord) -> Owner:
     return Owner(team_id=row["team_id"], api_key=row["api_key"], request_id=row["request_id"])
 
 
+def _value_bytes(value: object) -> int:
+    if _is_sequence(value):
+        return sys.getsizeof(value) + sum(sys.getsizeof(item) for item in value)
+    return sys.getsizeof(value)
+
+
+def _retained_bytes(row: Mapping[str, object]) -> int:
+    """Memory a row keeps alive: the mapping, its keys, and each string or tag list it holds, as stored."""
+    return sys.getsizeof(row) + sum(sys.getsizeof(key) + _value_bytes(value) for key, value in row.items())
+
+
 def _held(bare: SpendLogRecord, content: tuple[str, str] | Unavailable) -> tuple[Mapping[str, object], int]:
     """A ledger-backed record waiting for its commit: content serialized, nothing uploaded or signed yet."""
-    if isinstance(content, Unavailable):
-        return {**bare, _CONTENT_STATE: content.value}, _HELD_ROW_BYTES
-    text, reply = content
-    return {**bare, "messages": text, "response": reply}, _HELD_ROW_BYTES + len(text) + len(reply)
+    row: Final = (
+        {**bare, _CONTENT_STATE: content.value}
+        if isinstance(content, Unavailable)
+        else {**bare, "messages": content[0], "response": content[1]}
+    )
+    return row, _retained_bytes(row)
 
 
 def _with_reference(row: SpendLogRecord, signing_key: bytes, state: ContentState) -> Mapping[str, object]:
@@ -481,7 +494,7 @@ class LensExporter(CustomLogger):
         self._admit_packing(final)
 
     def _admit_packing(self, final: SpendLogRecord) -> None:
-        reserved: Final = len(final["messages"]) + len(final["response"])
+        reserved: Final = _retained_bytes(final)
         bare: Final[SpendLogRecord] = {**final, "messages": "", "response": ""}
         if self._saturated(True, reserved):
             self._finish(bare, Unavailable.OVERLOADED)
@@ -520,7 +533,7 @@ class LensExporter(CustomLogger):
             too_large: Final = Unavailable.TOO_LARGE if spill else Unavailable.STORAGE_NOT_CONFIGURED
             self._settle(key, bare, too_large if measured is ExportFailure.TOO_LARGE else Unavailable.UNSERIALIZABLE)
             return
-        raw: Final = limit - measured
+        raw: Final = limit - measured + _retained_bytes(bare)
         if self._saturated(spill, raw):
             self._settle(key, bare, Unavailable.OVERLOADED)
             return
