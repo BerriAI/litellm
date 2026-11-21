@@ -25,7 +25,7 @@ use litellm_llms::{
     },
     base_llm::messages::context::MessagesModelCapabilities,
     bedrock::chat::invoke_handler::BedrockStreamRaise,
-    bedrock::claude_platform::messages::transformation::{
+    bedrock::messages::claude_platform::transformation::{
         is_claude_platform_route, is_missing_region, logged_model as claude_platform_logged_model,
     },
     bedrock_mantle::messages::transformation::{mantle_capability_lookup, mantle_logged_model},
@@ -270,6 +270,55 @@ fn bedrock_litellm_params<'py>(
         );
     }
     Ok(extra)
+}
+
+fn bedrock_session_identity<'py>(
+    params: &mut LitellmParams,
+    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> PyResult<()> {
+    use litellm_llms::bedrock::session_identity::{
+        REQUIRE_SESSION_ATTRIBUTION, SessionIdentity, session_identity,
+    };
+
+    let fields = |name| -> PyResult<Vec<String>> {
+        global(name)?
+            .filter(|value| !value.is_none())
+            .map(|value| value.extract())
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    let source = |name| {
+        params
+            .extra
+            .get(name)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_owned())))
+            .collect()
+    };
+    let identity = SessionIdentity {
+        tag_fields: fields("bedrock_session_tag_fields")?,
+        name_fields: fields("bedrock_session_name_fields")?,
+        metadata: source("metadata"),
+        litellm_metadata: source("litellm_metadata"),
+    };
+    let aws = session_identity(&params.aws, &identity, env);
+    let derived_name = params.aws.aws_session_name.is_none()
+        && env("AWS_SESSION_NAME").is_none()
+        && aws.aws_session_name.is_some();
+    params.extra = params
+        .extra
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .chain(std::iter::once((
+            REQUIRE_SESSION_ATTRIBUTION.to_owned(),
+            Value::Bool(derived_name),
+        )))
+        .collect();
+    params.aws = aws;
+    Ok(())
 }
 
 /// Python's `vertex_request_label_fields()`: a non-empty string names one field, a list or tuple
@@ -862,9 +911,15 @@ impl MessagesPythonHost {
             }
             (None, false) => Map::new(),
         };
-        let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
-            module_global(py, name)
-        })?;
+        let mut litellm_params =
+            project_litellm_params(provider_fields, settled, argument, |name| {
+                module_global(py, name)
+            })?;
+        if bedrock && let Ok(params) = litellm_params.as_mut() {
+            bedrock_session_identity(params, |name| module_global(py, name), &|name| {
+                std::env::var(name).ok()
+            })?;
+        }
         // Python's Claude Platform config falls back to `litellm.api_base` before its env bases.
         let api_base = match (api_base, claude_platform) {
             (None, true) => module_global(py, "api_base")?
@@ -1471,6 +1526,51 @@ mod tests {
 
     fn map(value: Value) -> Map<String, Value> {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::metadata("metadata")]
+    #[case::litellm_metadata("litellm_metadata")]
+    fn bedrock_identity_settings_project_into_aws_credentials(#[case] bucket: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = to_py(
+                py,
+                &json!({
+                    "bedrock_session_tag_fields": ["user_api_key_alias"],
+                    "bedrock_session_name_fields": ["user_api_key_alias"],
+                }),
+            )
+            .unwrap()
+            .into_bound(py)
+            .cast_into::<PyDict>()
+            .unwrap();
+            let mut params = litellm_params(map(json!({
+                "model": "m", "aws_role_name": "arn:aws:iam::123456789012:role/invocation",
+                (bucket): {"user_api_key_alias": "agent"},
+            })))
+            .unwrap();
+            bedrock_session_identity(&mut params, |name| globals.get_item(name), &|_| None)
+                .unwrap();
+            assert_eq!(params.aws.aws_session_name.as_deref(), Some("agent"));
+            assert_eq!(
+                params
+                    .aws
+                    .aws_session_tags
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+                    .collect::<Vec<_>>(),
+                [("user_api_key_alias", "agent")]
+            );
+            assert_eq!(
+                params
+                    .extra
+                    .get(litellm_llms::bedrock::session_identity::REQUIRE_SESSION_ATTRIBUTION),
+                Some(&Value::Bool(true))
+            );
+        });
     }
 
     #[rstest]

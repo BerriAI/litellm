@@ -398,7 +398,10 @@ def test_repeated_hub_reads_return_the_same_rows(gateway: Gateway) -> None:
         reads: Final = tuple(hub_rows(gateway) for _ in range(3))
         assert reads[0] == reads[1] == reads[2], reads
         assert names_of(reads[0]).count(display_name) == 1, reads[0]
-        assert len(legacy_hub_rows(gateway)) == len(reads[0]), "legacy and v1 disagree on the row count"
+        legacy_pass_through_rows: Final = tuple(
+            row for row in legacy_hub_rows(gateway) if row["mode"] == PASS_THROUGH_MODE
+        )
+        assert sorted(names_of(legacy_pass_through_rows)) == sorted(names_of(reads[0]))
 
 
 def test_hub_reads_stay_200_while_an_endpoint_is_created_and_deleted_under_load(

@@ -17,6 +17,7 @@ _PER_REQUEST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "mar
 _TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
 _COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
 _STR_KEYED: Final = TypeAdapter(Mapping[str, object])
+_JSONABLE_USAGE: Final = TypeAdapter(object)
 
 _Round = TypeVar("_Round", ResponsesAPIResponse, ModelResponse)
 
@@ -47,7 +48,9 @@ def _summed_mapping(first: Mapping[str, object], final: Mapping[str, object]) ->
 
 
 def _summed_usage(first: BaseModel, final: BaseModel) -> object:
-    return to_jsonable_python(_summed_mapping(first.model_dump(), final.model_dump()), fallback=dict)
+    return _JSONABLE_USAGE.validate_python(
+        to_jsonable_python(_summed_mapping(first.model_dump(), final.model_dump()), fallback=dict)
+    )
 
 
 def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage | None) -> ResponseAPIUsage | None:

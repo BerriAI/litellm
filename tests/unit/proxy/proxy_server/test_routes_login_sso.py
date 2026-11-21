@@ -64,71 +64,28 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fallback_login_returns_html_form(client, monkeypatch):
-    """Pin: GET /fallback/login returns an HTML login form with status 200."""
-    monkeypatch.delenv("UI_USERNAME", raising=False)
-    response = client.get("/fallback/login")
-    body_lower = response.text.lower()
-    shape = {
-        "status": response.status_code,
-        "content_type_html": response.headers.get("content-type", "").startswith("text/html"),
-        "has_form": "<form" in body_lower or "username" in body_lower,
-    }
-    assert shape == {
-        "status": 200,
-        "content_type_html": True,
-        "has_form": True,
-    }
+def test_fallback_login_opens_the_dashboard_login_page_with_the_sso_redirect_off(client):
+    response = client.get("/fallback/login", follow_redirects=False)
+    client.cookies.clear()
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui/login")
+    assert "litellm_sso_fallback=1" in response.headers["set-cookie"]
 
 
-def test_fallback_login_returns_html_form_with_ui_username_set(client, monkeypatch):
-    """Both branches (UI_USERNAME set or not) return the same HTML form."""
-    monkeypatch.setenv("UI_USERNAME", "admin")
-    response = client.get("/fallback/login")
-    body_lower = response.text.lower()
-    shape = {
-        "status": response.status_code,
-        "content_type_html": response.headers.get("content-type", "").startswith("text/html"),
-        "has_form_or_username": "<form" in body_lower or "username" in body_lower,
-    }
-    assert shape == {
-        "status": 200,
-        "content_type_html": True,
-        "has_form_or_username": True,
-    }
-
-
-def test_fallback_login_shows_credentials_hint_by_default(client, monkeypatch):
-    """Control: without the flag, /fallback/login still renders the hint."""
-    monkeypatch.delenv("UI_USERNAME", raising=False)
-    monkeypatch.delenv("UI_PASSWORD", raising=False)
-    monkeypatch.delenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", raising=False)
-    response = client.get("/fallback/login")
+@pytest.mark.parametrize(
+    ("cookies", "expected"),
+    [pytest.param({}, True, id="normal_visit"), pytest.param({"litellm_sso_fallback": "1"}, False, id="fallback")],
+)
+def test_ui_config_only_auto_redirects_to_sso_outside_a_fallback_visit(client, monkeypatch, cookies, expected):
+    monkeypatch.setenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "true")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id")
+    client.cookies.clear()
+    response = client.get(
+        "/.well-known/litellm-ui-config",
+        headers={"cookie": "; ".join(f"{name}={value}" for name, value in cookies.items())} if cookies else {},
+    )
     assert response.status_code == 200
-    assert "Default Credentials" in response.text
-    assert "MASTER_KEY" in response.text
-
-
-def test_fallback_login_hides_credentials_hint_when_ui_password_set(client, monkeypatch):
-    monkeypatch.setenv("UI_PASSWORD", "s3cret-pass")
-    monkeypatch.delenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", raising=False)
-    response = client.get("/fallback/login")
-    assert response.status_code == 200
-    assert "Default Credentials" not in response.text
-    assert "MASTER_KEY" not in response.text
-    assert 'name="username"' in response.text
-
-
-def test_fallback_login_hides_credentials_hint_via_env_flag(client, monkeypatch):
-    """Pin: LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT removes the hint on /fallback/login."""
-    monkeypatch.delenv("UI_USERNAME", raising=False)
-    monkeypatch.setenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "true")
-    response = client.get("/fallback/login")
-    assert response.status_code == 200
-    assert "Default Credentials" not in response.text
-    assert "MASTER_KEY" not in response.text
-    # the login form itself must still render
-    assert "username" in response.text.lower()
+    assert response.json()["auto_redirect_to_sso"] is expected
 
 
 def test_fallback_login_invalid_method_405(client):
@@ -274,7 +231,7 @@ def test_v3_login_success_returns_code(client, monkeypatch):
     monkeypatch.setattr(ps, "redis_usage_cache", None)
     fake_cache = MagicMock()
     fake_cache.async_set_cache = AsyncMock()
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_cache)
+    monkeypatch.setattr(ps, "sso_flow_cache", fake_cache)
 
     response = client.post(
         "/v3/login",
@@ -356,7 +313,7 @@ def test_v3_login_exchange_invalid_code_401(client, monkeypatch):
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=None)
     fake_cache.async_delete_cache = AsyncMock()
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_cache)
+    monkeypatch.setattr(ps, "sso_flow_cache", fake_cache)
 
     response = client.post("/v3/login/exchange", json={"code": "nope"})
     assert response.status_code == 401
@@ -379,7 +336,7 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=cached_payload)
     fake_cache.async_delete_cache = AsyncMock()
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_cache)
+    monkeypatch.setattr(ps, "sso_flow_cache", fake_cache)
 
     response = client.post("/v3/login/exchange", json={"code": "valid-code"})
     assert response.status_code == 200
@@ -728,3 +685,102 @@ def test_sign_in_succeeds_again_once_the_block_is_cleared(client, monkeypatch, r
 
     reset_login_throttle()
     assert _json_login(client, "/v2/login") == 401
+
+
+# ---------------------------------------------------------------------------
+# Dashboard login page resuming a stored return_to
+# ---------------------------------------------------------------------------
+
+
+def _session_cookie(master_key: str = "sk-test-master") -> str:
+    import jwt
+
+    return jwt.encode(
+        {"user_id": "u-1", "key": "sk-fake-ui-key", "login_method": "username_password", "exp": 4102444800},
+        master_key,
+        algorithm="HS256",
+    )
+
+
+@pytest.mark.parametrize(
+    ("cookies", "expected"),
+    [
+        pytest.param({}, "/ui?login=success", id="no_return_to"),
+        pytest.param({"litellm_cp_return_to": "sealed"}, "/login/resume", id="stored_return_to"),
+    ],
+)
+def test_v2_login_sends_a_stored_return_to_through_the_resume_route(client, monkeypatch, cookies, expected):
+    _install_login_mocks(monkeypatch)
+    sealed: Final = {name: _sealed_return_to("/mcp/authorize?client_id=abc") for name in cookies}
+    client.cookies.clear()
+    response = client.post(
+        "/v2/login",
+        json={"username": "admin", "password": "password"},
+        headers={"cookie": "; ".join(f"{name}={value}" for name, value in sealed.items())} if sealed else {},
+    )
+    client.cookies.clear()
+    assert response.status_code == 200, response.text
+    assert response.json()["redirect_url"].endswith(expected)
+
+
+def test_login_resume_returns_a_signed_in_browser_to_a_same_origin_return_to(client, monkeypatch):
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "master_key", "sk-test-master")
+    client.cookies.clear()
+    response = client.get(
+        "/login/resume",
+        headers={
+            "cookie": f"token={_session_cookie()}; litellm_cp_return_to={_sealed_return_to('/mcp/authorize?client_id=abc')}"
+        },
+        follow_redirects=False,
+    )
+    client.cookies.clear()
+    assert response.status_code == 303
+    assert response.headers["location"] == "/mcp/authorize?client_id=abc"
+
+
+def test_login_resume_hands_a_control_plane_return_to_a_one_time_code(client, monkeypatch):
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "master_key", "sk-test-master")
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.com"})
+    session: Final = _session_cookie()
+    client.cookies.clear()
+    response = client.get(
+        "/login/resume",
+        headers={
+            "cookie": f"token={session}; litellm_cp_return_to={_sealed_return_to('https://cp.example.com/console')}"
+        },
+        follow_redirects=False,
+    )
+    client.cookies.clear()
+    location: Final = response.headers["location"]
+    assert response.status_code == 303
+    assert location.startswith("https://cp.example.com/console")
+    assert "code=" in location
+    assert session not in location
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        pytest.param(None, id="no_session"),
+        pytest.param(_session_cookie("another-master-key"), id="session_signed_by_another_key"),
+    ],
+)
+def test_login_resume_ignores_a_return_to_without_a_valid_dashboard_session(client, monkeypatch, session):
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "master_key", "sk-test-master")
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.com"})
+    cookie: Final = f"litellm_cp_return_to={_sealed_return_to('https://cp.example.com/console')}"
+    client.cookies.clear()
+    response = client.get(
+        "/login/resume",
+        headers={"cookie": cookie if session is None else f"token={session}; {cookie}"},
+        follow_redirects=False,
+    )
+    client.cookies.clear()
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui?login=success")

@@ -13,12 +13,12 @@ import {
 import { ChartSkeleton, Segmented } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { CustomerHierarchyUsage } from "./customerUsageApi";
+import type { CustomerUsageAnalysisData } from "./customerUsageApi";
 import CustomerCacheCost from "./CustomerCacheCost";
 import { customerTokenBreakdownSeries, customerUsageSeries } from "./customerUsageChartData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
 import { ModelMark } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
-import type { CustomerUsageMetric } from "./useCustomerHierarchyUsage";
+import type { CustomerUsageMetric } from "./CustomerUsageAnalysis";
 
 const DIMENSION_LABELS = {
   models: "customerPortal.analytics.models",
@@ -27,7 +27,7 @@ const DIMENSION_LABELS = {
 } as const;
 
 interface CustomerUsageTrendProps {
-  data: CustomerHierarchyUsage | undefined;
+  data: CustomerUsageAnalysisData | undefined;
   dimension: CustomerUsageDimension;
   onDimensionChange: (dimension: CustomerUsageDimension) => void;
   totals: OverviewTotals;

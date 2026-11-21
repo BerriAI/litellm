@@ -374,7 +374,7 @@ describe("KeyInfoView", () => {
     expect(await screen.findByText("$50.00 (team member budget)")).toBeInTheDocument();
   });
 
-  it("keeps an own key budget in the Overview when a team-member budget exists", async () => {
+  it("keeps an own key budget in the Overview and still lists the team-member budget that applies", async () => {
     vi.mocked(useAuthorized).mockReturnValue(authorizedForTeamBudget);
     vi.mocked(teamInfoCall).mockResolvedValue({
       team_info: {
@@ -395,7 +395,7 @@ describe("KeyInfoView", () => {
     );
 
     expect(await screen.findByText("of $20.00")).toBeInTheDocument();
-    expect(teamInfoCall).not.toHaveBeenCalled();
+    expect(await within(screen.getByTestId("applied-budgets")).findByText(/in Test Team$/)).toBeInTheDocument();
   });
 
   it("shows the backfill hint when lifetime spend trails the period spend", async () => {

@@ -157,7 +157,13 @@ class _InMemoryManagedFileTable:
         where: Mapping[str, object],
         **_query: object,
     ) -> list[LiteLLM_ManagedFileTable]:
-        return list(self.rows.values())
+        if "OR" not in where or len(where) != 1:
+            return list(self.rows.values())
+        return [
+            row
+            for row in self.rows.values()
+            if await _InMemoryManagedFileTable(row).find_first(where) is not None
+        ]
 
 
 class _InMemoryManagedObjectTable:
@@ -6585,6 +6591,13 @@ _GEMINI_OUTPUT_SPELLINGS: Final = (
     "https://example.invalid/batch-out1",
     "http://example.invalid/batch-out1?alt=media#download",
     "https%3A%2F%2Fexample.invalid%2Fbatch-out1",
+    "https://example.invalid/%23/files/batch-out1",
+    "https://example.invalid/%3F/files/batch-out1",
+    "https://generativelanguage.googleapis.com/%23/files/batch-out1",
+    "https://generativelanguage.googleapis.com/%3F/files/batch-out1",
+    "https://x%23/batch-out1",
+    "https://x%3F/batch-out1",
+    "https://x%2Ffiles%2F/batch-out1",
 )
 
 
@@ -6629,6 +6642,55 @@ async def test_enforce_provider_file_access_lets_the_owner_read_any_spelling(spe
 
     assert await managed_files.enforce_provider_file_access(spelling, owner) is None
     assert await managed_files.enforce_provider_file_access(spelling, teammate) is None
+
+
+@pytest.mark.asyncio
+async def test_enforce_provider_file_access_checks_every_matching_provider_file_row():
+    row_for_a: Final = _gemini_batch_output_row().model_copy(
+        update={
+            "unified_file_id": "file-encoded-gemini-a",
+            "model_mappings": {"model-gemini": "A"},
+            "flat_model_file_ids": ["A"],
+            "created_by": "owner-a",
+            "team_id": "team-a",
+        }
+    )
+    row_for_v: Final = _gemini_batch_output_row().model_copy(
+        update={
+            "unified_file_id": "file-encoded-gemini-v",
+            "model_mappings": {"model-gemini": "V"},
+            "flat_model_file_ids": ["V"],
+            "created_by": "owner-v",
+            "team_id": "team-v",
+        }
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(row_for_a, row_for_v)
+    owner_of_a: Final = UserAPIKeyAuth(user_id="owner-a", team_id="team-a")
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.enforce_provider_file_access(
+            "https://x%2Ffiles%2FA%23/V", owner_of_a
+        )
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_enforce_provider_file_access_allows_multiple_rows_the_caller_owns():
+    row_for_v: Final = _gemini_batch_output_row()
+    row_for_a: Final = row_for_v.model_copy(
+        update={
+            "unified_file_id": "file-encoded-gemini-a",
+            "model_mappings": {"model-gemini": "A"},
+            "flat_model_file_ids": ["A"],
+        }
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(row_for_a, row_for_v)
+    owner: Final = UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+
+    assert await managed_files.enforce_provider_file_access(
+        "https://x%2Ffiles%2FA%23/batch-out1", owner
+    ) is None
 
 
 @pytest.mark.asyncio

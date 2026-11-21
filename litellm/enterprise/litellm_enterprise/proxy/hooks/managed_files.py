@@ -1116,7 +1116,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if self.prisma_client is None:
             return
         spellings: Final = list(provider_file_id_spellings(file_id))
-        managed_file = await _managed_file_table(self.prisma_client).find_first(
+        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
             where={
                 "OR": [
                     {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
@@ -1124,17 +1124,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 ]
             }
         )
-        if managed_file is None:
-            return
-        if not can_access_resource(
-            user_api_key_dict=user_api_key_dict,
-            created_by=managed_file.created_by,
-            resource_team_id=managed_file.team_id,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-            )
+        for managed_file in managed_files:
+            if not can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=managed_file.created_by,
+                resource_team_id=managed_file.team_id,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+                )
 
     async def store_batch_output_file_ownership(
         self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]
