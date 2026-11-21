@@ -34,7 +34,12 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _RESPONSE_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _non_streaming_error(response: Mapping[str, object], headers: httpx.Headers) -> OpenRouterException | None:
+def _choice_error(response: Mapping[str, object], headers: httpx.Headers) -> OpenRouterException | None:
+    """The provider failure OpenRouter reports in a choice (finish_reason "error" or a choice-level error), if any.
+
+    Used for complete responses and for each stream chunk: in both, OpenRouter answers HTTP 200 and the failure
+    only shows in the choice.
+    """
     choices: Final = _RESPONSE_CHOICES.validate_python(response.get("choices") or ())
     choice: Final = next(
         (choice for choice in choices if choice.get("finish_reason") == "error" or choice.get("error")), None
@@ -269,7 +274,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
             # If we can't extract cost, continue without it - don't fail the response
             pass
 
-        response_error: Final = _non_streaming_error(response_json, raw_response.headers)
+        response_error: Final = _choice_error(response_json, raw_response.headers)
         if response_error is not None:
             failed_attempt: Final = logging_obj.served_round(model_response)
             logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
@@ -317,6 +322,12 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     status_code=error_message["code"],
                     headers=error_message["metadata"].get("headers", {}),
                 )
+
+            ## HANDLE A PROVIDER FAILURE REPORTED IN A CHOICE ##
+            # finish_reason "error" would otherwise be mapped to "stop" and the partial answer would look complete.
+            choice_error: Final = _choice_error(chunk, httpx.Headers())
+            if choice_error is not None:
+                raise choice_error
 
             new_choices: Final = []
             for choice in chunk["choices"]:
