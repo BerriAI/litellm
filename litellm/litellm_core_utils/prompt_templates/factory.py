@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, Any, Final, NamedTuple, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Final, NamedTuple, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError, model_validator
@@ -2151,7 +2151,11 @@ def _placed_and_paired(
     return _pair_tool_calls_with_results(placed) if litellm.modify_params else placed
 
 
-_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
+_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, object]
+
+
+class _SuffixMatcher(Protocol):
+    def endswith(self, suffix: str, /) -> bool: ...
 
 
 def _is_server_tool_result(block: Mapping[str, object]) -> bool:
@@ -2314,7 +2318,7 @@ def _anthropic_argument_object_count(arguments: object) -> int:
 
 def _anthropic_tool_inputs(
     arguments: str | None, tool_name: str, tool_id: str, split_tool_use_ids: Mapping[str, tuple[str, ...]]
-) -> tuple[tuple[str, dict[str, object]], ...]:  # mutable-ok: the tool_use block's input field is typed dict
+) -> tuple[tuple[str, object], ...]:
     try:
         return ((tool_id, parse_tool_call_arguments(arguments, tool_name=tool_name, context="Anthropic tool invoke")),)
     except ValueError:
@@ -2346,8 +2350,8 @@ def _anthropic_tool_results_for_split_ids(
 
 def convert_to_anthropic_tool_invoke(
     tool_calls: Sequence[ChatCompletionAssistantToolCall],
-    web_search_results: Sequence[object] | None = None,
-    tool_results: Sequence[object] | None = None,
+    web_search_results: object = None,
+    tool_results: object = None,
     answered_tool_ids: Container[str] = frozenset(),
     server_tool_call_ids: Container[str] = frozenset(),
     split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
@@ -3545,7 +3549,7 @@ def anthropic_messages_pt(
             new_messages.append({"role": "user", "content": [placeholder]})
 
         # Track unique tool IDs in this merge block to avoid duplication
-        unique_tool_ids: set[str] = set()
+        unique_tool_ids: set[object] = set()
 
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
@@ -3582,11 +3586,11 @@ def anthropic_messages_pt(
             # for server_tool_use reconstruction.
             # Fixes: https://github.com/BerriAI/litellm/issues/17737
             _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
-            _provider_specific_fields: dict[str, Any] = (
-                cast(dict[str, Any], _provider_specific_fields_raw)
+            _provider_specific_fields: Mapping[str, object] = (
+                as_str_mapping(_DECODED_JSON.validate_python(_provider_specific_fields_raw))
                 if isinstance(_provider_specific_fields_raw, dict)
-                else {}
-            )
+                else None
+            ) or {}
             tool_invoke_results = tuple(
                 block
                 for block in (
@@ -3637,7 +3641,7 @@ def anthropic_messages_pt(
                         if _current_group:
                             server_tool_groups.append(_current_group)
                         _current_group = [item]
-                    elif item_type.endswith("_tool_result"):
+                    elif require_attributes(item_type, _SuffixMatcher, "endswith").endswith("_tool_result"):
                         _current_group.append(item)
                     elif item_type == "tool_use":
                         regular_tool_uses.append(item)
@@ -3919,6 +3923,15 @@ from litellm.types.llms.cohere import (
 )
 
 
+def _cohere_tool_output(content_str: str) -> object:
+    if not content_str:
+        return {}
+    try:
+        return _DECODED_JSON.validate_python(json.loads(content_str))
+    except json.JSONDecodeError:
+        return {"result": content_str}
+
+
 def convert_openai_message_to_cohere_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     tool_calls: list,
@@ -3966,15 +3979,9 @@ def convert_openai_message_to_cohere_tool_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
-    if len(content_str) > 0:
-        try:
-            content = json.loads(content_str)
-        except json.JSONDecodeError:
-            content = {"result": content_str}
-    else:
-        content = {}
+    tool_output: Final = _cohere_tool_output(content_str)
     name = ""
-    arguments = {}
+    arguments: object = {}
     # Recover name from last message with tool calls
     if len(tool_calls) > 0:
         tools: Final = tool_calls
@@ -3985,14 +3992,14 @@ def convert_openai_message_to_cohere_tool_result(
                 name = tool.get("function", {}).get("name", "")
                 arguments_str = tool.get("function", {}).get("arguments", "")
                 if arguments_str is not None and len(arguments_str) > 0:
-                    arguments = json.loads(arguments_str)
+                    arguments = _DECODED_JSON.validate_python(json.loads(arguments_str))
 
     if message["role"] == "function":
         function_message: Final[ChatCompletionFunctionMessage] = message
         name = function_message["name"]
         cohere_tool_result: ToolResultObject = {
             "call": CallObject(name=name, parameters=arguments),
-            "outputs": [content],
+            "outputs": [tool_output],
         }
         return cohere_tool_result
     else:
@@ -4001,7 +4008,7 @@ def convert_openai_message_to_cohere_tool_result(
 
         cohere_tool_result = {
             "call": CallObject(name=name, parameters=arguments),
-            "outputs": [content],
+            "outputs": [tool_output],
         }
         return cohere_tool_result
 
@@ -7254,6 +7261,10 @@ class _SupportsModelDump(Protocol):
     def model_dump(self) -> dict[str, object]: ...
 
 
+class _SupportsKeyedGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 class _StructuredMessagesSource(Protocol):
     def get_structured_messages(self, data: dict[str, object], /) -> Sequence[object] | None: ...
 
@@ -7266,7 +7277,7 @@ def _instantiate_structured_message_sources(
 
 def resolve_structured_messages(
     messages: list[dict[str, object]] | None,
-    request_kwargs: dict[str, Any],
+    request_kwargs: dict[str, object],
 ) -> list[dict[str, object]] | None:
     """
     Normalize a request's messages to OpenAI-spec chat-completions shape,
@@ -7291,8 +7302,10 @@ def resolve_structured_messages(
     call_type: CallTypes | None = None
 
     # 1. Try route-based inference from proxy metadata
-    route: Final = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
-    if route:
+    route: Final = require_attributes(request_kwargs.get("litellm_metadata", {}), _SupportsKeyedGet, "get").get(
+        "user_api_key_request_route"
+    )
+    if isinstance(route, str) and route:
         call_types_list: Final = get_call_types_for_route(route)
         if call_types_list:
             for ct in call_types_list:

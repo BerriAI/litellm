@@ -34,9 +34,12 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     coerce_token_limit,
     drops_unsupported_params,
+    json_contains,
     map_finish_reason,
+    require_attributes,
+    subscript,
 )
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_mapping
 from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import holds_mcp_blocks
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     defs_unpacked,
@@ -450,6 +453,11 @@ def _hosted_web_call(call_id: str, tool_name: str, tool_input: object, result: o
     )
 
 
+class _AnthropicCacheCreation(TypedDict, total=False):
+    ephemeral_5m_input_tokens: ReadOnly[int | None]
+    ephemeral_1h_input_tokens: ReadOnly[int | None]
+
+
 class _AnthropicUsageIteration(TypedDict, total=False):
     """One entry of the ``usage.iterations`` array on an Anthropic response."""
 
@@ -457,6 +465,7 @@ class _AnthropicUsageIteration(TypedDict, total=False):
     output_tokens: ReadOnly[int | None]
     cache_creation_input_tokens: ReadOnly[int | None]
     cache_read_input_tokens: ReadOnly[int | None]
+    cache_creation: ReadOnly[_AnthropicCacheCreation]
 
 
 class _AnthropicToolResultBlock(TypedDict, total=False):
@@ -3116,7 +3125,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _aggregate_cache_creation_token_details(
-        iterations: Sequence[Mapping[str, Any]],
+        iterations: Sequence[_AnthropicUsageIteration],
     ) -> CacheCreationTokenDetails | None:
         breakdowns: Final = tuple(c for c in (it.get("cache_creation") for it in iterations) if isinstance(c, Mapping))
         if not breakdowns:
@@ -3131,13 +3140,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
-        iterations: Final = usage.get("iterations")
+    def _resolve_cache_creation_token_details(
+        iterations: Sequence[_AnthropicUsageIteration] | None,
+        cache_creation: _AnthropicCacheCreation | None,
+    ) -> CacheCreationTokenDetails | None:
         if iterations:
             aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
             if aggregated is not None:
                 return aggregated
-        cache_creation: Final = usage.get("cache_creation")
         if not isinstance(cache_creation, Mapping):
             return None
         return CacheCreationTokenDetails(
@@ -3160,12 +3170,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _usage: Final = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
-        cache_creation_token_details: Final = self._resolve_cache_creation_token_details(_usage)
+        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
+        usage_cache_creation: Final[_AnthropicCacheCreation | None] = _usage.get("cache_creation")
+        cache_creation_token_details: Final = self._resolve_cache_creation_token_details(
+            iterations, usage_cache_creation
+        )
         web_search_requests: int | None = None
         tool_search_requests: int | None = None
-        inference_geo: str | None = None
-        if "inference_geo" in _usage and _usage["inference_geo"] is not None:
-            inference_geo = _usage["inference_geo"]
+        usage_fields: Final[Mapping[str, object]] = usage_object
+        inference_geo: Final = usage_fields.get("inference_geo")
         service_tier: Final = cast(
             str | None,
             _usage.get("service_tier"),
@@ -3173,7 +3186,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_speed: Final = _usage.get("speed")
         resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
-        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
@@ -3533,7 +3545,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -3550,15 +3562,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if isinstance(_candidate, dict):
                 tool_name_reverse_map = _candidate
 
+        response_format_schema: Final = (
+            JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
+        )
         model_response = self.transform_parsed_response(
-            completion_response=completion_response,
+            completion_response=response_body(completion_response),
             raw_response=raw_response,
             model_response=model_response,
             json_mode=json_mode,
             prefix_prompt=prefix_prompt,
             speed=speed,
             tool_name_reverse_map=tool_name_reverse_map,
-            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
+            response_format_schema=response_format_schema,
         )
         return model_response
 
@@ -3619,6 +3634,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def response_body(completion_response: object) -> dict[str, object]:
+    if is_str_keyed_dict(completion_response):
+        return completion_response
+    subscript(completion_response, "error" if json_contains(completion_response, "error") else "content")
+    return require_attributes(completion_response, dict[str, object], "__getitem__")
 
 
 class JsonModeRequest(BaseModel):

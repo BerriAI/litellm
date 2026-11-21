@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.proxy._types import SpendLogsPayload
-from litellm.proxy.spend_tracking.spend_tracking_utils import (
+from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
 from litellm.responses.litellm_completion_transformation import session_handler

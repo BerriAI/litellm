@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.repositories.table_repositories import ManagedObjectRepository
+
+if TYPE_CHECKING:
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
 _KEY_OWNED_TABLES: Final = (
     "LiteLLM_ManagedFileTable",
@@ -19,9 +24,14 @@ class _RawWriter(Protocol):
     async def execute_raw(self, query: str, *args: str) -> int: ...
 
 
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> PrismaWrapper | RoutingPrismaWrapper: ...
+
+
 def _raw_writer(prisma_client: object) -> _RawWriter:
-    db: Final = ManagedObjectRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
-    return writer_wrapper(db)  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
+    db: Final = require_attributes(ManagedObjectRepository(prisma_client).prisma_client, _PrismaClientView, "db").db
+    return writer_wrapper(db)
 
 
 async def repoint_key_owned_managed_resources(

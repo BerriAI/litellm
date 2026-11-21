@@ -18,10 +18,18 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypeVar,
+    cast,
+)
 
 import fastapi
 import yaml
@@ -40,7 +48,14 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
-from litellm.litellm_core_utils.core_helpers import as_object_list
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    attribute_or_none,
+    has_attributes,
+    int_of,
+    require_attributes,
+    sum_of,
+)
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     duration_in_seconds_from,
@@ -194,6 +209,7 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     hash_token_if_needed,
     is_valid_api_key,
+    query_raw_rows,
     require_enterprise_license,
 )
 from litellm.redis.stores.spend_counters import (
@@ -248,7 +264,6 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
-_RawRowT = TypeVar("_RawRowT")
 
 
 class _UserRowLike(Protocol):
@@ -396,10 +411,6 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     return cast(  # cast-ok: the rotation loop reads and rewrites these rows through CredentialItem names only
         "TableActions[CredentialItem]", CredentialsRepository(prisma_client).table
     )
-
-
-async def _query_raw_rows(prisma_client: PrismaClient, query: str, *args: object) -> Sequence[_RawRowT]:
-    return await prisma_client.db.query_raw(query, *args)
 
 
 def _model_reencrypt_transaction(prisma_client: PrismaClient) -> _ModelReencryptTransaction:
@@ -1199,8 +1210,8 @@ _READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
 
 
 def _is_safe_preset_route_transition(
-    incoming_allowed_routes: Sequence[str] | None,
-    existing_allowed_routes: Sequence[str] | None,
+    incoming_allowed_routes: Sequence[object] | None,
+    existing_allowed_routes: Sequence[object] | None,
 ) -> bool:
     """
     True when every route on BOTH sides is a safe `key_type` preset bucket
@@ -1280,10 +1291,8 @@ def _check_budget_limits_delegation_ceiling(
     team_table: LiteLLM_TeamTableCachedObj | None,
 ) -> None:
     """
-    Enforce three invariants on `budget_limits`:
+    Enforce two invariants on `budget_limits`:
 
-    - Every `budget_limits[*].max_budget` must be a finite number; applies
-      to every caller including proxy admin.
     - A CLI session token caller may not set `budget_limits` on a personal
       key (one with no `team_id`); mirrors the scalar `max_budget` guard in
       `_common_key_generation_helper`.
@@ -1291,12 +1300,6 @@ def _check_budget_limits_delegation_ceiling(
     """
     if not budget_limits:
         return
-    non_finite: Final = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
-    if non_finite is not None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
-        )
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if is_ui_session_team_key:
@@ -1445,43 +1448,69 @@ def _enforce_upperbound_key_params(
                     detail={"error": f"{field_name} must be a finite number. Received: {field_value}"},
                 )
 
-    if litellm.upperbound_key_generate_params is None:
+    upperbound: Final = litellm.upperbound_key_generate_params
+    if upperbound is None:
         return
 
-    for elem in data:
-        key, value = elem
-        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
-        if upperbound_value is not None:
-            if value is None:
-                if fill_defaults:
-                    setattr(data, key, upperbound_value)
-            else:
-                if key in [
-                    "max_budget",
-                    "max_parallel_requests",
-                    "tpm_limit",
-                    "rpm_limit",
-                ]:
-                    if value > upperbound_value:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
-                elif key in ["budget_duration", "duration"]:
-                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
-                    if value == "-1":
-                        user_duration = float("inf")
-                    else:
-                        user_duration = duration_in_seconds(duration=value)
-                    if user_duration > upperbound_duration:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
+    _enforce_duration_upperbound(data, "duration", data.duration, upperbound.duration, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(data, "max_budget", data.max_budget, upperbound.max_budget, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(
+        data,
+        "max_parallel_requests",
+        data.max_parallel_requests,
+        upperbound.max_parallel_requests,
+        fill_defaults=fill_defaults,
+    )
+    _enforce_numeric_upperbound(data, "tpm_limit", data.tpm_limit, upperbound.tpm_limit, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(data, "rpm_limit", data.rpm_limit, upperbound.rpm_limit, fill_defaults=fill_defaults)
+    _enforce_duration_upperbound(
+        data, "budget_duration", data.budget_duration, upperbound.budget_duration, fill_defaults=fill_defaults
+    )
+
+
+def _over_upperbound_error(key: str, value: object, upperbound_value: object) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"},
+    )
+
+
+def _enforce_numeric_upperbound(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    key: str,
+    value: float | None,
+    upperbound_value: float | None,
+    *,
+    fill_defaults: bool,
+) -> None:
+    if upperbound_value is None:
+        return
+    if value is None:
+        if fill_defaults:
+            setattr(data, key, upperbound_value)
+        return
+    if value > upperbound_value:
+        raise _over_upperbound_error(key, value, upperbound_value)
+
+
+def _enforce_duration_upperbound(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    key: str,
+    value: str | None,
+    upperbound_value: str | None,
+    *,
+    fill_defaults: bool,
+) -> None:
+    if upperbound_value is None:
+        return
+    if value is None:
+        if fill_defaults:
+            setattr(data, key, upperbound_value)
+        return
+    upperbound_duration: Final = duration_in_seconds(duration=upperbound_value)
+    user_duration: Final = float("inf") if value == "-1" else duration_in_seconds(duration=value)
+    if user_duration > upperbound_duration:
+        raise _over_upperbound_error(key, value, upperbound_value)
 
 
 def _team_admin_requests_member_key(
@@ -1732,7 +1761,7 @@ async def _common_key_generation_helper(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
             delattr(data, field)
 
@@ -1741,7 +1770,7 @@ async def _common_key_generation_helper(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
             delattr(data, field)
 
@@ -1946,31 +1975,46 @@ async def _common_key_generation_helper(
     return response
 
 
+class _ModelLimits(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
+
+
+class _AddsToAllocation(Protocol):
+    def __radd__(self, other: int, /) -> float: ...
+
+
+def _allocation_total(allocated: int, requested: object) -> float:
+    if has_attributes(requested, _AddsToAllocation, "__radd__"):
+        return allocated + requested
+    sum_of(allocated, requested)
+    raise TypeError(f"unsupported operand type(s) for +: 'int' and {type(requested).__name__!r}")
+
+
 def _check_key_model_specific_limits(
     keys: Sequence[LiteLLM_VerificationToken],
     data: GenerateKeyRequest | UpdateKeyRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
-    entity_model_rpm_limit_dict: dict[str, int],
-    entity_model_tpm_limit_dict: dict[str, int],
+    entity_model_rpm_limit_dict: Mapping[object, int],
+    entity_model_tpm_limit_dict: Mapping[object, int],
     entity_type: str,  # "team" or "organization"
 ) -> None:
     """
     Generic function to check if a key is allocating model specific limits.
     Raises an error if we're overallocating.
     """
-    model_rpm_limit: Final = getattr(data, "model_rpm_limit", None) or (
-        data.metadata.get("model_rpm_limit", None) if data.metadata else None
+    model_rpm_limit: Final = data.model_rpm_limit or (
+        _DECODED_JSON.validate_python(data.metadata.get("model_rpm_limit", None)) if data.metadata else None
     )
-    model_tpm_limit: Final = getattr(data, "model_tpm_limit", None) or (
-        data.metadata.get("model_tpm_limit", None) if data.metadata else None
+    model_tpm_limit: Final = data.model_tpm_limit or (
+        _DECODED_JSON.validate_python(data.metadata.get("model_tpm_limit", None)) if data.metadata else None
     )
     if model_rpm_limit is None and model_tpm_limit is None:
         return
 
     # get total model specific tpm/rpm limit
-    model_specific_rpm_limit: Final[dict[str, int]] = {}
-    model_specific_tpm_limit: Final[dict[str, int]] = {}
+    model_specific_rpm_limit: Final[dict[object, int]] = {}
+    model_specific_tpm_limit: Final[dict[object, int]] = {}
 
     for key in keys:
         if key.metadata.get("model_rpm_limit", None) is not None:
@@ -1981,8 +2025,11 @@ def _check_key_model_specific_limits(
                 model_specific_tpm_limit[model] = model_specific_tpm_limit.get(model, 0) + tpm_limit
 
     if model_rpm_limit is not None:
-        for model, rpm_limit in model_rpm_limit.items():
-            if entity_rpm_limit is not None and model_specific_rpm_limit.get(model, 0) + rpm_limit > entity_rpm_limit:
+        for model, rpm_limit in require_attributes(model_rpm_limit, _ModelLimits, "items").items():
+            if (
+                entity_rpm_limit is not None
+                and _allocation_total(model_specific_rpm_limit.get(model, 0), rpm_limit) > entity_rpm_limit
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
@@ -1991,7 +2038,8 @@ def _check_key_model_specific_limits(
                 entity_model_specific_rpm_limit = entity_model_rpm_limit_dict.get(model)
                 if (
                     entity_model_specific_rpm_limit
-                    and model_specific_rpm_limit.get(model, 0) + rpm_limit > entity_model_specific_rpm_limit
+                    and _allocation_total(model_specific_rpm_limit.get(model, 0), rpm_limit)
+                    > entity_model_specific_rpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
@@ -1999,8 +2047,11 @@ def _check_key_model_specific_limits(
                     )
 
     if model_tpm_limit is not None:
-        for model, tpm_limit in model_tpm_limit.items():
-            if entity_tpm_limit is not None and model_specific_tpm_limit.get(model, 0) + tpm_limit > entity_tpm_limit:
+        for model, tpm_limit in require_attributes(model_tpm_limit, _ModelLimits, "items").items():
+            if (
+                entity_tpm_limit is not None
+                and _allocation_total(model_specific_tpm_limit.get(model, 0), tpm_limit) > entity_tpm_limit
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
@@ -2009,7 +2060,8 @@ def _check_key_model_specific_limits(
                 entity_model_specific_tpm_limit = entity_model_tpm_limit_dict.get(model)
                 if (
                     entity_model_specific_tpm_limit
-                    and model_specific_tpm_limit.get(model, 0) + tpm_limit > entity_model_specific_tpm_limit
+                    and _allocation_total(model_specific_tpm_limit.get(model, 0), tpm_limit)
+                    > entity_model_specific_tpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
@@ -3211,7 +3263,7 @@ async def prepare_key_update_data(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
     for k, v in data_json.items():
         if k in LiteLLM_ManagementEndpoint_MetadataFields or k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -5300,7 +5352,8 @@ async def info_key_fn(
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         key_info_dict: Final = key_info.model_dump()
-        key_token_hash: Final[str | None] = key_info_dict.pop("token")
+        popped_token: Final = _DECODED_JSON.validate_python(key_info_dict.pop("token"))
+        key_token_hash: Final = popped_token if isinstance(popped_token, str) else None
         key_info_dict["status"] = (
             "deleted" if live_key_info is None else _derive_key_status(key_info_dict, now=datetime.now(timezone.utc))
         )
@@ -7682,8 +7735,8 @@ async def key_aliases(
         where_sql: Final = " AND ".join(where_parts)
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows: Final[Sequence[Mapping[str, int]]] = await _query_raw_rows(prisma_client, count_sql, *query_params)
-        total_count: Final = int(count_rows[0]["count"]) if count_rows else 0
+        count_rows: Final = await query_raw_rows(prisma_client.db, count_sql, *query_params)
+        total_count: Final = int_of(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
         limit_idx: Final = len(aliases_params) - 1
@@ -7695,10 +7748,8 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows: Final[Sequence[Mapping[str, str]]] = await _query_raw_rows(
-            prisma_client, aliases_sql, *aliases_params
-        )
-        aliases: Final[list[str]] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+        alias_rows: Final = await query_raw_rows(prisma_client.db, aliases_sql, *aliases_params)
+        aliases: Final = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages: Final = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(

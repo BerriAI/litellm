@@ -6,7 +6,11 @@ from typing import Final
 from pydantic import ConfigDict
 
 import litellm
-from litellm.litellm_core_utils.duration_parser import get_budget_window_start, get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import (
+    get_budget_window_start,
+    get_next_standardized_reset_time,
+    normalize_budget_window_start,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -102,7 +106,7 @@ def get_budget_window_reset_fields(
     current: Final = now if now is not None else datetime.now(timezone.utc)
     end: Final = reset_at if reset_at is not None else compute_budget_reset_at(budget_duration, configured, current)
     scheduled: Final = get_budget_window_start(budget_duration, end, configured.timezone, configured.reset_time_of_day)
-    start: Final = scheduled if reset_at is not None else min(scheduled, current)
+    start: Final = normalize_budget_window_start(scheduled if reset_at is not None else min(scheduled, current))
     return MappingProxyType(
         {
             "reset_at": end.astimezone(timezone.utc).isoformat(),
