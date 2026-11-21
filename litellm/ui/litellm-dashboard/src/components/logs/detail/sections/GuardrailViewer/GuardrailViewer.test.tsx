@@ -313,6 +313,43 @@ describe("GuardrailViewer", () => {
     expect(screen.queryByText(/Raw Bedrock Guardrail Response/)).not.toBeInTheDocument();
   });
 
+  it("expands a content-filter entry whose match_details and classification were redacted to strings", async () => {
+    const user = userEvent.setup();
+    const data = makeGuardrailInformation({
+      guardrail_name: "secrets-filter",
+      guardrail_provider: "litellm_content_filter",
+      guardrail_status: "guardrail_intervened",
+      guardrail_response: "REDACTED_BY_LITELM",
+      match_details: "REDACTED_BY_LITELM",
+      classification: "REDACTED_BY_LITELM",
+      masked_entity_count: { API_KEY: 1 },
+    });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    await user.click(screen.getByText("secrets-filter"));
+
+    expect(screen.getByText("API_KEY: 1")).toBeInTheDocument();
+    expect(screen.queryByText("Classification")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Match Details/i)).not.toBeInTheDocument();
+  });
+
+  it("still renders match details and classification when they are structured", async () => {
+    const user = userEvent.setup();
+    const data = makeGuardrailInformation({
+      guardrail_name: "judge",
+      guardrail_provider: "custom_judge",
+      match_details: [{ type: "pattern", detection_method: "regex", action_taken: "BLOCK" }],
+      classification: { category: "credential_leak" },
+    });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    await user.click(screen.getByText("judge"));
+
+    expect(screen.getByText("Classification")).toBeInTheDocument();
+    expect(screen.getByText("credential_leak")).toBeInTheDocument();
+    expect(screen.getByText("regex")).toBeInTheDocument();
+  });
+
   it("renders without crashing when guardrail_mode is null", () => {
     const data = makeGuardrailInformation({ guardrail_mode: null });
     renderWithProviders(<GuardrailViewer data={data} />);

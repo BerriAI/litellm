@@ -53,8 +53,8 @@ interface GuardrailInformation {
   policy_template?: string;
   detection_method?: string;
   confidence_score?: number;
-  classification?: Record<string, any>;
-  match_details?: MatchDetail[];
+  classification?: Record<string, any> | string;
+  match_details?: MatchDetail[] | string;
   patterns_checked?: number;
   alert_recipients?: string[];
   risk_score?: number;
@@ -535,6 +535,8 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   const modeStr = formatMode(entry.guardrail_mode);
   const riskScore = getRiskScore(entry);
   const textRecords = entry.guardrail_usage?.["text_records"];
+  const classification = typeof entry.classification === "object" ? entry.classification : undefined;
+  const matchDetails = Array.isArray(entry.match_details) ? entry.match_details : [];
 
   const guardrailProvider = entry.guardrail_provider ?? "presidio";
   const guardrailResponse = entry.guardrail_response;
@@ -661,50 +663,48 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
       {expanded && (
         <div className="border-t border-border px-4 py-3">
           {/* Classification details for llm-judge */}
-          {entry.classification && (
+          {classification && (
             <div className="mb-3 bg-muted rounded-lg p-3 space-y-1">
               <h5 className="text-sm font-medium text-foreground mb-2">
                 {t("logs.detail.guardrails.classification.title")}
               </h5>
-              {entry.classification.category && (
+              {classification.category && (
                 <div className="flex text-sm">
                   <span className="font-medium w-1/3 text-muted-foreground">
                     {t("logs.detail.guardrails.classification.category")}
                   </span>
-                  <span>{entry.classification.category}</span>
+                  <span>{classification.category}</span>
                 </div>
               )}
-              {entry.classification.article_reference && (
+              {classification.article_reference && (
                 <div className="flex text-sm">
                   <span className="font-medium w-1/3 text-muted-foreground">
                     {t("logs.detail.guardrails.classification.reference")}
                   </span>
-                  <span className="font-mono">{entry.classification.article_reference}</span>
+                  <span className="font-mono">{classification.article_reference}</span>
                 </div>
               )}
-              {entry.classification.confidence != null && (
+              {classification.confidence != null && (
                 <div className="flex text-sm">
                   <span className="font-medium w-1/3 text-muted-foreground">
                     {t("logs.detail.guardrails.classification.confidence")}
                   </span>
-                  <span>{(entry.classification.confidence * 100).toFixed(0)}%</span>
+                  <span>{(classification.confidence * 100).toFixed(0)}%</span>
                 </div>
               )}
-              {entry.classification.reason && (
+              {classification.reason && (
                 <div className="flex text-sm">
                   <span className="font-medium w-1/3 text-muted-foreground">
                     {t("logs.detail.guardrails.classification.reason")}
                   </span>
-                  <span>{entry.classification.reason}</span>
+                  <span>{classification.reason}</span>
                 </div>
               )}
             </div>
           )}
 
           {/* Match details table */}
-          {entry.match_details && entry.match_details.length > 0 && (
-            <MatchDetailsTable matchDetails={entry.match_details} />
-          )}
+          <MatchDetailsTable matchDetails={matchDetails} />
 
           {/* Masked entity summary */}
           {totalMasked > 0 && (
