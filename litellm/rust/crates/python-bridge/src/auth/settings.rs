@@ -1,10 +1,11 @@
 use litellm_config::{GeneralSettings, JwtAuthSettings, RolePermissions};
-use litellm_gateway_auth_core::{HostFacts, MasterKey, Settings};
+use litellm_gateway_auth_core::{HostFacts, MasterKey, Settings, authn::jwt::Claims};
 use litellm_host_python::from_py;
 use pyo3::{
     prelude::*,
     types::{PyDict, PySet, PyString},
 };
+use serde_json::{Map, Value};
 
 /// `general_settings.get(key)`. The proxy's settings are a dict or its `SettingsStore` mapping.
 fn get<'py>(general: &Bound<'py, PyAny>, key: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -146,5 +147,10 @@ impl AuthSettings {
     #[getter]
     fn jwt_leeway_seconds(&self) -> u64 {
         self.0.jwt.leeway_seconds
+    }
+
+    fn claims_limit_models(&self, claims: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let claims = Claims(from_py::<Map<String, Value>>(claims)?);
+        Ok(self.0.jwt.claims_limit_models(&claims))
     }
 }
