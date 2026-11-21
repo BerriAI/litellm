@@ -1,13 +1,16 @@
 //! The gateway's answers to `gateway-auth-core`'s host steps on the key path, so it authenticates
 //! a virtual key with no Python behind it, the native counterpart of python-bridge's
 //! `PythonAuthHost`. A key's row is read and shaped by `auth-store`, as the Python proxy's is,
-//! from the proxy's database on every request.
+//! and `store.rs` puts the cache in front of it: the auth cache the gateway shares with the
+//! proxy, then the proxy's database on a miss, which fills that cache. With no shared cache the
+//! key is read from the database on every request.
 //!
 //! A step this host does not answer yet declines, which sends the request to Python. A later
 //! change serves more keys by answering one more step.
 
 #[macro_use]
 mod key;
+mod store;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
@@ -34,6 +37,16 @@ use litellm_repositories::Side;
 use serde_json::Value;
 
 pub use key::Key;
+pub use store::AuthStore;
+
+/// Where the native host reads a virtual key.
+pub enum Keys {
+    /// The auth cache the gateway shares with the Python pods, in front of the database. It
+    /// holds a copy in this process's memory, so the gateway must hear every pod's evictions.
+    Shared(Arc<AuthStore>),
+    /// The database on every request, for a gateway that shares no cache.
+    Database(KeyDatabase),
+}
 
 /// The rows the native host hands the core: a key's, and none of the objects it does not read
 /// yet. `Infallible` is a row this host does not read, so no identity that needs one exists. The
@@ -57,7 +70,9 @@ impl Rows for NativeRows {
 pub struct NativeAuthHost {
     /// Where a virtual key is read from. `None` without a database, where the master key is the
     /// only caller.
-    keys: Option<Arc<KeyDatabase>>,
+    keys: Option<Arc<Keys>>,
+    /// The hash Python caches the master key's identity under, which is no key row.
+    master: Option<KeyHash>,
 }
 
 /// The request needs `step`, which this host does not answer yet.
@@ -76,21 +91,24 @@ fn keyed(key: &CachedKey) -> Result<Option<Keyed<Key>>, Error> {
     }
 }
 
-/// What the core reads of this host beside `general_settings`. A blank master key is none.
-/// `database` is whether this host reads keys from one, and without one the core refuses every
+/// The master key of `config`, which a blank one is not.
+fn master_key(config: &Config) -> Option<&litellm_secret_value::SecretValue> {
+    config
+        .general_settings
+        .master_key
+        .as_ref()
+        .filter(|key| !key.expose().trim().is_empty())
+}
+
+/// What the core reads of this host beside `general_settings`. `database` is whether this host reads keys from one, and without one the core refuses every
 /// token but the master key before it asks for a key. The gateway guards its inference routes
 /// alone, so it names no route group, and it serves no UI login. The proxy budget, the license
 /// and the environment only shape steps and text this host does not answer with.
 fn settings(config: &Config, database: bool) -> Settings {
-    let master_key = config
-        .general_settings
-        .master_key
-        .as_ref()
-        .filter(|key| !key.expose().trim().is_empty());
     Settings::new(
         &config.general_settings,
         HostFacts {
-            master_key: master_key.map(|key| MasterKey::new(key.clone())),
+            master_key: master_key(config).map(|key| MasterKey::new(key.clone())),
             premium: false,
             has_db: database,
             db_configured: database,
@@ -106,9 +124,13 @@ fn settings(config: &Config, database: bool) -> Settings {
 /// Who the inference routes and `admit` authenticate: the callers the core finds over this host
 /// for `config`, the master key and with `keys` a virtual key read from them, taken from the
 /// header an inference client sends its key in.
-pub fn auth(config: &Config, keys: Option<Arc<KeyDatabase>>) -> Auth<NativeRows> {
+pub fn auth(config: &Config, keys: Option<Arc<Keys>>) -> Auth<NativeRows> {
     let settings = settings(config, keys.is_some());
-    let keys = KeyAuthenticator::new(NativeAuthHost { keys }, settings, Arc::new(SystemClock));
+    let host = NativeAuthHost {
+        keys,
+        master: master_key(config).map(|key| Token::new(key.clone()).hash()),
+    };
+    let keys = KeyAuthenticator::new(host, settings, Arc::new(SystemClock));
     Auth::new(Arc::new(keys)).with_extractor(Arc::new(BearerOrXApiKey))
 }
 
@@ -123,16 +145,28 @@ impl OperatorHooks for NoOperatorCode {
 impl AuthHost for NativeAuthHost {
     type Rows = NativeRows;
 
-    /// The gateway shares no cache, so every key is read from the database.
-    async fn cached_key(&self, _: &KeyHash) -> Result<Option<Keyed<Key>>, Error> {
-        Ok(None)
+    async fn cached_key(&self, hash: &KeyHash) -> Result<Option<Keyed<Key>>, Error> {
+        if self.master.as_ref() == Some(hash) {
+            return Ok(None);
+        }
+        let Some(Keys::Shared(store)) = self.keys.as_deref() else {
+            return Ok(None);
+        };
+        match Box::pin(store.cached(hash)).await {
+            Some(key) => keyed(&key),
+            None => Ok(None),
+        }
     }
 
+    /// The core asks here only after `cached_key` missed, so the shared cache is not read again.
+    /// The store caches the key it found for every pod, whoever answers the request.
     async fn db_key(&self, hash: &KeyHash, _: &()) -> Result<Option<Keyed<Key>>, Error> {
-        let Some(keys) = &self.keys else {
-            return declined("db_key");
+        let found = match self.keys.as_deref() {
+            Some(Keys::Shared(store)) => Box::pin(store.loaded(hash)).await,
+            Some(Keys::Database(database)) => Box::pin(database.read(hash, Side::Read)).await,
+            None => return declined("db_key"),
         };
-        match Box::pin(keys.read(hash, Side::Read)).await {
+        match found {
             Ok(Some(key)) => keyed(&key),
             Ok(None) => Ok(None),
             Err(error) => {
@@ -392,6 +426,8 @@ mod tests {
     use jiff::Timestamp;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
     use litellm_gateway_auth_core::Caller;
+    use litellm_redis_store::cache_invalidation::CacheInvalidation;
+    use litellm_redis_testing::{RedisServer, eventually};
     use rstest::rstest;
     use serde_json::{Value as Columns, json};
     use tower::ServiceExt;
@@ -435,7 +471,7 @@ mod tests {
 
     async fn authenticate(
         config: &Config,
-        keys: Option<KeyDatabase>,
+        keys: Option<Keys>,
         header: (&str, &str),
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         auth(config, keys.map(Arc::new))
@@ -443,13 +479,19 @@ mod tests {
             .await
     }
 
-    /// What `token` gets as a bearer from a gateway that reads its keys from `keys`.
-    async fn presenting(
-        keys: KeyDatabase,
+    /// What `token` gets as a bearer from `auth`.
+    async fn bearing(
+        auth: &Auth<NativeRows>,
         token: &str,
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         let bearer = format!("Bearer {token}");
-        authenticate(&with_master_key(), Some(keys), ("authorization", &bearer)).await
+        auth.authenticate_parts(&parts(("authorization", &bearer)))
+            .await
+    }
+
+    /// What `token` gets as a bearer from a gateway that reads its keys from `keys`.
+    async fn presenting(keys: Keys, token: &str) -> Result<Authenticated<NativeRows>, Rejected> {
+        bearing(&auth(&with_master_key(), Some(Arc::new(keys))), token).await
     }
 
     /// The database holding [`VIRTUAL_KEY`] alone, a plain key with `columns` set on it.
@@ -463,15 +505,15 @@ mod tests {
     /// What [`VIRTUAL_KEY`] gets from a gateway that shares no cache, with `columns` set on it.
     async fn authenticate_holding(columns: Columns) -> Result<Authenticated<NativeRows>, Rejected> {
         let held = holding(columns).await;
-        presenting(held.database(), VIRTUAL_KEY).await
+        presenting(Keys::Database(held.database()), VIRTUAL_KEY).await
     }
 
     #[rstest]
     #[case::without_a_database(None)]
-    #[case::with_a_database_that_is_never_read(Some(keys::unreachable()))]
+    #[case::with_a_database_that_is_never_read(Some(Keys::Database(keys::unreachable())))]
     #[tokio::test]
     async fn the_master_key_is_the_admin_caller_with_and_without_a_database(
-        #[case] keys: Option<KeyDatabase>,
+        #[case] keys: Option<Keys>,
         #[values(("authorization", "Bearer sk-master-credential"), ("x-api-key", MASTER_KEY))]
         header: (&str, &str),
     ) {
@@ -646,7 +688,7 @@ mod tests {
     async fn a_key_the_database_does_not_hold_is_an_invalid_token() {
         let held = Held::holding("sk-another-credential", json!({})).await;
 
-        let refused = presenting(held.database(), VIRTUAL_KEY).await;
+        let refused = presenting(Keys::Database(held.database()), VIRTUAL_KEY).await;
 
         assert!(
             matches!(refused, Err(Rejected::InvalidToken)),
@@ -676,7 +718,7 @@ mod tests {
     ) {
         let held = holding(json!({})).await;
 
-        let caller = presenting(held.database(), token).await;
+        let caller = presenting(Keys::Database(held.database()), token).await;
 
         assert_eq!(
             caller.ok().map(|caller| *caller == Caller::MasterKey),
@@ -687,11 +729,112 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_database_that_fails_is_unavailable_and_never_a_denial() {
-        let Err(refused) = presenting(keys::unreachable(), VIRTUAL_KEY).await else {
+        let Err(refused) = presenting(Keys::Database(keys::unreachable()), VIRTUAL_KEY).await
+        else {
             panic!("a key was authenticated with no database to read it from");
         };
 
         assert!(matches!(refused, Rejected::Unavailable(_)), "{refused:?}");
         assert!(!refused.is_denied());
+    }
+
+    fn sharing(redis: &RedisServer) -> Config {
+        Config::from_yaml(&format!(
+            "general_settings:\n  master_key: {MASTER_KEY}\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\nlitellm_settings:\n  enable_redis_auth_cache: true\n",
+            redis.port()
+        ))
+        .unwrap()
+    }
+
+    /// One gateway pod as `AppState` builds its auth with `enable_redis_auth_cache` on: its own
+    /// memory in front of `redis`, over the database `held`.
+    async fn pod(redis: &RedisServer, held: &Held) -> Auth<NativeRows> {
+        let config = sharing(redis);
+        let resources = crate::Resources::build(&config).unwrap();
+        let clients = crate::redis::connect(&config, &resources).await.unwrap();
+        let keys = crate::state::keys(&config, &clients, held.repositories());
+        auth(&config, Some(Arc::new(keys)))
+    }
+
+    fn stored_hash() -> String {
+        Token::new(VIRTUAL_KEY).hash().to_string()
+    }
+
+    /// How long `redis` keeps its entry for [`VIRTUAL_KEY`], or a negative number with none.
+    async fn seconds_cached(redis: &RedisServer) -> i64 {
+        let ttl = redis.cli(&["TTL", &stored_hash()]).await;
+        ttl.unwrap().trim().parse().unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_read_from_the_database_is_cached_for_every_pod() {
+        let redis = RedisServer::start().await.unwrap();
+        let held = holding(json!({})).await;
+        let pod_a = pod(&redis, &held).await;
+        let pod_b = pod(&redis, &held).await;
+
+        let first = bearing(&pod_a, VIRTUAL_KEY).await;
+        let second = bearing(&pod_a, VIRTUAL_KEY).await;
+        let other_pod = bearing(&pod_b, VIRTUAL_KEY).await;
+
+        assert_eq!(
+            (
+                first.is_ok(),
+                second.is_ok(),
+                other_pod.is_ok(),
+                held.key_reads(),
+                (1..=60).contains(&seconds_cached(&redis).await),
+            ),
+            (true, true, true, 1, true)
+        );
+    }
+
+    #[rstest]
+    #[case::with_an_owner(json!({"user_id": "user"}))]
+    #[case::in_a_team(json!({"team_id": "team"}))]
+    #[case::with_a_budget(json!({"max_budget": 5.0}))]
+    #[case::blocked(json!({"blocked": true}))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_python_answers_is_cached_for_python_by_the_read_that_declined(
+        #[case] columns: Columns,
+    ) {
+        let redis = RedisServer::start().await.unwrap();
+        let held = holding(columns).await;
+
+        let authenticated = bearing(&pod(&redis, &held).await, VIRTUAL_KEY).await;
+
+        assert_eq!(
+            (authenticated.is_err(), seconds_cached(&redis).await > 0),
+            (true, true)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_another_pod_blocks_stops_answering_from_this_pods_memory() {
+        let redis = RedisServer::start().await.unwrap();
+        let held = holding(json!({})).await;
+        let gateway = pod(&redis, &held).await;
+        let config = sharing(&redis);
+        let resources = crate::Resources::build(&config).unwrap();
+        let clients = crate::redis::connect(&config, &resources).await.unwrap();
+        let another_pod = crate::state::auth_cache(&config, &clients).unwrap();
+        let channel = CacheInvalidation::new(
+            clients.coordination.clone().unwrap(),
+            None,
+            tokio::runtime::Handle::current(),
+        );
+        let served = bearing(&gateway, VIRTUAL_KEY).await.is_ok();
+
+        held.execute(r#"UPDATE "LiteLLM_VerificationToken" SET blocked = true"#)
+            .await;
+        another_pod.delete(&[stored_hash()]).await.unwrap();
+
+        let refused = eventually(async || {
+            channel.broadcast_evictions(&[stored_hash()]).await;
+            bearing(&gateway, VIRTUAL_KEY).await.err()
+        })
+        .await;
+        assert!(served);
+        assert!(matches!(refused, Rejected::InvalidToken), "{refused:?}");
     }
 }
