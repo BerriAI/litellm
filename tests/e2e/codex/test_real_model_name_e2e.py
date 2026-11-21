@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from codex.harness import CodexHarness
-from codex.setups import COMPACTION_SETUPS, SETUPS, Deployment, ModelSetup
+from codex.setups import SETUPS, Deployment, ModelSetup
 from e2e_config import unique_marker
 
 pytestmark = pytest.mark.e2e
@@ -30,7 +30,7 @@ class TestCodexUnderTheRealModelName:
         assert any(marker in command.output for command in run.commands), run
         assert marker in run.answer, run
 
-    @pytest.mark.parametrize("deployment", COMPACTION_SETUPS)
+    @pytest.mark.parametrize("deployment", SETUPS)
     def test_remembers_a_value_after_the_gateway_compacts_the_session(
         self, real_name_codex: CodexHarness, real_name_setup: ModelSetup
     ) -> None:

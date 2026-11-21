@@ -1,3 +1,6 @@
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import { Palette } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -125,71 +128,76 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   }
 
   return (
-    <div className="w-full mx-auto max-w-4xl px-6 py-8">
-      <div className="mb-8">
-        <h1 className="mb-2 text-2xl font-bold">{t("uiTheme.settings.title")}</h1>
-        <p className="text-sm text-muted-foreground">{t("uiTheme.settings.description")}</p>
-      </div>
-      <Card>
-        <CardContent className="space-y-6">
-          <div>
-            <Label htmlFor="ui-theme-logo-url" className="mb-2">
-              {t("uiTheme.settings.logoUrl.label")}
-            </Label>
-            <Input
-              id="ui-theme-logo-url"
-              placeholder="https://example.com/logo.png"
-              value={logoUrlInput}
-              onChange={(event) => {
-                setLogoUrlInput(event.target.value);
-                setLogoUrl(event.target.value || null);
-              }}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrl.hint")}</p>
-          </div>
-          <div>
-            <Label htmlFor="ui-theme-logo-url-dark" className="mb-2">
-              {t("uiTheme.settings.logoUrlDark.label")}
-            </Label>
-            <Input
-              id="ui-theme-logo-url-dark"
-              placeholder="https://example.com/logo-dark.png"
-              value={logoUrlDarkInput}
-              onChange={(event) => {
-                setLogoUrlDarkInput(event.target.value);
-                setLogoUrlDark(event.target.value || null);
-              }}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrlDark.hint")}</p>
-          </div>
-          <div>
-            <Label htmlFor="ui-theme-favicon-url" className="mb-2">
-              {t("uiTheme.settings.faviconUrl.label")}
-            </Label>
-            <Input
-              id="ui-theme-favicon-url"
-              placeholder="https://example.com/favicon.ico"
-              value={faviconUrlInput}
-              onChange={(event) => {
-                setFaviconUrlInput(event.target.value);
-                setFaviconUrl(event.target.value || null);
-              }}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.faviconUrl.hint")}</p>
-          </div>
-          <div className="flex gap-3 pt-4">
-            <Button onClick={handleSave} disabled={loading}>
-              {loading && <UiLoadingSpinner className="size-4" />}
-              {t("uiTheme.settings.saveButton")}
-            </Button>
-            <Button variant="outline" onClick={handleReset} disabled={loading}>
-              {loading && <UiLoadingSpinner className="size-4" />}
-              {t("uiTheme.settings.resetButton")}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+    <Page>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Palette />
+            {t("uiTheme.settings.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("uiTheme.settings.description")}</PageHeaderDescription>
+        </PageHeader>
+        <Card className="w-full max-w-4xl">
+          <CardContent className="space-y-6">
+            <div>
+              <Label htmlFor="ui-theme-logo-url" className="mb-2">
+                {t("uiTheme.settings.logoUrl.label")}
+              </Label>
+              <Input
+                id="ui-theme-logo-url"
+                placeholder="https://example.com/logo.png"
+                value={logoUrlInput}
+                onChange={(event) => {
+                  setLogoUrlInput(event.target.value);
+                  setLogoUrl(event.target.value || null);
+                }}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrl.hint")}</p>
+            </div>
+            <div>
+              <Label htmlFor="ui-theme-logo-url-dark" className="mb-2">
+                {t("uiTheme.settings.logoUrlDark.label")}
+              </Label>
+              <Input
+                id="ui-theme-logo-url-dark"
+                placeholder="https://example.com/logo-dark.png"
+                value={logoUrlDarkInput}
+                onChange={(event) => {
+                  setLogoUrlDarkInput(event.target.value);
+                  setLogoUrlDark(event.target.value || null);
+                }}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrlDark.hint")}</p>
+            </div>
+            <div>
+              <Label htmlFor="ui-theme-favicon-url" className="mb-2">
+                {t("uiTheme.settings.faviconUrl.label")}
+              </Label>
+              <Input
+                id="ui-theme-favicon-url"
+                placeholder="https://example.com/favicon.ico"
+                value={faviconUrlInput}
+                onChange={(event) => {
+                  setFaviconUrlInput(event.target.value);
+                  setFaviconUrl(event.target.value || null);
+                }}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.faviconUrl.hint")}</p>
+            </div>
+            <div className="flex gap-3 pt-4">
+              <Button onClick={handleSave} disabled={loading}>
+                {loading && <UiLoadingSpinner className="size-4" />}
+                {t("uiTheme.settings.saveButton")}
+              </Button>
+              <Button variant="outline" onClick={handleReset} disabled={loading}>
+                {loading && <UiLoadingSpinner className="size-4" />}
+                {t("uiTheme.settings.resetButton")}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </PageContent>
+    </Page>
   );
 };
 

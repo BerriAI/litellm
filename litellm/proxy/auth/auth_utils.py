@@ -1724,10 +1724,9 @@ def get_key_model_rpm_limit(
         return key_own_limit
 
     # 3. Fallback to team metadata
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("model_rpm_limit")
-        if team_limit is not None:
-            return team_limit
+    team_limit: Final = get_team_model_rpm_limit(user_api_key_dict)
+    if team_limit is not None:
+        return team_limit
 
     # 4. Fallback to deployment default_api_key_rpm_limit
     if model_name is not None:
@@ -1756,10 +1755,9 @@ def get_key_model_tpm_limit(
         return key_own_limit
 
     # 3. Fallback to team metadata
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("model_tpm_limit")
-        if team_limit is not None:
-            return team_limit
+    team_limit: Final = get_team_model_tpm_limit(user_api_key_dict)
+    if team_limit is not None:
+        return team_limit
 
     # 4. Fallback to deployment default_api_key_tpm_limit
     if model_name is not None:
@@ -1945,6 +1943,7 @@ _ADMIN_ONLY_METADATA_KEYS: Final = (
     *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
     MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
 )
 _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -1953,6 +1952,9 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         ),
         MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
             "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+        REQUIRED_CUSTOMER_HEADERS_SETTING: (
+            "It requires customer identity headers, so the holder cannot remove the policy."
         ),
     }
 )
@@ -2090,12 +2092,7 @@ def get_key_mcp_rpm_limit(
         if result is not None:
             return result
 
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("mcp_rpm_limit")
-        if team_limit is not None:
-            return team_limit
-
-    return None
+    return get_team_mcp_rpm_limit(user_api_key_dict)
 
 
 def get_team_mcp_rpm_limit(

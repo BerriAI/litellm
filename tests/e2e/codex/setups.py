@@ -124,10 +124,3 @@ def with_expected_failure(setup_id: SetupId, *, reason: str) -> tuple[ParameterS
         else setup
         for setup in SETUPS
     )
-
-
-COMPACTION_SETUPS: Final = with_expected_failure(
-    "claude_bedrock",
-    reason="LiteLLM's Responses-to-chat bridge ignores Codex's compaction_trigger item, so Codex gets no"
-    " compaction back and fails the turn",
-)

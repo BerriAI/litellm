@@ -455,6 +455,8 @@ pub struct MessagesOptionalParams {
     pub safeguards: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Value>,
     #[serde(flatten)]
     #[field_names_as_slice(skip)]
     pub extra: Map<String, Value>,

@@ -43,10 +43,17 @@ model_catalog_url = "{gateway}/v1/models"
 type CodexCatalog = Literal["gateway", "openai", "amazon-bedrock", "amazon-bedrock-runtime"]
 
 
+class _CatalogTier(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
 class _CatalogModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     slug: str
+    service_tiers: tuple[_CatalogTier, ...] = ()
     tool_mode: str | None = None
 
 
@@ -134,8 +141,20 @@ class CodexHarness:
         )
         return tuple(rollout_subagent(rollout) for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
 
+    @step("Read the service tiers Codex's catalog from the gateway offers each model")
+    def service_tiers(self) -> Mapping[str, frozenset[str]]:
+        return MappingProxyType(
+            {
+                model.slug: frozenset(tier.id for tier in model.service_tiers)
+                for model in self._catalog("gateway").models
+            }
+        )
+
     @step("Read the tool mode the {source} catalog gives each model in Codex")
     def tool_modes(self, source: CodexCatalog = "gateway") -> Mapping[str, str | None]:
+        return MappingProxyType({model.slug: model.tool_mode for model in self._catalog(source).models})
+
+    def _catalog(self, source: CodexCatalog) -> _Catalog:
         completed: Final = subprocess.run(
             (self.cli, *_catalog_args(source)),
             cwd=self.home,
@@ -146,8 +165,7 @@ class CodexHarness:
             timeout=self.timeout_seconds,
             check=True,
         )
-        catalog: Final = _Catalog.model_validate_json(completed.stdout)
-        return MappingProxyType({model.slug: model.tool_mode for model in catalog.models})
+        return _Catalog.model_validate_json(completed.stdout)
 
     def _env(self) -> Mapping[str, str]:
         return locked_down_env(

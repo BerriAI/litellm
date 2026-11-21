@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from codex.harness import CodexHarness
-from codex.setups import COMPACTION_SETUPS, ModelSetup
+from codex.setups import SETUPS, ModelSetup
 from e2e_config import unique_marker
 
 pytestmark = pytest.mark.e2e
@@ -13,7 +13,7 @@ COMPACT_AFTER_TOKENS: Final = 500
 PADDING: Final = "".join(f"line {number}: the quick brown fox jumps over the lazy dog\n" for number in range(400))
 
 
-@pytest.mark.parametrize("deployment", COMPACTION_SETUPS)
+@pytest.mark.parametrize("deployment", SETUPS)
 class TestCodexAutoCompaction:
     def test_remembers_a_value_after_the_gateway_compacts_the_session(
         self, codex: CodexHarness, setup: ModelSetup

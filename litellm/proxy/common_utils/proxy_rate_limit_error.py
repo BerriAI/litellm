@@ -63,6 +63,8 @@ PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
         "model_per_app",
         "model_per_app_customer_org",
         "model_per_app_customer_member",
+        "model_per_app_group",
+        "model_per_app_group_customer_org",
     }
 )
 DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
