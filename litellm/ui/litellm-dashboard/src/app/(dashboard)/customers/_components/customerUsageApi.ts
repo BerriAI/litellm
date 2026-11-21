@@ -217,7 +217,7 @@ export const customerAppSpendCall = async (request: CustomerUsageRequest & { app
 export const customerAppsUsageCall = async (
   ids: readonly string[],
   includeOverall: boolean,
-  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appGroupId">,
   dimension: "appId" | "appGroupId" = "appId",
 ) => {
   const scopes = includeOverall ? [null, ...ids] : ids;

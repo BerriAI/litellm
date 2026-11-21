@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useApplicationUsage } from "./useApplicationUsage";
+import { useApplicationUsage, type ApplicationUsageScope } from "./useApplicationUsage";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -13,25 +13,26 @@ export default function ApplicationsTable({
   loading,
   onOpen,
   keyPrefix,
+  usageScope,
 }: {
   rows: readonly ApplicationRow[];
   loading: boolean;
   onOpen?: (resourceId: string) => void;
   keyPrefix?: string;
+  usageScope?: ApplicationUsageScope;
 }) {
   const { t } = useTranslation();
   const groups = useOverallAppBudgetGroups(Boolean(onOpen));
   const appIds = useMemo(() => rows.flatMap(({ app }) => (app ? [app.app_id] : [])).sort(), [rows]);
-  const usage = useApplicationUsage(appIds, Boolean(onOpen));
+  const usage = useApplicationUsage(appIds, Boolean(onOpen), "appId", usageScope);
+  const spendPeriod = usageScope ? "selected" : "monthly";
   const tableRows = useMemo(
     () =>
-      applicationTableRows(
-        rows,
-        onOpen && groups.isSuccess ? groups.data.default_budgets : undefined,
-        usage.data,
-        t("customerPortal.organizationGroups.customBadge"),
-      ),
-    [rows, onOpen, groups.isSuccess, groups.data, usage.data, t],
+      applicationTableRows(rows, onOpen && groups.isSuccess ? groups.data.default_budgets : undefined, usage.data, {
+        customLabel: t("customerPortal.organizationGroups.customBadge"),
+        spendPeriod,
+      }),
+    [rows, onOpen, groups.isSuccess, groups.data, usage.data, t, spendPeriod],
   );
   return (
     <>
@@ -44,6 +45,7 @@ export default function ApplicationsTable({
         onEdit={onOpen}
         keyPrefix={keyPrefix}
         overallSpend={usage.data?.get(null)?.spend ?? null}
+        spendPeriod={spendPeriod}
       />
     </>
   );

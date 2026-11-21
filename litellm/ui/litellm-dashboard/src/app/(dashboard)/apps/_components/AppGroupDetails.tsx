@@ -102,6 +102,7 @@ export default function AppGroupDetails({
           rows={rows}
           loading={apps.isPending}
           keyPrefix={GROUP_APPS_TABLE_PREFIX}
+          usageScope={{ appGroupId: group.app_group_id, startDate, endDate }}
           onOpen={(id) => void setSelectedApp(id)}
         />
       )}

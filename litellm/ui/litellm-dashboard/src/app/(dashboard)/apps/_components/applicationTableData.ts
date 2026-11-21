@@ -40,11 +40,16 @@ const STATUS_ORDER = {
   "customerPortal.analytics.budgetUsageUnavailable": null,
 } as const;
 
+export type ApplicationSpendPeriod = "monthly" | "selected";
+
 function applicationSortValues(
   entity: CustomerUsageEntity,
   total: CustomerUsageTotal | null | undefined,
-  overallSpend: number | null,
-  customLabel: string | null,
+  {
+    overallSpend,
+    customLabel,
+    spendPeriod,
+  }: { overallSpend: number | null; customLabel: string | null; spendPeriod: ApplicationSpendPeriod },
 ) {
   const budgets = customerBudgetUsage(entity);
   const monthly = budgets.find((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
@@ -53,7 +58,7 @@ function applicationSortValues(
   return {
     application: entity.label,
     group: customLabel === null ? null : entity.budgetGroup ?? custom,
-    spend: monthly ? monthly.spend : total?.spend ?? null,
+    spend: spendPeriod === "monthly" && monthly ? monthly.spend : total?.spend ?? null,
     budget: customerBudgetLimit(entity),
     share: total && overallSpend !== null ? share : null,
     tokens: total?.tokens ?? null,
@@ -72,7 +77,7 @@ function budgetUsageRow(
   },
   groups: BudgetGroups["default_budgets"] | undefined,
   usage: ReadonlyMap<string | null, CustomerUsageTotal> | undefined,
-  customLabel: string,
+  { customLabel, spendPeriod = "monthly" }: { customLabel: string; spendPeriod?: ApplicationSpendPeriod },
 ) {
   const { id, label, record, usageId } = source;
   const entity = {
@@ -87,7 +92,11 @@ function budgetUsageRow(
   return {
     entity,
     total,
-    values: applicationSortValues(entity, total, usage?.get(null)?.spend ?? null, groups ? customLabel : null),
+    values: applicationSortValues(entity, total, {
+      overallSpend: usage?.get(null)?.spend ?? null,
+      customLabel: groups ? customLabel : null,
+      spendPeriod,
+    }),
   };
 }
 
@@ -101,14 +110,14 @@ export function applicationTableRows(
   rows: readonly ApplicationRow[],
   groups: BudgetGroups["default_budgets"] | undefined,
   usage: ReadonlyMap<string | null, CustomerUsageTotal> | undefined,
-  customLabel: string,
+  options: { customLabel: string; spendPeriod?: ApplicationSpendPeriod },
 ) {
   return rows.map(({ resource, app }) => {
     const source = { id: resource.resource_id, label: resource.alias, record: app, usageId: app?.app_id ?? null };
     return {
       resource,
       app,
-      ...budgetUsageRow(source, groups, usage, customLabel),
+      ...budgetUsageRow(source, groups, usage, options),
       resourceType: resource.resource_type,
       href: app ? usageHref(uiHref("apps/usage"), { app_id: app.app_id }) : undefined,
     };
@@ -124,7 +133,7 @@ export function appGroupTableRows(
   return rows.map((group) => {
     const source = { id: group.app_group_id, label: group.name, record: group, usageId: group.app_group_id };
     return {
-      ...budgetUsageRow(source, groups, usage, customLabel),
+      ...budgetUsageRow(source, groups, usage, { customLabel }),
       description: group.description,
     };
   });

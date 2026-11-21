@@ -17,6 +17,7 @@ import {
   APPLICATION_TABLE,
   sortApplications,
   type ApplicationUsageTableRow,
+  type ApplicationSpendPeriod,
 } from "./applicationTableData";
 
 export default function ApplicationUsageTable({
@@ -28,6 +29,7 @@ export default function ApplicationUsageTable({
   onOpen,
   actions,
   keyPrefix,
+  spendPeriod = "monthly",
 }: {
   rows: readonly ApplicationUsageTableRow[];
   loading: boolean;
@@ -37,6 +39,7 @@ export default function ApplicationUsageTable({
   onOpen?: (id: string) => void;
   actions?: ReactNode;
   keyPrefix?: string;
+  spendPeriod?: ApplicationSpendPeriod;
 }) {
   const { t } = useTranslation();
   const defaultPrefix = kind === "groups" ? "groups_" : "";
@@ -47,9 +50,12 @@ export default function ApplicationUsageTable({
   };
   const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } =
     useUrlTableState(tableOptions);
-  const columns = APPLICATION_COLUMNS.map((column) =>
-    column.id === "application" && kind === "groups" ? { ...column, label: "apps.groups.parent" as const } : column,
-  );
+  const columns = APPLICATION_COLUMNS.map((column) => {
+    if (column.id === "application" && kind === "groups") return { ...column, label: "apps.groups.parent" as const };
+    if (column.id === "spend" && spendPeriod === "selected")
+      return { ...column, label: "customerPortal.list.columns.spend" as const };
+    return column;
+  });
   const sortedRows = useMemo(() => sortApplications(rows, search, sorting), [rows, search, sorting]);
   const { pageSize, pageIndex } = pagination;
   const currentPage = Math.min(pageIndex, Math.max(0, Math.ceil(sortedRows.length / pageSize) - 1));
@@ -111,6 +117,7 @@ export default function ApplicationUsageTable({
               <CustomerSpendCells
                 entity={entity}
                 monthlySpend={total?.spend ?? null}
+                selectedSpend={spendPeriod === "selected" ? total?.spend ?? null : undefined}
                 yearlySpend={null}
                 tokens={total?.tokens ?? null}
                 tokenContent={<CustomerTokenTotal usage={total ?? null} />}

@@ -120,6 +120,7 @@ export function CustomerSpendCells({
   shareSpend = monthlySpend,
   budgetUnavailable,
   spendClassName,
+  selectedSpend,
 }: {
   entity: CustomerUsageEntity;
   monthlySpend: number | null;
@@ -134,6 +135,7 @@ export function CustomerSpendCells({
   shareSpend?: number | null;
   budgetUnavailable?: ReactNode;
   spendClassName?: string;
+  selectedSpend?: number | null;
 }) {
   const { t } = useTranslation();
   const budgets = budgetUnavailable ? [] : customerBudgetUsage(member);
@@ -151,6 +153,7 @@ export function CustomerSpendCells({
     <>
       <TableCell className={cn("pr-4", usageLayout && "px-4")}>
         <div className={cn("space-y-3", spendClassName)}>
+          <SelectedPeriodSpend spend={selectedSpend} hasMonthlyBudget={monthlyBudgets.length > 0} />
           {monthlyBudgets.map((budget) => (
             <CustomerBudgetWindow
               key={`${budget.source}-${budget.budget_duration}`}
@@ -158,7 +161,7 @@ export function CustomerSpendCells({
               showReset={monthlyBudgets.length > 1}
             />
           ))}
-          {monthlyBudgets.length === 0 && (
+          {monthlyBudgets.length === 0 && selectedSpend === undefined && (
             <CustomerBudgetSpend
               spend={monthlySpend}
               limit={null}
@@ -227,6 +230,19 @@ export function CustomerSpendCells({
           {t(budgetUnavailable ? "customerPortal.analytics.budgetUsageUnavailable" : status)}
         </span>
       </TableCell>
+    </>
+  );
+}
+
+function SelectedPeriodSpend({ spend, hasMonthlyBudget }: { spend?: number | null; hasMonthlyBudget: boolean }) {
+  const { t } = useTranslation();
+  if (spend === undefined) return null;
+  return (
+    <>
+      <CustomerBudgetSpend spend={spend} limit={null} label={t("customerPortal.analytics.spend")} showLimit={false} />
+      {hasMonthlyBudget && (
+        <span className="text-xs text-muted-foreground">{t("customerPortal.analytics.monthlySpend")}</span>
+      )}
     </>
   );
 }

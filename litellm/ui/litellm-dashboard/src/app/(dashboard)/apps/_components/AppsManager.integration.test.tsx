@@ -121,10 +121,17 @@ const appGroup: AppGroup = {
 describe("App groups", () => {
   it("shows group usage and filters an app within the same group and date range", async () => {
     network.routes["GET /management/v1/app_groups"] = () => [appGroup];
-    configureApp({ app_group_id: appGroup.app_group_id, budget: { max_budget: 2000 } });
+    configureApp({
+      app_group_id: appGroup.app_group_id,
+      budget: { max_budget: 2000, budget_duration: "1mo" },
+      budget_usage: [{ source: "scalar", max_budget: 2000, budget_duration: "1mo", spend: 1200, reset_at: null }],
+    });
     network.routes["GET /management/v1/customer_organizations/daily/activity"] = (request) => {
       const query = new URL(request.url).searchParams;
-      const scoped = query.get("app_group_id") === appGroup.app_group_id;
+      const scoped =
+        query.get("app_group_id") === appGroup.app_group_id &&
+        query.get("start_date") === "2026-11-01" &&
+        query.get("end_date") === "2026-11-03";
       const groupSpend = query.has("app_id") ? 2.5 : 12.5;
       const metrics = {
         spend: scoped ? groupSpend : 900,
@@ -150,6 +157,11 @@ describe("App groups", () => {
     });
     const models = within(await screen.findByRole("table", { name: "Models" }));
     expect(await models.findByText("$12.50")).toBeInTheDocument();
+    const applications = within(screen.getByRole("table", { name: "Applications" }));
+    expect(await applications.findByText("$2.50")).toBeInTheDocument();
+    expect(applications.getByText("$1,200.00 / $2,000.00")).toBeInTheDocument();
+    expect(applications.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "60");
+    expect(applications.getByRole("meter", { name: "Overall spend share" })).toHaveAttribute("aria-valuenow", "20");
     expect(screen.getByTitle("1,500 tokens")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Usage over time" })).toBeInTheDocument();
     expect(
