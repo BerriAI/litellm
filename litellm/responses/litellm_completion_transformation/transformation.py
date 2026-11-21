@@ -1507,8 +1507,9 @@ class LiteLLMCompletionResponsesConfig:
                 else bridged_messages
             ),
             "model": model,
-            "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                responses_api_request.get("tool_choice")
+            "tool_choice": LiteLLMCompletionResponsesConfig._chat_tool_choice_for_namespaces(
+                LiteLLMCompletionResponsesConfig._transform_tool_choice(responses_api_request.get("tool_choice")),
+                LiteLLMCompletionResponsesConfig.request_tools(responses_api_request),
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
@@ -3171,16 +3172,39 @@ class LiteLLMCompletionResponsesConfig:
         return (flat_tool,) if flat_tool is not None else ()
 
     @staticmethod
+    def _namespace_function_members(tools: ResponseTools) -> frozenset[tuple[str, str]]:
+        return frozenset(
+            chain.from_iterable(
+                (
+                    (str(tool.get("name") or ""), member)
+                    for member in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
+                )
+                for tool in tools or ()
+                if tool.get("type") == "namespace"
+            )
+        )
+
+    @staticmethod
+    def _chat_tool_choice_for_namespaces(tool_choice: object, tools: ResponseTools) -> object:
+        """Point a choice that names a namespace tool by its joined name at the name the provider is offered."""
+        function: Final = tool_choice.get("function") if is_str_keyed_dict(tool_choice) else None
+        name: Final = function.get("name") if is_str_keyed_dict(function) else None
+        if not isinstance(name, str):
+            return tool_choice
+        chat_names: Final = MappingProxyType(
+            {
+                f"{namespace}__{member}": namespaced_tool_name(namespace, member)
+                for namespace, member in LiteLLMCompletionResponsesConfig._namespace_function_members(tools)
+            }
+        )
+        return {"type": "function", "function": {"name": chat_names.get(name, name)}}
+
+    @staticmethod
     def _validate_namespace_name_collisions(tools: ResponseTools) -> None:
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
-        namespace_members: Final = frozenset(
-            (str(tool.get("name") or ""), member_name)
-            for tool in tools or ()
-            if tool.get("type") == "namespace"
-            for member_name in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
-        )
+        namespace_members: Final = LiteLLMCompletionResponsesConfig._namespace_function_members(tools)
         chat_and_joined_names: Final = sorted(
             (namespaced_tool_name(namespace, member_name), f"{namespace}__{member_name}")
             for namespace, member_name in namespace_members

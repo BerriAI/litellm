@@ -85,6 +85,11 @@ class _LoadedTool:
         name: Final = str(self.spec.get("name") or "")
         return name if self.namespace is None else namespaced_tool_name(self.namespace, name)
 
+    @property
+    def identity(self) -> str:
+        name: Final = str(self.spec.get("name") or "")
+        return name if self.namespace is None else f"{self.namespace}__{name}"
+
 
 @dataclass(frozen=True, slots=True)
 class ClientToolSearchBridge:
@@ -173,21 +178,19 @@ def _deferred_top_level_names(tools: Iterable[Mapping[str, object]]) -> frozense
     )
 
 
-def _callable_names(tool: object) -> tuple[str, ...]:
+def _tool_identities(tool: object) -> tuple[str, ...]:
     spec: Final = _tool_spec(tool)
     if spec is None:
         return ()
     if spec.type != "namespace":
         return (spec.name,)
-    return tuple(namespaced_tool_name(spec.name, str(member.get("name") or "")) for member in spec.tools)
+    return tuple(f"{spec.name}__{member.get('name') or ''}" for member in spec.tools)
 
 
 def _first_occurrences(loaded: Sequence[_LoadedTool], taken: frozenset[str]) -> tuple[_LoadedTool, ...]:
-    first_index: Final = {tool.callable_name: index for index, tool in reversed(tuple(enumerate(loaded)))}
+    first_index: Final = {tool.identity: index for index, tool in reversed(tuple(enumerate(loaded)))}
     return tuple(
-        tool
-        for index, tool in enumerate(loaded)
-        if first_index[tool.callable_name] == index and tool.callable_name not in taken
+        tool for index, tool in enumerate(loaded) if first_index[tool.identity] == index and tool.identity not in taken
     )
 
 
@@ -273,7 +276,7 @@ def bridge_client_tool_search(
     loaded: Final = _all_loaded_tools(
         (*loaded_earlier, *client_tool_search_loaded_tools(input)), _deferred_top_level_names(existing)
     )
-    taken: Final = frozenset(chain.from_iterable(map(_callable_names, eager)))
+    taken: Final = frozenset(chain.from_iterable(map(_tool_identities, eager)))
     bridged_input: Final = (
         input if isinstance(input, str) else [bridged for item in input if (bridged := _bridged_item(item)) is not None]
     )

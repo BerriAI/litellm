@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, Type
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils import tool_name_truncation as _tool_name_truncation
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_items,
@@ -14,9 +15,6 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.litellm_core_utils.tool_name_truncation import OPENAI_MAX_TOOL_NAME_LENGTH as OPENAI_MAX_TOOL_NAME_LENGTH
-from litellm.litellm_core_utils.tool_name_truncation import TOOL_NAME_HASH_LENGTH as TOOL_NAME_HASH_LENGTH
-from litellm.litellm_core_utils.tool_name_truncation import TOOL_NAME_PREFIX_LENGTH as TOOL_NAME_PREFIX_LENGTH
 from litellm.litellm_core_utils.tool_name_truncation import truncate_tool_name
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
@@ -29,6 +27,9 @@ from litellm.llms.anthropic.messages.utils import (
 )
 from litellm.responses.utils import auto_reasoning_summary
 
+OPENAI_MAX_TOOL_NAME_LENGTH: Final = _tool_name_truncation.OPENAI_MAX_TOOL_NAME_LENGTH
+TOOL_NAME_HASH_LENGTH: Final = _tool_name_truncation.TOOL_NAME_HASH_LENGTH
+TOOL_NAME_PREFIX_LENGTH: Final = _tool_name_truncation.TOOL_NAME_PREFIX_LENGTH
 PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 PROVIDERS_SERVED_BY_THE_MISTRAL_CHAT_CONFIG: Final = frozenset({"mistral", "codestral"})
 _COMPACTION_BLOCK: Final = TypeAdapter(dict[str, JsonValue])

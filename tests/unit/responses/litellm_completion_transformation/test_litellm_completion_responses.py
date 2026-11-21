@@ -15,7 +15,7 @@ from openai.types.responses.response_function_web_search import (
     ActionSearchSource,
     ResponseFunctionWebSearch,
 )
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
@@ -8630,22 +8630,21 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
 _VAULT_TOOL: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
 _APPS_NAMESPACE: Final = "mcp__codex_apps__atlassian_rovo__legacy"
 _APPS_TOOLS: Final = ("atlassian_rovo_legacy_addcommenttojiraissue", "atlassian_rovo_legacy_addworklogtojiraissue")
-_LONG_NAMESPACE_TOOLS: Final = (
-    {
-        "type": "namespace",
-        "name": "mcp__vault",
-        "description": "Vault tools",
-        "tools": [{"type": "function", "name": _VAULT_TOOL, "parameters": {"type": "object", "properties": {}}}],
-    },
-    {
-        "type": "namespace",
-        "name": _APPS_NAMESPACE,
-        "description": "Atlassian tools",
-        "tools": [
-            {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
-            for name in _APPS_TOOLS
-        ],
-    },
+_EMPTY_OBJECT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({"type": "object", "properties": {}})
+
+
+def _function_tool(name: str) -> Mapping[str, object]:
+    return {"type": "function", "name": name, "parameters": dict(_EMPTY_OBJECT_SCHEMA)}
+
+
+def _namespace_tool(name: str, members: Sequence[Mapping[str, object]], description: str = "") -> Mapping[str, object]:
+    return {"type": "namespace", "name": name, "description": description, "tools": list(members)}
+
+
+_VAULT_NAMESPACE: Final = _namespace_tool("mcp__vault", (_function_tool(_VAULT_TOOL),), "Vault tools")
+_LONG_NAMESPACE_TOOLS: Final[tuple[Mapping[str, object], ...]] = (
+    _VAULT_NAMESPACE,
+    _namespace_tool(_APPS_NAMESPACE, tuple(map(_function_tool, _APPS_TOOLS)), "Atlassian tools"),
 )
 _LONG_NAMESPACE_MEMBERS: Final = (("mcp__vault", _VAULT_TOOL), *((_APPS_NAMESPACE, name) for name in _APPS_TOOLS))
 
@@ -8674,6 +8673,21 @@ def _chat_tool_call_response(call_id: str, chat_name: str) -> ModelResponse:
     )
 
 
+class _ChatFunctionName(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+
+
+class _ChatFunctionTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    function: _ChatFunctionName
+
+
+_CHAT_FUNCTION_TOOLS: Final = TypeAdapter(tuple[_ChatFunctionTool, ...])
+
+
 class TestLongNamespaceToolNames:
     """Bedrock Converse, OpenAI and Gemini reject tool names over 64 characters, and joining a
     Responses namespace with its tool name can pass that (LIT-10289)."""
@@ -8683,7 +8697,7 @@ class TestLongNamespaceToolNames:
         chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             tools=list(tools)
         )
-        return tuple(str(tool["function"]["name"]) for tool in chat_tools)
+        return tuple(tool.function.name for tool in _CHAT_FUNCTION_TOOLS.validate_python(chat_tools))
 
     def test_joined_names_fit_in_64_characters_and_stay_distinct(self) -> None:
         chat_names: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)
@@ -8693,7 +8707,7 @@ class TestLongNamespaceToolNames:
         assert all(name.endswith(f"__{tool}") for name, tool in zip(chat_names[1:], _APPS_TOOLS)), chat_names
 
     def test_namespaces_that_differ_only_past_the_cut_still_get_distinct_names(self) -> None:
-        tools: Final = [
+        tools: Final[list[Mapping[str, object]]] = [
             {
                 "type": "namespace",
                 "name": f"mcp__codex_apps__vault_connector_with_a_very_long_shared_name_{suffix}",
@@ -8711,7 +8725,7 @@ class TestLongNamespaceToolNames:
         tool_names: Final = tuple(
             f"read_the_current_secret_value_from_the_vault_for_the_{region}" for region in ("east", "west")
         )
-        tools: Final = [
+        tools: Final[list[Mapping[str, object]]] = [
             {
                 "type": "namespace",
                 "name": "mcp__vault",
@@ -8726,7 +8740,7 @@ class TestLongNamespaceToolNames:
 
     def test_a_top_level_function_named_like_a_shortened_name_is_rejected(self) -> None:
         shortened: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS[:1])[0]
-        tools: Final = [
+        tools: Final[list[Mapping[str, object]]] = [
             *_LONG_NAMESPACE_TOOLS[:1],
             {"type": "function", "name": shortened, "parameters": {"type": "object", "properties": {}}},
         ]
@@ -8735,7 +8749,7 @@ class TestLongNamespaceToolNames:
             self._chat_tool_names(tools)
 
     def test_names_that_already_fit_are_sent_unchanged(self) -> None:
-        tools: Final = [
+        tools: Final[list[Mapping[str, object]]] = [
             {
                 "type": "namespace",
                 "name": "mcp__everything",
@@ -8819,8 +8833,9 @@ class TestLongNamespaceToolNames:
         assert (added.item.name, added.item.namespace) == (_VAULT_TOOL, "mcp__vault")
 
     def test_a_server_tool_search_that_finds_a_shortened_name_loads_the_original_tool(self) -> None:
-        vault: Final = _LONG_NAMESPACE_TOOLS[0]
-        deferred_vault: Final = {**vault, "tools": [{**vault["tools"][0], "defer_loading": True}]}
+        deferred_vault: Final = _namespace_tool(
+            "mcp__vault", ({**_function_tool(_VAULT_TOOL), "defer_loading": True},), "Vault tools"
+        )
         chat_name: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)[0]
         assert len(chat_name) <= 64
 
@@ -8894,12 +8909,31 @@ class TestLongNamespaceToolNames:
         calls: Final = [item for item in response.output if item.type == "function_call"]
         assert [(call.name, call.namespace) for call in calls] == [(_VAULT_TOOL, "mcp__vault")]
 
+    def test_forcing_a_long_namespace_tool_by_its_joined_name_forces_the_name_the_provider_is_offered(self) -> None:
+        chat_name: Final = self._chat_tool_names(_LONG_NAMESPACE_TOOLS)[0]
+        assert len(chat_name) <= 64
+
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            input="Read the secret",
+            responses_api_request=cast(
+                ResponsesAPIOptionalRequestParams,
+                {
+                    "tools": list(_LONG_NAMESPACE_TOOLS),
+                    "tool_choice": {"type": "function", "name": f"mcp__vault__{_VAULT_TOOL}"},
+                },
+            ),
+            custom_llm_provider="bedrock",
+        )
+
+        assert request["tool_choice"] == {"type": "function", "function": {"name": chat_name}}
+
     def test_two_namespaces_whose_shortened_names_collide_are_rejected(self) -> None:
         colliding_namespaces: Final = (
             "mcp__codex_apps__vault_connector_with_a_long_name_104655",
             "mcp__codex_apps__vault_connector_with_a_long_name_119871",
         )
-        tools: Final = [
+        tools: Final[list[Mapping[str, object]]] = [
             {
                 "type": "namespace",
                 "name": namespace,
