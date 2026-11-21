@@ -4433,7 +4433,7 @@ GOOGLE_MODEL_PATH_TEMPLATES: Final = tuple(
 
 @pytest.mark.parametrize("template", GOOGLE_MODEL_PATH_TEMPLATES)
 @pytest.mark.parametrize("model_name", ["", "gemini-text", "publishers/google/gemini-2.5-flash", "a:b"])
-def test_google_model_route_gate_agrees_with_the_router(template, model_name):
+def test_google_model_route_gate_agrees_with_the_router(template: str, model_name: str) -> None:
     route: Final = template.replace("{model_name:path}", model_name)
     router_regex, _, _ = compile_path(template)
 

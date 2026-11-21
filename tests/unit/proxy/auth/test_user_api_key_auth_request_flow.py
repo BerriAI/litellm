@@ -1551,7 +1551,11 @@ async def test_zero_budget_key_is_refused_on_google_model_routes(
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     monkeypatch.setattr(_proxy_server_mod, "prisma_client", MagicMock())
-    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", UserApiKeyCache())
+    key_cache: Final = UserApiKeyCache()
+    await key_cache.async_set_cache(
+        key=AuthObject.virtual_key(hash_token(api_key)), value=cached_token, model_type=UserAPIKeyAuth
+    )
+    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", key_cache)
     monkeypatch.setattr(_proxy_server_mod, "proxy_logging_obj", mock_proxy_logging_obj)
     monkeypatch.setattr(_proxy_server_mod, "master_key", "sk-master-key")
     monkeypatch.setattr(_proxy_server_mod, "general_settings", {})
@@ -1565,14 +1569,7 @@ async def test_zero_budget_key_is_refused_on_google_model_routes(
     request: Final = Request(scope={"type": "http", "method": "POST", "headers": []})
     request._url = URL(url=template.replace("{model_name:path}", model_in_url))
 
-    with (
-        patch(
-            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
-            new_callable=AsyncMock,
-            return_value=cached_token,
-        ),
-        pytest.raises(ProxyException) as refused,
-    ):
+    with pytest.raises(ProxyException) as refused:
         await user_api_key_auth_builder(
             request=request,
             api_key=f"Bearer {api_key}",

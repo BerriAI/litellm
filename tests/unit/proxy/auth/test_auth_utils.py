@@ -1710,6 +1710,10 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
         )
         == "hosted_vllm/gpt-oss-20b"
     )
+    assert (
+        get_model_from_request(request_data={}, route="/gemini/v1beta/models/gemini-text:v1:generateContent")
+        == "gemini-text:v1"
+    )
 
 
 _URL_SELECTED_MODEL_ROUTES: Final = (
@@ -1717,6 +1721,8 @@ _URL_SELECTED_MODEL_ROUTES: Final = (
     ("/models/premium-model:generateContent", "premium-model"),
     ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
     ("/models/provider/premium-model:7b:streamGenerateContent", "provider/premium-model:7b"),
+    ("/v1beta/models/premium-model:countTokens", "premium-model"),
+    ("/v1beta/models/premium-model:7b:countTokens", "premium-model:7b"),
     ("/openai/deployments/premium-model/images/generations", "premium-model"),
     ("/openai/deployments/provider/premium-model/images/edits", "provider/premium-model"),
 )
