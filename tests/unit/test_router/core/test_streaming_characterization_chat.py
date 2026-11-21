@@ -11,9 +11,11 @@ while one that raises later fails while the caller iterates.
 import asyncio
 from collections.abc import Callable, Mapping
 from typing import Final, NoReturn
+from unittest.mock import patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
@@ -499,6 +501,35 @@ async def test_continuation_continues_after_content_on_a_prefill_capable_fallbac
     stream = await open_stream(core)
     assert await collect_texts(stream) == "hello world"
     assert host.deployments_called() == ["a", "b"]
+
+
+async def test_continuation_rejects_an_unknown_guardrail_before_calling_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    host.answer("openai/a", chat_stream("he", "llo", error=rate_limit()))
+    host.answer(PREFILL_MODEL, chat_stream(" world"))
+    core: Final = make_core(
+        model_list=[
+            deployment("a", "a"),
+            deployment("b", "b", model=PREFILL_MODEL, guardrails=["unknown-stream-guard"]),
+        ],
+        fallbacks=[{"a": ["b"]}],
+        num_retries=0,
+        enable_mid_stream_fallback_continuation=True,
+    )
+    token: Final = REQUEST_AUTH.set(UserAPIKeyAuth(api_key="test-key"))
+    try:
+        with patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": True}):
+            stream: Final = await open_stream(core)
+            with pytest.raises(HTTPException, match="unknown-stream-guard") as exc:
+                await collect_texts(stream)
+            assert exc.value.status_code == 400
+        assert host.deployments_called() == ["a"]
+    finally:
+        REQUEST_AUTH.reset(token)
 
 
 async def test_continuation_sends_the_partial_text_as_an_assistant_prefill(
