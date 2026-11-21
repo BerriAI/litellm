@@ -1074,14 +1074,14 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         return choices
 
     @staticmethod
-    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:
+    def _extract_error_from_chunk(chunk: Mapping[str, object]) -> tuple[str, int] | None:
         """OpenAI-compatible backends (vLLM, sglang) can return an HTTP 200
         stream whose body carries an error payload, e.g.
         ``data: {"error": {"message": "...", "code": 400}}``."""
         error: Final = chunk.get("error")
         if not error:
             return None
-        if not isinstance(error, dict):
+        if not isinstance(error, Mapping):
             return str(error), 500
         message: Final = error.get("message")
         code: Final = error.get("code")

@@ -4231,7 +4231,7 @@ _BEDROCK_REGION_PREFIXES: Final = (
 _TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
 
 
-def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
+def model_cost_rows() -> dict[str, Mapping[str, object]]:
     return cast(dict[str, Mapping[str, object]], litellm.model_cost)
 
 
@@ -4241,7 +4241,7 @@ def _without_synthesized_costs(
     """``_get_model_info_helper`` synthesizes ``input_cost_per_token`` / ``output_cost_per_token`` = 0 when the raw
     entry has neither (#30198). Persisting those zeros would turn a name-priced entry into a free one and make
     ``_is_cost_explicitly_configured`` disable budget enforcement on the next re-registration."""
-    builtin_cost_map: Final = _builtin_cost_map()
+    builtin_cost_map: Final = model_cost_rows()
     raw_fields: Final = frozenset(builtin_cost_map.get(str(model_info["key"]), builtin_cost_map.get(key, {})))
     return MappingProxyType(
         {
@@ -4398,7 +4398,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
     row_names: Final = (key, *prefix_stripped, base, stripped)
     candidates: Final = (key, *prefix_stripped, base, *region_stripped, stripped)
 
-    builtin_cost_map: Final = _builtin_cost_map()
+    builtin_cost_map: Final = model_cost_rows()
     for candidate in candidates:
         entry = builtin_cost_map.get(candidate)
         if (
@@ -4478,7 +4478,7 @@ def model_cost_registration_row(key: str, provider: object) -> Mapping[str, obje
     ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
     with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
     base: Final = registration_base(key, {"litellm_provider": provider}, custom_llm_provider=None)
-    return _builtin_cost_map().get(base.key) or base.base
+    return model_cost_rows().get(base.key) or base.base
 
 
 def model_cost_registration_key(key: str) -> str:
@@ -4490,7 +4490,7 @@ def model_cost_registration_key(key: str) -> str:
 def registration_base(key: str, value: Mapping[str, object], custom_llm_provider: str | None) -> Landing:
     provider: Final = str(value.get("litellm_provider") or "")
     if _skips_builtin_registration_lookup(key, provider):
-        return Landing(key=key, base=dict(_builtin_cost_map().get(key, {})), matched_builtin=True)
+        return Landing(key=key, base=dict(model_cost_rows().get(key, {})), matched_builtin=True)
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider
     )
@@ -4621,7 +4621,7 @@ def runtime_model_cost_registrations(
         names["split_model"],
         names["stripped_model_name"],
     )
-    entries: Final = ((key, _builtin_cost_map().get(key)) for key in dict.fromkeys(candidates))
+    entries: Final = ((key, model_cost_rows().get(key)) for key in dict.fromkeys(candidates))
     registered: Final = (
         (key, entry) for key, entry in entries if isinstance(entry, AliasedCostEntry) and entry.registered_fields
     )
@@ -9409,7 +9409,7 @@ def _get_valid_models_from_provider_api(
 
 def bundled_provider_models(provider: str) -> tuple[str, ...]:
     bundled: Final[tuple[str, ...]] = tuple(litellm.models_by_provider.get(provider, ()))
-    cost_map: Final = _builtin_cost_map()
+    cost_map: Final = model_cost_rows()
     return tuple(model for model in bundled if not is_hidden_as_retired(cost_map.get(model, {})))
 
 
@@ -11029,10 +11029,10 @@ class ProviderConfigManager:
                 mantle_supports_responses,
             )
 
-            if not model or not mantle_supports_responses(model, litellm.model_cost):
+            if not model or not mantle_supports_responses(model, model_cost_rows()):
                 return None
             return litellm.BedrockMantleResponsesAPIConfig(
-                use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1",
+                use_openai_path=mantle_base_segment(model, model_cost_rows()) == "openai/v1",
                 encrypted_agent_messages=bedrock_model_encrypts_agent_messages(model),
             )
         return None

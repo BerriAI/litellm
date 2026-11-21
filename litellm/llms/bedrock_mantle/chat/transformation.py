@@ -19,6 +19,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
@@ -45,16 +46,16 @@ if TYPE_CHECKING:
 _AWS_ERROR_ENVELOPE_STATUS: Final = 404
 
 
-def _json_or_none(response: httpx.Response) -> object:
+def _json_or_none(response: httpx.Response) -> Mapping[str, object] | None:
     try:
-        return response.json()
+        return as_str_mapping(response.json())
     except ValueError:
         return None
 
 
 class BedrockMantleChatStreamingHandler(OpenAIChatCompletionStreamingHandler):
     @staticmethod
-    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:  # mutable-ok: base class signature
+    def _extract_error_from_chunk(chunk: Mapping[str, object]) -> tuple[str, int] | None:
         error_type: Final = aws_error_envelope_type(chunk)
         if error_type is not None:
             return aws_error_envelope_message(error_type), _AWS_ERROR_ENVELOPE_STATUS
@@ -145,13 +146,15 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
         BaseAWSLLM.validate_aws_region_name(region)
+        from litellm.utils import model_cost_rows
+
         # The base path segment is data-driven per model (use_openai_responses_path
         # flag): gemma-4-* and gpt-5.x are served on /openai/v1, everything else on
         # /v1. An explicit api_base still wins over the derived default.
         api_base = (
             api_base
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
-            or f"https://bedrock-mantle.{region}.api.aws/{mantle_base_segment(base_model, litellm.model_cost)}"
+            or f"https://bedrock-mantle.{region}.api.aws/{mantle_base_segment(base_model, model_cost_rows())}"
         )
         dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
@@ -253,10 +256,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,  # mutable-ok: signature fixed by the override contract
+        request_data: dict[str, object],  # mutable-ok: signature fixed by the override contract
         messages: list[AllMessageValues],  # mutable-ok: signature fixed by the override contract
-        optional_params: dict,  # mutable-ok: signature fixed by the override contract
-        litellm_params: dict,  # mutable-ok: signature fixed by the override contract
+        optional_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
+        litellm_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

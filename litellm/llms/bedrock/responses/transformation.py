@@ -42,6 +42,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
@@ -168,8 +169,8 @@ def without_what_bedrock_runtime_rejects(params: Mapping[str, object]) -> Mappin
             unsupported,
         )
     supported: Final = {key: value for key, value in params.items() if key not in unsupported}
-    tools: Final = supported.get("tools")
-    if not isinstance(tools, list):
+    tools: Final = as_object_list(supported.get("tools"))
+    if tools is None:
         return supported
     kept, dropped_types = drop_unsupported_tools(tools, BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES)
     if not dropped_types:
@@ -315,7 +316,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         mapped: Final = super().map_openai_params(
             response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
         )
-        return _without_disabled_reasoning_effort(without_what_bedrock_runtime_rejects(mapped), model, drop_params)
+        return _without_disabled_reasoning_effort(
+            without_what_bedrock_runtime_rejects(as_str_mapping(mapped) or {}), model, drop_params
+        )
 
     def transform_responses_api_request(
         self,

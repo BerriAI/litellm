@@ -264,16 +264,13 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
                 list(rewritten_types),
             )
-        request_params: Final = (
-            self._params_with_hoisted_tools(params, hoisted)
-            if hoisted.hoisted
-            else response_api_optional_request_params
-        )
+        hoisted_params: Final = self._params_with_hoisted_tools(params, hoisted) if hoisted.hoisted else None
+        request_params: Final = hoisted_params if hoisted_params is not None else response_api_optional_request_params
         return super().transform_responses_api_request(
             model=model,
             input=normalized_input,
             response_api_optional_request_params=(
-                dict(without_what_bedrock_runtime_rejects(request_params))
+                dict(without_what_bedrock_runtime_rejects(hoisted_params if hoisted_params is not None else params))
                 if is_bedrock_runtime_host(_configured_api_base(litellm_params.api_base))
                 else request_params
             ),

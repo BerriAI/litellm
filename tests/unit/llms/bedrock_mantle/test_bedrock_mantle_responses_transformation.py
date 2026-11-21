@@ -8,6 +8,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
 import copy
+from collections.abc import Mapping
 import logging
 from typing import Final
 
@@ -1453,13 +1454,13 @@ class TestMantleGeoInferenceProfile:
 
     @pytest.mark.parametrize("geo", get_bedrock_cross_region_inference_regions())
     @pytest.mark.parametrize("region_path", ["", "us-west-2/"])
-    def test_every_geo_prefix_routes_like_the_bare_id(self, geo, region_path):
+    def test_every_geo_prefix_routes_like_the_bare_id(self, geo: str, region_path: str) -> None:
         model_cost = {"bedrock_mantle/openai.gpt-x": {"mode": "responses", "use_openai_responses_path": True}}
         model = f"{region_path}{geo}.openai.gpt-x"
         assert mantle_supports_responses(model, model_cost) is True
         assert mantle_base_segment(model, model_cost) == "openai/v1"
 
-    def test_an_exactly_registered_geo_id_wins_over_the_bare_row(self):
+    def test_an_exactly_registered_geo_id_wins_over_the_bare_row(self) -> None:
         model_cost = {
             "bedrock_mantle/openai.gpt-x": {"mode": "chat"},
             "bedrock_mantle/us.openai.gpt-x": {"mode": "responses", "use_openai_responses_path": True},
@@ -1468,7 +1469,7 @@ class TestMantleGeoInferenceProfile:
         assert mantle_base_segment("us.openai.gpt-x", model_cost) == "openai/v1"
         assert mantle_supports_responses("eu.openai.gpt-x", model_cost) is False
 
-    def test_every_catalogued_model_gets_the_same_responses_url_under_a_us_profile(self, local_cost_map):
+    def test_every_catalogued_model_gets_the_same_responses_url_under_a_us_profile(self, local_cost_map: None) -> None:
         bare_ids = [
             key.removeprefix("bedrock_mantle/")
             for key, row in litellm.model_cost.items()
@@ -1501,7 +1502,9 @@ class TestMantleGeoInferenceProfile:
             {"reasoning_effort": {"effort": "low", "summary": "auto"}},
         ],
     )
-    def test_chat_completions_take_the_same_route_under_a_us_profile(self, local_cost_map, request_params):
+    def test_chat_completions_take_the_same_route_under_a_us_profile(
+        self, local_cost_map: None, request_params: Mapping[str, object]
+    ) -> None:
         from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
 
         bare_ids = [

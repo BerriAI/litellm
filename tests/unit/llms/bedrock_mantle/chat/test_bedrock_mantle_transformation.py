@@ -11,6 +11,7 @@ Tests use a fake/mocked HTTP layer to verify the full request pipeline:
 import asyncio
 import importlib
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -210,30 +211,33 @@ AWS_UNKNOWN_OPERATION: Final = {
 CHAT_ONLY_MANTLE_MODEL: Final = "bedrock_mantle/openai.not-in-the-cost-map"
 
 
-def _aws_reply(body: dict, url: str) -> httpx.Response:
+def _aws_reply(body: Mapping[str, object], url: str) -> httpx.Response:
     return httpx.Response(200, json=body, request=httpx.Request("POST", url))
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_a_200_aws_error_body_is_raised_instead_of_an_empty_answer(stream):
+def test_a_200_aws_error_body_is_raised_instead_of_an_empty_answer(stream: bool) -> None:
     client = HTTPHandler()
     url = "https://bedrock-runtime.us-east-1.amazonaws.com/chat/completions"
 
+    def call_and_drain() -> None:
+        response = litellm.completion(
+            model=CHAT_ONLY_MANTLE_MODEL,
+            messages=[{"role": "user", "content": "Hi"}],
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="synthetic-bedrock-mantle-key",
+            stream=stream,
+            client=client,
+        )
+        for _ in response if stream else ():
+            pass
+
     with patch.object(client, "post", return_value=_aws_reply(AWS_UNKNOWN_OPERATION, url)):
         with pytest.raises(litellm.NotFoundError, match="UnknownOperationException"):
-            response = litellm.completion(
-                model=CHAT_ONLY_MANTLE_MODEL,
-                messages=[{"role": "user", "content": "Hi"}],
-                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
-                api_key="synthetic-bedrock-mantle-key",
-                stream=stream,
-                client=client,
-            )
-            for _ in response if stream else ():
-                pass
+            call_and_drain()
 
 
-def test_a_normal_200_answer_still_reads_as_the_answer():
+def test_a_normal_200_answer_still_reads_as_the_answer() -> None:
     client = HTTPHandler()
     url = "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions"
     answer = {
