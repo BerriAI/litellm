@@ -57,3 +57,67 @@ def test_trustedrouter_provider_detection_by_prefix():
     assert model == "zdr"
     assert provider == "trustedrouter"
     assert api_base == TRUSTEDROUTER_API_BASE
+
+
+_TRUSTEDROUTER_CHAT_URL = f"{TRUSTEDROUTER_API_BASE}/chat/completions"
+_TRUSTEDROUTER_CHAT_COMPLETION = {
+    "id": "chatcmpl_trustedrouter",
+    "object": "chat.completion",
+    "created": 1_790_000_000,
+    "model": "zdr",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+}
+
+
+def test_trustedrouter_chat_never_borrows_the_openai_key(monkeypatch):
+    import pytest
+    import respx
+
+    import litellm
+
+    monkeypatch.delenv("TRUSTEDROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("TRUSTEDROUTER_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-env")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route = upstream.post(_TRUSTEDROUTER_CHAT_URL).respond(
+            200, json=_TRUSTEDROUTER_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.AuthenticationError, match="TRUSTEDROUTER_API_KEY"):
+            litellm.completion(
+                model="trustedrouter/zdr",
+                messages=[{"role": "user", "content": "Say hello"}],
+            )
+
+    assert route.call_count == 0
+
+
+def test_trustedrouter_chat_sends_the_explicit_key(monkeypatch):
+    import respx
+
+    import litellm
+
+    monkeypatch.delenv("TRUSTEDROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("TRUSTEDROUTER_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-env")
+
+    with respx.mock() as upstream:
+        route = upstream.post(_TRUSTEDROUTER_CHAT_URL).respond(
+            200, json=_TRUSTEDROUTER_CHAT_COMPLETION
+        )
+        response = litellm.completion(
+            model="trustedrouter/zdr",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="sk-tr-test",
+        )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-tr-test"
+    assert response.choices[0].message.content == "Hello"
