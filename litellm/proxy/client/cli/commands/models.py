@@ -61,7 +61,8 @@ def _get_model_info_obj_from_yaml(model: dict[str, Any], model_id: str) -> Model
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: Final[str] = model["model_name"]
     model_params: Final = _DECODED_YAML.validate_python(model["litellm_params"])
-    model_info: Final = _DECODED_YAML.validate_python(model.get("model_info", {}))
+    raw_model_info: Final = model.get("model_info")
+    model_info: Final = _DECODED_YAML.validate_python({} if raw_model_info is None else raw_model_info)
     access_groups: Final = require_get(model_info).get("access_groups", [])
     provider: Final = model_id.split("/", 1)[0] if "/" in model_id else model_id
     return ModelYamlInfo(
@@ -359,7 +360,7 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
 def _filter_model(model, model_regex, access_group_regex) -> str | None:
     model_name: Final = model.get("model_name")
     model_params: Final = model.get("litellm_params")
-    model_info: Final = model.get("model_info", {})
+    model_info: Final = model.get("model_info") or {}
     if not model_name or not model_params:
         return None
     model_id: Final = model_params.get("model")
