@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse, ORJSONResponse
+from fastapi.responses import JSONResponse, ORJSONResponse, StreamingResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
@@ -18,6 +18,7 @@ from litellm.proxy.common_request_processing import (
     proxy_exception_from_http_exception,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
@@ -25,9 +26,20 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
-from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody, TokenCountDetailsResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _GoogleGenerateContentRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    contents: tuple[Mapping[str, object], ...]
+    system_instruction: Mapping[str, object] | None = Field(default=None, alias="systemInstruction")
+    tools: tuple[Mapping[str, object], ...] = ()
+    tool_config: Mapping[str, object] | None = Field(default=None, alias="toolConfig")
+    safety_settings: tuple[Mapping[str, object], ...] = Field(default=(), alias="safetySettings")
+    generation_config: Mapping[str, object] | None = Field(default=None, alias="generationConfig")
+    cached_content: str | None = Field(default=None, alias="cachedContent")
 
 
 def _google_repeated_field(value: JsonValue) -> JsonValue:
@@ -197,6 +209,17 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
 
 
 @router.post(
+    "/v1/models/{model_name:path}:generateContent",
+    dependencies=[Depends(user_api_key_auth)],
+    description="Generate content using the Google GenAI request and response format.",
+    openapi_extra={
+        "requestBody": inline_request_body(
+            _GoogleGenerateContentRequest, {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
+        )
+    },
+    responses={200: {"model": GenerateContentResponseBody}},
+)
+@router.post(
     "/v1beta/models/{model_name:path}:generateContent",
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -257,6 +280,22 @@ async def google_generate_content(
         )
 
 
+@router.post(
+    "/v1/models/{model_name:path}:streamGenerateContent",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=StreamingResponse,
+    description="Stream Google GenAI response chunks as server-sent events.",
+    openapi_extra={
+        "requestBody": inline_request_body(
+            _GoogleGenerateContentRequest, {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
+        )
+    },
+    responses={
+        200: {
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
+)
 @router.post(
     "/v1beta/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
@@ -322,6 +361,16 @@ async def google_stream_generate_content(
         )
 
 
+@router.post(
+    "/v1/models/{model_name:path}:countTokens",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountDetailsResponse,
+    openapi_extra={
+        "requestBody": inline_request_body(
+            _GoogleCountTokensRequest, {"contents": [{"role": "user", "parts": [{"text": "Count this"}]}]}
+        )
+    },
+)
 @router.post(
     "/v1beta/models/{model_name:path}:countTokens",
     dependencies=[Depends(user_api_key_auth)],

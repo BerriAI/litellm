@@ -963,6 +963,9 @@ def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
 @pytest.mark.parametrize(
     "route",
     [
+        "/v1/models/routed-model:countTokens",
+        "/v1/models/routed-model:generateContent",
+        "/v1/models/provider/routed-model:streamGenerateContent",
         "/v1beta/models/gemini-2.5-flash:countTokens",
         "/v1beta/models/gemini-2.0-flash:generateContent",
         "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
