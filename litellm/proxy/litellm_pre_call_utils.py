@@ -2407,6 +2407,11 @@ class LiteLLMProxyRequestSetup:
                     "billing_agent_id": user_api_key_dict.agent_id or user_api_key_dict.invoked_agent_id,
                     "agent_execution_mode": managed_context.mode if managed_context else None,
                     "verified_human_user_id": managed_context.user_id if managed_context else None,
+                    **(
+                        {"agent_actor_chain": ",".join(managed_context.actor_chain)}
+                        if managed_context and managed_context.actor_chain
+                        else {}
+                    ),
                 }
             )
         )
