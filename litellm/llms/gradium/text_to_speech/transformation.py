@@ -110,12 +110,17 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return self.VOICE_MAPPINGS.get(candidate.lower(), candidate)
 
+    def _set_request_fields(
+        self, source: Mapping[str, object]
+    ) -> dict[str, object]:  # mutable-ok: merged into dict_body
+        return {key: source[key] for key in self.CALLER_REQUEST_FIELDS if source.get(key) is not None}
+
     def _caller_request_fields(
         self, kwargs: Mapping[str, object]
     ) -> dict[str, object]:  # mutable-ok: merged into dict_body
         extra_body: Final = kwargs.get("extra_body")
-        sent: Final = {**kwargs, **(_REQUEST_FIELDS.validate_python(extra_body) if extra_body is not None else {})}
-        return {key: sent[key] for key in self.CALLER_REQUEST_FIELDS if sent.get(key) is not None}
+        extra_fields: Final = _REQUEST_FIELDS.validate_python(extra_body) if isinstance(extra_body, dict) else {}
+        return {**self._set_request_fields(kwargs), **self._set_request_fields(extra_fields)}
 
     def map_openai_params(
         self,
