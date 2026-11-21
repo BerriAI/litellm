@@ -130,6 +130,15 @@ class GenericGuardrailAPIConfigModel(
 ):
     """Configuration parameters for the Generic Guardrail API guardrail"""
 
+    api_base: str | None = Field(
+        default=None,
+        description="Base URL of the guardrail service. Defaults to GENERIC_GUARDRAIL_API_BASE when omitted",
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="API key sent to the guardrail service in the x-api-key header",
+    )
+
     optional_params: GenericGuardrailAPIOptionalParams | None = Field(
         default_factory=GenericGuardrailAPIOptionalParams,
         description="Optional parameters for the Generic Guardrail API guardrail",
