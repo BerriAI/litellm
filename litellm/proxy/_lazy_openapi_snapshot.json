@@ -38813,12 +38813,14 @@
                   "items": {
                     "type": "string"
                   },
+                  "minItems": 1,
                   "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
               "title": "Allowed Events"
             },
             "enabled": {
@@ -41706,12 +41708,14 @@
                   "items": {
                     "type": "string"
                   },
+                  "minItems": 1,
                   "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
               "title": "Allowed Events"
             },
             "enabled": {
@@ -45544,12 +45548,14 @@
                   "items": {
                     "type": "string"
                   },
+                  "minItems": 1,
                   "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
               "title": "Allowed Events"
             },
             "enabled": {
@@ -47559,7 +47565,7 @@
       },
       "/v1/mcp/events/types": {
         "get": {
-          "description": "List the event types one events-enabled MCP server publishes to this caller, with gateway-prefixed names.",
+          "description": "List the event types one events-enabled MCP server publishes to this caller, under their upstream names.",
           "operationId": "list_event_types_v1_mcp_events_types_get",
           "parameters": [
             {
@@ -49866,12 +49872,14 @@
                   "items": {
                     "type": "string"
                   },
+                  "minItems": 1,
                   "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
               "title": "Allowed Events"
             },
             "enabled": {

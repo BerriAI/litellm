@@ -22583,7 +22583,7 @@ export interface paths {
         };
         /**
          * List Event Types
-         * @description List the event types one events-enabled MCP server publishes to this caller, with gateway-prefixed names.
+         * @description List the event types one events-enabled MCP server publishes to this caller, under their upstream names.
          */
         get: operations["list_event_types_v1_mcp_events_types_get"];
         put?: never;
@@ -41419,7 +41419,10 @@ export interface components {
         };
         /** MCPServerEventsConfig */
         MCPServerEventsConfig: {
-            /** Allowed Events */
+            /**
+             * Allowed Events
+             * @description Event names or globs this server may publish. Omit for every event; set enabled false for none.
+             */
             allowed_events?: string[] | null;
             /**
              * Enabled
