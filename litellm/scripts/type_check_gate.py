@@ -53,14 +53,15 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from types import MappingProxyType
-from typing import Final
+from types import FrameType, MappingProxyType
+from typing import Final, NoReturn
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -96,6 +97,11 @@ PRISMA_SCHEMA = REPO_ROOT / "litellm" / "proxy" / "schema.prisma"
 NODE_HEAP_OPTION = "--max-old-space-size=8192"
 
 BASEDPYRIGHT_THREADS: Final = min(os.cpu_count() or 1, 4)
+
+# A healthy pass takes 3 to 20 minutes depending on load. When one of basedpyright's workers dies
+# mid-run, the main process waits on it forever while holding its memory and a
+# machine-wide gate slot.
+BASEDPYRIGHT_TIMEOUT_SECONDS: Final = 60 * 60
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
@@ -174,9 +180,7 @@ def typecheck_env_commands(env_dir: Path = TYPECHECK_ENV_DIR) -> tuple[tuple[str
 
 
 def _run_provision_step(cmd: tuple[str, ...], env: Mapping[str, str]) -> int:
-    proc = subprocess.run(
-        list(cmd), cwd=REPO_ROOT, env=dict(env), capture_output=True, text=True
-    )
+    proc = subprocess.run(list(cmd), cwd=REPO_ROOT, env=dict(env), capture_output=True, text=True)
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout)
         sys.stderr.write(proc.stderr)
@@ -199,14 +203,28 @@ def ensure_typecheck_env(
     env: Final = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(env_dir)}
     for cmd in typecheck_env_commands(env_dir):
         if run(cmd, env) != 0:
-            raise SystemExit(
-                f"could not provision the type-check environment at {env_dir}: "
-                f"`{' '.join(cmd)}` failed"
-            )
+            raise SystemExit(f"could not provision the type-check environment at {env_dir}: `{' '.join(cmd)}` failed")
     return env_dir
 
 
-def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -> str:
+def _raise_system_exit(signum: int, _frame: FrameType | None) -> NoReturn:
+    raise SystemExit(128 + signum)
+
+
+@contextlib.contextmanager
+def _sigterm_raises_system_exit() -> Iterator[None]:
+    previous: Final = signal.signal(signal.SIGTERM, _raise_system_exit)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
+
+
+def run_basedpyright(
+    cwd: Path = REPO_ROOT,
+    env_dir: Path = TYPECHECK_ENV_DIR,
+    timeout_seconds: float = BASEDPYRIGHT_TIMEOUT_SECONDS,
+) -> str:
     """One basedpyright pass over `cwd` from the gate-owned venv, with the
     raised node heap exported.
 
@@ -216,28 +234,48 @@ def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -
     measuring the caller's fatter venv (whose extra typed packages flip
     diagnostics) whenever the repo has one. Exit 0 (clean) and 1 (errors
     found) are both output-bearing runs; anything else is a crash and fails
-    loudly instead of reading as zero errors."""
+    loudly instead of reading as zero errors.
+
+    It runs in its own process group so a timeout, Ctrl-C or SIGTERM kills its
+    worker processes too. Killing only the `basedpyright` wrapper leaves node and
+    every worker running."""
     bin_dir: Final = env_dir / "bin"
-    proc = subprocess.run(
-        [
-            str(bin_dir / "basedpyright"),
-            "--outputjson",
-            "--project",
-            str(cwd / PYRIGHT_CONFIG.name),
-            "--pythonpath",
-            str(bin_dir / "python"),
-            "--threads",
-            str(BASEDPYRIGHT_THREADS),
-        ],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "NODE_OPTIONS": node_options_with_heap(os.environ)},
-    )
+    with (
+        _sigterm_raises_system_exit(),
+        subprocess.Popen(
+            [
+                str(bin_dir / "basedpyright"),
+                "--outputjson",
+                "--project",
+                str(cwd / PYRIGHT_CONFIG.name),
+                "--pythonpath",
+                str(bin_dir / "python"),
+                "--threads",
+                str(BASEDPYRIGHT_THREADS),
+            ],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "NODE_OPTIONS": node_options_with_heap(os.environ)},
+            start_new_session=True,
+        ) as proc,
+    ):
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            raise SystemExit(
+                f"basedpyright did not finish within {timeout_seconds:g}s, so it and its workers were killed. "
+                "A healthy run takes minutes; this usually means a worker died and left it waiting forever."
+            ) from None
+        except BaseException:
+            os.killpg(proc.pid, signal.SIGKILL)
+            raise
     if proc.returncode not in (0, 1):
-        sys.stderr.write(proc.stderr)
+        sys.stderr.write(stderr)
         raise SystemExit(f"basedpyright exited {proc.returncode}")
-    return proc.stdout
+    return stdout
 
 
 @contextlib.contextmanager
