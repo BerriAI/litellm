@@ -104,8 +104,13 @@ class EventStore(Protocol):
         """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
         ...
 
-    async def delete_ended(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
-        """Delete the row only while it is still this terminated upstream subscription."""
+    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        """Freeze a live row as pending while it is torn down, so delivery stops and a racing subscribe is told to
+        retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
+        ...
+
+    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+        """Delete the row only while it is still held for this upstream subscription's unsubscribe."""
         ...
 
     async def delete(self, subscription_id: str) -> None: ...
@@ -279,9 +284,20 @@ class PrismaEventStore:
         )
         return ended > 0
 
-    async def delete_ended(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        held: Final = await self._subscriptions.update_many(
+            where={
+                "id": subscription_id,
+                "upstream_subscription_id": upstream_subscription_id,
+                "status": {"in": ["active", "suspended"]},
+            },
+            data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
+        )
+        return held > 0
+
+    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
         await self._subscriptions.delete_many(
-            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "terminated"}
+            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "pending"}
         )
 
     async def delete(self, subscription_id: str) -> None:

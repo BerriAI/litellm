@@ -393,14 +393,14 @@ async def unsubscribe(
         mismatch: Final = check_routing_headers(headers, params.name, params.arguments, prepared)
         if mismatch is not None:
             return Error(mismatch)
-    if not await events_store.end_if_current(sid, row.upstream_subscription_id):
+    if not await events_store.hold_for_unsubscribe(sid, row.upstream_subscription_id):
         return Error(subscription_not_found())
     await events_store.drop_deliveries(sid)
     if prepared is not None:
         await _unsubscribe_upstream(row, prepared, settings, runtime)
     else:
         await end_upstream(row, settings, runtime)
-    await events_store.delete_ended(sid, row.upstream_subscription_id)
+    await events_store.delete_held(sid, row.upstream_subscription_id)
     await runtime.record(
         EventActivity(
             call_type="mcp_event_subscribe",

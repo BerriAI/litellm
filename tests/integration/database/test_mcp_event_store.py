@@ -225,9 +225,22 @@ async def test_ending_and_deleting_only_touch_the_upstream_subscription_that_was
         assert await store.end_if_current(row.id, "up_other") is False
         assert await store.end_if_current(row.id, "up_1") is True
         assert await store.end_if_current(row.id, "up_1") is False
-        await store.delete_ended(row.id, "up_other")
         assert await store.get(row.id) is not None
-        await store.delete_ended(row.id, "up_1")
+        await store.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_an_unsubscribe_holds_only_the_upstream_subscription_it_read_and_deletes_only_that() -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        assert await store.hold_for_unsubscribe(row.id, "up_other") is False
+        assert await store.hold_for_unsubscribe(row.id, "up_1") is True
+        assert await store.reserve(row) is False
+        held: Final = await store.get(row.id)
+        assert held is not None and held.status == "pending" and held.refresh_before is not None
+        await store.delete_held(row.id, "up_other")
+        assert await store.get(row.id) is not None
+        await store.delete_held(row.id, "up_1")
         assert await store.get(row.id) is None
 
 

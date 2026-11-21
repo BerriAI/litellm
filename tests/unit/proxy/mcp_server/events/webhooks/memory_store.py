@@ -1,10 +1,11 @@
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Final
 
 from litellm.proxy.mcp_server.events.webhooks.store import (
     LIVE_STATUSES,
+    PENDING_TTL,
     Activation,
     QueuedDelivery,
     SubscriptionQuery,
@@ -83,11 +84,24 @@ class MemoryStore:
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
         return True
 
-    async def delete_ended(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        current: Final = self.rows.get(subscription_id)
+        if (
+            current is None
+            or current.status not in ("active", "suspended")
+            or current.upstream_subscription_id != upstream_subscription_id
+        ):
+            return False
+        self.rows[subscription_id] = current.model_copy(
+            update={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL}
+        )
+        return True
+
+    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
         current: Final = self.rows.get(subscription_id)
         if (
             current is not None
-            and current.status == "terminated"
+            and current.status == "pending"
             and current.upstream_subscription_id == upstream_subscription_id
         ):
             self.rows.pop(subscription_id)

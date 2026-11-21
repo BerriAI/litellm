@@ -24,9 +24,11 @@ from litellm.proxy.mcp_server.events.webhooks.subscribe import (
     unsubscribe,
 )
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget
 from litellm.types.mcp_server.events import (
     CallbackFailure,
     EventsErrorCode,
+    JsonObject,
     SubscribeEventsParams,
     UnsubscribeDelivery,
     UnsubscribeEventsParams,
@@ -257,9 +259,33 @@ async def test_a_delayed_unsubscribe_never_removes_the_subscription_that_replace
     await _subscribe(store, upstream, _Client())
     stale: Final = store.rows[SID]
     store.rows[SID] = stale.model_copy(update={"upstream_subscription_id": "up_replacement"})
-    assert await store.end_if_current(SID, stale.upstream_subscription_id) is False
-    await store.delete_ended(SID, stale.upstream_subscription_id)
+    assert await store.hold_for_unsubscribe(SID, stale.upstream_subscription_id) is False
+    await store.delete_held(SID, stale.upstream_subscription_id)
     assert store.rows[SID].status == "active"
+
+
+@pytest.mark.asyncio
+async def test_a_subscribe_racing_an_unsubscribe_is_told_to_retry_and_never_loses_its_deliveries() -> None:
+    store: Final = MemoryStore()
+    racing: Final[list[object]] = []  # mutable-ok: the subscribe attempted during upstream teardown
+
+    class _RaceDuringTeardown(FakeUpstream):
+        async def call(
+            self, target: SubscriptionTarget, method: str, params: JsonObject, headers: Mapping[str, str]
+        ) -> Mapping[str, object]:
+            if method == "events/unsubscribe":
+                second: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+                racing.append(await _subscribe(store, second, _Client()))
+            return await super().call(target, method, params, headers)
+
+    upstream: Final = _RaceDuringTeardown(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    await _subscribe(store, upstream, _Client())
+    result: Final = await unsubscribe(
+        context(), _UNSUBSCRIBE, None, SETTINGS, runtime((server(),), upstream=upstream), store
+    )
+    (raced,) = racing
+    assert (result, isinstance(raced, Error), store.rows) == (Ok(None), True, {})
+    assert isinstance(await _subscribe(store, upstream, _Client()), Ok)
 
 
 @pytest.mark.asyncio
