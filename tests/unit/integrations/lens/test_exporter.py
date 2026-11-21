@@ -793,7 +793,7 @@ async def test_shutdown_exports_cancelled_records_while_native_uploads_keep_thei
 async def test_native_upload_saturation_rejects_new_content_before_serializing_it() -> None:
     store: Final = _Store(_pending)
     lens: Final = _Lens()
-    lens.expected = MAX_NATIVE_UPLOADS + 1
+    lens.expected = MAX_NATIVE_UPLOADS + 2
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
         exporter: Final = _ledger_backed(client, store, _SMALL_INLINE)
         exporter.start()
@@ -804,6 +804,7 @@ async def test_native_upload_saturation_rejects_new_content_before_serializing_i
                 store.started.clear()
                 await asyncio.wait_for(store.started.wait(), timeout=5)
             await _log_and_commit(exporter, _request("overflow", "x" * 100_000))
+            await _log_and_commit(exporter, _request("overflow-after-commit", "x" * 5000))
             assert store.uploads.qsize() == MAX_NATIVE_UPLOADS
             for _ in range(MAX_NATIVE_UPLOADS):
                 await _reservation_released(store.natives.get_nowait(), True)
@@ -814,9 +815,16 @@ async def test_native_upload_saturation_rejects_new_content_before_serializing_i
     states: Final = {row["request_id"]: _reference(row) for row in lens.drained()}
     overflow: Final = Owner(team_id="team-a", api_key="hash-a", request_id="overflow")
     assert states["overflow"] == dict(signed_reference(_KEY, overflow, Unavailable.OVERLOADED))
+    late: Final = Owner(team_id="team-a", api_key="hash-a", request_id="overflow-after-commit")
+    assert states["overflow-after-commit"] == dict(signed_reference(_KEY, late, Unavailable.OVERLOADED))
     assert sum(isinstance(state, dict) and state["state"] == "stored" for state in states.values()) == (
         MAX_NATIVE_UPLOADS
     )
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise TypeError("cannot be rendered")
 
 
 @pytest.mark.asyncio
@@ -831,6 +839,11 @@ async def test_native_upload_saturation_rejects_new_content_before_serializing_i
             id="unicode-escape-expansion",
         ),
         pytest.param("\ud800" * 100_000, _SMALL_INLINE, "unserializable", id="lone-surrogate"),
+        pytest.param([_Unprintable()], _SMALL_INLINE, "unserializable", id="encoder-failure"),
+        pytest.param(
+            "x" * 8180, ContentLimits(inline_bytes=4096, object_bytes=8192), "too_large", id="response-budget"
+        ),
+        pytest.param('"' * 5000, ContentLimits(inline_bytes=4096, object_bytes=8192), "too_large", id="object-escape"),
     ),
 )
 async def test_unstorable_content_is_never_uploaded_and_keeps_cost(
@@ -841,6 +854,33 @@ async def test_unstorable_content_is_never_uploaded_and_keeps_cost(
     assert store.uploads.empty()
     assert _reference(rows[0]) == _unavailable(Unavailable(reason))
     assert rows[0]["spend"] == 0.42
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("store", "fields", "reason"),
+    (
+        pytest.param(lambda: None, {}, "storage_not_configured", id="fits-as-text-not-as-row"),
+        pytest.param(lambda: _Store(prefix=None), {}, "storage_not_configured", id="no-object-key"),
+        pytest.param(_Store, {"startTime": 1e20}, "unserializable", id="no-object-name"),
+    ),
+)
+async def test_content_that_cannot_be_named_or_stored_keeps_its_committed_cost(
+    store: Callable[[], "_Store | None"], fields: dict[str, object], reason: str
+) -> None:
+    _, rows, _ = await _export((_request("request-a", "x" * 4000, **fields),), store(), _SMALL_INLINE)
+    assert _reference(rows[0]) == _unavailable(Unavailable(reason))
+    assert (rows[0]["spend"], rows[0]["messages"]) == (0.42, "")
+
+
+@pytest.mark.asyncio
+async def test_a_serializer_that_cannot_start_releases_its_slot_and_keeps_the_committed_cost() -> None:
+    await asyncio.get_running_loop().shutdown_default_executor()
+    store: Final = _Store()
+    exporter, rows, _ = await _export((_request("request-a", "x" * 100_000),), store, _SMALL_INLINE)
+    assert _reference(rows[0]) == _unavailable(Unavailable.UPLOAD_FAILED)
+    assert (rows[0]["spend"], store.uploads.empty(), exporter.serialize_slots.locked()) == (0.42, True, False)
+    assert exporter.pending_content_bytes == 0
 
 
 @pytest.mark.asyncio

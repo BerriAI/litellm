@@ -13,14 +13,15 @@ from litellm.integrations.lens.content import (
     ContentRequest,
     Owner,
     ReadFailure,
+    S3V2ContentStore,
     Stored,
     StoredReference,
+    Unavailable,
     content_limits_from_settings,
     content_signing_key,
     content_store_from_settings,
     object_name,
     signed_reference,
-    Unavailable,
 )
 
 _TOKEN: Final = "test-service-token-with-32-characters"
@@ -196,3 +197,49 @@ async def test_storage_errors_release_the_read_slot_and_report_unavailable() -> 
     failed: Final = asyncio.get_running_loop().create_future()
     failed.set_exception(RuntimeError("download failed"))
     assert await ContentReader(_Objects(failed), _TOKEN).read(_request()) is ReadFailure.UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_without_an_active_s3_v2_logger_the_store_names_and_moves_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+
+    for name in ("callbacks", "success_callback", "_async_success_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    for store in (S3V2ContentStore(), S3V2ContentStore(resolve=lambda: None)):
+        assert store.object_key("lens-content/object.json") is None
+        assert await store.upload("lens-content/object.json", "body") is False
+        assert await store.download("lens-content/object.json", 4) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ("team-logs/", None), ids=("prefixed", "unprefixed"))
+async def test_the_active_s3_v2_logger_stores_and_reads_content_within_the_reference_size(
+    monkeypatch: pytest.MonkeyPatch, prefix: str | None
+) -> None:
+    from tests.unit.integrations.s3_v2_rust_support import rust_s3_logger, scripted_bucket
+
+    with scripted_bucket() as bucket:
+        logger: Final = rust_s3_logger(
+            monkeypatch,
+            s3_bucket_name="logs-bucket",
+            s3_endpoint_url=bucket.url,
+            s3_aws_access_key_id="AKIDEXAMPLE",
+            s3_aws_secret_access_key="secret",
+            s3_region_name="us-east-1",
+            **({"s3_path": prefix} if prefix else {}),
+        )
+        try:
+            store: Final = S3V2ContentStore(resolve=lambda: logger)
+            key: Final = store.object_key("lens-content/object.json")
+            assert key == ("team-logs/" if prefix else "") + "lens-content/object.json"
+            assert key is not None
+            assert await store.upload(key, _BODY) is True
+            size: Final = len(_BODY.encode())
+            assert await store.download(key, size) == _BODY
+            assert await store.download(key, size - 1) is None
+            bucket.reply("rejected", (403, "<Error><Code>AccessDenied</Code></Error>"))
+            assert await store.upload(f"{key}.rejected", _BODY) is False
+        finally:
+            _ = logger.periodic_flush_task.cancel()

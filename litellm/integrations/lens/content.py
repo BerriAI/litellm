@@ -152,7 +152,7 @@ async def _not_uploaded() -> bool:
 
 @dataclass(frozen=True, slots=True)
 class S3V2ContentStore:
-    resolve: Callable[[], CustomLogger | None] = _active_s3_v2_logger
+    resolve: Callable[[], object] = _active_s3_v2_logger
 
     def _logger(self) -> "S3Logger | None":
         from litellm.integrations.s3_v2 import S3Logger
