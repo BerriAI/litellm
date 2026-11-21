@@ -886,6 +886,25 @@ def gemini_convert_messages_with_history(
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)
                 _message_content = assistant_msg.get("content", None)
                 reasoning_content = assistant_msg.get("reasoning_content", None)
+                provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                thought_signatures = None
+                if provider_specific_fields and isinstance(provider_specific_fields, dict):
+                    thought_signatures = provider_specific_fields.get("thought_signatures")
+
+                # A signature that is already carried by one of this message's
+                # tool-call parts must not be attached to another part too:
+                # Gemini bills every replayed copy as the previous turn's full
+                # reasoning token count on gemini-3 and newer models
+                tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
+
+                message_thought_signature = None
+                if (
+                    thought_signatures
+                    and isinstance(thought_signatures, list)
+                    and len(thought_signatures) > 0
+                    and thought_signatures[0] not in tool_call_signatures
+                ):
+                    message_thought_signature = thought_signatures[0]
                 if reasoning_content is not None:
                     assistant_content.append(PartType(thought=True, text=reasoning_content))
                 if _message_content is not None and isinstance(_message_content, list):
@@ -905,31 +924,15 @@ def gemini_convert_messages_with_history(
                     assistant_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
                     assistant_text = _message_content
-                    # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
-                    thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
-
-                    # A signature that is already carried by one of this message's
-                    # tool-call parts must not be attached to the text part too:
-                    # Gemini bills every replayed copy as the previous turn's full
-                    # reasoning token count on gemini-3 and newer models
-                    tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
-
-                    if (
-                        thought_signatures
-                        and isinstance(thought_signatures, list)
-                        and len(thought_signatures) > 0
-                        and thought_signatures[0] not in tool_call_signatures
-                    ):
+                    if message_thought_signature is not None:
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(
                             PartType(
                                 text=assistant_text,
-                                thoughtSignature=thought_signatures[0],
+                                thoughtSignature=message_thought_signature,
                             )
                         )
+                        message_thought_signature = None
                     else:
                         assistant_content.append(PartType(text=assistant_text))
 
@@ -958,6 +961,9 @@ def gemini_convert_messages_with_history(
                                         vertex_project=vertex_project,
                                         vertex_credentials=vertex_credentials,
                                     )
+                                    if message_thought_signature is not None:
+                                        _part["thoughtSignature"] = message_thought_signature
+                                        message_thought_signature = None
                                     assistant_content.append(_part)
 
                 ## HANDLE ASSISTANT FUNCTION CALL
