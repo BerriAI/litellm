@@ -160,8 +160,12 @@ def compaction_summary(item: object) -> str | None:
     return None if block is None else block.summary
 
 
+def summary_only_compaction_block(summary: str) -> Mapping[str, object]:
+    return MappingProxyType({"type": "compaction", "content": summary})
+
+
 def summary_only_compaction_content(summary: str) -> str:
-    return json.dumps({"type": "compaction", "content": summary}, separators=(",", ":"))
+    return json.dumps(dict(summary_only_compaction_block(summary)), separators=(",", ":"))
 
 
 def with_compaction_summary(encrypted_content: str, summary: str) -> str:

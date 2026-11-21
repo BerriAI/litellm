@@ -1,5 +1,6 @@
 """Constants for the in-gateway context-management polyfill."""
 
+import re
 from typing import Final
 
 CLEAR_TOOL_USES_EDIT_TYPE: Final = "clear_tool_uses_20250919"
@@ -43,3 +44,5 @@ COMPACT_DEFAULT_INSTRUCTIONS: Final = (
 # did not supply custom ``instructions``. Matches the guidance in the
 # Anthropic docs under "Compaction might fail when tools are defined".
 COMPACT_NO_TOOL_CALLS_SUFFIX: Final = " Do not call any tools while writing this summary; respond with text only."
+
+COMPACT_SUMMARY_TAG_RE: Final = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
