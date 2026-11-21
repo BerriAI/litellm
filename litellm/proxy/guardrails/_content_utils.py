@@ -88,6 +88,7 @@ TEXT_PART_TYPES: Final[frozenset[str]] = frozenset(
 
 _OBJECT_LIST: Final[TypeAdapter[Sequence[object]]] = TypeAdapter(Sequence[object])
 _TEXT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _object_list(value: object) -> Sequence[object] | None:
@@ -119,11 +120,13 @@ def _finite_number(literal: str) -> float:
 
 def _tool_arguments(arguments: str) -> JsonValue:
     parsed: Final = _tool_json(
-        json.loads(
-            arguments,
-            object_pairs_hook=_tool_json_object,
-            parse_float=_finite_number,
-            parse_constant=_finite_number,
+        _DECODED_JSON.validate_python(
+            json.loads(
+                arguments,
+                object_pairs_hook=_tool_json_object,
+                parse_float=_finite_number,
+                parse_constant=_finite_number,
+            )
         )
     )
     json.dumps(parsed, ensure_ascii=False).encode("utf-8")  # raises for lone surrogates, which stay raw text

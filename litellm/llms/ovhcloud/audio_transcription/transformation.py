@@ -28,6 +28,7 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 from ..utils import OVHCloudException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -141,7 +142,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transform OVHCloud audio transcription response to OpenAI-compatible TranscriptionResponse.
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise OVHCloudException(
                 message="Received non-JSON response from OVHCloud audio transcription",
@@ -160,8 +161,5 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         duration: Final = (
             payload["seconds"] if "seconds" in payload and payload["seconds"] is not None else payload.get("duration")
         )
-        if duration is not None:
-            response_json["duration"] = duration
-
-        response.hidden_params = response_json
+        response.hidden_params = dict(payload) if duration is None else {**payload, "duration": duration}
         return response
