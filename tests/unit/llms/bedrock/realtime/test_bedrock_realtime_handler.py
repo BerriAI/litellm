@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -2307,6 +2307,12 @@ class TestBedrockRealtimeGuardrails:
             def update_from_kwargs(self, **kwargs: object) -> None:
                 pass
 
+        frozen_credentials: Final = SimpleNamespace(access_key="k", secret_key="s", token=None)
+        credentials: Final = SimpleNamespace(get_frozen_credentials=lambda: frozen_credentials)
+        monkeypatch.setattr(
+            "litellm.llms.bedrock.realtime.handler.run_aws_signing",
+            AsyncMock(side_effect=[credentials, frozen_credentials]),
+        )
         guardrail: Final = self._guardrail()
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
         stream: Final = ScriptedBedrockStream([], receiver_type=DrainedThenOpenBedrockReceiver)

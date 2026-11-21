@@ -858,15 +858,16 @@ async def test_a_wildcard_key_gets_the_team_key_through_the_one_model_its_team_a
 @pytest.mark.asyncio
 async def test_a_wildcard_key_gets_the_team_key_through_the_one_model_its_project_allows():
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     key_wildcard, family_models = _a_family_with_several_models(litellm.open_ai_chat_completion_models)
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="team_id:team-a", value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["openai/*"])
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["openai/*"])
     )
     await cache.async_set_cache(
-        key=project_cache_key("proj-1"),
+        key=AuthObject.project("proj-1"),
         value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=[family_models[-1]]),
     )
     data: Final[dict[str, object]] = {}

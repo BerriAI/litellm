@@ -38,7 +38,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 _DELETE_SEEDED = 'DELETE FROM "LiteLLM_TeamMembership" WHERE team_id = $1'
@@ -118,7 +118,7 @@ async def _clean_db(team_id: str, user_id: str):
 async def _real_prisma_client():
     """The full app-level PrismaClient, not the raw generated client: add_new_member reads
     and writes through PrismaClient.get_data/insert_data, which the raw client doesn't have."""
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
     await client.connect()
     try:

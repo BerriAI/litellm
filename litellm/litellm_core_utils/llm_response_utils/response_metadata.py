@@ -113,6 +113,7 @@ def response_timing_metrics(
 
 
 _HIDDEN_PARAMS_DICT: Final = TypeAdapter(dict[str, object])
+_OPAQUE_REQUEST_KWARGS: Final = TypeAdapter(object)
 
 
 def _hidden_params_mapping(hidden_params: object) -> Mapping[str, object]:
@@ -191,7 +192,10 @@ class ResponseMetadata:
         model_id: Final = model_info.get("id", None)
         new_params: Final = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
-            "api_base": _reported_api_base(get_api_base(model=model or "", optional_params=kwargs), logging_obj),
+            "api_base": _reported_api_base(
+                get_api_base(model=model or "", optional_params=_OPAQUE_REQUEST_KWARGS.validate_python(kwargs)),
+                logging_obj,
+            ),
             "model_id": model_id,
             "response_cost": logging_obj.response_cost_calculator(
                 result=self.result,

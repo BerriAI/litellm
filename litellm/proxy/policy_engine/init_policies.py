@@ -9,7 +9,7 @@ Configuration structure:
 import sys
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from litellm._logging import print_startup_message, print_startup_warning, verbose_proxy_logger
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
@@ -100,7 +100,7 @@ def _print_policies_on_startup(
 
 
 async def init_policies(
-    policies_config: dict[str, Any],
+    policies_config: Mapping[str, dict[str, object]],
     policy_attachments_config: list[dict[str, object]] | None = None,
     prisma_client: Optional["PrismaClient"] = None,
     validate_db: bool = True,
@@ -187,7 +187,7 @@ async def init_policies(
 
 
 def init_policies_sync(
-    policies_config: dict[str, object],
+    policies_config: Mapping[str, dict[str, object]],
     policy_attachments_config: list[dict[str, object]] | None = None,
     fail_on_error: bool = True,
 ) -> None:

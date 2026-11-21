@@ -7,9 +7,10 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Final, Literal
 
 from httpx import Headers, Response
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS_FOR_TRITON
+from litellm.litellm_core_utils.core_helpers import as_object_list, joined, subscript
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
@@ -23,7 +24,6 @@ from litellm.types.utils import (
     ChatCompletionUsageBlock,
     Choices,
     GenericStreamingChunk,
-    Message,
     ModelResponse,
 )
 
@@ -33,8 +33,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
-class _TritonGenerateResponse(TypedDict):
-    text_output: ReadOnly[str]
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class TritonConfig(BaseConfig):
@@ -225,10 +224,10 @@ class TritonGenerateConfig(TritonConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final[_TritonGenerateResponse] = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
-        model_response.choices = [Choices(index=0, message=Message(content=raw_response_json["text_output"]))]
+        model_response.choices = [Choices(index=0, message={"content": subscript(raw_response_json, "text_output")})]
 
         return model_response
 
@@ -290,21 +289,20 @@ class TritonInferConfig(TritonConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _triton_response_data: Final = raw_response_json["outputs"][0]["data"]
-        triton_response_data: str | None = None
-        if isinstance(_triton_response_data, list):
-            triton_response_data = "".join(_triton_response_data)
-        else:
-            triton_response_data = _triton_response_data
+        _triton_response_data: Final = subscript(subscript(subscript(raw_response_json, "outputs"), 0), "data")
+        triton_response_parts: Final = as_object_list(_triton_response_data)
+        triton_response_data: Final = (
+            _triton_response_data if triton_response_parts is None else joined("", triton_response_parts)
+        )
 
         model_response.choices = [
             Choices(
                 index=0,
-                message=Message(content=triton_response_data),
+                message={"content": triton_response_data},
             )
         ]
 

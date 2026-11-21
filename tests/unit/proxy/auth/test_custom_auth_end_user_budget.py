@@ -206,10 +206,8 @@ async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_
     from unittest.mock import MagicMock
 
     from litellm.proxy.auth.user_api_key_auth import _lookup_end_user_and_apply_budget
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        end_user_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     rust_auth_stores.end_user.rows["customer-1"] = {"user_id": "customer-1", "blocked": False, "spend": 100.0}
     mock_prisma = MagicMock()
@@ -230,7 +228,7 @@ async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_
 
     assert end_user_object is not None
     assert end_user_object.spend == 100.0
-    assert await cache.async_get_cache(key=end_user_cache_key("customer-1")) is not None
+    assert await cache.async_get_cache(key=AuthObject.end_user("customer-1")) is not None
 
 
 @pytest.mark.asyncio

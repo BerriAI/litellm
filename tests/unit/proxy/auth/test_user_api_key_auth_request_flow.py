@@ -41,15 +41,13 @@ import litellm
 import litellm.proxy.proxy_server
 from litellm._internal_context import current_request_parent_otel_span
 from litellm.proxy import utils as proxy_utils
-from litellm.proxy.common_utils import user_api_key_cache as key_cache_utils
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
-    end_user_cache_key,
-    team_membership_reservation_cache_key,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     model_budget_spend_cache_key,
@@ -437,7 +435,7 @@ async def test_apply_user_budget_to_team_keys_reaches_reservation(general_settin
 
 @pytest.mark.asyncio
 async def test_should_not_reuse_cached_key_object_for_request_state():
-    key_cache = DualCache()
+    key_cache = UserApiKeyCache()
     cached_key = UserAPIKeyAuth(
         token="cached-token",
         request_route="/old-route",
@@ -1673,8 +1671,11 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
     valid_token = UserAPIKeyAuth(api_key=api_key, token=hash_token(api_key), user_id="u1", team_id="t1")
 
     mock_cache = UserApiKeyCache()
-    mock_cache.set_cache("team_id:t1", LiteLLM_TeamTable(team_id="t1"))
-    mock_cache.set_cache("team_membership:u1:t1", LiteLLM_TeamMembership(user_id="u1", team_id="t1"))
+    mock_cache.set_cache(AuthObject.team("t1"), LiteLLM_TeamTable(team_id="t1"))
+    mock_cache.set_cache(
+        AuthObject.team_membership_reservation(user_id="u1", team_id="t1"),
+        LiteLLM_TeamMembership(user_id="u1", team_id="t1"),
+    )
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
@@ -1892,12 +1893,12 @@ async def test_jwt_customer_budget_rate_limits_reach_enforcement(
     cache: Final = UserApiKeyCache()
     database: Final = prisma_with_empty_config()
     cache.set_cache(
-        "team_id:rate-limit-team",
+        AuthObject.team("rate-limit-team"),
         LiteLLM_TeamTable(team_id="rate-limit-team", models=[]),
         model_type=LiteLLM_TeamTable,
     )
     cache.set_cache(
-        end_user_cache_key("rate-limit-customer"),
+        AuthObject.end_user("rate-limit-customer"),
         LiteLLM_EndUserTable(
             user_id="rate-limit-customer",
             blocked=False,
@@ -1957,7 +1958,7 @@ async def test_jwt_path_spares_only_video_retrieval_from_an_exhausted_user_model
     video_id: Final = encode_video_id_with_provider(video_id="video_raw", provider="openai", model_id="sora-2")
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="jwt-user",
+        key=AuthObject.user("jwt-user"),
         value=LiteLLM_UserTable(
             user_id="jwt-user",
             model_max_budget={"sora-2": {"budget_limit": 0.3, "time_period": "1d"}},
@@ -3479,7 +3480,7 @@ async def _run_checks_for_cached_user(db_user: LiteLLM_UserTable, token: UserAPI
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
     key_cache = UserApiKeyCache()
-    key_cache.set_cache(key=db_user.user_id, value=db_user)
+    key_cache.set_cache(key=AuthObject.user(db_user.user_id), value=db_user)
     attrs = {
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": prisma_with_empty_config(),
@@ -3667,13 +3668,13 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="team_id:t1",
+        key=AuthObject.team("t1"),
         value=LiteLLM_TeamTableCachedObj(team_id="t1", budget_reset_at=reset_at, max_budget=300.0),
     )
     await user_api_key_cache.async_set_cache(
-        key="u1",
+        key=AuthObject.user("u1"),
         value=LiteLLM_UserTable(user_id="u1", user_alias="Alice", budget_reset_at=None, max_budget=None),
     )
     proxy_logging_obj = MagicMock()
@@ -3735,7 +3736,7 @@ async def test_centralized_common_checks_carry_the_committed_spend_beside_the_st
     token: Final = UserAPIKeyAuth(api_key="sk-live-spend", max_budget=10.0, spend=0.0, team_id="t-live", team_spend=0.0)
     user_api_key_cache: Final = UserApiKeyCache()
     user_api_key_cache.set_cache(
-        key="team_id:t-live", value=LiteLLM_TeamTableCachedObj(team_id="t-live", max_budget=20.0, spend=0.0)
+        key=AuthObject.team("t-live"), value=LiteLLM_TeamTableCachedObj(team_id="t-live", max_budget=20.0, spend=0.0)
     )
     spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
     for counter_key, held, committed in ((f"spend:key:{token.token}", 0.67, 0.37), ("spend:team:t-live", 1.55, 1.25)):
@@ -3788,7 +3789,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
     end_user_row: MagicMock | None,
     budgets: Mapping[str, float],
     request_user: str | None = None,
-    user_api_key_cache: DualCache | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
     custom_auth: bool = False,
 ) -> UserAPIKeyAuth:
     """Run the centralized checks with a fake DB and return the token handed to budget reservation.
@@ -3818,7 +3819,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
     attrs = {
         **_proxy_attrs_for_centralized_checks(user_custom_auth=AsyncMock() if custom_auth else None, flag=custom_auth),
         "prisma_client": prisma_client,
-        "user_api_key_cache": user_api_key_cache if user_api_key_cache is not None else DualCache(),
+        "user_api_key_cache": user_api_key_cache if user_api_key_cache is not None else UserApiKeyCache(),
         "proxy_logging_obj": proxy_logging_obj,
     }
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
@@ -3856,8 +3857,8 @@ async def test_centralized_common_checks_keeps_a_validated_away_end_user_when_th
     key's default so the customer is both budgeted and attributed on the first request."""
     monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
-    cache = DualCache()
-    await cache.async_set_cache(key="end_user_validation:cust-new", value="invalid")
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.end_user_validation("cust-new"), value="invalid")
     token = UserAPIKeyAuth(
         api_key="sk-test",
         token="hashed",
@@ -3991,9 +3992,9 @@ async def test_centralized_common_checks_enforces_team_model_max_budget_from_the
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="team_id:t1",
+        key=AuthObject.team("t1"),
         value=LiteLLM_TeamTableCachedObj(team_id="t1", model_max_budget=team_caps),
     )
     limiter = _RecordingTeamModelBudgetLimiter()
@@ -4105,25 +4106,24 @@ async def _run_centralized_checks_for_end_user(
     from starlette.datastructures import URL
 
     import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
     from litellm.proxy.utils import ProxyLogging
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", default_budget_id)
     user_api_key_cache: Final = UserApiKeyCache()
     if end_user is not None:
         await user_api_key_cache.async_set_cache(
-            key=end_user_cache_key("eu-1"),
+            key=AuthObject.end_user("eu-1"),
             value=end_user,
             model_type=LiteLLM_EndUserTable,
         )
     for budget_id in ("eu-default", "eu-key-budget"):
         await user_api_key_cache.async_set_cache(
-            key=f"default_end_user_budget:{budget_id}",
+            key=AuthObject.default_end_user_budget(budget_id),
             value=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget=_END_USER_MODEL_CAPS),
             model_type=LiteLLM_BudgetTable,
         )
     await user_api_key_cache.async_set_cache(
-        key="admin",
+        key=AuthObject.user("admin"),
         value=LiteLLM_UserTable(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
         model_type=LiteLLM_UserTable,
     )
@@ -4398,18 +4398,17 @@ async def test_centralized_common_checks_holds_the_end_user_to_the_model_a_team_
     from starlette.datastructures import URL
 
     import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
     from litellm.proxy.utils import ProxyLogging
 
     budget_id: Final = "member-budget-1"
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="u1", team_id="t1"),
+        key=AuthObject.team_membership_reservation(user_id="u1", team_id="t1"),
         value=LiteLLM_TeamMembership(user_id="u1", team_id="t1", budget_id=budget_id),
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key="team_id:t1",
+        key=AuthObject.team("t1"),
         value=LiteLLM_TeamTableCachedObj(
             team_id="t1",
             models=["gpt-4o", "gpt-4o-mini"],
@@ -4418,7 +4417,7 @@ async def test_centralized_common_checks_holds_the_end_user_to_the_model_a_team_
         model_type=LiteLLM_TeamTableCachedObj,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_member_default_budget:{budget_id}",
+        key=AuthObject.team_member_default_budget(budget_id),
         value=LiteLLM_BudgetTable(
             budget_id=budget_id,
             model_max_budget={
@@ -4429,12 +4428,12 @@ async def test_centralized_common_checks_holds_the_end_user_to_the_model_a_team_
         model_type=LiteLLM_BudgetTable,
     )
     await user_api_key_cache.async_set_cache(
-        key="u1",
+        key=AuthObject.user("u1"),
         value=LiteLLM_UserTable(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
         model_type=LiteLLM_UserTable,
     )
     await user_api_key_cache.async_set_cache(
-        key=end_user_cache_key("eu-1"),
+        key=AuthObject.end_user("eu-1"),
         value=_end_user_linked_to_the_capped_budget(),
         model_type=LiteLLM_EndUserTable,
     )
@@ -4516,18 +4515,17 @@ async def test_centralized_common_checks_applies_an_end_user_cap_on_the_tokens_t
     from starlette.datastructures import URL
 
     import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
     from litellm.proxy.utils import ProxyLogging
 
     group_cap: Final = {"t1-group": {"budget_limit": 0.00004, "time_period": "1d"}}
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="team_id:t1",
+        key=AuthObject.team("t1"),
         value=LiteLLM_TeamTableCachedObj(team_id="t1", models=["gpt-4o"]),
         model_type=LiteLLM_TeamTableCachedObj,
     )
     await user_api_key_cache.async_set_cache(
-        key=end_user_cache_key("eu-1"),
+        key=AuthObject.end_user("eu-1"),
         value=LiteLLM_EndUserTable(
             user_id="eu-1",
             blocked=False,
@@ -4599,12 +4597,12 @@ async def test_centralized_common_checks_loads_member_budget_and_exempts_discove
     )
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="u1", team_id="t1"),
+        key=AuthObject.team_membership_reservation(user_id="u1", team_id="t1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key="team_id:t1",
+        key=AuthObject.team("t1"),
         value=LiteLLM_TeamTableCachedObj(
             team_id="t1",
             models=["gpt-4o"],
@@ -4613,12 +4611,12 @@ async def test_centralized_common_checks_loads_member_budget_and_exempts_discove
         model_type=LiteLLM_TeamTableCachedObj,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_member_default_budget:{budget_id}",
+        key=AuthObject.team_member_default_budget(budget_id),
         value=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget=member_caps),
         model_type=LiteLLM_BudgetTable,
     )
     await user_api_key_cache.async_set_cache(
-        key="u1",
+        key=AuthObject.user("u1"),
         value=LiteLLM_UserTable(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
         model_type=LiteLLM_UserTable,
     )
@@ -4734,12 +4732,12 @@ async def test_centralized_common_checks_skips_default_member_budget_lookup_erro
     )
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="u1", team_id="t1"),
+        key=AuthObject.team_membership_reservation(user_id="u1", team_id="t1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key="team_id:t1",
+        key=AuthObject.team("t1"),
         value=LiteLLM_TeamTableCachedObj(
             team_id="t1",
             models=["gpt-4o"],
@@ -4748,7 +4746,7 @@ async def test_centralized_common_checks_skips_default_member_budget_lookup_erro
         model_type=LiteLLM_TeamTableCachedObj,
     )
     await user_api_key_cache.async_set_cache(
-        key="u1",
+        key=AuthObject.user("u1"),
         value=LiteLLM_UserTable(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
         model_type=LiteLLM_UserTable,
     )
@@ -4835,7 +4833,7 @@ async def test_member_model_budget_load_prefers_override_row() -> None:
         litellm_budget_table=LiteLLM_BudgetTable(budget_id="member-budget", model_max_budget=member_caps),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="member-1", team_id="team-1"),
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
@@ -4865,7 +4863,7 @@ async def test_member_model_budget_load_uses_override_without_team_default_id() 
         litellm_budget_table=LiteLLM_BudgetTable(budget_id="member-budget", model_max_budget=member_caps),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="member-1", team_id="team-1"),
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
@@ -4885,7 +4883,6 @@ async def test_member_model_budget_load_uses_override_without_team_default_id() 
 
 @pytest.mark.asyncio
 async def test_member_model_budget_load_reads_current_default_for_plain_team_object() -> None:
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     token: Final = UserAPIKeyAuth(user_id="member-1", team_id="team-1")
     team_object: Final = LiteLLM_TeamTable(
@@ -4903,12 +4900,12 @@ async def test_member_model_budget_load_reads_current_default_for_plain_team_obj
         litellm_budget_table=LiteLLM_BudgetTable(budget_id="default-budget", model_max_budget=stale_caps),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="member-1", team_id="team-1"),
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key="team_member_default_budget:default-budget",
+        key=AuthObject.team_member_default_budget("default-budget"),
         value=LiteLLM_BudgetTable(budget_id="default-budget", model_max_budget=current_caps),
         model_type=LiteLLM_BudgetTable,
     )
@@ -4936,12 +4933,12 @@ async def test_member_model_budget_load_overall_only_override_keeps_default_caps
         litellm_budget_table=LiteLLM_BudgetTable(budget_id="member-budget", max_budget=5.0, model_max_budget=None),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="member-1", team_id="team-1"),
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key="team_member_default_budget:default-budget",
+        key=AuthObject.team_member_default_budget("default-budget"),
         value=LiteLLM_BudgetTable(budget_id="default-budget", model_max_budget=default_caps),
         model_type=LiteLLM_BudgetTable,
     )
@@ -4973,12 +4970,12 @@ async def test_member_model_budget_load_falls_back_when_override_has_no_model_ca
     )
     default_budget: Final = LiteLLM_BudgetTable(budget_id="default-budget", model_max_budget=default_caps)
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="member-1", team_id="team-1"),
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key="team_member_default_budget:default-budget",
+        key=AuthObject.team_member_default_budget("default-budget"),
         value=default_budget,
         model_type=LiteLLM_BudgetTable,
     )
@@ -5003,7 +5000,7 @@ async def test_member_model_budget_load_uses_default_without_membership() -> Non
     default_budget: Final = LiteLLM_BudgetTable(budget_id="default-budget", model_max_budget=default_caps)
     prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     await user_api_key_cache.async_set_cache(
-        key="team_member_default_budget:default-budget",
+        key=AuthObject.team_member_default_budget("default-budget"),
         value=default_budget,
         model_type=LiteLLM_BudgetTable,
     )
@@ -5482,7 +5479,7 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
     )
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="user-1",
+        key=AuthObject.user("user-1"),
         value=LiteLLM_UserTable(user_id="user-1", teams=["team-1", "team-2"], object_permission_id="user-grants-a"),
         model_type=LiteLLM_UserTable,
     )
@@ -7225,7 +7222,7 @@ async def _run_auth_with_malformed_body(post_call_failure_hook):
     request._body = b'{}{"model": "gpt-4o"}'
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    attrs["proxy_logging_obj"].post_call_failure_hook = post_call_failure_hook
+    attrs["proxy_logging_obj"] = MagicMock(post_call_failure_hook=post_call_failure_hook)
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
         for k, v in attrs.items():
@@ -7350,7 +7347,7 @@ async def test_user_api_key_auth_does_not_double_log_a_malformed_body_from_a_rej
 
     hook = AsyncMock(return_value=None)
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    attrs["proxy_logging_obj"].post_call_failure_hook = hook
+    attrs["proxy_logging_obj"] = MagicMock(post_call_failure_hook=hook)
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
         for k, v in attrs.items():
@@ -8061,7 +8058,9 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
         metadata={"model_rpm_limit": {"gpt-5.4-mini": 3}},
         last_refreshed_at=1000.0,
     )
-    await key_cache.async_set_cache(key=hashed_key, value=stale_token, model_type=UserAPIKeyAuth)
+    await key_cache.async_set_cache(
+        key=AuthObject.virtual_key(hashed_key), value=stale_token, model_type=UserAPIKeyAuth
+    )
 
     fetch_from_db = AsyncMock(side_effect=AssertionError("cache-hit auth must not touch the DB"))
 
@@ -8109,7 +8108,9 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
         assert result.token == hashed_key
         fetch_from_db.assert_not_called()
 
-        cached_after = await key_cache.async_get_cache(key=hashed_key, model_type=UserAPIKeyAuth)
+        cached_after = await key_cache.async_get_cache(
+            key=AuthObject.virtual_key(hashed_key), model_type=UserAPIKeyAuth
+        )
         assert cached_after is not None
         assert cached_after.last_refreshed_at == 1000.0
         assert cached_after.metadata == {"model_rpm_limit": {"gpt-5.4-mini": 3}}
@@ -8133,7 +8134,9 @@ class TestJWTAuthUserEmail:
         jwt_token: Final = _signed_jwt(claims)
         cache: Final = UserApiKeyCache()
         if user_row is not None:
-            await cache.async_set_cache(key=user_row.user_id, value=user_row, model_type=LiteLLM_UserTable)
+            await cache.async_set_cache(
+                key=AuthObject.user(user_row.user_id), value=user_row, model_type=LiteLLM_UserTable
+            )
         request: Final = Request(
             {
                 "type": "http",
@@ -8442,15 +8445,15 @@ class TestCheckTeamMemberModelBudgetWithFallback:
     @pytest.fixture(autouse=True)
     async def _seed_auth_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_reservation_cache_key
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
         user_api_key_cache: Final = UserApiKeyCache()
         await user_api_key_cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id="user-1", team_id="team-1"),
+            key=AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"),
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
         )
         await user_api_key_cache.async_set_cache(
-            key="team_id:team-1",
+            key=AuthObject.team("team-1"),
             value=LiteLLM_TeamTableCachedObj(team_id="team-1"),
             model_type=LiteLLM_TeamTableCachedObj,
         )
@@ -8598,7 +8601,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, redis_cache = await _real_model_budget_limiter(member_spend={"claude-sonnet-4-6": 10.0})
         user_api_key_cache: Final = UserApiKeyCache()
         await user_api_key_cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id="user-1", team_id="team-1"),
+            key=AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"),
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
         )
         uploaded_file: Final = UploadFile(filename="audio.wav", file=BytesIO(b"audio"))
@@ -8653,7 +8656,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         request: Final = self._request("claude-sonnet-4-6")
         user_api_key_cache: Final = UserApiKeyCache()
         await user_api_key_cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id="user-1", team_id="team-1"),
+            key=AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"),
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
         )
 
@@ -8688,7 +8691,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
 
         router_settings: Final = {"fallbacks": [{"claude-sonnet-4-6": ["claude-haiku-4-5"]}]}
         await proxy_server.user_api_key_cache.async_set_cache(
-            key="team_id:team-1",
+            key=AuthObject.team("team-1"),
             value=LiteLLM_TeamTableCachedObj(team_id="team-1", router_settings=router_settings),
             model_type=LiteLLM_TeamTableCachedObj,
         )
@@ -9523,7 +9526,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
             litellm_budget_table=LiteLLM_BudgetTable(budget_id="member-budget", allowed_models=["gpt-4o"]),
         )
         await proxy_server.user_api_key_cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id="user-1", team_id="team-1"),
+            key=AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"),
             value=membership,
             model_type=LiteLLM_TeamMembership,
         )
@@ -9767,7 +9770,7 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
     )
 
     result = await fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
+        cache_key=AuthObject.global_proxy_spend(),
         user_api_key_cache=UserApiKeyCache(),
         prisma_client=prisma_client,
     )
@@ -9789,7 +9792,7 @@ async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     result = await fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
+        cache_key=AuthObject.global_proxy_spend(),
         user_api_key_cache=UserApiKeyCache(),
         prisma_client=prisma_client,
     )
@@ -9828,7 +9831,7 @@ async def test_temp_budget_increase_applied_for_cached_key():
         metadata={"temp_budget_increase": 100.0, "temp_budget_expiry": expiry},
     )
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=cached_key,
@@ -9874,7 +9877,9 @@ async def test_temp_budget_increase_applied_for_cached_key():
 
     assert all(result.max_budget == 102.0 for result in results)
 
-    cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
+    cached_after = await user_api_key_cache.async_get_cache(
+        key=AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth
+    )
     assert cached_after.max_budget == 2.0
 
 
@@ -9919,7 +9924,6 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
     """A team member counter sitting exactly at the cap (where a resized reservation
     lands it) must be rejected by the cached-key auth path like every other budget check."""
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
     from litellm.proxy.utils import hash_token
 
     api_key = "sk-team-member-exact-cap"
@@ -9928,7 +9932,7 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
     user_id = "user-exact-cap"
     max_budget = 2.4
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
@@ -9941,15 +9945,15 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
         proxy_logging_obj=None,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_id:{team_id}",
+        key=AuthObject.team(team_id),
         value=LiteLLM_TeamTableCachedObj(team_id=team_id),
     )
     await user_api_key_cache.async_set_cache(
-        key=user_id,
+        key=AuthObject.user(user_id),
         value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        key=AuthObject.team_membership(team_id=team_id, user_id=user_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -10037,7 +10041,8 @@ async def test_cached_key_budget_preserves_non_spending_access(
     hashed_token: Final = proxy_utils.hash_token(api_key)
     team_id: Final = "budget-route-team"
     user_id: Final = "budget-route-user"
-    cache: Final = DualCache()
+    cache: Final = UserApiKeyCache()
+    spend_cache: Final = DualCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
@@ -10051,13 +10056,13 @@ async def test_cached_key_budget_preserves_non_spending_access(
         user_api_key_cache=cache,
         proxy_logging_obj=None,
     )
-    await cache.async_set_cache(key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id))
+    await cache.async_set_cache(key=AuthObject.team(team_id), value=LiteLLM_TeamTableCachedObj(team_id=team_id))
     await cache.async_set_cache(
-        key=user_id,
+        key=AuthObject.user(user_id),
         value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
     )
     await cache.async_set_cache(
-        key=key_cache_utils.team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        key=AuthObject.team_membership(team_id=team_id, user_id=user_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -10065,8 +10070,8 @@ async def test_cached_key_budget_preserves_non_spending_access(
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=member_max_budget),
         ),
     )
-    await cache.async_set_cache(key=f"spend:team_member:{user_id}:{team_id}", value=2.0)
-    await cache.async_set_cache(key=f"spend:key:{hashed_token}", value=2.0)
+    await spend_cache.async_set_cache(key=f"spend:team_member:{user_id}:{team_id}", value=2.0)
+    await spend_cache.async_set_cache(key=f"spend:key:{hashed_token}", value=2.0)
     request: Final = Request(
         scope={
             "type": "http",
@@ -10087,7 +10092,7 @@ async def test_cached_key_budget_preserves_non_spending_access(
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "spend_counter_cache", spend_cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging)
 
     async def authenticate() -> UserAPIKeyAuth:
@@ -10124,7 +10129,6 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
     """A member over their permanent cap is admitted while a temp_budget_increase is unexpired
     and blocked again once it expires, on the cached-key auth path."""
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
     from litellm.proxy.utils import hash_token
 
     api_key = "sk-team-member-temp-budget"
@@ -10133,7 +10137,7 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
     user_id = "user-temp-budget"
     team_member_spend = 2.5
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
@@ -10146,15 +10150,15 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
         proxy_logging_obj=None,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_id:{team_id}",
+        key=AuthObject.team(team_id),
         value=LiteLLM_TeamTableCachedObj(team_id=team_id),
     )
     await user_api_key_cache.async_set_cache(
-        key=user_id,
+        key=AuthObject.user(user_id),
         value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        key=AuthObject.team_membership(team_id=team_id, user_id=user_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -10259,10 +10263,6 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     """The team's team_member_max_budget_alert_emails thresholds fire from the cached-key auth path,
     including on the request that trips the hard cap, and stay silent below the lowest threshold."""
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        team_membership_auth_cache_key,
-        team_membership_reservation_cache_key,
-    )
     from litellm.proxy.utils import hash_token
 
     api_key = "sk-team-member-alert-thresholds"
@@ -10286,7 +10286,7 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
         proxy_logging_obj=None,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_id:{team_id}",
+        key=AuthObject.team(team_id),
         value=LiteLLM_TeamTableCachedObj(
             team_id=team_id,
             team_alias="platform",
@@ -10294,7 +10294,7 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
         ),
     )
     await user_api_key_cache.async_set_cache(
-        key=user_id,
+        key=AuthObject.user(user_id),
         value=LiteLLM_UserTable(
             user_id=user_id, user_email="member@example.com", user_role=LitellmUserRoles.INTERNAL_USER
         ),
@@ -10309,8 +10309,8 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     # A live proxy holds the row under both keys, so any second team-member check in the
     # auth flow would find it too and send a duplicate alert.
     for membership_cache_key in (
-        team_membership_reservation_cache_key(team_id=team_id, user_id=user_id),
-        team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        AuthObject.team_membership_reservation(team_id=team_id, user_id=user_id),
+        AuthObject.team_membership(team_id=team_id, user_id=user_id),
     ):
         await user_api_key_cache.async_set_cache(key=membership_cache_key, value=membership)
 
@@ -10679,7 +10679,7 @@ def _viewer_inference_key(monkeypatch: pytest.MonkeyPatch, team_id: str | None, 
     hashed_key: Final = hash_token(key)
     cache: Final = UserApiKeyCache()
     cache.set_cache(
-        key=hashed_key,
+        key=AuthObject.virtual_key(hashed_key),
         value=UserAPIKeyAuth(
             token=hashed_key,
             user_id="viewer",
@@ -10691,7 +10691,7 @@ def _viewer_inference_key(monkeypatch: pytest.MonkeyPatch, team_id: str | None, 
         ),
     )
     cache.set_cache(
-        key="viewer",
+        key=AuthObject.user("viewer"),
         value=LiteLLM_UserTable(
             user_id="viewer",
             user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
@@ -10701,7 +10701,7 @@ def _viewer_inference_key(monkeypatch: pytest.MonkeyPatch, team_id: str | None, 
     )
     if team_id is not None:
         cache.set_cache(
-            key=team_membership_reservation_cache_key(user_id="viewer", team_id=team_id),
+            key=AuthObject.team_membership_reservation(user_id="viewer", team_id=team_id),
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
         )
     for name, value in {
@@ -10810,7 +10810,7 @@ def _alias_token(monkeypatch, level: str, alias: dict, models: list) -> UserAPIK
         return UserAPIKeyAuth(models=models, router_settings={"model_group_alias": alias})
     cache = UserApiKeyCache()
     team = LiteLLM_TeamTableCachedObj(team_id="team-alias", models=models, router_settings={"model_group_alias": alias})
-    cache.set_cache(key="team_id:team-alias", value=team)
+    cache.set_cache(key=AuthObject.team("team-alias"), value=team)
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     return UserAPIKeyAuth(team_id="team-alias", models=models)
@@ -11298,28 +11298,28 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
 
 def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
     from litellm.proxy.auth.user_api_key_auth import identity_cache_keys
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        end_user_cache_key,
-        end_user_restricted_registry_cache_key,
-        model_access_group_registry_cache_key,
-    )
     from litellm.proxy.utils import hash_token
 
     assert identity_cache_keys(MASTER_KEY, end_user_id="eu-1", key_is_resolved=False) == (
-        hash_token(MASTER_KEY),
-        end_user_cache_key("eu-1"),
-        end_user_restricted_registry_cache_key(),
-        model_access_group_registry_cache_key(),
+        AuthObject.virtual_key(hash_token(MASTER_KEY)),
+        AuthObject.end_user("eu-1"),
+        AuthObject.end_user_restricted_registry(),
+        AuthObject.model_access_group_registry(),
     )
     assert identity_cache_keys("a" * 64, end_user_id=None, key_is_resolved=False) == (
-        hash_token("a" * 64),
-        model_access_group_registry_cache_key(),
+        AuthObject.virtual_key(hash_token("a" * 64)),
+        AuthObject.model_access_group_registry(),
     )
     master_key_keys = identity_cache_keys("my-master-key", end_user_id=None, key_is_resolved=False)
-    assert master_key_keys == (hash_token("my-master-key"), model_access_group_registry_cache_key())
-    assert "my-master-key" not in master_key_keys, "a bearer that is not an sk- key must not be sent to Redis as is"
+    assert master_key_keys == (
+        AuthObject.virtual_key(hash_token("my-master-key")),
+        AuthObject.model_access_group_registry(),
+    )
+    assert "my-master-key" not in {key.key for key in master_key_keys}, (
+        "a bearer that is not an sk- key must not be sent to Redis as is"
+    )
     assert identity_cache_keys(MASTER_KEY, end_user_id=None, key_is_resolved=True) == (
-        model_access_group_registry_cache_key(),
+        AuthObject.model_access_group_registry(),
     )
 
 
@@ -11702,7 +11702,7 @@ async def test_lens_oauth2_validates_identity_without_inference_user_field(
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.master_key", "sk-fixture-master"),
         patch("litellm.proxy.proxy_server.prisma_client", None),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
         patch.dict(
             os.environ,
             {
@@ -11797,7 +11797,7 @@ async def test_exhausted_key_budget_spares_only_zero_spend_mcp_discovery(
 
     api_key: Final = "sk-exhausted-mcp-discovery"
     hashed_token: Final = hash_token(api_key)
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(token=hashed_token, max_budget=2.0, spend=5.0),
@@ -12004,7 +12004,7 @@ async def test_exhausted_key_budget_is_waived_only_when_the_served_model_is_free
 
     api_key: Final = "sk-exhausted-aliased-free-model"
     hashed_token: Final = hash_token(api_key)
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(

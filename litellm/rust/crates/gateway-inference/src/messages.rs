@@ -4,19 +4,31 @@ use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Extension, Json,
     body::Bytes,
     extract::State,
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
+use litellm_cache_response::CachePolicy;
+use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
-use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
+use litellm_inference_messages::{
+    MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
+};
 use litellm_llms_types::formats::messages::MessagesOptionalParams;
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_router_core::{Attempt, Deployment, Op, Served};
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
+use crate::{
+    Ended, Error, Gateway, JsonObject, RequestId,
+    caching::CacheHeaders,
+    headers::Routing,
+    request,
+    routing::{self, Host, RouteAttempt},
+    stream_outcome::{self, Streamed},
+};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
@@ -28,8 +40,8 @@ const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 const TOOLS: &str = "tools";
 
-pub async fn create(
-    State(gateway): State<Arc<Gateway>>,
+pub async fn create<H: Host>(
+    State(gateway): State<Arc<Gateway<H>>>,
     identity: AuthenticatedRequest,
     RequestId(request_id): RequestId,
     headers: HeaderMap,
@@ -37,19 +49,24 @@ pub async fn create(
 ) -> impl IntoResponse {
     let result = match body {
         Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     };
-    result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
+    result.map_err(|ended| {
+        (
+            ended.error.status(),
+            ended.routing(),
+            Json(ended.error.body(request_id.as_deref())),
+        )
+    })
 }
 
-async fn handle(
-    gateway: &Gateway,
+async fn handle<H: Host>(
+    gateway: &Gateway<H>,
     identity: &AuthenticatedRequest,
     headers: &HeaderMap,
     body: Map<String, Value>,
-) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, "/v1/messages", &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+) -> Result<Response, Ended> {
+    let model = request::model(&body)?.to_owned();
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
@@ -59,24 +76,89 @@ async fn handle(
         )),
         None => route,
     };
-
-    let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
+    let attempt = MessagesAttempt {
+        gateway,
+        route,
+        body,
+        headers,
+        policy: cache_options.policy,
+    };
+    let routed = routing::call(
+        gateway,
+        identity,
+        Op::ANTHROPIC_MESSAGES,
+        "/v1/messages",
+        &model,
+        &attempt,
+    )
+    .await?;
+    let routing = Routing::served(&routed);
+    let (ran, cache) = routed.output.response;
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
-    Ok(headers.apply(response))
+    let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
+    Ok((Extension(routing), cache.apply(response)).into_response())
+}
+
+struct MessagesAttempt<'a, H> {
+    gateway: &'a Gateway<H>,
+    route: MessagesRoute,
+    body: Map<String, Value>,
+    headers: &'a HeaderMap,
+    policy: CachePolicy,
+}
+
+impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
+    type Outcome = (Streamed<Messages>, CacheHeaders);
+
+    async fn run(&self, attempt: &Attempt) -> Result<Served<Self::Outcome>, Error> {
+        let deployment = &attempt.deployment;
+        let call = MessagesCall {
+            timeout: routing::timeout(attempt, routing::streamed(&self.body)),
+            ..project(
+                deployment,
+                self.gateway.shaping(&deployment.id),
+                routing::attempt_body(&self.body, attempt),
+                self.headers,
+            )?
+        };
+        let machine = self.route.clone().machine(call, self.policy);
+        let cache = CacheHeaders::default();
+        let ran = litellm_host_http::run(machine, (), cache.clone(), None).await?;
+        Ok(match ran {
+            CallOutput::Complete(body) => {
+                let total_tokens = routing::total_tokens(match &body {
+                    MessagesBody::Message(message) => message.usage.as_ref(),
+                    MessagesBody::Unchecked(fields) => fields.get("usage"),
+                });
+                Served::new((CallOutput::Complete(body), cache), total_tokens)
+            }
+            CallOutput::Stream { head, chunks } => {
+                let chunks = stream_outcome::reporting_outcome(
+                    self.gateway,
+                    deployment,
+                    chunks,
+                    stream_outcome::messages_event,
+                );
+                Served {
+                    deferred: true,
+                    ..Served::new((CallOutput::Stream { head, chunks }, cache), 0)
+                }
+            }
+        })
+    }
 }
 
 fn project(
     deployment: &Deployment,
+    shaping: MessagesShaping,
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
     let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
+    let params = &deployment.params;
     let client_params = body.into_iter().map(|(name, value)| match name.as_str() {
-        "model" => (name, Value::from(deployment.model.as_str())),
+        "model" => (name, Value::from(params.model.as_str())),
         _ => (name, value),
     });
     let body = deployment_default_params(deployment)
@@ -85,14 +167,14 @@ fn project(
         .collect();
     Ok(MessagesCall {
         body: messages_body(body)?,
-        api_key: deployment.api_key.clone(),
-        api_base: deployment.api_base.clone(),
-        custom_llm_provider: deployment.custom_llm_provider.clone(),
-        litellm_params: deployment.litellm_params.clone(),
+        api_key: routing::api_key(deployment),
+        api_base: params.api_base.clone(),
+        custom_llm_provider: params.custom_llm_provider.clone(),
+        litellm_params: params.clone(),
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
-        timeout: deployment.timeout,
-        shaping: deployment.shaping.clone(),
+        timeout: None,
+        shaping,
     })
 }
 
@@ -102,13 +184,13 @@ fn deployment_default_params(
     MessagesOptionalParams::fields()
         .filter(|name| *name != TOOLS)
         .filter_map(|name| {
-            let value = deployment.litellm_params.extra.get(name)?;
+            let value = deployment.params.extra.get(name)?;
             Some((name.to_owned(), value.clone()))
         })
 }
 
 fn merged_tools(deployment: &Deployment, client_tools: Option<&Value>) -> Option<Value> {
-    let deployment_tools = deployment.litellm_params.extra.get(TOOLS)?.as_array()?;
+    let deployment_tools = deployment.params.extra.get(TOOLS)?.as_array()?;
     let client_tools: &[Value] = match client_tools.unwrap_or(&Value::Null) {
         Value::Null => &[],
         Value::Array(tools) => tools,
