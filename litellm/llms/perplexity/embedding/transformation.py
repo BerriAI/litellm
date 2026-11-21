@@ -21,6 +21,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import provider_reported_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -192,6 +193,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
                 usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0) or 0
             ),
             total_tokens=_INT.validate_python(usage_data.get("total_tokens", 0) or 0),
+            cost=provider_reported_usage_cost(usage_data, "perplexity"),
         )
         model_response.usage = usage
         return model_response

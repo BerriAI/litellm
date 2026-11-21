@@ -65,7 +65,11 @@ const SAVED_BODY = {
   teams: [{ team_id: "team-alpha", max_budget_in_team: 25, user_role: "user" }],
 };
 
-const renderForm = (overrides?: { fetchSettings?: Mock; updateSettings?: Mock }) => {
+const renderForm = (overrides?: {
+  fetchSettings?: Mock;
+  updateSettings?: Mock;
+  possibleUIRoles?: typeof POSSIBLE_UI_ROLES | null;
+}) => {
   const fetchSettings = overrides?.fetchSettings ?? vi.fn().mockResolvedValue(SETTINGS);
   const updateSettings = overrides?.updateSettings ?? vi.fn().mockResolvedValue(undefined);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -73,7 +77,7 @@ const renderForm = (overrides?: { fetchSettings?: Mock; updateSettings?: Mock })
   render(
     <QueryClientProvider client={queryClient}>
       <DefaultUserSettingsForm
-        possibleUIRoles={POSSIBLE_UI_ROLES}
+        possibleUIRoles={overrides?.possibleUIRoles === undefined ? POSSIBLE_UI_ROLES : overrides.possibleUIRoles}
         fetchSettings={fetchSettings}
         updateSettings={updateSettings}
       />
@@ -92,6 +96,18 @@ const enterEditMode = async (user: ReturnType<typeof userEvent.setup>) => {
 describe("DefaultUserSettingsForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("labels the configured role even when available roles have not loaded", async () => {
+    renderForm({
+      possibleUIRoles: null,
+      fetchSettings: vi.fn().mockResolvedValue({
+        ...SETTINGS,
+        values: { ...SETTINGS.values, user_role: "internal_user_viewer" },
+      }),
+    });
+
+    expect(await screen.findByText("Internal User Viewer")).toBeInTheDocument();
   });
 
   it("shows a read-only summary until Edit Settings is clicked", async () => {
