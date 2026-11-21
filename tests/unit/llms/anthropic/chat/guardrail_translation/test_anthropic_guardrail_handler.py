@@ -2479,6 +2479,66 @@ async def test_reserved_tool_parameters_cannot_hide_guardrail_schema_redactions(
     ]
 
 
+class OuterToolMetadataGuardrail(CustomGuardrail):
+    def __init__(self, field: str, at_function: bool):
+        super().__init__(guardrail_name="outer-tool-metadata")
+        self.field: Final = field
+        self.at_function: Final = at_function
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        edits: Final = {"defer_loading": False} if self.field == "defer_loading" else {"allowed_callers": []}
+        return {
+            **inputs,
+            "tools": [
+                {
+                    **tool,
+                    **({} if self.at_function else edits),
+                    "function": {**tool["function"], **(edits if self.at_function else {})},
+                }
+                for tool in inputs.get("tools", [])
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("defer_loading", "allowed_callers"))
+@pytest.mark.parametrize("at_function", (False, True), ids=("outer-tool", "outer-function"))
+@pytest.mark.parametrize("reserved_parameters", (False, True), ids=("normal-schema", "reserved-schema"))
+async def test_explicit_outer_tool_metadata_edits_override_unchanged_relocated_values(
+    field: str, at_function: bool, reserved_parameters: bool
+) -> None:
+    schema: Final = {"type": "object", "properties": {}}
+    metadata: Final = {"defer_loading": True} if field == "defer_loading" else {"allowed_callers": ["direct"]}
+    edits: Final = {"defer_loading": False} if field == "defer_loading" else {"allowed_callers": []}
+    tool: Final = {
+        "name": "Read",
+        "type": "custom",
+        "strict": True,
+        "input_schema": schema,
+        **metadata,
+        **({"parameters": {}} if reserved_parameters else {}),
+    }
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=OuterToolMetadataGuardrail(field, at_function)
+    )
+    assert result["tools"] == [
+        {
+            "name": "Read",
+            "type": "custom",
+            "strict": True,
+            "input_schema": {**schema, **metadata, "parameters": {}} if reserved_parameters else schema,
+            **edits,
+        }
+    ]
+
+
 class ToolFieldSplitGuardrail(CustomGuardrail):
     def __init__(self, explicit: bool, omit_schema: bool):
         super().__init__(guardrail_name="field-split")

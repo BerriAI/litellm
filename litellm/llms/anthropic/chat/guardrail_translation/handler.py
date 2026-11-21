@@ -532,7 +532,7 @@ def _restore_relocated_tool_fields(function: Mapping[str, object], relocated: fr
     return {
         **function,
         "parameters": {key: value for key, value in parameters.items() if key not in relocated},
-        **{key: parameters[key] for key in relocated if key in parameters},
+        **{key: parameters[key] for key in relocated if key in parameters and key not in function},
     }
 
 
