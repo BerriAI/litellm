@@ -16,7 +16,7 @@ from typing import Final, TypeAlias, TypeVar, get_args
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
+from litellm.litellm_core_utils.aws_partition import get_aws_partition, is_bedrock_arn
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
@@ -103,7 +103,15 @@ _PROVIDER_BASE_URL_ENV_VARS_NOT_NAMED_AFTER_THE_PROVIDER: Final = MappingProxyTy
     }
 )
 _PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE: Final = frozenset(
-    provider.value for provider in (LlmProviders.TOGETHER_AI, LlmProviders.AZURE_AI, LlmProviders.WATSONX)
+    provider.value
+    for provider in (
+        LlmProviders.TOGETHER_AI,
+        LlmProviders.AZURE_AI,
+        LlmProviders.WATSONX,
+        LlmProviders.AZURE,
+        LlmProviders.BEDROCK,
+        LlmProviders.VERTEX_AI,
+    )
 )
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
@@ -465,8 +473,13 @@ def _bedrock_routing_segments() -> Iterable[str]:
     )
 
 
+_VERTEX_AI_ROUTES_NAMING_AN_ACCOUNT_RESOURCE: Final = frozenset(
+    (VertexAIModelRoute.AGENT_ENGINE, VertexAIModelRoute.BGE)
+)
+
+
 def _vertex_ai_routing_segments() -> Iterable[str]:
-    return (route.value for route in VertexAIModelRoute)
+    return (route.value for route in VertexAIModelRoute if route not in _VERTEX_AI_ROUTES_NAMING_AN_ACCOUNT_RESOURCE)
 
 
 def _azure_routing_segments() -> Iterable[str]:
@@ -509,8 +522,25 @@ def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
     )
 
 
-def _names_a_cross_region_inference_profile(model_id: str) -> bool:
-    return model_id.partition(".")[0] in get_bedrock_cross_region_inference_regions()
+def _cross_region_profile_geo(model_id: str) -> str | None:
+    geo: Final = model_id.partition(".")[0]
+    return geo if geo in get_bedrock_cross_region_inference_regions() else None
+
+
+def _partition_serving_geo(geo: str) -> str:
+    return get_aws_partition(f"{geo}-").partition
+
+
+def _names_a_cross_region_inference_profile_in(partition: str) -> Callable[[str], bool]:
+    def names_one(model_id: str) -> bool:
+        geo: Final = _cross_region_profile_geo(model_id)
+        return geo is not None and _partition_serving_geo(geo) == partition
+
+    return names_one
+
+
+def _names_a_foundation_model(model_id: str) -> bool:
+    return _cross_region_profile_geo(model_id) is None and "." in model_id and "/" not in model_id
 
 
 def _bedrock_ids_an_arn_route_can_reach(routing_prefix: str, provider_model_ids: tuple[str, ...]) -> tuple[str, ...]:
@@ -519,9 +549,9 @@ def _bedrock_ids_an_arn_route_can_reach(routing_prefix: str, provider_model_ids:
         return provider_model_ids
     match arn.rpartition(":")[2]:
         case "inference-profile":
-            return tuple(filter(_names_a_cross_region_inference_profile, provider_model_ids))
+            return tuple(filter(_names_a_cross_region_inference_profile_in(arn.split(":")[1]), provider_model_ids))
         case "foundation-model":
-            return tuple(itertools.filterfalse(_names_a_cross_region_inference_profile, provider_model_ids))
+            return tuple(filter(_names_a_foundation_model, provider_model_ids))
         case _:
             return ()
 
