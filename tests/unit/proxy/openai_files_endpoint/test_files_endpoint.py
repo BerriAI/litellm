@@ -5,7 +5,7 @@ import json
 import tempfile
 import tracemalloc
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from email.parser import BytesParser
 from typing import IO, Final, List, Optional
 from urllib.parse import quote
@@ -1430,7 +1430,7 @@ async def test_route_create_file_rewrites_a_large_upload_on_disk_and_discards_it
     rows_per_model: Final[list[Counter[str]]] = []
     uploaded_handles: Final[list[IO[bytes]]] = []
     upload_allocations: Final[list[int]] = []
-    upload_filters: Final = [
+    upload_filters: Final[list[tracemalloc.Filter]] = [
         tracemalloc.Filter(True, function.__code__.co_filename, all_frames=True)
         for function in (route_create_file, rewrite_rows_naming_model)
     ]
@@ -1439,7 +1439,7 @@ async def test_route_create_file_rewrites_a_large_upload_on_disk_and_discards_it
         snapshot: Final = tracemalloc.take_snapshot().filter_traces(upload_filters)
         upload_allocations.append(sum(trace.size for trace in snapshot.traces))
 
-    rollover: Final = tempfile.SpooledTemporaryFile.rollover
+    rollover: Final[Callable[[tempfile.SpooledTemporaryFile[bytes]], None]] = tempfile.SpooledTemporaryFile.rollover
 
     def record_before_rollover(spool: tempfile.SpooledTemporaryFile[bytes]) -> None:
         record_upload_allocations()
