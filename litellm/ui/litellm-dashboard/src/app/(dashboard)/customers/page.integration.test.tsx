@@ -200,14 +200,16 @@ describe("customer organization overview", () => {
     expect(monthly.getByText("$60.00 left")).toBeInTheDocument();
     expect(monthly.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "40");
     const limits = within(row.getByRole("cell", { name: /6,000.00 total/ }));
-    expect(limits.getByText("$6,000.00 total · No automatic reset")).toBeInTheDocument();
+    expect(limits.getByText("$6,000.00 total")).toBeInTheDocument();
+    expect(limits.getByText("No automatic reset")).toBeInTheDocument();
     expect(limits.getByText("$100.00/mo")).toBeInTheDocument();
     expect(limits.getByText("$1,000.00/yr")).toBeInTheDocument();
     expect(limits.getByText("10,000 TPM")).toBeInTheDocument();
     expect(limits.getByText("20 RPM")).toBeInTheDocument();
     const uncappedMonth = within(screen.getByRole("row", { name: /Customer 01/ }));
     expect(uncappedMonth.getByText("No monthly limit")).toBeInTheDocument();
-    expect(uncappedMonth.getByText("$50.00 total · No automatic reset")).toBeInTheDocument();
+    expect(uncappedMonth.getByText("$50.00 total")).toBeInTheDocument();
+    expect(uncappedMonth.getByText("No automatic reset")).toBeInTheDocument();
     expect(uncappedMonth.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 

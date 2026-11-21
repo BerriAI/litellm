@@ -58,7 +58,8 @@ export function CustomerBudgetSourceSelect({
     ];
     const spendSummary = spendLimits.map((limit) => {
       const amount = t("format.number", { val: limit.max_budget, ...currencyOptions });
-      return customerBudgetLimitLabel(amount, limit.budget_duration ?? null, t);
+      const label = customerBudgetLimitLabel(amount, limit.budget_duration ?? null, t);
+      return limit.budget_duration ? label : `${label} · ${t("customerPortal.analytics.noAutomaticReset")}`;
     });
     const rateSummary = rateFields.map((field) =>
       group[`${field}_limit`] == null

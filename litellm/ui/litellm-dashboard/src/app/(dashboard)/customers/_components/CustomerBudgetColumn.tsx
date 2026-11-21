@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableHead } from "@/components/ui/table";
 import { CustomerRateLimitSummary } from "./CustomerRateLimits";
@@ -38,9 +39,14 @@ export function CustomerBudgetLimitCell({ entity, children }: { entity: Customer
         <div className="space-y-1">
           {budgets.length === 0 && <span>{t("customerPortal.rateLimits.noSpendLimit")}</span>}
           {budgets.map((budget) => (
-            <p key={`${budget.source}-${budget.budget_duration}`}>
-              {customerBudgetLimitLabel(formatUsd(budget.max_budget), budget.budget_duration, t)}
-            </p>
+            <div key={`${budget.source}-${budget.budget_duration}`} className="flex flex-col items-start gap-1">
+              <p>{customerBudgetLimitLabel(formatUsd(budget.max_budget), budget.budget_duration, t)}</p>
+              {!budget.budget_duration && (
+                <Badge variant="secondary" className="font-normal text-muted-foreground">
+                  {t("customerPortal.analytics.noAutomaticReset")}
+                </Badge>
+              )}
+            </div>
           ))}
         </div>
         {children}
