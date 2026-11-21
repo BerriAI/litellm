@@ -1286,7 +1286,9 @@ class _ToolCallProviderStream(httpx.AsyncByteStream):
         self._shape: Final = shape
         self._split_arguments: Final = split_arguments
 
-    def _call_events(self, output_index: int, item_id: str, call_id: str, name: str, arguments: str) -> Iterator[dict]:
+    def _call_events(
+        self, output_index: int, item_id: str, call_id: str, name: str, arguments: str
+    ) -> Iterator[Mapping[str, object]]:
         item: Final = {"type": "function_call", "id": item_id, "call_id": call_id, "name": name}
         yield {
             "type": "response.output_item.added",
@@ -1337,13 +1339,18 @@ def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple
 
     chunks: Final = asyncio.run(_run())
     starts: Final = {c["index"]: c["content_block"] for c in chunks if c["type"] == "content_block_start"}
-    partial_json: Final = {
-        index: "".join(
-            c["delta"]["partial_json"] for c in chunks if c["type"] == "content_block_delta" and c["index"] == index
-        )
-        for index in starts
-    }
-    return tuple((starts[i]["id"], starts[i]["name"], partial_json[i]) for i in sorted(starts))
+    return tuple((starts[i]["id"], starts[i]["name"], _input_before_block_stop(chunks, i)) for i in sorted(starts))
+
+
+def _input_before_block_stop(chunks: list[Mapping[str, object]], index: int) -> str | None:
+    stop: Final = next(
+        (pos for pos, c in enumerate(chunks) if c["type"] == "content_block_stop" and c["index"] == index), None
+    )
+    if stop is None:
+        return None
+    return "".join(
+        c["delta"]["partial_json"] for c in chunks[:stop] if c["type"] == "content_block_delta" and c["index"] == index
+    )
 
 
 @pytest.mark.parametrize(
