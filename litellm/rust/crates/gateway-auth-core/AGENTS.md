@@ -1,6 +1,6 @@
 # Gateway auth core
 
-Every proxy auth decision for the planner, the master key, virtual keys and JWTs, behind one `AuthHost` trait. The Python proxy is the only host, and runs it through `python-bridge/src/auth/`. `common_checks`, the authorization stage that runs after either path, is still Python. Design and scope live in the Notion page "Auth" under "Rust Migration Depth First Plan"
+Every proxy auth decision for the planner, the master key, virtual keys and JWTs, behind one `AuthHost` trait. The Python proxy runs it through `python-bridge/src/auth/`, and the gateway's native host through `gateway/src/host/auth`. `common_checks`, the authorization stage that runs after either path, is still Python. Design and scope live in the Notion page "Auth" under "Rust Migration Depth First Plan"
 
 These are target invariants. Where the code still lags them, the Notion page lists the gap, and new code follows the invariant, not the gap
 
@@ -23,6 +23,14 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - No generic methods such as `cached_json(key)` or `run_step()`. One method per question, typed in and out
 - The order of host calls is behavior, since it decides which reads and writes happen before a denial. Tests share the scripted host in `testing.rs` and assert the result and the calls in order
 - Where one path hands off to another, such as a mapped JWT continuing on the key path, a test at the entry point in `lib.rs` covers it, with inputs built by the stage that produces them. A test that seeds a record by hand proves only its own stage
+
+## The caller
+
+- Every answer about who the caller is and what it may reach is decided here, with no IO. A host asks, it never works one out from a row
+- `Caller` in `caller.rs` is the only thing a host carries past authentication. An identity that is not a caller a host serves, as no master key, the user auth route, a cached admin key and a JWT are, is `NotACaller` and never becomes one, so a host cannot serve it by accident
+- The role is derived here, by `Caller::role`. Admin is a role and never a kind of credential, so a host never reads it off how the caller authenticated or off a permission it holds
+- A key's id is the hash its row is stored under, `Caller::hash`, read from the `KeyRecord` the host's key row keeps through `StoredKey`. The key path refuses a key whose record has none, so a caller that is a key always has one and only the master key has none. It is never the hash of the token the request presented, which a key a JWT maps to does not have
+- For access, the host supplies the layers it read (the key's, the team's and so on) and the core decides. A host that did not read a layer a key has must have declined that key at authentication, so no decision is ever made on a layer that is missing
 
 ## No Python semantics
 

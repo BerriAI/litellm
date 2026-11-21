@@ -18,6 +18,7 @@ litellm-gateway-forward.workspace = true
 thiserror.workspace = true
 futures-util.workspace = true
 litellm-gateway-auth.workspace = true
+litellm-gateway-auth-core.workspace = true
 litellm-callbacks.workspace = true
 parking_lot.workspace = true
 litellm-config.workspace = true
