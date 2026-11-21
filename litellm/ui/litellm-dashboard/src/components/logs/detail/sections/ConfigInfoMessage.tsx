@@ -38,7 +38,6 @@ export const ConfigInfoMessage: React.FC<ConfigInfoMessageProps> = ({ show }) =>
         </p>
         <pre className="mt-2 bg-card p-3 rounded-sm border border-info/20 text-xs font-mono overflow-auto">
           {`general_settings:
-  store_model_in_db: true
   store_prompts_in_spend_logs: true`}
         </pre>
         <p className="text-xs text-info mt-2">{t("logs.detail.configInfo.note")}</p>
