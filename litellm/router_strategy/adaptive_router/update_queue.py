@@ -30,6 +30,7 @@ from litellm.repositories.table_repositories import (
 
 StateKey = tuple[str, str, str]  # (router_name, request_type, model_name)
 SessionKey = tuple[str, str, str]  # (session_id, router_name, model_name)
+_MAX_SESSION_RETRY_ENTRIES: Final[int] = 1024
 
 
 class AdaptiveRouterUpdateQueue:
@@ -42,6 +43,8 @@ class AdaptiveRouterUpdateQueue:
         self._state_agg: dict[StateKey, dict[str, float]] = {}
         self._session_agg: dict[SessionKey, Mapping[str, object]] = {}
         self._lock = asyncio.Lock()
+        self._state_flush_lock = asyncio.Lock()
+        self._session_flush_lock = asyncio.Lock()
         self._max_state_size_seen = 0
         self._max_session_size_seen = 0
 
@@ -85,14 +88,22 @@ class AdaptiveRouterUpdateQueue:
         SessionState (signals counts + bookkeeping fields). The flusher will
         upsert this into LiteLLM_AdaptiveRouterSession.
         """
+        if any("\0" in part for part in (session_id, router_name, model_name)):
+            verbose_router_logger.warning("AdaptiveRouterUpdateQueue: session key cannot be stored in PostgreSQL")
+            return
         key: Final[SessionKey] = (session_id, router_name, model_name)
         async with self._lock:
+            self._session_agg.pop(key, None)
             self._session_agg[key] = state_dict
             self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
     # ---- Flushers (called by background task) ----------------------------
 
     async def flush_state_to_db(self, prisma_client: object) -> int:
+        async with self._state_flush_lock:
+            return await self._flush_state_to_db(prisma_client)
+
+    async def _flush_state_to_db(self, prisma_client: object) -> int:
         """
         Drain state aggregator and apply to LiteLLM_AdaptiveRouterState.
         Returns number of cells flushed.
@@ -106,49 +117,57 @@ class AdaptiveRouterUpdateQueue:
 
         # Sort keys to give deterministic write order across writers and
         # reduce the chance of cross-row deadlocks when other workers race us.
-        for key in sorted(batch.keys()):
-            router, rt, model = key
-            payload = batch[key]
-            try:
-                # Atomic increment: push the delta directly into the DB so
-                # concurrent flushers from multiple pods don't overwrite each
-                # other. The upsert creates the row with the delta as the
-                # initial value on first write, then increments on subsequent
-                # writes — no read-modify-write race.
-                await AdaptiveRouterStateRepository(prisma_client).table.upsert(
-                    where={
-                        "router_name_request_type_model_name": {
-                            "router_name": router,
-                            "request_type": rt,
-                            "model_name": model,
-                        }
-                    },
-                    data={
-                        "create": {
-                            "router_name": router,
-                            "request_type": rt,
-                            "model_name": model,
-                            "alpha": payload["delta_alpha"],
-                            "beta": payload["delta_beta"],
-                            "total_samples": int(payload["samples_added"]),
+        pending: Final = dict(batch)
+        try:
+            for key, payload in sorted(batch.items()):
+                router, rt, model = key
+                try:
+                    # Atomic increment: push the delta directly into the DB so
+                    # concurrent flushers from multiple pods don't overwrite each
+                    # other. The upsert creates the row with the delta as the
+                    # initial value on first write, then increments on subsequent
+                    # writes — no read-modify-write race.
+                    await AdaptiveRouterStateRepository(prisma_client).table.upsert(
+                        where={
+                            "router_name_request_type_model_name": {
+                                "router_name": router,
+                                "request_type": rt,
+                                "model_name": model,
+                            }
                         },
-                        "update": {
-                            "alpha": {"increment": payload["delta_alpha"]},
-                            "beta": {"increment": payload["delta_beta"]},
-                            "total_samples": {"increment": int(payload["samples_added"])},
+                        data={
+                            "create": {
+                                "router_name": router,
+                                "request_type": rt,
+                                "model_name": model,
+                                "alpha": payload["delta_alpha"],
+                                "beta": payload["delta_beta"],
+                                "total_samples": int(payload["samples_added"]),
+                            },
+                            "update": {
+                                "alpha": {"increment": payload["delta_alpha"]},
+                                "beta": {"increment": payload["delta_beta"]},
+                                "total_samples": {"increment": int(payload["samples_added"])},
+                            },
                         },
-                    },
-                )
-            except Exception as e:
-                verbose_router_logger.exception(
-                    "AdaptiveRouterUpdateQueue: failed to flush state for %s: %s",
-                    key,
-                    e,
-                )
+                    )
+                    pending.pop(key)
+                except Exception as e:
+                    verbose_router_logger.exception(
+                        "AdaptiveRouterUpdateQueue: failed to flush state for %s: %s",
+                        key,
+                        e,
+                    )
+        finally:
+            await self._restore_state_batch(pending)
 
-        return len(batch)
+        return len(batch) - len(pending)
 
     async def flush_session_to_db(self, prisma_client: object) -> int:
+        async with self._session_flush_lock:
+            return await self._flush_session_to_db(prisma_client)
+
+    async def _flush_session_to_db(self, prisma_client: object) -> int:
         """
         Drain session aggregator and upsert into LiteLLM_AdaptiveRouterSession.
         Returns number of session rows flushed.
@@ -160,45 +179,69 @@ class AdaptiveRouterUpdateQueue:
         if not batch:
             return 0
 
-        for key in sorted(batch.keys()):
-            session_id, router, model = key
-            payload = batch[key]
-            try:
-                # NOTE: Prisma client lower-cases model names, so
-                # `LiteLLM_AdaptiveRouterSession` -> `litellm_adaptiveroutersession`
-                # (single 's', not 'litellm_adaptiverouterssession').
-                # Strip PK fields from the update payload — Prisma rejects
-                # writes to fields that are part of the @@id. asdict(state)
-                # always carries them, so build a separate update dict.
-                update_payload = {
-                    k: v for k, v in payload.items() if k not in ("session_id", "router_name", "model_name")
-                }
-                await AdaptiveRouterSessionRepository(prisma_client).table.upsert(
-                    where={
-                        "session_id_router_name_model_name": {
-                            "session_id": session_id,
-                            "router_name": router,
-                            "model_name": model,
-                        }
-                    },
-                    data={
-                        "create": {
-                            "session_id": session_id,
-                            "router_name": router,
-                            "model_name": model,
-                            **update_payload,
+        pending: Final = dict(batch)
+        try:
+            for key, payload in sorted(batch.items()):
+                session_id, router, model = key
+                try:
+                    # NOTE: Prisma client lower-cases model names, so
+                    # `LiteLLM_AdaptiveRouterSession` -> `litellm_adaptiveroutersession`
+                    # (single 's', not 'litellm_adaptiverouterssession').
+                    # Strip PK fields from the update payload — Prisma rejects
+                    # writes to fields that are part of the @@id. asdict(state)
+                    # always carries them, so build a separate update dict.
+                    update_payload = {
+                        k: v for k, v in payload.items() if k not in ("session_id", "router_name", "model_name")
+                    }
+                    await AdaptiveRouterSessionRepository(prisma_client).table.upsert(
+                        where={
+                            "session_id_router_name_model_name": {
+                                "session_id": session_id,
+                                "router_name": router,
+                                "model_name": model,
+                            }
                         },
-                        "update": update_payload,
-                    },
-                )
-            except Exception as e:
-                verbose_router_logger.exception(
-                    "AdaptiveRouterUpdateQueue: failed to flush session for %s: %s",
-                    key,
-                    e,
-                )
+                        data={
+                            "create": {
+                                "session_id": session_id,
+                                "router_name": router,
+                                "model_name": model,
+                                **update_payload,
+                            },
+                            "update": update_payload,
+                        },
+                    )
+                    pending.pop(key)
+                except Exception as e:
+                    verbose_router_logger.exception(
+                        "AdaptiveRouterUpdateQueue: failed to flush session for %s: %s",
+                        key,
+                        e,
+                    )
+        finally:
+            await self._restore_session_batch(pending)
 
-        return len(batch)
+        return len(batch) - len(pending)
+
+    async def _restore_state_batch(self, pending: Mapping[StateKey, Mapping[str, float]]) -> None:
+        async with self._lock:
+            for key, payload in pending.items():
+                self._state_agg[key] = {
+                    field: value + (self._state_agg[key][field] if key in self._state_agg else 0)
+                    for field, value in payload.items()
+                }
+            self._max_state_size_seen = max(self._max_state_size_seen, len(self._state_agg))
+
+    async def _restore_session_batch(self, pending: Mapping[SessionKey, Mapping[str, object]]) -> None:
+        if not pending:
+            return
+        async with self._lock:
+            restored: Final = dict(pending)
+            for key in self._session_agg:
+                restored.pop(key, None)
+            merged: Final = {**restored, **self._session_agg}
+            self._session_agg = dict(tuple(merged.items())[-_MAX_SESSION_RETRY_ENTRIES:])
+            self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
     # ---- Observability ---------------------------------------------------
 
