@@ -72,6 +72,19 @@ def test_should_aggregate_known_usage_and_serialize_unknown_metrics_without_auth
     assert "Known subtotals" in report.to_markdown()
 
 
+def test_should_report_judge_token_counts_even_when_the_judge_price_is_unknown() -> None:
+    judged: Final = CheckResult(passed=True, detail="rubric passed", judge_usage=Usage(20, 5, 1), judge_cost=None)
+    output: Final = AgentOutput("answer", cost=0.0, usage=Usage(), events=())
+    report: Final = EvalScorecard(
+        "suite", (EvalRun("one", "task", "target", 1, EvalStatus.PASS, output, judged, 1, "rubric passed"),)
+    )
+
+    summary: Final = report.summaries[0]
+    assert summary.judge_usage == Usage(20, 5, 1)
+    assert summary.judge_cost is None
+    assert not summary.metrics_complete
+
+
 def test_should_escape_multiline_labels_and_check_output_in_markdown() -> None:
     report: Final = EvalScorecard(
         suite_id="suite",

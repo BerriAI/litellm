@@ -247,7 +247,7 @@ async def _execute(
         if isinstance(task.check, JudgeCheck):
             return replace(
                 failure,
-                check=CheckResult(False, failure.detail, judge_cost=None, error=failure.detail),
+                check=CheckResult(False, failure.detail, judge_usage=None, judge_cost=None, error=failure.detail),
             )
         return failure
     if checked.error is not None:

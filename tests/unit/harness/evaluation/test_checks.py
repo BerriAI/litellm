@@ -246,6 +246,7 @@ async def test_should_report_unknown_judge_cost_after_provider_errors(
     assert run.check is not None
     assert run.check.error is not None
     assert run.check.judge_cost is None
+    assert run.check.judge_usage is None
     assert not report.summaries[0].metrics_complete
     assert report.summaries[0].errors == 1
     assert report.summaries[0].cost == run.result.cost

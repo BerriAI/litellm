@@ -233,7 +233,7 @@ class EvalStatus(Enum):
 class CheckResult:
     passed: bool
     detail: str
-    judge_usage: Usage = field(default_factory=Usage)
+    judge_usage: Usage | None = field(default_factory=Usage)
     judge_cost: float | None = 0.0
     error: str | None = None
 
@@ -322,9 +322,9 @@ def _summary(target: str, runs: tuple[EvalRun, ...]) -> EvalSummary:
         metrics_complete=all(
             run.cost is not None and run.usage is not None and run.tool_calls is not None for run in selected
         )
-        and all(check.judge_cost is not None for check in checks),
+        and all(check.judge_cost is not None and check.judge_usage is not None for check in checks),
         judge_cost=_cost_sum(tuple(check.judge_cost for check in checks)),
-        judge_usage=_usage_sum(tuple(check.judge_usage if check.judge_cost is not None else None for check in checks)),
+        judge_usage=_usage_sum(tuple(check.judge_usage for check in checks)),
     )
 
 
