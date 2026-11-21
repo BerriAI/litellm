@@ -1506,6 +1506,32 @@ class TestMantleGeoInferenceProfile:
             ) == chat_completion_ends_in_responses_api(bare_id, "bedrock_mantle", **request_params), bare_id
 
 
+class TestMantleOnABedrockRuntimeApiBase:
+    """bedrock-runtime's Responses endpoint rejects web_search, which the Mantle host accepts."""
+
+    TOOLS: Final = [
+        {"type": "web_search"},
+        {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+    ]
+
+    def _sent_tool_types(self, api_base):
+        request = BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+            model="us.openai.gpt-6.1-sol",
+            input="hi",
+            response_api_optional_request_params={"tools": self.TOOLS},
+            litellm_params=GenericLiteLLMParams(api_base=api_base),
+            headers={},
+        )
+        return [tool["type"] for tool in request.get("tools", [])]
+
+    def test_bedrock_runtime_gets_only_the_tools_it_accepts(self):
+        assert self._sent_tool_types("https://bedrock-runtime.us-east-1.amazonaws.com") == ["function"]
+
+    @pytest.mark.parametrize("api_base", [None, "https://bedrock-mantle.us-east-1.api.aws"])
+    def test_the_mantle_host_keeps_web_search(self, api_base):
+        assert self._sent_tool_types(api_base) == ["web_search", "function"]
+
+
 class TestBedrockMantleEndpointHonoring:
     def test_plain_chat_call_to_gpt_oss_is_not_bridged(self, local_cost_map):
         # Adding native Responses support to gpt-oss must NOT reroute its plain
