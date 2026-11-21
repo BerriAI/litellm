@@ -1,11 +1,12 @@
 import asyncio
 import copy
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from types import SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import orjson
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -442,8 +443,43 @@ class _BilledThenFailingImageHandler(litellm.CustomLLM):
         )
         raise litellm.RateLimitError(message="refused after billing", llm_provider="image-regression", model=model)
 
+    async def aimage_edit(
+        self,
+        model: str,
+        image: object,
+        prompt: str | None,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        return await self.aimage_generation(
+            model, prompt or "", model_response, api_key, api_base, optional_params, logging_obj
+        )
 
-def test_failed_image_generation_spend_row_bills_what_the_provider_charged(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def _send_generation(client: TestClient) -> httpx.Response:
+    return client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+
+
+def _send_edit(client: TestClient) -> httpx.Response:
+    return client.post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={"model": "A", "prompt": "add a hat"},
+    )
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_failed_image_request_bills_what_the_provider_charged_in_its_spend_row_and_cost_header(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
@@ -477,12 +513,13 @@ def test_failed_image_generation_spend_row_bills_what_the_provider_charged(monke
 
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
-            response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+            response: Final = send(client)
     finally:
         ProxyLogging._callback_capabilities_cache.clear()
 
     assert response.status_code == 429, response.text
     db_call: Final = spend_writer.update_database.call_args.kwargs
+    assert float(response.headers["x-litellm-response-cost"]) == db_call["response_cost"]
     payload: Final = get_logging_payload(
         kwargs=db_call["kwargs"],
         response_obj=db_call["completion_response"],

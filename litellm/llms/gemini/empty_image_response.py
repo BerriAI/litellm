@@ -18,6 +18,10 @@ _REFUSALS_GOOGLE_DOES_NOT_CHARGE: Final = frozenset({"IMAGE_RECITATION"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
 
 
+class UnservedImageError(UnprocessableEntityError):
+    pass
+
+
 class FailedImageBilling(Protocol):
     def response_cost_calculator(self, result: ImageResponse) -> float | None: ...
 
@@ -101,7 +105,7 @@ def empty_image_response_error(
     raw_response: httpx.Response,
     answer: ImageResponse,
     billing: FailedImageBilling,
-) -> ContentPolicyViolationError | UnprocessableEntityError:
+) -> ContentPolicyViolationError | UnservedImageError:
     result: Final = _parsed(response)
     feedback: Final = result.prompt_feedback
     if feedback is not None and feedback.block_reason:
@@ -136,7 +140,7 @@ def empty_image_response_error(
         )
     finish_reasons: Final = ",".join(candidate.finish_reason or "none" for candidate in candidates) or "none"
     _bill_answer(billing, answer)
-    return UnprocessableEntityError(
+    return UnservedImageError(
         message=f"Gemini returned no image, finishReason={finish_reasons}",
         model=model,
         llm_provider=llm_provider,

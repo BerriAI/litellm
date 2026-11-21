@@ -140,6 +140,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.openai_files_endpoints.common_utils import (
     ManagedResourceAccessChecker,
@@ -4247,7 +4248,7 @@ class ProxyBaseLLMRequestProcessing:
             call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=0,
+            response_cost=failure_row_response_cost(_REQUEST_FIELDS.validate_python(self.data)),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,

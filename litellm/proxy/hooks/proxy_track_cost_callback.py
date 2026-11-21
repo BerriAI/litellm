@@ -162,6 +162,24 @@ def _str_keyed_fields(value: object) -> Mapping[str, object]:
     return value if is_str_keyed_mapping(value) else {}
 
 
+def _failure_row_guardrail_information(request_data: Mapping[str, object]) -> object:
+    metadata: Final = _str_keyed_fields(request_data.get("metadata"))
+    if "standard_logging_guardrail_information" in metadata:
+        return metadata["standard_logging_guardrail_information"]
+    return _str_keyed_fields(request_data.get("litellm_metadata")).get("standard_logging_guardrail_information")
+
+
+def failure_row_response_cost(request_data: Mapping[str, object]) -> float:
+    stashed_cost: Final = request_data.get("response_cost")
+    recovered_stream_cost: Final = (
+        max(float(stashed_cost), 0.0)
+        if isinstance(request_data.get("combined_usage_object"), litellm.Usage)
+        and isinstance(stashed_cost, (int, float))
+        else 0.0
+    )
+    return recovered_stream_cost + guardrail_information_cost(_failure_row_guardrail_information(request_data))
+
+
 DeploymentLookup: TypeAlias = Callable[[str], Deployment | None]
 
 
@@ -443,13 +461,8 @@ class _ProxyDBLogger(CustomLogger):
         # recovered cost onto request_data (the usage rides along in
         # ``combined_usage_object`` for the token columns), so attribute the
         # real partial spend to this failure row instead of zero.
-        recovered_stream_cost: Final = (
-            max(float(request_data.get("response_cost") or 0.0), 0.0)
-            if isinstance(request_data.get("combined_usage_object"), litellm.Usage)
-            else 0.0
-        )
-        recovered_response_cost: Final = recovered_stream_cost + guardrail_information_cost(
-            existing_metadata.get("standard_logging_guardrail_information")
+        recovered_response_cost: Final = failure_row_response_cost(
+            cast("Mapping[str, object]", request_data)  # cast-ok: request dict, read only
         )
 
         failure_snapshot_with_late_guardrails: Final = _failure_snapshot_with_guardrails_recorded_after_it(
