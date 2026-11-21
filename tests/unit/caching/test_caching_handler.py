@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import asyncio
+import contextlib
 import hashlib
 import threading
 import random
@@ -473,7 +474,9 @@ async def test_a_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypat
     assert logged_cache_hits[1:] == [True], logged_cache_hits
 
 
-def test_a_sync_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_sync_responses_call_on_a_chat_only_provider_logs_once_with_and_without_a_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm import CustomLLM
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -484,24 +487,17 @@ def test_a_sync_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypatc
                 usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
             )
 
-    logged_cache_hits: Final[list[object]] = []
-
-    class Recorder(CustomLogger):
-        def log_success_event(
-            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
-        ) -> None:
-            logged_cache_hits.append(kwargs.get("cache_hit"))
-
     class ConcurrentLoggingExecutor:
         def __init__(self) -> None:
             self.jobs: Final[list[Callable[[], object]]] = []
+            self.every_job_in_logging_hook = threading.Barrier(1)
 
         def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
             self.jobs.append(lambda: fn(*args, **kwargs))
 
         def run_queued_jobs_at_once(self) -> None:
-            start: Final = threading.Barrier(len(self.jobs))
-            workers: Final = tuple(threading.Thread(target=lambda job=job: (start.wait(), job())) for job in self.jobs)
+            self.every_job_in_logging_hook = threading.Barrier(len(self.jobs), timeout=5)
+            workers: Final = tuple(threading.Thread(target=job) for job in self.jobs)
             for worker in workers:
                 worker.start()
             for worker in workers:
@@ -509,6 +505,21 @@ def test_a_sync_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypatc
             self.jobs.clear()
 
     logging_executor: Final = ConcurrentLoggingExecutor()
+    logged_cache_hits: Final[list[object]] = []
+
+    class Recorder(CustomLogger):
+        def logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            with contextlib.suppress(threading.BrokenBarrierError):
+                logging_executor.every_job_in_logging_hook.wait()
+            return kwargs, result
+
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged_cache_hits.append(kwargs.get("cache_hit"))
+
     monkeypatch.setattr(litellm.utils, "executor", logging_executor)
     monkeypatch.setattr(litellm.litellm_core_utils.litellm_logging, "executor", logging_executor)
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "chat-only", "custom_handler": ChatOnlyProvider()}])
@@ -520,16 +531,14 @@ def test_a_sync_responses_cache_hit_on_a_chat_only_provider_logs_once(monkeypatc
     monkeypatch.setattr(
         litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=[CallTypes.completion.value])
     )
-    large_image_prompt: Final = "describe data:image/png;base64," + "A" * (2 * 1024 * 1024)
 
-    responses(model="chat-only/model", input=large_image_prompt)
+    responses(model="chat-only/model", input="describe this")
     logging_executor.run_queued_jobs_at_once()
-    logged_cache_hits.clear()
+    assert logged_cache_hits == [None], logged_cache_hits
 
-    responses(model="chat-only/model", input=large_image_prompt)
+    responses(model="chat-only/model", input="describe this")
     logging_executor.run_queued_jobs_at_once()
-
-    assert logged_cache_hits == [True], logged_cache_hits
+    assert logged_cache_hits == [None, True], logged_cache_hits
 
 
 @pytest.mark.parametrize(
