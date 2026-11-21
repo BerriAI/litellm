@@ -3546,6 +3546,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-auth-store"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "jiff",
+ "litellm-db",
+ "litellm-db-testing",
+ "litellm-error",
+ "litellm-gateway-auth-core",
+ "litellm-python-compat",
+ "litellm-redis-store",
+ "litellm-repositories",
+ "litellm-secret-value",
+ "rstest",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
@@ -4676,6 +4698,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-auth-store",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks",
@@ -4847,6 +4870,7 @@ name = "litellm-redis-store"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "jiff",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-circuit-breaker",
@@ -4864,6 +4888,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "veil",
 ]
 
 [[package]]
