@@ -66407,7 +66407,8 @@
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -66814,7 +66815,8 @@
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -66922,7 +66924,8 @@
         "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -66978,7 +66981,8 @@
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -67032,7 +67036,8 @@
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -67147,7 +67152,8 @@
         "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
