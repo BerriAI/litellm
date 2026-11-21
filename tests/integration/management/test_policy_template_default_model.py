@@ -318,7 +318,7 @@ def _assert_forced_suggestion(result: dict[str, JsonValue], sent: tuple[dict[str
     ], sent
 
 
-def test_suggest_without_a_model_selects_templates_through_the_configured_deployment_regression(rig: Rig) -> None:
+def test_suggest_without_a_model_selects_templates_with_the_default_model_regression(rig: Rig) -> None:
     result, sent = _suggest(rig, None)
     _assert_forced_suggestion(result, sent)
     assert sent[0]["model"] == CONFIGURED_DEFAULT, sent

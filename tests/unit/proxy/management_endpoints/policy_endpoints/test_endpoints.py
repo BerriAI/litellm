@@ -7,17 +7,25 @@ without needing a running proxy.
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from typing import Final
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import Request
+from fastapi.responses import StreamingResponse
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.policy_endpoints.endpoints import (
+    EnrichTemplateRequest,
     GuardrailTestResultEntry,
     _compute_overall_action,
     _test_guardrail_definitions,
+    enrich_policy_template,
+    enrich_policy_template_stream,
     get_policy_templates,
     list_policies,
 )
@@ -393,33 +401,33 @@ async def test_policy_templates_serve_the_bundled_copy_without_fetching(monkeypa
 
 
 class TestEnrichPolicyTemplateOnAModelThatRefusesCustomTemperature:
-    """gpt-6-luna, like the rest of the GPT reasoning line, answers 400 to any temperature but 1."""
-
     @staticmethod
-    def _openai_upstream(seen_bodies: list[dict]) -> None:
-        import httpx
-        import respx
+    def _openai_upstream(seen_bodies: list[dict[str, object]]) -> None:
+        def chunk(content: str, finish_reason: str | None) -> str:
+            delta: Final = {"role": "assistant", "content": content} if content else {}
+            payload: Final = {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "gpt-6-luna",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            }
+            return f"data: {json.dumps(payload)}\n\n"
 
         def handler(request: httpx.Request) -> httpx.Response:
-            body = json.loads(request.content)
+            body: Final = json.loads(request.content)
             seen_bodies.append(body)
-            if body.get("temperature", 1) != 1:
-                return httpx.Response(
-                    400,
-                    json={
-                        "error": {
-                            "message": "Unsupported value: 'temperature' does not support 0.3 with this model.",
-                            "type": "invalid_request_error",
-                            "param": "temperature",
-                            "code": "unsupported_value",
-                        }
-                    },
-                )
-            content = (
+            content: Final = (
                 "Rival Air: Rivalair, Rival Airways"
                 if "misspellings" in body["messages"][0]["content"]
                 else "Rival Air\nOther Air"
             )
+            if body.get("stream"):
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=chunk(content, None) + chunk("", "stop") + "data: [DONE]\n\n",
+                )
             return httpx.Response(
                 200,
                 json={
@@ -436,17 +444,9 @@ class TestEnrichPolicyTemplateOnAModelThatRefusesCustomTemperature:
 
         respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=handler)
 
-    async def _enrich(self, monkeypatch, model: str | None) -> dict:
-        from unittest.mock import MagicMock
-
-        import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy._types import LitellmUserRoles
-        from litellm.proxy.management_endpoints.policy_endpoints.endpoints import (
-            EnrichTemplateRequest,
-            enrich_policy_template,
-        )
-
-        router = litellm.Router(
+    @staticmethod
+    async def _enrich(monkeypatch: pytest.MonkeyPatch, model: str | None, stream: bool) -> dict[str, object]:
+        router: Final = litellm.Router(
             model_list=[
                 {
                     "model_name": "gpt-6-luna",
@@ -455,29 +455,44 @@ class TestEnrichPolicyTemplateOnAModelThatRefusesCustomTemperature:
             ]
         )
         monkeypatch.setattr(proxy_server, "llm_router", router)
-        return await enrich_policy_template(
-            data=EnrichTemplateRequest(
-                template_id="competitor-mention-detection",
-                parameters={"brand_name": "Acme Air"},
-                model=model,
-            ),
-            request=MagicMock(),
-            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
+        data: Final = EnrichTemplateRequest(
+            template_id="competitor-mention-detection",
+            parameters={"brand_name": "Acme Air"},
+            model=model,
         )
+        admin: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        if not stream:
+            return await enrich_policy_template(data=data, request=MagicMock(spec=Request), user_api_key_dict=admin)
+        response: Final = await enrich_policy_template_stream(
+            data=data, request=MagicMock(spec=Request), user_api_key_dict=admin
+        )
+        assert isinstance(response, StreamingResponse)
+        sse: Final = "".join(
+            [chunk if isinstance(chunk, str) else bytes(chunk).decode() async for chunk in response.body_iterator]
+        )
+        events: Final = tuple(
+            json.loads(line.removeprefix("data: ")) for line in sse.splitlines() if line.startswith("data: ")
+        )
+        return events[-1]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [None, "gpt-6-luna"])
+    @pytest.mark.parametrize("stream", [False, True], ids=["enrich", "enrich_stream"])
+    @pytest.mark.parametrize("model", [None, "gpt-6-luna"], ids=["no_model", "explicit_gpt_6_luna"])
     async def test_competitors_and_variations_are_discovered(
-        self, monkeypatch, model, local_model_cost_map, httpx_transport
-    ):
-        import respx
-
-        seen_bodies: list[dict] = []
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str | None,
+        stream: bool,
+        local_model_cost_map: None,
+        httpx_transport: None,
+    ) -> None:
+        seen_bodies: Final[list[dict[str, object]]] = []
         with respx.mock:
             self._openai_upstream(seen_bodies)
-            result = await self._enrich(monkeypatch, model)
+            result: Final = await self._enrich(monkeypatch, model, stream)
 
         assert result["competitors"] == ["Rival Air", "Other Air"]
         assert result["competitor_variations"] == {"Rival Air": ["Rivalair", "Rival Airways"]}
-        assert len(seen_bodies) == 2
-        assert all(body.get("temperature", 1) == 1 for body in seen_bodies)
+        assert [body["model"] for body in seen_bodies] == ["gpt-6-luna", "gpt-6-luna"]
+        assert not any("temperature" in body for body in seen_bodies)
