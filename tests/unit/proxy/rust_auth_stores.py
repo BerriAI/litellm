@@ -32,6 +32,7 @@ from litellm.rust_bridge._native import (
     RustBudgetRepository,
     RustEndUserRepository,
     RustJwtKeyMappingRepository,
+    RustKeyOwnersRepository,
     RustKeyRepository,
     RustModelAccessGroupRepository,
     RustObjectPermissionRepository,
@@ -706,8 +707,35 @@ class FakeSpendLogStore:
 
 
 @dataclass
+class FakeKeyOwnersStore:
+    """The auth prefetch's one-statement read: answers ``rows`` (a missing key reads as no row) and logs the ids
+    each call asked for, in ``(user, team, membership user, organization, project)`` order."""
+
+    rows: Mapping[str, object] = field(default_factory=dict)
+    lookups: list[tuple[str | None, ...]] = field(default_factory=list)
+
+    async def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> str:
+        self.lookups.append((user_id, team_id, membership_user_id, organization_id, project_id))
+        return json.dumps(
+            {
+                kind: self.rows.get(kind)
+                for kind in ("user_row", "team_row", "membership_row", "organization_row", "project_row")
+            }
+        )
+
+
+@dataclass
 class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
+    key_owners: FakeKeyOwnersStore = field(default_factory=FakeKeyOwnersStore)
     jwt_key_mapping: FakeJwtKeyMappingStore = field(default_factory=FakeJwtKeyMappingStore)
     agent_identity: FakeAgentIdentityStore = field(default_factory=FakeAgentIdentityStore)
     audit_log: FakeAuditLogStore = field(default_factory=FakeAuditLogStore)
@@ -727,6 +755,7 @@ class RustAuthStores:
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
             RustKeyRepository: FakeKeyReader(self.key),
+            RustKeyOwnersRepository: self.key_owners,
             RustJwtKeyMappingRepository: self.jwt_key_mapping,
             RustAgentIdentityRepository: self.agent_identity,
             RustAuditLogRepository: self.audit_log,
