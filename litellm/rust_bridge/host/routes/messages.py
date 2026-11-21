@@ -47,7 +47,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_request_headers,
     stream_cost_injection_requested,
 )
-from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
+from litellm.litellm_core_utils.exception_mapping_utils import is_aws_credential_error, with_deployment_debug_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1702,10 +1702,10 @@ def azure_ad_token(arguments: Mapping[str, object]) -> str:
 def map_token_failure(
     error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool = False
 ) -> Exception:
-    """Python's handler maps a litellm exception raised while it gets the call's credential, and lets any other
-    exception through as raised."""
+    """Python's handler maps a litellm exception or an AWS credential error raised while it gets the call's
+    credential, and lets any other exception through as raised."""
     _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
-    if not isinstance(error, BaseLLMException):
+    if not isinstance(error, BaseLLMException) and not is_aws_credential_error(error):
         return error
     return _public_provider_error(error, error, request, request_provider)
 
