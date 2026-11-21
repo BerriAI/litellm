@@ -12,7 +12,8 @@ use serde::Serialize;
 
 use super::{
     memory::DeprecatedKeys,
-    queries::{self, KeyView},
+    queries::{self, KeyViewRow},
+    view::KeyView,
 };
 use crate::{Database, Side};
 
@@ -58,7 +59,7 @@ impl KeyRepository {
     ) -> Result<Option<FetchedKey>, litellm_db::Error> {
         let mut session = self.database.session(side).await?;
         if let Some(row) = queries::find_key_view(session.executor(), token).await? {
-            return Ok(Some(FetchedKey::new(row, now)));
+            return Ok(Some(FetchedKey::new(grouped(row)?, now)));
         }
         let cached = match side {
             Side::Read => self.deprecated_keys().active_token(token, now),
@@ -86,9 +87,10 @@ impl KeyRepository {
                 }
             }
         };
-        Ok(queries::find_key_view(session.executor(), &active_token)
+        queries::find_key_view(session.executor(), &active_token)
             .await?
-            .map(|row| FetchedKey::new(row, now)))
+            .map(|row| Ok(FetchedKey::new(grouped(row)?, now)))
+            .transpose()
     }
 
     fn deprecated_keys(&self) -> std::sync::MutexGuard<'_, DeprecatedKeys> {
@@ -96,6 +98,10 @@ impl KeyRepository {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+fn grouped(row: KeyViewRow) -> Result<KeyView, litellm_db::Error> {
+    KeyView::try_from(row).map_err(|orphaned| sqlx::Error::Decode(Box::new(orphaned)).into())
 }
 
 /// A key view stamped with when it was read.
@@ -107,6 +113,10 @@ pub struct FetchedKey {
 }
 
 impl FetchedKey {
+    pub fn view(&self) -> &KeyView {
+        &self.view
+    }
+
     fn new(view: KeyView, now: SystemTime) -> Self {
         Self {
             view,
@@ -115,5 +125,34 @@ impl FetchedKey {
                 .unwrap_or_default()
                 .as_secs_f64(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use serde_json::{Value, json};
+
+    use super::FetchedKey;
+    use crate::test_support::{PLAIN_KEY_JSON, plain_key};
+
+    #[test]
+    fn a_fetched_key_writes_the_flat_row_and_when_it_was_read() {
+        let fetched = FetchedKey::new(plain_key("hash"), UNIX_EPOCH + Duration::from_millis(1500));
+
+        let mut expected: Value = serde_json::from_str(PLAIN_KEY_JSON).unwrap();
+        expected.as_object_mut().unwrap().extend(
+            json!({
+                "token": "hash",
+                "created_at": "2026-11-19T10:00:00.123+00:00",
+                "updated_at": "2026-11-19T10:00:00.123+00:00",
+                "last_refreshed_at": 1.5
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        assert_eq!(serde_json::to_value(&fetched).unwrap(), expected);
     }
 }

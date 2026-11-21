@@ -15,7 +15,11 @@ crates/repositories/
     inserted.rs               # Inserted: how an insert that can lose to a concurrent one ended
     raw_json.rs               # row helpers shared by more than one repository
     utc_timestamp.rs
-    test_support.rs           # the database_pool fixture and shared fixture inserts
+    test_support/
+      mod.rs                  # public under the `test-support` feature, for other crates' tests
+      database.rs             # the database_pool fixture and shared fixture inserts, for this crate's tests only
+      keys.rs                 # plain_key and HeldKeys: key rows another crate's tests hold in memory
+      plain_key.json
     jwt_key_mapping/
       mod.rs                  # mod lines and pub use of the public types, nothing else
       repository.rs           # the public repository
@@ -27,6 +31,7 @@ crates/repositories/
       mod.rs
       repository.rs
       memory.rs               # a repository's own memory tier gets its own file
+      view.rs                 # KeyView: the flat row grouped by the object each column was read from
       queries.rs
       queries/...
     spend_log/
@@ -53,12 +58,14 @@ crates/repositories/
 - A write of more than one statement runs in `Database::transaction`, inside `Database::run`. It commits when the steps return `Ok` and rolls back otherwise, so the retry `run` makes on a stale plan starts from nothing
 - A write to a team's roster takes `pg_advisory_xact_lock(hashtext(team_id))` first, then any user row, the order the Python management endpoints lock in. The roster is a JSON column both sides rewrite, so skipping the lock loses updates and another order can deadlock
 - Row types use `#[macro_rules_attribute::apply(crate::db_row)]` for the shared derives. Add `Serialize` by hand only when a row goes to the host unchanged, with `utc_timestamp` on its timestamp fields and `RawJson` for JSON columns the host parses itself
+- `KeyView` groups the key row's columns by the object they were read from (`key`, `team`, `team_member`, `organization`, `project`), and a group the row did not join is `None`. sqlx and serde both go through the flat `KeyViewRow` in `key/queries.rs`, so the JSON stays the one flat object Python's `UserAPIKeyAuth` reads and writes. A new column goes in the SQL, in `KeyViewRow`, in its group, and in both conversions in `key/view.rs`, which do not compile until it is named
 - A helper used by more than one repository lives at the crate root as `pub(crate)`. Anything used by one repository stays in its folder
 - When two repositories need the same row, prefer each owning the query it needs. Raise a row type to `pub(crate)` only when both really run the same query
 
 ## Tests
 
 - Database tests sit inline in `queries.rs` (or in `repository.rs` for policy that spans several queries, such as a transaction), use the `database_pool` fixture from `test_support`, are `#[ignore]`d with the reason `requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database`, and run inside a transaction they never commit, so their fixture rows roll back
+- Another crate's tests build key rows from `test_support::plain_key` and serve them from `test_support::HeldKeys`, with `litellm-repositories = { workspace = true, features = ["test-support"] }` under its `[dev-dependencies]`, instead of writing a row out by hand
 - Policy that needs no database (memory tiers, row shaping) is tested inline in the file that holds it, without the database
 - Run the database tests against a database Prisma has migrated:
 

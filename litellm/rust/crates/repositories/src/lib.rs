@@ -30,8 +30,8 @@ mod spend_log;
 mod tag;
 mod team;
 mod team_membership;
-#[cfg(test)]
-mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod user;
 mod utc_timestamp;
 
@@ -43,12 +43,15 @@ pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
 pub use inserted::Inserted;
 pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim, NewKeyMapping};
-pub use key::{FetchedKey, KeyRepository};
+pub use key::{
+    FetchedKey, KeyColumns, KeyRepository, KeyView, OrganizationColumns, Orphaned, ProjectColumns,
+    TeamColumns, TeamMemberColumns,
+};
 pub use model_access_group::{ModelAccessGroupBudget, ModelAccessGroupRepository};
 pub use object_permission::{ObjectPermission, ObjectPermissionRepository};
 pub use organization::{Organization, OrganizationRepository};
 pub use project::{Project, ProjectRepository};
-use raw_json::RawJson;
+pub use raw_json::RawJson;
 pub use spend_log::{
     JsonText, SpendLogDelivery, SpendLogOwner, SpendLogRecord, SpendLogRepository, SpendLogWrite,
 };

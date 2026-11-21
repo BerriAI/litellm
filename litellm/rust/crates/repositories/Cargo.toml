@@ -7,6 +7,11 @@ repository.workspace = true
 description = "Rust repositories for the auth objects the proxy reads from Postgres on a cache miss and the spend logs it writes"
 include = ["Cargo.toml", "README.md", "src/**", ".sqlx/**"]
 
+[features]
+# Fixture key rows for another crate's tests. Enable it only from `[dev-dependencies]` or another crate's
+# own `test-support`
+test-support = []
+
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 jiff.workspace = true
@@ -17,6 +22,7 @@ macro_rules_attribute.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 sqlx.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
 tracing.workspace = true
 uuid.workspace = true

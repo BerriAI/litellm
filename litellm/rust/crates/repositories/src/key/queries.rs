@@ -2,18 +2,19 @@
 //! organization) and the rotation grace-period lookup in `LiteLLM_DeprecatedVerificationToken`.
 
 use chrono::NaiveDateTime;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgExecutor;
 
 use litellm_db::Error;
 
 use crate::{RawJson, utc_timestamp};
 
-/// The key as the auth flow sees it: the key's own columns, with its budget row filling the limits the key
-/// leaves unset, and the team, membership, project and organization values it is checked against.
+/// The key view as the query returns it and as its JSON is written: one flat object, where a field it does
+/// not name is refused. [`super::view::KeyView`] groups these columns.
 #[macro_rules_attribute::apply(crate::db_row)]
-#[derive(Serialize)]
-pub(super) struct KeyView {
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct KeyViewRow {
     pub token: String,
     pub key_name: Option<String>,
     pub key_alias: Option<String>,
@@ -102,13 +103,13 @@ pub(super) struct DeprecatedKey {
     pub revoke_at: NaiveDateTime,
 }
 
-/// The [`KeyView`] of the key whose hash is `token`, or `None` when no such key exists.
+/// The [`KeyViewRow`] of the key whose hash is `token`, or `None` when no such key exists.
 pub(super) async fn find_key_view(
     executor: impl PgExecutor<'_>,
     token: &str,
-) -> Result<Option<KeyView>, Error> {
+) -> Result<Option<KeyViewRow>, Error> {
     Ok(
-        sqlx::query_file_as!(KeyView, "src/key/queries/find_key_view.sql", token)
+        sqlx::query_file_as!(KeyViewRow, "src/key/queries/find_key_view.sql", token)
             .fetch_optional(executor)
             .await?,
     )
@@ -134,8 +135,8 @@ pub(super) async fn find_deprecated_key(
 mod tests {
     use std::error::Error as StdError;
 
-    use super::{KeyView, find_deprecated_key, find_key_view};
-    use crate::test_support::database_pool;
+    use super::{KeyViewRow, find_deprecated_key, find_key_view};
+    use crate::{key::view::KeyView, test_support::database_pool};
     use chrono::{Duration, NaiveDateTime, Utc};
     use rstest::rstest;
     use sqlx::{PgPool, Postgres, Transaction};
@@ -167,7 +168,7 @@ mod tests {
     async fn key_view(
         tx: &mut Transaction<'_, Postgres>,
         token: &str,
-    ) -> Result<KeyView, Box<dyn StdError>> {
+    ) -> Result<KeyViewRow, Box<dyn StdError>> {
         Ok(find_key_view(&mut **tx, token)
             .await?
             .ok_or("key view row")?)
@@ -257,6 +258,48 @@ mod tests {
                 Some(r#"{"tier": "gold"}"#),
                 NaiveDateTime::parse_from_str("2030-01-02 03:04:05.678", "%Y-%m-%d %H:%M:%S%.f")
                     .ok(),
+            )
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn a_key_in_a_team_groups_its_team_and_nothing_it_did_not_join(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        insert_key_with_team(&mut tx).await?;
+        execute(
+            &mut tx,
+            r#"INSERT INTO "LiteLLM_VerificationToken" (token) VALUES ('kv-bare')"#,
+            &[],
+        )
+        .await?;
+
+        let in_team = KeyView::try_from(key_view(&mut tx, "kv-token").await?)?;
+        let bare = KeyView::try_from(key_view(&mut tx, "kv-bare").await?)?;
+
+        assert_eq!(
+            (
+                in_team
+                    .team
+                    .map(|team| (team.alias, team.blocked, team.models)),
+                in_team.team_member,
+                in_team.organization,
+                bare.team,
+                bare.team_member,
+                bare.organization,
+            ),
+            (
+                Some((Some("Team KV".to_owned()), true, strings(&["gpt-4o"]))),
+                None,
+                None,
+                None,
+                None,
+                None,
             )
         );
         Ok(())
