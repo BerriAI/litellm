@@ -2,15 +2,18 @@
 //! apart by name, so a field added to the cached key does not compile here until it is honored,
 //! left to a host step or named as one no step is asked about.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use litellm_gateway_auth_core::{
     KeyHash,
     authn::key::{KeyRecord, Keyed},
 };
-use litellm_python_compat::Value;
+use litellm_python_compat::{Value, json};
 use litellm_redis_store::auth_cache::{Bag, CachedKey, CachedObjectPermission, Lists};
+use serde::Deserialize;
+
+use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
 
 /// The name of the first of `fields` that holds something.
 macro_rules! carried {
@@ -96,6 +99,8 @@ const UI_TEAM: &str = "litellm-dashboard";
 pub struct Key {
     /// The key's `models` list, which the auth core decides model access on.
     models: Arc<[String]>,
+    /// The key's own rate limits, which the limiter enforces.
+    limits: KeyLimits,
     /// The first budget column the row holds, which `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
@@ -105,6 +110,32 @@ pub struct Key {
 impl Key {
     pub(crate) fn models(&self) -> &[String] {
         &self.models
+    }
+
+    pub(crate) fn limits(&self) -> &KeyLimits {
+        &self.limits
+    }
+}
+
+/// The `metadata` the native app honors: the key's own limit for each model it names one for,
+/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Metadata {
+    #[serde(default)]
+    model_rpm_limit: BTreeMap<String, i64>,
+    #[serde(default)]
+    model_tpm_limit: BTreeMap<String, i64>,
+}
+
+impl Metadata {
+    /// `None` when `metadata` holds anything else, or a limit that is not a whole number.
+    fn read(metadata: &Bag) -> Option<Self> {
+        if metadata.is_empty() {
+            return Some(Self::default());
+        }
+        let text = json::dumps(&Value::Dict(metadata.entries().to_vec())).ok()?;
+        serde_json::from_str(&text).ok()
     }
 }
 
@@ -116,10 +147,12 @@ struct Held {
     aliased: bool,
 }
 
-/// The native app honors a key's expiry, its block and its model list. The owner, the team and the
-/// project are the core's to ask the host for, the budgets and the aliases are steps the host
-/// declines, and every other field that holds something is one no step is asked about. The team,
-/// organization and project fields are only filled for a key that names one, and the last group
+/// The native app honors a key's expiry, its block, its model list, its `rpm_limit`, `tpm_limit`
+/// and `max_parallel_requests`, and the per-model limits in its metadata. Its `tpd_limit` only
+/// counts a batch, which no native route serves. The owner, the team and the project are the
+/// core's to ask the host for, the budgets and the aliases are steps the host declines, and every
+/// other field that holds something is one no step is asked about. The team, organization and
+/// project fields are only filled for a key that names one, and the last group
 /// only describes the key or the request that cached it. A field this build does not name, which
 /// a newer pod wrote, is not asked about either unless that pod wrote it empty.
 fn held(key: &CachedKey) -> Held {
@@ -166,6 +199,11 @@ fn held(key: &CachedKey) -> Held {
         organization_rpm_limit: _,
         organization_metadata: _,
         project_alias: _,
+        max_parallel_requests: _,
+        rpm_limit: _,
+        tpm_limit: _,
+        tpd_limit: _,
+        metadata: _,
         key_type,
         soft_budget_cooldown,
         models,
@@ -178,11 +216,6 @@ fn held(key: &CachedKey) -> Held {
         project_id: _,
         org_id,
         permissions,
-        max_parallel_requests,
-        metadata,
-        tpm_limit,
-        rpm_limit,
-        tpd_limit,
         max_budget,
         soft_budget,
         budget_duration,
@@ -248,11 +281,6 @@ fn held(key: &CachedKey) -> Held {
                     agent_id,
                     org_id,
                     permissions,
-                    max_parallel_requests,
-                    metadata,
-                    tpm_limit,
-                    rpm_limit,
-                    tpd_limit,
                     allowed_cache_controls,
                     allowed_routes,
                     access_group_ids,
@@ -320,9 +348,12 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
         budget,
         aliased,
     } = held(key);
-    if let Some(field) = unasked.filter(|_| !blocked) {
+    let metadata = Metadata::read(&key.metadata);
+    let unread = metadata.is_none().then_some("metadata");
+    if let Some(field) = unasked.or(unread).filter(|_| !blocked) {
         return Err(field);
     }
+    let metadata = metadata.unwrap_or_default();
     let expires = key.expires.as_deref().map(expiry).transpose()?;
     let token = key.token.clone().ok_or("token")?;
     Ok(Keyed {
@@ -339,6 +370,13 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
         },
         row: Key {
             models: Arc::from(key.models.as_slice()),
+            limits: KeyLimits {
+                rpm: key.rpm_limit,
+                tpm: key.tpm_limit,
+                max_parallel_requests: key.max_parallel_requests,
+                model_rpm: ModelLimits::new(metadata.model_rpm_limit),
+                model_tpm: ModelLimits::new(metadata.model_tpm_limit),
+            },
             budget,
             aliased,
         },
@@ -419,6 +457,7 @@ mod tests {
                 None,
                 Key {
                     models: Arc::from([]),
+                    limits: KeyLimits::default(),
                     budget: None,
                     aliased: false,
                 }

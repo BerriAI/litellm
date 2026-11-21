@@ -416,6 +416,8 @@ pub(crate) mod keys;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use axum::{
         Router,
         body::Body,
@@ -433,6 +435,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{keys::Held, *};
+    use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
 
     const MASTER_KEY: &str = "sk-master-credential";
     const VIRTUAL_KEY: &str = "sk-test-credential";
@@ -657,12 +660,10 @@ mod tests {
     #[case::project_id(json!({"project_id": "project"}))]
     #[case::org_id(json!({"organization_id": "org"}))]
     #[case::permissions(json!({"permissions": {"a": true}}))]
-    #[case::max_parallel_requests(json!({"max_parallel_requests": 1}))]
     #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]
-    #[case::tpm_limit(json!({"tpm_limit": 1}))]
-    #[case::rpm_limit(json!({"rpm_limit": 1}))]
-    #[case::a_limit_of_zero(json!({"rpm_limit": 0}))]
-    #[case::tpd_limit(json!({"tpd_limit": 1}))]
+    #[case::metadata_beside_a_model_limit(json!({"metadata": {"model_rpm_limit": {"claude": 2}, "tags": ["a"]}}))]
+    #[case::a_model_limit_that_is_no_whole_number(json!({"metadata": {"model_tpm_limit": {"claude": "100"}}}))]
+    #[case::model_limits_that_are_no_map(json!({"metadata": {"model_rpm_limit": 5}}))]
     #[case::max_budget(json!({"max_budget": 5.0}))]
     #[case::budget_duration(json!({"budget_duration": "30d"}))]
     #[case::budget_reset_at(json!({"budget_reset_at": "1970-01-01T00:00:09"}))]
@@ -683,6 +684,33 @@ mod tests {
             "{:?}",
             refused.err()
         );
+    }
+
+    #[rstest]
+    #[case::rpm(json!({"rpm_limit": 2}), KeyLimits { rpm: Some(2), ..KeyLimits::default() })]
+    #[case::tpm(json!({"tpm_limit": 100}), KeyLimits { tpm: Some(100), ..KeyLimits::default() })]
+    #[case::parallel(
+        json!({"max_parallel_requests": 1}),
+        KeyLimits { max_parallel_requests: Some(1), ..KeyLimits::default() }
+    )]
+    #[case::a_limit_of_zero(json!({"rpm_limit": 0}), KeyLimits { rpm: Some(0), ..KeyLimits::default() })]
+    #[case::per_model_in_its_metadata(
+        json!({"metadata": {"model_rpm_limit": {"claude": 2}, "model_tpm_limit": {"claude": 100, "gpt": 0}}}),
+        KeyLimits {
+            model_rpm: ModelLimits::new(BTreeMap::from([("claude".to_owned(), 2)])),
+            model_tpm: ModelLimits::new(BTreeMap::from([("claude".to_owned(), 100), ("gpt".to_owned(), 0)])),
+            ..KeyLimits::default()
+        }
+    )]
+    #[case::a_daily_token_limit_that_only_counts_batches(json!({"tpd_limit": 1}), KeyLimits::default())]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_keys_limits_reach_its_caller(#[case] columns: Columns, #[case] limits: KeyLimits) {
+        let caller = authenticate_holding(columns).await.unwrap();
+
+        let Caller::Key(key) = &*caller else {
+            panic!("the key authenticated as the master key");
+        };
+        assert_eq!(key.key.row.limits(), &limits);
     }
 
     #[rstest]

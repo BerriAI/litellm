@@ -18,14 +18,22 @@ struct Scenario {
     /// The virtual keys the database holds, each token with its model list.
     #[serde(default)]
     keys: BTreeMap<String, Vec<String>>,
+    /// The `tpm_limit` of each key that holds one.
+    #[serde(default)]
+    tpm_limits: BTreeMap<String, i64>,
     requests: Vec<Sent>,
 }
 
-/// The database holding each key of the scenario, a plain row with the model list it gives.
-async fn listed(keys: &BTreeMap<String, Vec<String>>) -> keys::Held {
+/// The database holding each key of the scenario, a plain row with the model list and the token
+/// limit it gives.
+async fn listed(
+    keys: &BTreeMap<String, Vec<String>>,
+    tpm_limits: &BTreeMap<String, i64>,
+) -> keys::Held {
     let held = keys::Held::start().await;
     for (token, models) in keys {
-        held.key(token, serde_json::json!({"models": models})).await;
+        let columns = serde_json::json!({"models": models, "tpm_limit": tpm_limits.get(token)});
+        held.key(token, columns).await;
     }
     held
 }
@@ -99,6 +107,7 @@ impl Sent {
 #[case::router_host_steps("router_host_steps")]
 #[case::callers("callers")]
 #[case::virtual_key_models("virtual_key_models")]
+#[case::virtual_key_token_limits("virtual_key_token_limits")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -114,7 +123,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         .unwrap();
     let held = match scenario.keys.is_empty() {
         true => None,
-        false => Some(listed(&scenario.keys).await),
+        false => Some(listed(&scenario.keys, &scenario.tpm_limits).await),
     };
     let state = match &held {
         None => state,

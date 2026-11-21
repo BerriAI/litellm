@@ -57,8 +57,8 @@ impl Host for NativeHost {
         layers(identity)
     }
 
-    fn hooks(&self, _identity: &Authenticated<NativeRows>, call_type: CallType) -> callbacks::Call {
-        self.callbacks.begin(call_type)
+    fn hooks(&self, identity: &Authenticated<NativeRows>, call_type: CallType) -> callbacks::Call {
+        self.callbacks.begin(identity, call_type)
     }
 
     fn router_host<'a, A: RouteAttempt>(
