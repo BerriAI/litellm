@@ -11,7 +11,7 @@ from urllib.parse import unquote
 import httpx
 import pytest
 import yaml
-from integration._support.anthropic_sse import error_body
+from integration._support.anthropic_sse import error_body, error_frame, message_start, stream_reply
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
@@ -39,6 +39,8 @@ _TRACED_CHAT: Final = "audit-signals-traced-chat"
 _DATADOG_MESSAGES_ANTHROPIC: Final = "audit-signals-datadog-messages-anthropic"
 _DATADOG_MESSAGES_BEDROCK: Final = "audit-signals-datadog-messages-bedrock"
 _DATADOG_CHAT_ANTHROPIC: Final = "audit-signals-datadog-chat-anthropic"
+_DATADOG_MID_STREAM_CHAT: Final = "audit-signals-datadog-mid-stream-chat"
+_MID_STREAM_PROMPT: Final = "signals-mid-stream-"
 _GUARDED_MESSAGES: Final = "audit-signals-guarded-messages"
 _GUARDED_CHAT: Final = "audit-signals-guarded-chat"
 _AKTO_DOWN: Final = "audit-signals-akto-down"
@@ -47,6 +49,7 @@ _LATE_PASS_THROUGH_BACKEND: Final = "claude-late-pass-through"
 _KEEPALIVE_SECONDS: Final = 0.2
 _LATE_ANSWER_SECONDS: Final = 1.0
 _OVERLOADED: Final = Reply(status=529, body=error_body(529, "Overloaded"))
+_OVERLOADED_MID_STREAM: Final = stream_reply((message_start("msg_scripted", _MODEL), error_frame(529, "Overloaded")))
 _SERVER: Final = 2
 
 AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
@@ -66,6 +69,8 @@ def _respond(request: Request) -> Reply:
         return Reply(status=503, body=_BEDROCK_503)
     if json.loads(request.body).get("model") == _LATE_PASS_THROUGH_BACKEND:
         time.sleep(_LATE_ANSWER_SECONDS)
+    if _MID_STREAM_PROMPT in request.body.decode():
+        return _OVERLOADED_MID_STREAM
     return _OVERLOADED
 
 
@@ -92,6 +97,7 @@ def _config(directory: Path, tracing: Path, wire: Wire) -> Path:
         (_DATADOG_MESSAGES_ANTHROPIC, anthropic),
         (_DATADOG_MESSAGES_BEDROCK, bedrock),
         (_DATADOG_CHAT_ANTHROPIC, anthropic),
+        (_DATADOG_MID_STREAM_CHAT, anthropic),
         (_GUARDED_MESSAGES, anthropic),
         (_GUARDED_CHAT, anthropic),
     )
@@ -327,6 +333,59 @@ def test_the_datadog_proxy_failure_log_carries_the_answered_status_and_the_llm_f
         assert response.status_code == answered, response.text
         assert len(rig.wire.drain()) == 1
         assert _datadog_status_codes(rig, alias, 2) == (("llm", deployment_status), ("proxy", str(answered)))
+
+
+def _datadog_llm_failures(rig: _Rig, aliases: Sequence[str]) -> Mapping[str, Mapping[str, JsonValue]]:
+    batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+
+    def alias_of(message: Mapping[str, JsonValue]) -> str | None:
+        if "user_api_key_dict" in message:
+            return None
+        return next((alias for alias in aliases if _keyed_by(message, alias)), None)
+
+    def delivered() -> Mapping[str, Mapping[str, JsonValue]]:
+        batches.extend(rig.datadog.drain())
+        keyed: Final = ((alias_of(message), message) for message in _datadog_messages(batches))
+        return {alias: object_value(message["error_information"]) for alias, message in keyed if alias is not None}
+
+    return eventually(delivered, lambda found: len(found) >= len(aliases), seconds=40, return_last_on_timeout=True)
+
+
+def test_the_datadog_llm_failure_log_of_a_stream_that_fails_after_it_opens_matches_the_one_of_a_stream_that_never_opens(
+    rig: _Rig,
+) -> None:
+    route: Final = "/v1/chat/completions"
+    model: Final = _DATADOG_MID_STREAM_CHAT
+    rig.wire.drain()
+    rig.datadog.drain()
+    never_opened: Final = f"audit-signals-datadog-never-opened-{uuid.uuid4().hex}"
+    failed_open: Final = f"audit-signals-datadog-failed-open-{uuid.uuid4().hex}"
+    with rig.proxy.scenario() as scenario:
+        opening: Final = _send(rig, route, model, key=scenario.key(key_alias=never_opened, models=[model]))
+        assert opening.status_code >= 500, opening.text
+        mid_stream: Final = _send(
+            rig,
+            route,
+            model,
+            key=scenario.key(key_alias=failed_open, models=[model]),
+            extra={
+                "stream": True,
+                "messages": [{"role": "user", "content": f"{_MID_STREAM_PROMPT}{uuid.uuid4().hex}"}],
+            },
+        )
+        assert "Overloaded" in mid_stream.text, mid_stream.text
+        assert len(rig.wire.drain()) == 2
+        failures: Final = _datadog_llm_failures(rig, (never_opened, failed_open))
+    assert set(failures) == {never_opened, failed_open}, json.dumps(failures)
+    control: Final = failures[never_opened]
+    observed: Final = failures[failed_open]
+    assert control["error_class"] == "InternalServerError", json.dumps(control)
+    assert (observed["error_class"], observed["llm_provider"], observed["error_code"]) == (
+        control["error_class"],
+        control["llm_provider"],
+        control["error_code"],
+    ), json.dumps((observed, control))
+    assert "Overloaded" in string_value(observed["error_message"]), json.dumps(observed)
 
 
 @pytest.mark.parametrize(
