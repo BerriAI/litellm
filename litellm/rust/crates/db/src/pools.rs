@@ -5,10 +5,11 @@ use std::{
 };
 
 use litellm_circuit_breaker::{Breaker, Config, Failure};
+use litellm_secret_value::SecretValue;
 use sqlx::{PgPool, Postgres, pool::PoolConnection};
 use tokio::{net::TcpStream, sync::Mutex as AsyncMutex};
 
-use crate::{Endpoint, Error};
+use crate::{Endpoint, Error, endpoint::ClientFiles};
 
 const RECOVERY: Duration = Duration::from_secs(30);
 /// How long an acquire runs before it checks that the server accepts connections at all. sqlx retries a
@@ -95,9 +96,17 @@ impl FailFastPool {
     }
 }
 
+/// The endpoint a pool's connect options are built from, with its current password, and the client certificate files
+/// as they were when the options were built.
+struct Connect {
+    endpoint: Endpoint,
+    files: ClientFiles,
+}
+
 #[derive(Clone)]
 struct Side {
     pool: FailFastPool,
+    connect: Arc<Mutex<Connect>>,
     breaker: Breaker,
     recycled: Arc<Recycled>,
 }
@@ -105,6 +114,7 @@ struct Side {
 impl Side {
     fn new(endpoint: &Endpoint) -> Result<Self, Error> {
         let recycled = Arc::new(Recycled::default());
+        let files = ClientFiles::now();
         let pool = endpoint
             .pool_options()?
             .before_acquire({
@@ -120,6 +130,10 @@ impl Side {
                 pool,
                 watch: RefusalWatch::of(endpoint).map(Arc::new),
             },
+            connect: Arc::new(Mutex::new(Connect {
+                endpoint: endpoint.clone(),
+                files,
+            })),
             recycled,
             breaker: Breaker::new(
                 Config {
@@ -134,7 +148,7 @@ impl Side {
 
     async fn acquire_unless_skipped(&self) -> Option<Connection> {
         let admission = self.breaker.admit(Instant::now()).ok()?;
-        match self.pool.acquire().await {
+        match self.pool().acquire().await {
             Ok(connection) => {
                 admission.succeeded();
                 Some(connection)
@@ -147,11 +161,35 @@ impl Side {
     }
 
     async fn acquire(&self) -> Result<Connection, Error> {
-        let result = self.pool.acquire().await;
+        let result = self.pool().acquire().await;
         if result.is_err() {
             self.breaker.failed(Failure::Hard, Instant::now());
         }
         Ok(result?)
+    }
+
+    fn set_password(&self, password: SecretValue) {
+        let mut connect = self.connect.lock().unwrap_or_else(PoisonError::into_inner);
+        connect.endpoint = connect.endpoint.with_password(password);
+        connect.files = ClientFiles::now();
+        self.pool
+            .pool
+            .set_connect_options(connect.endpoint.connect_options());
+    }
+
+    /// The pool, with its connect options built again first when `PGSSLCERT` or `PGSSLKEY` changed since they were
+    /// built, so a new connection presents the files as they are now even when the options hold a key converted for
+    /// native-tls.
+    fn pool(&self) -> &FailFastPool {
+        let files = ClientFiles::now();
+        let mut connect = self.connect.lock().unwrap_or_else(PoisonError::into_inner);
+        if connect.files != files {
+            connect.files = files;
+            self.pool
+                .pool
+                .set_connect_options(connect.endpoint.connect_options());
+        }
+        &self.pool
     }
 }
 
@@ -183,11 +221,23 @@ impl Pools {
     }
 
     pub fn writer(&self) -> &PgPool {
-        &self.writer.pool.pool
+        &self.writer.pool().pool
     }
 
     pub fn reader_pool(&self) -> Option<&PgPool> {
-        self.reader.as_ref().map(|reader| &reader.pool.pool)
+        self.reader.as_ref().map(|reader| &reader.pool().pool)
+    }
+
+    pub fn set_writer_password(&self, password: SecretValue) {
+        self.writer.set_password(password);
+    }
+
+    /// Whether a read replica is configured to take the password.
+    pub fn set_reader_password(&self, password: SecretValue) -> bool {
+        self.reader
+            .as_ref()
+            .map(|reader| reader.set_password(password))
+            .is_some()
     }
 
     pub async fn read(&self) -> Result<Connection, Error> {
@@ -580,5 +630,213 @@ mod tests {
 
         assert!(pools.read_after_write().await.is_err());
         Ok(())
+    }
+
+    #[cfg(feature = "native-tls")]
+    mod native_tls_client_files {
+        use std::{
+            error::Error as StdError,
+            io::{Read, Write},
+            net::TcpListener,
+            path::{Path, PathBuf},
+            process::Command,
+            sync::{Arc, Mutex, PoisonError},
+        };
+
+        use openssl::{
+            asn1::Asn1Time,
+            error::ErrorStack,
+            hash::MessageDigest,
+            nid::Nid,
+            pkey::{PKey, Private},
+            rsa::Rsa,
+            ssl::{SslAcceptor, SslMethod, SslVerifyMode},
+            x509::{X509, X509NameBuilder, X509Ref},
+        };
+
+        use litellm_secret_value::SecretValue;
+        use rstest::rstest;
+
+        use super::super::Pools;
+        use crate::{Endpoint, PoolLimits, SslMode};
+
+        const CHILD_DIRECTORY: &str = "LITELLM_DB_CLIENT_FILES_TEST_DIRECTORY";
+
+        fn self_signed(common_name: &str) -> Result<(X509, PKey<Private>), ErrorStack> {
+            let key = PKey::from_rsa(Rsa::generate(2048)?)?;
+            let mut name = X509NameBuilder::new()?;
+            name.append_entry_by_nid(Nid::COMMONNAME, common_name)?;
+            let name = name.build();
+            let mut certificate = X509::builder()?;
+            certificate.set_version(2)?;
+            certificate.set_subject_name(&name)?;
+            certificate.set_issuer_name(&name)?;
+            certificate.set_pubkey(&key)?;
+            certificate.set_not_before(&*Asn1Time::days_from_now(0)?)?;
+            certificate.set_not_after(&*Asn1Time::days_from_now(1)?)?;
+            certificate.sign(&key, MessageDigest::sha256())?;
+            Ok((certificate.build(), key))
+        }
+
+        /// Puts a client certificate and its PKCS#1 key in place the way a mounted secret is replaced: new files
+        /// renamed over the old ones.
+        fn install(directory: &Path, common_name: &str) -> Result<(), Box<dyn StdError>> {
+            let (certificate, key) = self_signed(common_name)?;
+            std::fs::write(directory.join("cert.new"), certificate.to_pem()?)?;
+            std::fs::write(directory.join("key.new"), key.rsa()?.private_key_to_pem()?)?;
+            std::fs::rename(directory.join("cert.new"), directory.join("cert.pem"))?;
+            std::fs::rename(directory.join("key.new"), directory.join("key.pem"))?;
+            Ok(())
+        }
+
+        fn common_name(certificate: &X509Ref) -> Option<String> {
+            let entry = certificate
+                .subject_name()
+                .entries_by_nid(Nid::COMMONNAME)
+                .next()?;
+            entry.data().to_string().ok()
+        }
+
+        /// Reads the body of a message that starts with its length.
+        fn body(stream: &mut impl Read) -> std::io::Result<Vec<u8>> {
+            let mut length = [0; 4];
+            stream.read_exact(&mut length)?;
+            let mut body = vec![0; (u32::from_be_bytes(length) as usize).saturating_sub(4)];
+            stream.read_exact(&mut body)?;
+            Ok(body)
+        }
+
+        /// Reads the startup message, asks for the password in cleartext and reads it.
+        fn password(stream: &mut (impl Read + Write)) -> std::io::Result<String> {
+            body(stream)?;
+            stream.write_all(b"R\0\0\0\x08\0\0\0\x03")?;
+            stream.read_exact(&mut [0])?;
+            let password = body(stream)?;
+            Ok(
+                String::from_utf8_lossy(password.strip_suffix(b"\0").unwrap_or(&password))
+                    .into_owned(),
+            )
+        }
+
+        /// The common name of the client certificate and the password a connection presented.
+        type Presented = (Option<String>, Option<String>);
+
+        type Recorded = Arc<Mutex<Vec<Presented>>>;
+
+        /// A server that answers Postgres' SSLRequest, completes the TLS handshake asking for a client certificate,
+        /// asks for the password, records the certificate's common name and the password, and hangs up.
+        fn recording_server() -> Result<(u16, Recorded), Box<dyn StdError>> {
+            let (certificate, key) = self_signed("server")?;
+            let mut acceptor = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
+            acceptor.set_certificate(&certificate)?;
+            acceptor.set_private_key(&key)?;
+            acceptor.set_verify_callback(SslVerifyMode::PEER, |_, _| true);
+            let acceptor = acceptor.build();
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let port = listener.local_addr()?.port();
+            let presented = Arc::new(Mutex::new(Vec::new()));
+            let recorded = Arc::clone(&presented);
+            std::thread::spawn(move || {
+                for mut socket in listener.incoming().flatten() {
+                    if socket.read_exact(&mut [0; 8]).is_err() || socket.write_all(b"S").is_err() {
+                        continue;
+                    }
+                    let mut tls = acceptor.accept(socket);
+                    let seen = match &mut tls {
+                        Ok(tls) => (
+                            tls.ssl()
+                                .peer_certificate()
+                                .and_then(|certificate| common_name(&certificate)),
+                            password(tls).ok(),
+                        ),
+                        Err(_) => (None, None),
+                    };
+                    recorded
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push(seen);
+                    drop(tls);
+                }
+            });
+            Ok((port, presented))
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn new_connections_present_the_client_files_as_they_are_now()
+        -> Result<(), Box<dyn StdError>> {
+            let Some(directory) = std::env::var_os(CHILD_DIRECTORY).map(PathBuf::from) else {
+                let directory = std::env::temp_dir()
+                    .join(format!("litellm-db-client-files-{}", std::process::id()));
+                std::fs::create_dir_all(&directory)?;
+                let output = Command::new(std::env::current_exe()?)
+                    .args([
+                        "--exact",
+                        std::thread::current()
+                            .name()
+                            .ok_or("the test thread is named")?,
+                        "--nocapture",
+                    ])
+                    .env(CHILD_DIRECTORY, &directory)
+                    .env("PGSSLCERT", directory.join("cert.pem"))
+                    .env("PGSSLKEY", directory.join("key.pem"))
+                    .output()?;
+                std::fs::remove_dir_all(&directory)?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    output.status.success() && stdout.contains("1 passed"),
+                    "{stdout}\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return Ok(());
+            };
+            let (port, presented_to_server) = recording_server()?;
+            let pools = Pools::new(
+                &Endpoint {
+                    host: "127.0.0.1".to_owned(),
+                    port,
+                    socket: None,
+                    username: "litellm".to_owned(),
+                    password: Some(SecretValue::new("first")),
+                    database: "litellm".to_owned(),
+                    ssl_mode: SslMode::Require,
+                    ssl_root_cert: None,
+                    ssl_client: None,
+                    application_name: None,
+                    options: Vec::new(),
+                    statement_cache_capacity: 0,
+                    pool: PoolLimits {
+                        max_connections: 1,
+                        acquire_timeout_seconds: Some(5.0),
+                        idle_timeout_seconds: None,
+                        socket_timeout_seconds: None,
+                    },
+                },
+                None,
+            )?;
+
+            install(&directory, "mounted-after-startup")?;
+            let first = pools.writer_only().await;
+            pools.set_writer_password(SecretValue::new("rotated"));
+            install(&directory, "replaced")?;
+            let second = pools.writer_only().await;
+
+            assert!(
+                first.is_err() && second.is_err(),
+                "the server hangs up after the password"
+            );
+            let presented =
+                |name: &str, password: &str| (Some(name.to_owned()), Some(password.to_owned()));
+            assert_eq!(
+                *presented_to_server
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+                [
+                    presented("mounted-after-startup", "first"),
+                    presented("replaced", "rotated")
+                ]
+            );
+            Ok(())
+        }
     }
 }
