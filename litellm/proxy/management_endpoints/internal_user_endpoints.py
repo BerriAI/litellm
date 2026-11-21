@@ -44,7 +44,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.auth_utils import (
-    enforce_admin_only_metadata,
+    enforce_batch_limits_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.password_policy import (
@@ -638,7 +638,7 @@ async def new_user(
             )
 
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
-            enforce_admin_only_metadata(data, None, user_api_key_dict, "key")
+            enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")
             raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
             await validate_guardrail_names(

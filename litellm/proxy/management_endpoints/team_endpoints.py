@@ -123,7 +123,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     team_max_budget_alert_emails_error,
 )
 from litellm.proxy.auth.auth_utils import (
-    enforce_admin_only_metadata,
+    enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
@@ -1894,7 +1894,7 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        enforce_admin_only_metadata(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=None,
             user_api_key_dict=user_api_key_dict,
@@ -2739,7 +2739,7 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        enforce_admin_only_metadata(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,

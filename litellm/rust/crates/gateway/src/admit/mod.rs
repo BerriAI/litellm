@@ -88,10 +88,12 @@ mod tests {
     use super::*;
 
     #[fixture]
-    fn admit() -> Admit {
+    fn admit(#[default("[]")] required: &str) -> Admit {
         Admit::new(
-            &Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
-                .unwrap(),
+            &Config::from_yaml(&format!(
+                "model_list: []\ngeneral_settings:\n  master_key: gateway-key\n  required_customer_headers: {required}\n"
+            ))
+            .unwrap(),
         )
     }
 
@@ -101,6 +103,8 @@ mod tests {
             .fold(Request::post("/v1/messages"), |request, (name, value)| {
                 request.header(name, value)
             })
+            .header("x-tenant-id", "tenant")
+            .header("x-user-id", "member")
             .body(Body::empty())
             .unwrap()
     }
@@ -110,36 +114,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::bearer(("authorization", "Bearer gateway-key"))]
-    #[case::x_api_key(("x-api-key", "gateway-key"))]
+    #[case::bearer(("authorization", "Bearer gateway-key"), "[]", None)]
+    #[case::x_api_key(("x-api-key", "gateway-key"), "[]", None)]
+    #[case::one_header(("authorization", "Bearer gateway-key"), "[X-Tenant-ID]", Some(Refused::RequiredCustomerHeaders))]
+    #[case::multiple_headers(("x-api-key", "gateway-key"), "[X-Tenant-ID, X-User-ID]", Some(Refused::RequiredCustomerHeaders))]
     #[tokio::test]
-    async fn a_master_key_caller_of_messages_is_admitted(
-        admit: Admit,
+    async fn a_master_key_caller_of_messages_is_deferred_when_customer_headers_are_required(
         #[case] credential: (&str, &str),
-    ) {
-        assert_eq!(refusal(admit, messages(Some(credential))).await, None);
-    }
-
-    #[rstest]
-    #[case::empty("[]", None)]
-    #[case::one_header("[X-Tenant-ID]", Some(Refused::RequiredCustomerHeaders))]
-    #[case::multiple_headers("[X-Tenant-ID, X-User-ID]", Some(Refused::RequiredCustomerHeaders))]
-    #[tokio::test]
-    async fn a_master_key_caller_of_messages_is_deferred_only_when_customer_headers_are_required(
         #[case] required: &str,
         #[case] expected: Option<Refused>,
+        #[with(required)] admit: Admit,
     ) {
-        let config = Config::from_yaml(&format!(
-            "model_list: []\ngeneral_settings:\n  master_key: gateway-key\n  required_customer_headers: {required}\n"
-        ))
-        .unwrap();
-        let request = Request::post("/v1/messages")
-            .header("authorization", "Bearer gateway-key")
-            .header("x-tenant-id", "tenant")
-            .header("x-user-id", "member")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(refusal(Admit::new(&config), request).await, expected);
+        assert_eq!(refusal(admit, messages(Some(credential))).await, expected);
     }
 
     #[rstest]

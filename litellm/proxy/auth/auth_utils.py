@@ -1929,7 +1929,7 @@ def enforce_output_token_estimates_are_admin_only(
     )
 
 
-class MetadataUpdateRequest(Protocol):
+class BatchLimitRequest(Protocol):
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
 
@@ -1958,8 +1958,8 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def enforce_admin_only_metadata(
-    data: MetadataUpdateRequest,
+def enforce_batch_limits_are_admin_only(
+    data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     entity: Literal["key", "team", "project"],
@@ -2003,7 +2003,7 @@ def _stored_vector_store_index_grants(existing_metadata: Mapping[str, object] | 
 
 
 def _requested_vector_store_index_grants(
-    data: MetadataUpdateRequest,
+    data: BatchLimitRequest,
     top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
     stored_grants: object,
 ) -> object:
@@ -2015,7 +2015,7 @@ def _requested_vector_store_index_grants(
 
 
 def enforce_vector_store_index_grants_are_admin_only(
-    data: MetadataUpdateRequest,
+    data: BatchLimitRequest,
     top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,

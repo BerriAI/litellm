@@ -1,4 +1,5 @@
-from collections.abc import Iterator, Mapping, Sequence
+from collections import UserDict
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -48,20 +49,12 @@ from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-class _ReadCountingHeaders(Mapping[str, object]):
-    def __init__(self, values: Mapping[str, object]) -> None:
-        self._values = values
-        self.reads = 0
+class _ReadCountingHeaders(UserDict[str, object]):
+    reads = 0
 
     def __getitem__(self, key: str) -> object:
         self.reads += 1
-        return self._values[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._values)
-
-    def __len__(self) -> int:
-        return len(self._values)
+        return super().__getitem__(key)
 
 
 def test_duplicate_requirements_do_not_multiply_header_reads_or_admit_a_blank_header() -> None:

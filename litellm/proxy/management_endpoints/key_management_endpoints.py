@@ -79,7 +79,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
-    enforce_admin_only_metadata,
+    enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
@@ -1633,7 +1633,7 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
-    enforce_admin_only_metadata(
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=None,
         user_api_key_dict=user_api_key_dict,
@@ -3249,7 +3249,7 @@ async def prepare_key_update_data(
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     if user_api_key_dict is not None:
-        enforce_admin_only_metadata(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_METADATA_OBJECT.validate_python(
                 _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata or {}

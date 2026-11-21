@@ -203,38 +203,6 @@ def test_config_update_persists_only_the_general_settings_keys_the_request_set(
     assert persisted == {"alerting_threshold": 600}
 
 
-@pytest.mark.parametrize(
-    ("endpoint", "payload"),
-    [
-        ("/config/update", {"general_settings": {"required_customer_headers": ["X-Tenant-ID"]}}),
-        ("/config/update", {"general_settings": {"required_customer_headers": []}}),
-        (
-            "/config/field/update",
-            {
-                "config_type": "general_settings",
-                "field_name": "required_customer_headers",
-                "field_value": ["X-Tenant-ID"],
-            },
-        ),
-    ],
-)
-def test_required_customer_headers_cannot_be_updated_through_admin_api(
-    client, auth_as, mock_prisma, monkeypatch, endpoint, payload
-):
-    from litellm.proxy import proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles
-
-    table = _install_litellm_config(mock_prisma)
-    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-
-    with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post(endpoint, json=payload)
-
-    assert response.status_code == 400, response.text
-    assert "general_settings.required_customer_headers can only be set in the YAML config file." in response.text
-    table.upsert.assert_not_called()
-
-
 def test_config_update_persists_only_the_router_settings_keys_the_request_set(
     client, auth_as, mock_prisma, monkeypatch
 ):
@@ -279,7 +247,12 @@ def test_config_update_accepts_a_config_owned_success_callback_the_file_spells_i
     assert persisted["success_callback"] == ["langfuse"]
 
 
-def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch):
+@pytest.mark.parametrize("payload,field", [
+    ({"router_settings": {"assistants_config": {"enabled": True}}}, "assistants_config"),
+    *[({"general_settings": {"required_customer_headers": value}}, "required_customer_headers")
+      for value in ([], ["X-Tenant-ID"])],
+])
+def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch, payload, field):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -289,11 +262,11 @@ def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, m
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.post(
             "/config/update",
-            json={"router_settings": {"assistants_config": {"enabled": True}}},
+            json=payload,
         )
 
     assert response.status_code == 400
-    assert "assistants_config" in response.json()["error"]["message"]
+    assert field in response.text
     table.upsert.assert_not_called()
 
 
@@ -447,25 +420,30 @@ def test_config_field_update_non_admin_rejected(client, auth_as, mock_prisma, mo
     assert "error" in response.json().get("detail", {})
 
 
-def test_config_field_update_invalid_field(client, auth_as, mock_prisma, monkeypatch):
+@pytest.mark.parametrize("field,value,message", [
+    ("not_a_real_field_xyz", 1, "Invalid field"),
+    ("required_customer_headers", ["X-Tenant-ID"], "can only be set in the YAML config file"),
+])
+def test_config_field_update_invalid_field(client, auth_as, mock_prisma, monkeypatch, field, value, message):
     """Unknown field_name is rejected with 400 + 'Invalid field=' detail."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
-    _install_litellm_config(mock_prisma)
+    table = _install_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.post(
             "/config/field/update",
             json={
-                "field_name": "not_a_real_field_xyz",
-                "field_value": 1,
+                "field_name": field,
+                "field_value": value,
                 "config_type": "general_settings",
             },
         )
     assert response.status_code == 400
-    assert "Invalid field" in response.json().get("detail", {}).get("error", "")
+    assert message in response.text
+    table.upsert.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

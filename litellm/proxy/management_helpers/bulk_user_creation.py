@@ -30,7 +30,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
 from litellm.proxy.auth.auth_utils import (
-    enforce_admin_only_metadata,
+    enforce_batch_limits_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.litellm_license import LicenseCheck
@@ -222,7 +222,7 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
         validate_budget_duration(item.budget_duration)
         check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
         if item.auto_create_key:
-            enforce_admin_only_metadata(item, None, user_api_key_dict, "key")
+            enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(item, None, None, user_api_key_dict, "key")
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
         return _error_message(exc)
