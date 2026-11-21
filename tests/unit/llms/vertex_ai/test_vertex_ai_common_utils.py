@@ -1695,8 +1695,28 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
             {"type": "object", "properties": {"code": {"type": "string", "const": 7}}},
             {"type": "object", "properties": {"code": {"type": "string"}}},
         ),
+        (
+            {"type": "object", "properties": {"kind": {"type": ["string", "null"], "const": "card"}}},
+            {"type": "object", "properties": {"kind": {"type": "string", "enum": ["card"]}}},
+        ),
+        (
+            {"type": "object", "properties": {"note": {"type": "string", "const": ""}}},
+            {"type": "object", "properties": {"note": {"type": "string"}}},
+        ),
+        (
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string"}, {"type": "null"}], "const": "card"}}},
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"], "nullable": True}]}}},
+        ),
     ],
-    ids=["items", "any-of-branch", "ref-to-defs", "const-the-type-cannot-hold"],
+    ids=[
+        "items",
+        "any-of-branch",
+        "ref-to-defs",
+        "const-the-type-cannot-hold",
+        "nullable-type-list",
+        "empty-string",
+        "const-beside-any-of",
+    ],
 )
 def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
     parameters: dict[str, JsonValue], expected: dict[str, JsonValue]
@@ -1764,7 +1784,15 @@ def _payment_union(other: JsonValue) -> dict[str, JsonValue]:
         ({"const": None}, {"const": None}),
         ({"const": {"kind": "bank"}}, {"const": {"kind": "bank"}}),
         ({"const": ["bank"]}, {"const": ["bank"]}),
-        ({"const": "bank", "type": ["string", "null"]}, {"type": ["string", "null"], "enum": ["bank"]}),
+        ({"const": "bank", "type": ["string", "null"]}, {"type": "string", "enum": ["bank"]}),
+        ({"const": 7.0, "type": "integer"}, {"type": "integer", "enum": [7]}),
+        ({"const": 7.0, "type": "number"}, {"type": "number", "enum": [7.0]}),
+        ({"const": ""}, {"const": ""}),
+        (
+            {"anyOf": [{"type": "string"}, {"type": "null"}], "const": "bank"},
+            {"anyOf": [{"type": "string", "enum": ["bank"]}, {"type": "null", "const": "bank"}]},
+        ),
+        ({"oneOf": [{"type": "string"}], "const": "bank"}, {"oneOf": [{"type": "string", "enum": ["bank"]}]}),
         ({"const": 7, "type": "number"}, {"type": "number", "enum": [7]}),
         ({"const": "bank", "type": "STRING"}, {"type": "STRING", "enum": ["bank"]}),
         ({"const": 7, "type": "string"}, {"const": 7, "type": "string"}),
@@ -1778,13 +1806,18 @@ def _payment_union(other: JsonValue) -> dict[str, JsonValue]:
         "object-const",
         "array-const",
         "typed-const",
+        "whole-float-const-under-integer",
+        "whole-float-const-under-number",
+        "empty-string-const",
+        "const-beside-any-of",
+        "const-beside-one-of",
         "integer-const-under-number",
         "upper-case-type",
         "const-the-type-cannot-hold",
         "const-no-listed-type-holds",
     ],
 )
-def test_json_schema_builders_pin_only_scalar_consts_in_subschemas_and_keep_the_caller_type(
+def test_json_schema_builders_pin_only_scalar_consts_their_declared_type_can_hold(
     build: Callable[[dict[str, JsonValue]], Mapping[str, JsonValue] | None],
     other: JsonValue,
     expected_other: JsonValue,

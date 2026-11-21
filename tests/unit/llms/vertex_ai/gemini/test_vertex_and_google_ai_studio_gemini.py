@@ -3106,6 +3106,8 @@ def test_vertex_keeps_a_union_root_tool_on_parameters_when_the_call_can_be_force
         ("gemini-2.5-flash", {"const": 7}, {"type": "integer"}),
         ("gemini-2.5-flash", {"const": 1.5}, {"type": "number"}),
         ("gemini-2.5-flash", {"const": True}, {"type": "boolean"}),
+        ("gemini-2.5-flash", {"type": ["string", "null"], "const": "card"}, {"type": "string", "enum": ["card"]}),
+        ("gemini-4-argon", {"type": "integer", "const": 7.0}, {"type": "integer", "enum": ["7"]}),
     ],
     ids=[
         "const-only-string",
@@ -3115,6 +3117,8 @@ def test_vertex_keeps_a_union_root_tool_on_parameters_when_the_call_can_be_force
         "integer-without-integer-enums",
         "number",
         "boolean",
+        "nullable-type-list",
+        "whole-float-under-integer",
     ],
 )
 def test_vertex_sends_a_tool_parameter_const_as_its_type_and_the_one_enum_value_gemini_enforces(

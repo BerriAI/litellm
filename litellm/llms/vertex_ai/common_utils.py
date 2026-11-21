@@ -921,13 +921,37 @@ def _subschemas(keyword: str, value: JsonValue) -> Iterable[JsonValue]:
             return ()
 
 
+def _const_as_declared(value: JsonValue, declared_type: JsonValue) -> JsonValue:
+    match value:
+        case float() if value.is_integer() and not _declared_type_holds(declared_type, "number"):
+            return int(value)
+        case _:
+            return value
+
+
+def _push_const_into_branches(schema: JsonValue) -> None:
+    if not isinstance(schema, dict) or _json_schema_type_of(schema.get("const")) is None:
+        return
+    branches: Final = schema.get("anyOf", schema.get("oneOf"))
+    if not isinstance(branches, list):
+        return
+    const: Final = schema.pop("const")
+    for branch in branches:
+        if isinstance(branch, dict):
+            branch.setdefault("const", const)
+
+
 def _pin_scalar_consts(schema: JsonValue, depth: int = 0) -> None:
     if depth > DEFAULT_MAX_RECURSE_DEPTH or not isinstance(schema, dict):
         return
-    json_type: Final = _json_schema_type_of(schema.get("const"))
-    if json_type is not None and _declared_type_holds(schema.get("type"), json_type):
-        schema["enum"] = [schema.pop("const")]  # rebind-ok: the schema builders edit their own copy in place
-        schema.setdefault("type", json_type)
+    _push_const_into_branches(schema)
+    declared_type: Final = schema.get("type")
+    const: Final = _const_as_declared(schema.get("const"), declared_type)
+    json_type: Final = _json_schema_type_of(const)
+    if json_type is not None and const != "" and _declared_type_holds(declared_type, json_type):
+        del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
+        schema["enum"] = [const]  # rebind-ok: the schema builders edit their own copy in place
+        schema["type"] = declared_type if isinstance(declared_type, str) else json_type  # rebind-ok: same copy
     for subschema in chain.from_iterable(starmap(_subschemas, schema.items())):
         _pin_scalar_consts(subschema, depth + 1)
 
