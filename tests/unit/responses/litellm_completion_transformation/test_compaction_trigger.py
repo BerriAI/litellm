@@ -30,6 +30,7 @@ _TOOLS: Final = ({"type": "function", "name": "shell", "parameters": {"type": "o
 _SUMMARY: Final = "The user asked to remember secret.txt, which holds MARKER-42."
 _SUMMARY_REPLY: Final = f"<analysis>Read the file.</analysis>\n<summary>\n{_SUMMARY}\n</summary>"
 _MODEL: Final = "anthropic/claude-sonnet-5-5"
+_FORCED_TOOL_MODEL: Final = "anthropic/claude-haiku-5-5"
 _ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
 _BEDROCK_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
 _BEDROCK_CONVERSE_URL: Final = (
@@ -273,6 +274,44 @@ def test_a_compaction_trigger_over_anthropic_returns_one_compaction_item(respx_m
     assert _last_user_text(body).endswith(SUMMARY_PROMPT)
     assert "compaction_trigger" not in json.dumps(body)
     assert [tool["name"] for tool in cast(Sequence[Mapping[str, object]], body["tools"])] == ["shell"]
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        pytest.param("required", id="required"),
+        pytest.param({"type": "function", "name": "shell"}, id="named_tool"),
+    ],
+)
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_a_compaction_trigger_with_a_forced_tool_lets_the_model_write_the_summary(
+    respx_mock: respx.MockRouter, tool_choice: object
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": _SUMMARY_REPLY})
+    )
+
+    response: Final = litellm.responses(
+        model=_FORCED_TOOL_MODEL, api_key="mock_api_key", input=_trigger_request(), tools=list(_TOOLS), tool_choice=tool_choice
+    )
+
+    assert _sent_body(route)["tool_choice"] == {"type": "auto"}
+    assert [(item.type, item.encrypted_content) for item in response.output] == [
+        ("compaction", summary_only_compaction_content(_SUMMARY))
+    ]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_a_forced_tool_without_a_trigger_is_still_forced(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "Done."})
+    )
+
+    _ = litellm.responses(
+        model=_FORCED_TOOL_MODEL, api_key="mock_api_key", input=list(_HISTORY), tools=list(_TOOLS), tool_choice="required"
+    )
+
+    assert _sent_body(route)["tool_choice"] == {"type": "any"}
 
 
 def _event_summary(events: Sequence[BaseModel]) -> list[tuple[object, object]]:

@@ -16,7 +16,7 @@ from litellm.llms.anthropic.messages.context_management.constants import (
     COMPACT_NO_TOOL_CALLS_SUFFIX,
     COMPACT_SUMMARY_TAG_RE,
 )
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 from litellm.types.utils import Choices, Message, ModelResponse, ModelResponseStream
 
 from .compaction_items import input_items, summary_only_compaction_block
@@ -41,6 +41,16 @@ def with_trailing_compaction_trigger_as_summary_prompt(
     if isinstance(input, str) or not ends_in_compaction_trigger(input):
         return input
     return [*input[:-1], EasyInputMessageParam(role="user", type="message", content=SUMMARY_PROMPT)]
+
+
+def without_a_forced_tool(request: ResponsesAPIOptionalRequestParams) -> ResponsesAPIOptionalRequestParams:
+    """A forced tool choice would make the model call a tool instead of writing the summary"""
+    tool_choice: Final[object] = request.get(  # pyright: ignore[reportUnknownMemberType]  # ToolChoice has an untyped member
+        "tool_choice"
+    )
+    if tool_choice is None or tool_choice in ("auto", "none"):
+        return request
+    return {**request, "tool_choice": "auto"}
 
 
 def summary_from_reply(text: str | None) -> str | None:

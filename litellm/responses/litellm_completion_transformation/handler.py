@@ -21,6 +21,7 @@ from litellm.responses.litellm_completion_transformation.compaction_trigger impo
     as_compaction_reply,
     ends_in_compaction_trigger,
     with_trailing_compaction_trigger_as_summary_prompt,
+    without_a_forced_tool,
 )
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -152,12 +153,13 @@ class LiteLLMCompletionTransformationHandler:
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
         summarizes: Final = ends_in_compaction_trigger(input)
+        request: Final = without_a_forced_tool(responses_api_request) if summarizes else responses_api_request
         hoisted: Final = hoist_additional_tools(
             with_trailing_compaction_trigger_as_summary_prompt(input),
-            responses_api_request.get("tools"),
+            request.get("tools"),
             drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
         )
-        previous_response_id: Final = responses_api_request.get("previous_response_id")
+        previous_response_id: Final = request.get("previous_response_id")
         if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
             return self._async_response_api_handler_after_earlier_searches(
                 previous_response_client_ids,
@@ -165,14 +167,14 @@ class LiteLLMCompletionTransformationHandler:
                 hoisted,
                 model=model,
                 caller_input=input,
-                responses_api_request=responses_api_request,
+                responses_api_request=request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 summarizes_into_compaction=summarizes,
             )
-        bridged: Final = _bridged_request(hoisted, responses_api_request, ())
+        bridged: Final = _bridged_request(hoisted, request, ())
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
         litellm_completion_request: Final[dict] = {
