@@ -80,6 +80,18 @@ impl SpendLogRepository {
         writes: &[SpendLogWrite],
         transaction_timeout: Duration,
     ) -> Result<usize, Error> {
+        self.insert_committed(writes, transaction_timeout)
+            .await
+            .map(|inserted| inserted.count)
+    }
+
+    /// Like [`Self::insert_with_deliveries`], also naming the deliveries the committed ledger
+    /// transaction accepted. It returns only after the commit, so the ids are final.
+    pub async fn insert_committed(
+        &self,
+        writes: &[SpendLogWrite],
+        transaction_timeout: Duration,
+    ) -> Result<LedgerCommit, Error> {
         self.database
             .run(INSERT_SPEND_LOGS, || {
                 self.write(writes, transaction_timeout)
@@ -91,7 +103,7 @@ impl SpendLogRepository {
         &self,
         writes: &[SpendLogWrite],
         transaction_timeout: Duration,
-    ) -> Result<usize, Error> {
+    ) -> Result<LedgerCommit, Error> {
         let logs: Vec<&SpendLogRecord> = writes
             .iter()
             .filter(|write| write.delivery.is_none())
@@ -110,13 +122,27 @@ impl SpendLogRepository {
                 .len()
         };
         if ledger.is_empty() {
-            return Ok(logged);
+            return Ok(LedgerCommit {
+                count: logged,
+                accepted: Vec::new(),
+            });
         }
         let named = session.names_statements();
         let accepted =
             commit_ledger(session.connection(), named, &ledger, transaction_timeout).await?;
-        Ok(logged + accepted)
+        Ok(LedgerCommit {
+            count: logged + accepted.len(),
+            accepted,
+        })
     }
+}
+
+/// What one write committed: how many logs and deliveries were new, and the delivery ids the
+/// ledger transaction accepted.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct LedgerCommit {
+    pub count: usize,
+    pub accepted: Vec<String>,
 }
 
 /// Commits `writes` on `connection` as one transaction, giving up with `TransactionTimedOut`
@@ -126,7 +152,7 @@ async fn commit_ledger(
     named: bool,
     writes: &[&SpendLogWrite],
     timeout: Duration,
-) -> Result<usize, Error> {
+) -> Result<Vec<String>, Error> {
     let commit = async {
         let mut transaction = sqlx::Connection::begin(connection).await?;
         let accepted = write_ledger(&mut transaction, named, writes).await?;
@@ -170,15 +196,15 @@ fn first_write_per_delivery<'a>(
 
 /// Writes `writes` on `connection`, which holds an open transaction: the first write per
 /// delivery id wins, a delivery already stored is skipped, and only the logs of accepted
-/// deliveries are written. Returns how many deliveries were accepted.
+/// deliveries are written. Returns the accepted delivery ids.
 async fn write_ledger(
     connection: &mut PgConnection,
     named: bool,
     writes: &[&SpendLogWrite],
-) -> Result<usize, Error> {
+) -> Result<Vec<String>, Error> {
     let ledger = first_write_per_delivery(writes);
     if ledger.is_empty() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let deliveries: Vec<&SpendLogDelivery> = ledger.iter().map(|(delivery, _)| *delivery).collect();
     let accepted = queries::insert_spend_log_deliveries(
@@ -219,7 +245,7 @@ async fn write_ledger(
         queries::insert_spend_log_rows(Statements::new(&mut *connection, named), json_text(&logs)?)
             .await?;
     }
-    Ok(accepted.iter().filter(|id| kept(id)).count())
+    Ok(accepted.iter().filter(|id| kept(id)).cloned().collect())
 }
 
 #[cfg(test)]
@@ -404,8 +430,8 @@ mod tests {
         let pool = database_pool?;
         let mut tx = pool.begin().await?;
         let writes: Vec<&SpendLogWrite> = ledger.iter().collect();
-        assert_eq!(write_ledger(&mut tx, true, &writes).await?, 3);
-        assert_eq!(write_ledger(&mut tx, true, &writes).await?, 0);
+        assert_eq!(write_ledger(&mut tx, true, &writes).await?.len(), 3);
+        assert_eq!(write_ledger(&mut tx, true, &writes).await?.len(), 0);
         let every_id = [
             "delivery-a",
             "delivery-b",
@@ -458,7 +484,7 @@ mod tests {
             }),
         };
         let accepted = write_ledger(&mut tx, true, &[&job]).await?;
-        assert_eq!(accepted, expected_deliveries.len());
+        assert_eq!(accepted.len(), expected_deliveries.len());
         assert_eq!(
             ids(&mut *tx, DELIVERIES, &["job-1"]).await?,
             expected_deliveries

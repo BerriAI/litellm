@@ -2,7 +2,7 @@ use std::{borrow::Cow, sync::Mutex};
 
 use litellm_callbacks_spend_log::SpendLogRow;
 use litellm_db::Error;
-use litellm_repositories::SpendLogWrite;
+use litellm_repositories::{LedgerCommit, SpendLogWrite};
 use serde_json::{Map, Value, json};
 
 use crate::{LedgerStore, QueuedSpendLog};
@@ -196,5 +196,17 @@ impl LedgerStore for FakeStore {
             calls.written.extend(request_ids(writes));
         }
         Ok(writes.len())
+    }
+
+    async fn insert_committed(&self, writes: &[SpendLogWrite]) -> Result<LedgerCommit, Error> {
+        let count = self.insert(writes).await?;
+        Ok(LedgerCommit {
+            count,
+            accepted: writes
+                .iter()
+                .filter_map(|write| write.delivery.as_ref())
+                .map(|delivery| delivery.delivery_id.clone())
+                .collect(),
+        })
     }
 }

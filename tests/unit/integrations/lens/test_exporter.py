@@ -9,6 +9,7 @@ import httpx
 import prometheus_client
 import pytest
 from prometheus_client import CollectorRegistry, Counter
+from pydantic import TypeAdapter
 
 from litellm.integrations.lens import exporter as exporter_module
 from litellm.integrations.lens.exporter import (
@@ -366,3 +367,82 @@ async def test_a_rejecting_store_is_logged_as_an_error_naming_lens(caplog: pytes
     failures: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
     assert len(failures) == 1
     assert "lens" in failures[0] and "HTTP 500" in failures[0]
+
+
+def _ledger_event(request_id: str) -> dict[str, object]:
+    return {
+        "response_cost": 9.0,
+        "standard_logging_object": {"id": request_id, "status": "success", "response_cost": 9.0},
+    }
+
+
+@pytest.mark.asyncio
+async def test_ledger_backed_records_are_sent_only_after_their_commit_and_off_the_writer_path() -> None:
+    from litellm.integrations.lens.ledger import LedgerHandoff
+
+    received: Final = asyncio.Future[bytes]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.set_result(request.content)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client, ledger=LedgerHandoff(), ledger_key=lambda kwargs, response: "ledger-a")
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_ledger_event("ledger-a"), None, None, None)
+            assert (exporter.buffered_events, received.done()) == (0, False)
+            exporter.ledger_committed(
+                ({"request_id": "ledger-a", "delivery_id": "d", "spend": 0.5, "prompt_tokens": 1},)
+            )
+            assert (exporter.buffered_events, len(exporter.commits)) == (0, 1)
+            body: Final = await asyncio.wait_for(received, timeout=5)
+        finally:
+            await exporter.aclose()
+    rows: Final = TypeAdapter(list[dict[str, object]]).validate_json(body)
+    assert (rows[0]["request_id"], rows[0]["spend"], rows[0]["prompt_tokens"], rows[0]["total_tokens"]) == (
+        "ledger-a",
+        0.5,
+        1,
+        1,
+    )
+    assert (exporter.rows_written, exporter.rows_dropped) == (1, 0)
+
+
+@pytest.mark.asyncio
+async def test_confirmed_deliveries_beyond_the_pending_budget_are_counted_as_dropped() -> None:
+    from litellm.integrations.lens import exporter as module
+    from litellm.integrations.lens.ledger import LedgerHandoff
+
+    async with httpx.AsyncClient(base_url="http://lens") as client:
+        exporter: Final = LensExporter(client, ledger=LedgerHandoff(), ledger_key=lambda kwargs, response: "k")
+        try:
+            batch: Final = tuple({"request_id": f"r{index}", "delivery_id": f"d{index}"} for index in range(100))
+            for _ in range(module.MAX_PENDING_COMMITS // 100):
+                exporter.ledger_committed(batch)
+            exporter.ledger_committed(batch[:1])
+            assert (len(exporter.commits), exporter.rows_dropped) == (module.MAX_PENDING_COMMITS, 1)
+        finally:
+            await exporter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_records_outside_the_ledger_and_unknown_ledger_states_never_wait() -> None:
+    from litellm.integrations.lens.ledger import LedgerHandoff
+
+    def unknown(kwargs: object, response: object) -> str | None:
+        raise RuntimeError("settings unavailable")
+
+    async with httpx.AsyncClient(base_url="http://lens") as client:
+        direct: Final = LensExporter(client, ledger=LedgerHandoff(), ledger_key=lambda kwargs, response: None)
+        failing: Final = LensExporter(client, ledger=LedgerHandoff(), ledger_key=unknown)
+        await direct.async_log_success_event(_ledger_event("direct"), None, None, None)
+        await failing.async_log_success_event(_ledger_event("unknown"), None, None, None)
+        assert (direct.buffered_events, failing.buffered_events, failing.rows_dropped) == (1, 0, 1)
+        failing.ledger_committed(
+            ({"request_id": "unknown", "delivery_id": "d", "spend": 0.5, "startTime": "2026-11-20T10:00:00"},)
+        )
+        assert failing.buffered_events == 0
+        await direct.aclose()
+        await failing.aclose()
+    assert (failing.rows_written, failing.rows_dropped) == (0, 2)

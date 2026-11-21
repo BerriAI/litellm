@@ -10,7 +10,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.lens import TraceReceiver
 from litellm.integrations.lens.exporter import LensExporter
+from litellm.integrations.lens.ledger import LedgerHandoff
 from litellm.integrations.lens.lens_trace_adapter import export_traces
+from litellm.integrations.lens.proxy.ledger import ledger_request_id
 from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
 from litellm.integrations.lens.storage import LensTraceStorage
 
@@ -57,8 +59,18 @@ async def manage_tracing(
             if receiver_factory
             else TraceReceiver(storage=LensTraceStorage(RemoteTraceStore(client)))
         )
-        async with _export_requests(LensExporter(client)), export_traces(connection):
+        exporter: Final = LensExporter(client, ledger=LedgerHandoff(), ledger_key=ledger_request_id)
+        async with _export_requests(exporter), export_traces(connection):
             yield tracing
+
+
+def _sync_native_commit_reports() -> None:
+    try:
+        from litellm.proxy.db.rust_spend_log_writer import sync_native_commit_reporting
+
+        sync_native_commit_reporting()
+    except Exception as error:  # noqa: BLE001  # reports are optional; tracing and accounting continue without them
+        verbose_proxy_logger.warning("Agent tracing could not switch native commit reports: %s", error)
 
 
 @asynccontextmanager
@@ -70,9 +82,11 @@ async def _export_requests(spend_logger: LensExporter) -> AsyncGenerator[None, N
     manager.add_litellm_failure_callback(spend_logger)
     manager.add_litellm_async_success_callback(spend_logger)
     manager.add_litellm_async_failure_callback(spend_logger)
+    _sync_native_commit_reports()
     verbose_proxy_logger.info("Agent tracing enabled (store=lens)")
     try:
         yield None
     finally:
         manager.remove_callback_from_all_lists(spend_logger)
+        _sync_native_commit_reports()
         await spend_logger.aclose()

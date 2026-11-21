@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_LOG_QUEUE_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.repositories.spend_log_commits import NativeCommitReports, has_commit_observers
 from litellm.rust_bridge._native import NativeDatabase, NativeDatabaseFailure, RustSpendLogWriter
 
 if TYPE_CHECKING:
@@ -137,15 +138,27 @@ async def install_rust_spend_log_writer(
         write_batch_max_bytes=SPEND_LOG_WRITE_BATCH_MAX_BYTES,
         write_batch_max_rows=SPEND_LOG_WRITE_BATCH_MAX_ROWS,
         on_flush_request=partial(_request_flush_from_any_thread, asyncio.get_running_loop(), prisma_client),
+        on_committed=NativeCommitReports(asyncio.get_running_loop()).receive,
     )
     from litellm.proxy.utils import dequeue_spend_logs
 
     await uninstall_rust_spend_log_writer(prisma_client)
     pending: Final = await dequeue_spend_logs(prisma_client, sys.maxsize)
     _installed.append(_Installed(client=prisma_client, writer=writer))
+    sync_native_commit_reporting()
     if pending:
         enqueue_in_rust(writer, pending, at_head=True, max_bytes=SPEND_LOG_QUEUE_MAX_BYTES)
     return writer
+
+
+def sync_native_commit_reporting() -> None:
+    """Turns native commit reports on exactly while a commit observer is registered; never fails a caller."""
+    try:
+        enabled: Final = has_commit_observers()
+        for installed in tuple(_installed):
+            installed.writer.set_commit_reporting(enabled)
+    except Exception as error:  # noqa: BLE001  # reports are optional; accounting never depends on them
+        verbose_proxy_logger.warning("Spend tracking - could not switch native commit reports: %s", error)
 
 
 async def uninstall_rust_spend_log_writer(prisma_client: "PrismaClient") -> None:

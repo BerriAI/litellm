@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use litellm_db::Error;
-use litellm_repositories::{SpendLogRepository, SpendLogWrite};
+use litellm_repositories::{LedgerCommit, SpendLogRepository, SpendLogWrite};
 
 use crate::LedgerStore;
 
@@ -27,6 +27,12 @@ impl LedgerStore for PgLedgerStore {
     async fn insert(&self, writes: &[SpendLogWrite]) -> Result<usize, Error> {
         self.repository
             .insert_with_deliveries(writes, self.transaction_timeout)
+            .await
+    }
+
+    async fn insert_committed(&self, writes: &[SpendLogWrite]) -> Result<LedgerCommit, Error> {
+        self.repository
+            .insert_committed(writes, self.transaction_timeout)
             .await
     }
 }

@@ -50,7 +50,8 @@ pub use organization::{Organization, OrganizationRepository};
 pub use project::{Project, ProjectRepository};
 use raw_json::RawJson;
 pub use spend_log::{
-    JsonText, SpendLogDelivery, SpendLogOwner, SpendLogRecord, SpendLogRepository, SpendLogWrite,
+    JsonText, LedgerCommit, SpendLogDelivery, SpendLogOwner, SpendLogRecord, SpendLogRepository,
+    SpendLogWrite,
 };
 pub use tag::{Tag, TagRepository};
 pub use team::{Team, TeamRepository};

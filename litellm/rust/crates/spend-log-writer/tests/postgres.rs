@@ -4,7 +4,12 @@
 
 #![recursion_limit = "256"]
 
-use std::{error::Error as StdError, str::FromStr, sync::Arc, time::SystemTime};
+use std::{
+    error::Error as StdError,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
 use litellm_repositories::SpendLogRepository;
@@ -54,6 +59,7 @@ struct Database {
     writer: SpendLogWriter<PgLedgerStore>,
     pool: PgPool,
     prefix: String,
+    reported: Arc<Mutex<Vec<Value>>>,
 }
 
 #[fixture]
@@ -77,10 +83,22 @@ fn database() -> Result<Database, Box<dyn StdError>> {
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_nanos()
     );
+    let reported: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let sink = Arc::clone(&reported);
+    let flusher = SpendLogFlusher::new(store, settings).with_commit_observer(Arc::new(
+        move |rows: Vec<String>| {
+            sink.lock().expect("reported lock").extend(
+                rows.iter()
+                    .filter_map(|text| serde_json::from_str::<Value>(text).ok()),
+            );
+        },
+    ));
+    flusher.set_reporting(true);
     Ok(Database {
-        writer: SpendLogWriter::new(SpendLogFlusher::new(store, settings), || {}),
+        writer: SpendLogWriter::new(flusher, || {}),
         pool,
         prefix,
+        reported,
     })
 }
 
@@ -206,6 +224,35 @@ async fn a_replayed_flush_stores_what_python_stores(
     database.clean().await?;
     assert_eq!(logs, golden.logs);
     assert_eq!(deliveries, golden.deliveries);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+#[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+async fn only_the_first_commit_of_each_delivery_is_reported(
+    database: Result<Database, Box<dyn StdError>>,
+) -> Result<(), Box<dyn StdError>> {
+    let database = database?;
+    let golden = database.golden()?;
+    database
+        .writer
+        .enqueue(database.queued(&golden.rows)?, false);
+    database.writer.flush(usize::MAX, None).await?;
+    let first = database.reported.lock().expect("reported lock").len();
+    database
+        .writer
+        .enqueue(database.queued(&golden.rows)?, false);
+    database.writer.flush(usize::MAX, None).await?;
+
+    let reported = database.reported.lock().expect("reported lock").clone();
+    assert_eq!(first, golden.deliveries.len());
+    assert_eq!(reported.len(), first);
+    assert!(
+        reported
+            .iter()
+            .all(|row| row.get("spend").is_some() && row.get("messages").is_none())
+    );
     Ok(())
 }
 

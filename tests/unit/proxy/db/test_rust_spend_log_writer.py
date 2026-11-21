@@ -1,8 +1,9 @@
 import asyncio
 import threading
 from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -347,3 +348,62 @@ async def test_rows_left_at_shutdown_are_parked_from_the_rust_queue(
     store: Final = proxy_logging_obj.db_spend_update_writer.redis_update_buffer.store_spend_logs_in_redis
     store.assert_awaited_once_with([_row("a"), _charged("b")])
     assert len(writer) == 0
+
+
+def _lens_tracing(monkeypatch: pytest.MonkeyPatch) -> AbstractAsyncContextManager[object]:
+    import httpx
+
+    import litellm
+    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
+    from litellm.integrations.lens.remote import LensConnection
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+
+    def client(connection: LensConnection) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(lambda _: httpx.Response(204)))
+
+    return manage_tracing(enabled=True, client_factory=client)
+
+
+class _LedgerWriter:
+    def __init__(self) -> None:
+        self.client: Final = cast(  # cast-ok: FakePrismaClient has the queue attributes the installer reads
+            PrismaClient, FakePrismaClient()
+        )
+
+    async def __aenter__(self) -> RustSpendLogWriter:
+        writer: Final = await install_rust_spend_log_writer(self.client, await _unreachable_database(), _LEDGER_ON)
+        assert writer is not None
+        return writer
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await uninstall_rust_spend_log_writer(self.client)
+
+
+def _ledger_writer() -> _LedgerWriter:
+    return _LedgerWriter()
+
+
+@pytest.mark.asyncio
+async def test_native_commit_reports_turn_on_when_lens_starts_after_the_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    tracing: Final = _lens_tracing(monkeypatch)
+    async with _ledger_writer() as writer:
+        assert writer.commit_reporting is False
+        async with tracing:
+            assert writer.commit_reporting is True
+        assert writer.commit_reporting is False
+
+
+@pytest.mark.asyncio
+async def test_native_commit_reports_are_on_for_a_writer_installed_while_lens_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _lens_tracing(monkeypatch):
+        async with _ledger_writer() as writer:
+            assert writer.commit_reporting is True
+        async with _ledger_writer() as later:
+            assert later.commit_reporting is True
+    async with _ledger_writer() as after_shutdown:
+        assert after_shutdown.commit_reporting is False
