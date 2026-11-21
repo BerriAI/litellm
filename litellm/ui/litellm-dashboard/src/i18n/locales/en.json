@@ -16835,6 +16835,7 @@
         "myUser": "My User",
         "virtualKeys": "Virtual Keys",
         "members": "Members",
+        "memberDefaults": "Member Defaults",
         "memberPermissions": "Member Permissions",
         "settings": "Settings"
       },
@@ -16933,10 +16934,11 @@
           "bothConfigured": "Both percentage alerts and the legacy Soft Budget alerts are configured. Each sends its own emails, so recipients can be notified twice."
         },
         "teamMemberSettings": {
-          "title": "Team Member Settings",
+          "edit": "Edit Defaults",
           "description": "Optional defaults applied when members join this team. All fields can be overridden per member.",
+          "allTeamModels": "All team models",
           "defaultModelAccess": "Default Model Access",
-          "defaultModelAccessHint": "Optional. If set, new members can only access these models by default. Must be a subset of the team's models above. Leave empty to give all members access to all team models.",
+          "defaultModelAccessHint": "Optional. If set, new members can only access these models by default. Leave empty to give all members access to all team models.",
           "defaultModelAccessPlaceholder": "Leave empty — all team models accessible to every member",
           "defaultBudget": "Default Budget (USD)",
           "defaultBudgetHint": "Default spend budget for each member in this team.",
