@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final
 
@@ -7,6 +8,11 @@ from integration._support.client import Gateway, eventually, object_value, strin
 from integration._support.database import write_rows
 from integration._support.process import OwnedState, owned_proxy
 from pydantic import JsonValue, TypeAdapter
+
+from litellm.models.budget import LiteLLM_BudgetTableFull
+from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.repositories.budget_repository import BudgetRepository
+from tests.integration._support.prisma_clients import connected_proxy_prisma
 
 _FAST_RESET_TICK: Final = MappingProxyType(
     {"PROXY_BUDGET_RESCHEDULER_MIN_TIME": "2", "PROXY_BUDGET_RESCHEDULER_MAX_TIME": "2"}
@@ -61,6 +67,54 @@ def _member_close_period(proxy: Gateway, budget_id: str) -> None:
 def _member_budget(gateway: Gateway, team_id: str, user_id: str) -> dict[str, JsonValue]:
     rows: Final = _MEMBERS.validate_python(gateway.get("/team/info", {"team_id": team_id})["team_memberships"])
     return next(row for row in rows if row["user_id"] == user_id)
+
+
+async def test_a_capped_member_reset_does_not_overwrite_a_newer_period_edit(
+    rollover_proxy: Gateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proxy: Final = rollover_proxy
+    assert proxy.database_url is not None
+    monkeypatch.setenv("DATABASE_URL", proxy.database_url)
+    monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+    window_sql: Final = (
+        "SELECT budget_duration, budget_reset_at::text AS reset_at, budget_reset_count AS closes "
+        'FROM "LiteLLM_BudgetTable" WHERE budget_id = %s'
+    )
+    with proxy.scenario() as scenario:
+        team: Final = scenario.team(
+            team_member_budget=100.0, team_member_budget_duration="30d", team_member_rollover_max_budget=250.0
+        )
+        member: Final = scenario.member(team)
+        budget_id: Final = string_value(_member_budget(proxy, team, member)["budget_id"])
+        write_rows(
+            'UPDATE "LiteLLM_TeamMembership" SET spend = 30 WHERE team_id = %s AND user_id = %s',
+            (team, member),
+        )
+        write_rows(
+            """UPDATE "LiteLLM_BudgetTable" SET budget_reset_at = now() + interval '6 hours' WHERE budget_id = %s""",
+            (budget_id,),
+        )
+        async with connected_proxy_prisma() as client:
+            job: Final = ResetBudgetJob(client.proxy_logging_obj, client)
+            rows: Final = await BudgetRepository(client).table.find_many(where={"budget_id": budget_id})
+            budgets: Final = tuple(LiteLLM_BudgetTableFull.model_validate(row, from_attributes=True) for row in rows)
+            cascade: Final = await job._collect_budget_cascade(budgets, datetime.now(timezone.utc) + timedelta(days=1))
+            assert cascade.budget_ids == (budget_id,)
+            proxy.post(
+                "/team/update", {"team_id": team, "team_member_budget": 100.0, "team_member_budget_duration": "7d"}
+            )
+            edited: Final = proxy.rows(window_sql, (budget_id,))
+            assert len(edited) == 1 and edited[0]["budget_duration"] == "7d", edited
+            await job._commit_budget_cascade(cascade)
+        assert proxy.rows(window_sql, (budget_id,)) == edited
+        assert proxy.rows(
+            'SELECT spend, rollover_credit FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
+            (team, member),
+        ) == [{"spend": 30.0, "rollover_credit": None}]
+
+        _member_close_period(proxy, budget_id)
+        later: Final = _member_budget(proxy, team, member)
+        assert (later["spend"], later["rollover_credit"]) == (0.0, 70.0)
 
 
 @pytest.mark.parametrize(("cap", "credits"), ((250.0, (70.0, 150.0, 150.0)), (None, (0.0, 0.0, 0.0))))
@@ -306,6 +360,34 @@ def test_team_budget_edits_cannot_disable_saved_rollover_implicitly(rollover_pro
             )
             updated: Final = _member_budget(proxy, team, member)
             assert "rollover_credit" not in updated, updated
+
+
+def test_rejected_team_period_edit_keeps_the_inheriting_members_reset_schedule(rollover_proxy: Gateway) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        team: Final = scenario.team(team_member_budget=100, team_member_budget_duration="monthly")
+        member: Final = scenario.member(team)
+        proxy.post("/team/member_update", {"team_id": team, "user_id": member, "rpm_limit": 20})
+        proxy.post(
+            f"/management/v1/teams/{team}/members/bulk_update",
+            {"members": [{"user_id": member, "max_budget_in_team": None}]},
+        )
+        proxy.post("/team/update", {"team_id": team, "team_member_rollover_max_budget": 250})
+        budget_id: Final = string_value(_member_budget(proxy, team, member)["budget_id"])
+        schedule_query: Final = (
+            'SELECT max_budget, budget_duration, budget_reset_at::text FROM "LiteLLM_BudgetTable" WHERE budget_id = %s'
+        )
+        (before,) = proxy.rows(schedule_query, (budget_id,))
+        assert before["max_budget"] is None and before["budget_duration"] == "monthly" and before["budget_reset_at"]
+
+        response: Final = proxy.request("POST", "/team/update", {"team_id": team, "team_member_budget_duration": None})
+        assert response.status_code == 400 and "rollover" in response.text, response.text
+        assert proxy.rows(schedule_query, (budget_id,)) == [before]
+
+        proxy.post("/team/update", {"team_id": team, "team_member_budget_duration": "7d"})
+        (after,) = proxy.rows(schedule_query, (budget_id,))
+        assert (after["max_budget"], after["budget_duration"]) == (None, "7d")
+        assert after["budget_reset_at"]
 
 
 def test_management_responses_omit_rollover_cap_without_opt_in(rollover_proxy: Gateway) -> None:

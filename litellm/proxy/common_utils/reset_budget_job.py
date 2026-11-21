@@ -516,16 +516,24 @@ def _queue_enduser_tier_resets(
 
 
 @dataclass(frozen=True, slots=True)
+class _BudgetWindowAdvance:
+    budget_id: str
+    reset_at: datetime
+    expected_reset_at: datetime | None
+    duration: str
+
+
+@dataclass(frozen=True, slots=True)
 class _BudgetCascade:
     """Everything one budget-tier reset touches, resolved before any write."""
 
     budgets: tuple[LiteLLM_BudgetTableFull, ...] = ()
     budget_ids: tuple[str, ...] = ()
-    budget_resets: tuple[tuple[str, datetime], ...] = ()
+    budget_resets: tuple[_BudgetWindowAdvance, ...] = ()
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
-    member_credit_budget_ids: tuple[str, ...] = ()
+    member_credit_budget_ids: frozenset[str] = frozenset()
     member_credit_cache_keys: tuple[str, ...] = ()
     windows: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     customer_ids: Mapping[CustomerSpendEntity, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
@@ -1119,7 +1127,7 @@ class ResetBudgetJob:
             if _rollover_enabled()
             else {}
         )
-        member_credit_budget_ids: Final = tuple(
+        member_credit_budget_ids: Final = frozenset(
             b.budget_id
             for b in budgets_to_reset
             if b.budget_id is not None
@@ -1128,19 +1136,20 @@ class ResetBudgetJob:
             and active_rollover_credit(b.max_budget, getattr(b, "rollover_max_budget", None), b.budget_duration, None)
             is not None
         )
-        member_credit_budget_id_set: Final = frozenset(member_credit_budget_ids)
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
             budget_ids=budget_ids,
             budget_resets=tuple(
-                (
-                    b.budget_id,
-                    compute_budget_reset_at(
+                _BudgetWindowAdvance(
+                    budget_id=b.budget_id,
+                    reset_at=compute_budget_reset_at(
                         budget_duration=b.budget_duration,
                         settings=self.reset_settings,
                         now=now,
                         previous_reset=b.budget_reset_at,
                     ),
+                    expected_reset_at=b.budget_reset_at,
+                    duration=b.budget_duration,
                 )
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_id in windows and b.budget_duration is not None
@@ -1165,7 +1174,7 @@ class ResetBudgetJob:
                 chain.from_iterable(
                     _rollover_membership_cache_keys(row)
                     for row in team_memberships
-                    if row.budget_id in member_credit_budget_id_set
+                    if row.budget_id in member_credit_budget_ids
                 )
             ),
             windows=windows,
@@ -1333,8 +1342,6 @@ class ResetBudgetJob:
             uow.row_locks.queue_row_locks(cascade.budget_ids)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
             uow.team_memberships.queue_total_spend_repair(cascade.budget_ids)
-            if cascade.member_credit_budget_ids:
-                uow.team_memberships.queue_credit_reset(cascade.member_credit_budget_ids, _rollover_enabled())
             _queue_budget_linked_resets(
                 uow.team_memberships,
                 replace(
@@ -1358,8 +1365,17 @@ class ResetBudgetJob:
                 replace(cascade, budget_ids=cascade.customer_budget_ids),
                 extra=_SPENT_ROWS_WHERE,
             )
-            for budget_id, budget_reset_at in cascade.budget_resets:
-                uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
+            for advance in cascade.budget_resets:
+                if advance.budget_id in cascade.member_credit_budget_ids:
+                    uow.budgets.queue_member_credit_window_advance(
+                        budget_id=advance.budget_id,
+                        carry_overage=_rollover_enabled(),
+                        budget_reset_at=advance.reset_at,
+                        expected_reset_at=advance.expected_reset_at,
+                        expected_duration=advance.duration,
+                    )
+                else:
+                    uow.budgets.queue_window_advance(budget_id=advance.budget_id, budget_reset_at=advance.reset_at)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
         await self._invalidate_caches(
@@ -1403,7 +1419,7 @@ class ResetBudgetJob:
         return _BudgetCascadeCommitted(
             cascade=cascade,
             advanced=_count_advanced(
-                (reset_at for _, reset_at in cascade.budget_resets),
+                (advance.reset_at for advance in cascade.budget_resets),
                 cutoff=datetime.now(timezone.utc),
             ),
             endusers=await self._invalidate_enduser_caches(cascade.budget_ids),

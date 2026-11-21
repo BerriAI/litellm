@@ -51,7 +51,17 @@ _USER_CREDIT_RESET_SQL: Final = (
     " + LEAST(rollover_max_budget - max_budget, GREATEST(0, COALESCE(rollover_credit, 0))) - $6::text::double precision))"
     " ELSE NULL END WHERE user_id = $1" + _SPEND_RESET_WHERE
 )
-_MEMBER_CREDIT_RESET_SQL: Final = """
+_MEMBER_CREDIT_WINDOW_RESET_SQL: Final = """
+WITH budget AS (
+    UPDATE "LiteLLM_BudgetTable"
+    SET budget_reset_at = $3::timestamp, budget_reset_count = budget_reset_count + 1,
+        updated_at = (NOW() AT TIME ZONE 'UTC')
+    WHERE budget_id = $1 AND budget_reset_at IS NOT DISTINCT FROM $4::timestamp AND budget_duration = $5::text
+    RETURNING budget_id, max_budget,
+        CASE WHEN max_budget > 0 AND rollover_max_budget > max_budget
+            AND rollover_max_budget < 'Infinity'::double precision
+            THEN rollover_max_budget - max_budget END AS credit_room
+)
 UPDATE "LiteLLM_TeamMembership" AS member
 SET rollover_credit = CASE WHEN credit_room IS NOT NULL THEN
         LEAST(credit_room, GREATEST(0, budget.max_budget
@@ -60,15 +70,8 @@ SET rollover_credit = CASE WHEN credit_room IS NOT NULL THEN
         GREATEST(0, member.spend - budget.max_budget
             - LEAST(COALESCE(credit_room, 0), GREATEST(0, COALESCE(member.rollover_credit, 0))))
         ELSE 0 END
-FROM (
-    SELECT budget_id, max_budget, budget_reset_at,
-        CASE WHEN budget_duration IS NOT NULL AND max_budget > 0
-            AND rollover_max_budget > max_budget AND rollover_max_budget < 'Infinity'::double precision
-            THEN rollover_max_budget - max_budget END AS credit_room
-    FROM "LiteLLM_BudgetTable"
-) AS budget
-WHERE member.budget_id = budget.budget_id AND budget.budget_id = ANY($1::text[])
-    AND (budget.budget_reset_at IS NULL OR budget.budget_reset_at < (statement_timestamp() AT TIME ZONE 'UTC'))
+FROM budget
+WHERE member.budget_id = budget.budget_id
 """
 _TEAM_SPEND_RESET_SQL: Final = (
     'UPDATE "LiteLLM_TeamTable"' + _SPEND_RESET_SET + " WHERE team_id = $1" + _SPEND_RESET_WHERE
@@ -286,9 +289,6 @@ class TeamMembershipSpendResetWrites:
     resets: LinkedSpendResetWrites
     batch: PrismaBatch
 
-    def queue_credit_reset(self, budget_ids: Sequence[str], carry_overage: bool) -> None:
-        self.batch.execute_raw(_MEMBER_CREDIT_RESET_SQL, list(budget_ids), carry_overage)
-
     def queue_spend_zero(self, where: Mapping[str, object]) -> None:
         self.resets.queue_spend_zero(where)
 
@@ -347,6 +347,7 @@ class BudgetLinkedRowLocks:
 @dataclass(frozen=True, slots=True)
 class BudgetWindowWrites:
     table: BatchTable
+    batch: PrismaBatch
 
     def queue_window_advance(self, budget_id: str, budget_reset_at: datetime) -> None:
         """``update_many`` so a tier deleted between the read and the commit is a
@@ -355,6 +356,24 @@ class BudgetWindowWrites:
         self.table.update_many(
             where={"budget_id": budget_id},
             data={"budget_reset_at": budget_reset_at, "budget_reset_count": {"increment": 1}},
+        )
+
+    def queue_member_credit_window_advance(
+        self,
+        budget_id: str,
+        *,
+        carry_overage: bool,
+        budget_reset_at: datetime,
+        expected_reset_at: datetime | None,
+        expected_duration: str,
+    ) -> None:
+        self.batch.execute_raw(
+            _MEMBER_CREDIT_WINDOW_RESET_SQL,
+            budget_id,
+            carry_overage,
+            _reset_timestamp(budget_reset_at),
+            _reset_timestamp(expected_reset_at),
+            expected_duration,
         )
 
 
@@ -414,7 +433,7 @@ async def budget_cascade_unit_of_work(
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
         customer_organizations=LinkedSpendResetWrites(table=batch.litellm_customerorganizationtable),
-        budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
+        budgets=BudgetWindowWrites(table=batch.litellm_budgettable, batch=batch),
     )
     await batch.commit()
 

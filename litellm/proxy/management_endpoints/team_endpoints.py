@@ -183,6 +183,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     upsert_budget_and_membership,
     user_api_key_has_admin_view,
     validate_budget_duration,
+    validate_rollover_budget_patch,
     validate_team_model_max_budget,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -979,7 +980,7 @@ class TeamMemberBudgetHandler:
     @staticmethod
     async def member_budgets_on_team_reset_window(
         team_id: str, team_member_budget_id: str | None, prisma_client: PrismaClient
-    ) -> tuple[str | None, tuple[str, ...]]:
+    ) -> tuple["prisma_models.LiteLLM_BudgetTable | None", tuple[str, ...]]:
         """The team default's reset window, and the budgets of members who take their cap from it and reset on a copy."""
         team_default: Final = (
             await _budget_db(prisma_client).find_unique(where={"budget_id": team_member_budget_id})
@@ -991,7 +992,7 @@ class TeamMemberBudgetHandler:
             where={"team_id": team_id, "budget_id": {"not": team_member_budget_id}},
             include={"litellm_budget_table": True},
         )
-        return team_window, tuple(
+        return team_default, tuple(
             m.litellm_budget_table.budget_id
             for m in memberships
             if m.litellm_budget_table is not None
@@ -1001,14 +1002,30 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     async def move_members_to_team_reset_window(
-        team_id: str, team_member_budget_id: str | None, budget_duration: str | None, prisma_client: PrismaClient
+        team_id: str,
+        team_member_budget_id: str | None,
+        budget_duration: str | None,
+        prisma_client: PrismaClient,
+        *,
+        rollover_patch: Mapping[str, object] = MappingProxyType({}),
     ) -> None:
         """Runs before the team default is written, so a retry after a failure still finds the members left behind."""
-        team_window, budget_ids = await TeamMemberBudgetHandler.member_budgets_on_team_reset_window(
+        team_default, budget_ids = await TeamMemberBudgetHandler.member_budgets_on_team_reset_window(
             team_id=team_id, team_member_budget_id=team_member_budget_id, prisma_client=prisma_client
         )
+        team_window: Final = team_default.budget_duration if team_default is not None else None
         if team_window == budget_duration or not budget_ids:
             return
+        validate_rollover_budget_patch(
+            rollover_patch,
+            {
+                "max_budget": team_default.max_budget,
+                "rollover_max_budget": team_default.rollover_max_budget,
+                "budget_duration": team_window,
+            }
+            if team_default is not None and rollover_patch
+            else MappingProxyType({}),
+        )
         _ = await update_many_in(
             _budget_db(prisma_client),
             "budget_id",
@@ -2984,6 +3001,19 @@ async def update_team(
                 team_member_budget_id=_current_member_budget_id if isinstance(_current_member_budget_id, str) else None,
                 budget_duration=data.team_member_budget_duration,
                 prisma_client=prisma_client,
+                rollover_patch={
+                    "budget_duration": data.team_member_budget_duration,
+                    **(
+                        {"max_budget": data.team_member_budget}
+                        if "team_member_budget" in _team_member_fields_in_request
+                        else {}
+                    ),
+                    **(
+                        {"rollover_max_budget": data.team_member_rollover_max_budget}
+                        if "team_member_rollover_max_budget" in _team_member_fields_in_request
+                        else {}
+                    ),
+                },
             )
 
         if _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
