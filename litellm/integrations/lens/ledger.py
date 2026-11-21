@@ -8,7 +8,6 @@ from math import isfinite
 from typing import Final
 
 import litellm
-from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
 
 MAX_HELD_ROWS: Final = 10_000
 MAX_HELD_BYTES: Final = 64 * 1024 * 1024
@@ -64,7 +63,7 @@ def _accounting(committed: Mapping[str, object]) -> Mapping[str, object] | None:
     }
 
 
-def merged_row(companion: SpendLogRecord, committed: Mapping[str, object]) -> Mapping[str, object] | None:
+def merged_row(companion: Mapping[str, object], committed: Mapping[str, object]) -> Mapping[str, object] | None:
     """The callback's record carrying the committed accounting in place of its own billing values."""
     accounting: Final = _accounting(committed)
     return None if accounting is None else {**companion, **accounting}
@@ -130,7 +129,7 @@ def minimal_row(committed: Mapping[str, object]) -> Mapping[str, object] | None:
 
 @dataclass(frozen=True, slots=True)
 class _Held:
-    row: SpendLogRecord
+    row: Mapping[str, object]
     size: int
     at: float
 
@@ -222,7 +221,7 @@ class LedgerHandoff:
         orphans: Final = _ready(tuple(minimal_row(committed.row) for committed in self._stale_commits(now)))
         return _joined(Release(dropped=dropped), orphans)
 
-    def hold(self, key: str, row: SpendLogRecord, size: int) -> Release:
+    def hold(self, key: str, row: Mapping[str, object], size: int) -> Release:
         expired: Final = self._expire()
         early: Final = self.waiting.get(key)
         if early:

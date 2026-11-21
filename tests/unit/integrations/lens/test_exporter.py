@@ -1,16 +1,34 @@
 import asyncio
+import copy
+import hashlib
 import json
 import logging
+import threading
+from datetime import datetime, timezone
+from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
 from itertools import chain
-from typing import Final
+from typing import Final, TypeVar
 
 import httpx
 import prometheus_client
 import pytest
 from prometheus_client import CollectorRegistry, Counter
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
+import litellm
+from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
+from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
+from litellm.integrations.lens.content import (
+    MAX_NATIVE_UPLOADS,
+    ContentLimits,
+    Owner,
+    StoredReference,
+    Unavailable,
+    content_signing_key,
+    signed_reference,
+    verified_stored,
+)
 from litellm.integrations.lens import exporter as exporter_module
 from litellm.integrations.lens.exporter import (
     MAX_BUFFER_EVENTS,
@@ -294,11 +312,10 @@ async def test_batches_stay_bounded_without_losing_or_reordering_records() -> No
     (
         None,
         {"id": []},
-        {"id": "x", "messages": [{"content": "x" * MAX_EVENT_BYTES}]},
-        {"id": "x", "messages": [{"content": "\x01" * (MAX_EVENT_BYTES // 4)}]},
+        {"id": "x", "metadata": {"note": "x" * MAX_EVENT_BYTES}},
         {"id": "x", "response_cost": float("nan")},
     ),
-    ids=("missing", "invalid-id", "oversized-input", "escaped-row-expansion", "invalid-row-number"),
+    ids=("missing", "invalid-id", "oversized-metadata", "invalid-row-number"),
 )
 async def test_invalid_callback_data_never_interrupts_model_requests(payload: object) -> None:
     async with httpx.AsyncClient(base_url="http://lens") as client:
@@ -367,6 +384,420 @@ async def test_a_rejecting_store_is_logged_as_an_error_naming_lens(caplog: pytes
     failures: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
     assert len(failures) == 1
     assert "lens" in failures[0] and "HTTP 500" in failures[0]
+
+
+_T = TypeVar("_T")
+_KEY: Final = content_signing_key("test-service-token-with-32-characters")
+_OWNER: Final = Owner(team_id="team-a", api_key="hash-a", request_id="request-a")
+_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
+_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_TEXT: Final = TypeAdapter(dict[str, str])
+_SMALL_INLINE: Final = ContentLimits(inline_bytes=4096)
+
+
+class _Store:
+    def __init__(
+        self, outcome: Callable[[], "asyncio.Future[bool]"] | None = None, prefix: str | None = "logs"
+    ) -> None:
+        self.outcome: Final = outcome
+        self.prefix: Final = prefix
+        self.uploads: Final = asyncio.Queue[tuple[str, str]]()
+        self.natives: Final = asyncio.Queue["asyncio.Future[bool]"]()
+        self.started: Final = asyncio.Event()
+
+    def object_key(self, name: str) -> str | None:
+        return None if self.prefix is None else f"{self.prefix}/{name}"
+
+    def upload(self, key: str, body: str) -> "asyncio.Future[bool]":
+        self.uploads.put_nowait((key, body))
+        native: Final = self.outcome() if self.outcome is not None else _settled(True)
+        self.natives.put_nowait(native)
+        self.started.set()
+        return native
+
+    def download(self, key: str, max_bytes: int) -> "asyncio.Future[str | None]":
+        missing: Final[str | None] = None
+        return _settled(missing)
+
+
+def _settled(value: _T) -> "asyncio.Future[_T]":
+    future: Final = asyncio.get_running_loop().create_future()
+    future.set_result(value)
+    return future
+
+
+def _pending() -> "asyncio.Future[bool]":
+    return asyncio.get_running_loop().create_future()
+
+
+def _request(request_id: str, messages: object, **fields: object) -> dict[str, object]:
+    return {
+        "response_cost": 0.42,
+        "litellm_params": {"metadata": {"litellm_lens_content": "caller value", "kept": "yes"}},
+        "standard_logging_object": {
+            "id": request_id,
+            "litellm_call_id": f"call-{request_id}",
+            "status": "success",
+            "response_cost": 0.42,
+            "startTime": 1_700_000_000.0,
+            "metadata": {"user_api_key_hash": "hash-a", "user_api_key_team_id": "team-a"},
+            "messages": messages,
+            "response": {"choices": [{"message": {"content": "done"}}]},
+            **fields,
+        },
+    }
+
+
+class _Lens:
+    def __init__(self) -> None:
+        self.rows: Final = asyncio.Queue[dict[str, JsonValue]]()
+        self.bodies: Final = asyncio.Queue[bytes]()
+        self.arrived: Final = asyncio.Event()
+        self.expected = 1
+
+    def accept(self, request: httpx.Request) -> httpx.Response:
+        self.bodies.put_nowait(request.content)
+        for row in _ROWS.validate_json(request.content):
+            self.rows.put_nowait(row)
+        if self.rows.qsize() >= self.expected:
+            self.arrived.set()
+        return httpx.Response(204)
+
+    def drained(self) -> list[dict[str, JsonValue]]:
+        return [self.rows.get_nowait() for _ in range(self.rows.qsize())]
+
+
+async def _export(
+    requests: tuple[dict[str, object], ...],
+    store: _Store | None = None,
+    limits: ContentLimits = ContentLimits(),
+) -> tuple[LensExporter, list[dict[str, JsonValue]], _Lens]:
+    lens: Final = _Lens()
+    lens.expected = len(requests)
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = LensExporter(client, content_store=store, signing_key=_KEY, limits=limits)
+        exporter.start()
+        try:
+            for request in requests:
+                await exporter.async_log_success_event(request, None, None, None)
+            await asyncio.wait_for(lens.arrived.wait(), timeout=5)
+        finally:
+            await exporter.aclose()
+    return exporter, lens.drained(), lens
+
+
+def _reference(row: Mapping[str, JsonValue]) -> JsonValue:
+    return _OBJECT.validate_json(str(row["metadata"])).get("litellm_lens_content")
+
+
+def _unavailable(reason: Unavailable) -> dict[str, str | int]:
+    return dict(signed_reference(_KEY, _OWNER, reason))
+
+
+def _old_record(request: dict[str, object]) -> bytes:
+    payload: Final = TypeAdapter(SpendLogPayload).validate_python(request["standard_logging_object"])
+    record: Final = encode_record(spend_log_row_from_payload(payload, request))
+    assert isinstance(record, bytes)
+    return record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    (
+        pytest.param([{"role": "user", "content": "short \u754c"}], id="small"),
+        pytest.param([{"role": "user", "content": "x" * (MAX_EVENT_BYTES - 20_000)}], id="near-limit"),
+    ),
+)
+async def test_inline_records_are_byte_identical_and_ignore_unexported_fields(messages: object) -> None:
+    request: Final = _request("request-a", messages, model_map_information={"notes": "y" * 64_000})
+    original: Final = copy.deepcopy(request)
+    exporter, rows, lens = await _export((request,), _Store())
+    assert request == original
+    assert lens.bodies.get_nowait() == b"[" + _old_record(request) + b"]"
+    assert _OBJECT.validate_json(str(rows[0]["metadata"]))["litellm_lens_content"] == "caller value"
+    assert (exporter.rows_written, exporter.rows_dropped) == (1, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    (
+        pytest.param([{"role": "user", "content": "x" * MAX_EVENT_BYTES}], id="ascii"),
+        pytest.param([{"role": "user", "content": "\u754c" * 200_000}], id="escaped-unicode"),
+    ),
+)
+async def test_oversized_content_without_storage_keeps_cost_with_a_signed_unavailable_state(messages: object) -> None:
+    exporter, rows, _ = await _export((_request("request-a", messages),))
+    assert (exporter.rows_written, exporter.rows_dropped) == (1, 0)
+    assert (rows[0]["spend"], rows[0]["messages"], rows[0]["response"]) == (0.42, "", "")
+    assert _reference(rows[0]) == _unavailable(Unavailable.STORAGE_NOT_CONFIGURED)
+    assert _OBJECT.validate_json(str(rows[0]["metadata"]))["kept"] == "yes"
+
+
+@pytest.mark.asyncio
+async def test_content_is_referenced_only_after_a_confirmed_upload_bound_to_its_owner() -> None:
+    gate: Final = _pending()
+    store: Final = _Store(lambda: gate)
+    messages: Final = [{"role": "user", "content": "\u754c" * 3000}]
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = LensExporter(client, content_store=store, signing_key=_KEY, limits=_SMALL_INLINE)
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", messages), None, None, None)
+            await asyncio.wait_for(store.started.wait(), timeout=5)
+            assert (exporter.buffered_events, lens.rows.qsize(), exporter.native_uploads) == (0, 0, 1)
+            gate.set_result(True)
+            await asyncio.wait_for(lens.arrived.wait(), timeout=5)
+        finally:
+            if not gate.done():
+                gate.set_result(False)
+            await exporter.aclose()
+    key, body = store.uploads.get_nowait()
+    row: Final = lens.drained()[0]
+    reference: Final = StoredReference.model_validate(_reference(row))
+    stored: Final = verified_stored(_KEY, _OWNER, reference)
+    assert stored is not None and stored.object_key == key and key.startswith("logs/lens-content/2023-11-14/")
+    assert (stored.size, stored.sha256) == (len(body.encode()), hashlib.sha256(body.encode()).hexdigest())
+    assert verified_stored(_KEY, Owner(team_id="team-b", api_key="hash-a", request_id="request-a"), reference) is None
+    assert _TEXT.validate_json(body)["messages"] == json.dumps(messages)
+    assert (row["messages"], row["response"], row["spend"]) == ("", "", 0.42)
+    assert (exporter.native_uploads, exporter.pending_content_bytes) == (0, 0)
+
+
+async def _rejected() -> bool:
+    return False
+
+
+async def _raises() -> bool:
+    raise RuntimeError("private storage host")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", (_rejected, _raises), ids=("not-delivered", "error"))
+async def test_failed_upload_keeps_cost_and_reports_upload_failed(
+    outcome: Callable[[], Coroutine[object, object, bool]],
+) -> None:
+    store: Final = _Store(lambda: asyncio.ensure_future(outcome()))
+    exporter, rows, _ = await _export((_request("request-a", "x" * 100_000),), store, _SMALL_INLINE)
+    assert store.uploads.qsize() == 1
+    assert _reference(rows[0]) == _unavailable(Unavailable.UPLOAD_FAILED)
+    assert (rows[0]["spend"], exporter.rows_dropped) == (0.42, 0)
+
+
+def _settle_pending(store: _Store) -> None:
+    for native in tuple(store.natives.get_nowait() for _ in range(store.natives.qsize())):
+        if not native.done():
+            native.set_result(False)
+
+
+async def _reservation_released(native: "asyncio.Future[bool]", result: bool) -> None:
+    released: Final = asyncio.Event()
+    native.add_done_callback(lambda _: released.set())
+    native.set_result(result)
+    await asyncio.wait_for(released.wait(), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_upload_timeout_exports_the_record_but_holds_native_capacity_until_completion() -> None:
+    store: Final = _Store(_pending)
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = LensExporter(
+            client, content_store=store, signing_key=_KEY, limits=_SMALL_INLINE, upload_timeout=0
+        )
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", "x" * 100_000), None, None, None)
+            await asyncio.wait_for(lens.arrived.wait(), timeout=5)
+            assert _reference(lens.drained()[0]) == _unavailable(Unavailable.UPLOAD_FAILED)
+            assert exporter.native_uploads == 1 and exporter.pending_content_bytes > 0
+            await _reservation_released(store.natives.get_nowait(), True)
+            assert (exporter.native_uploads, exporter.pending_content_bytes) == (0, 0)
+        finally:
+            _settle_pending(store)
+            await exporter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_exports_cancelled_records_while_native_uploads_keep_their_reservation() -> None:
+    store: Final = _Store(_pending)
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = LensExporter(client, content_store=store, signing_key=_KEY, limits=_SMALL_INLINE)
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", "x" * 100_000), None, None, None)
+            await asyncio.wait_for(store.started.wait(), timeout=5)
+        finally:
+            await exporter.aclose()
+        try:
+            assert _reference(lens.drained()[0]) == _unavailable(Unavailable.CANCELLED)
+            assert exporter.native_uploads == 1
+            await _reservation_released(store.natives.get_nowait(), True)
+        finally:
+            _settle_pending(store)
+    assert (exporter.native_uploads, exporter.pending_content_bytes) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_native_upload_saturation_rejects_new_content_before_serializing_it() -> None:
+    store: Final = _Store(_pending)
+    lens: Final = _Lens()
+    lens.expected = MAX_NATIVE_UPLOADS + 1
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = LensExporter(client, content_store=store, signing_key=_KEY, limits=_SMALL_INLINE)
+        exporter.start()
+        try:
+            for index in range(MAX_NATIVE_UPLOADS):
+                await exporter.async_log_success_event(_request(f"r{index}", "x" * 100_000), None, None, None)
+            while store.natives.qsize() < MAX_NATIVE_UPLOADS:
+                store.started.clear()
+                await asyncio.wait_for(store.started.wait(), timeout=5)
+            await exporter.async_log_success_event(_request("overflow", "x" * 100_000), None, None, None)
+            assert store.uploads.qsize() == MAX_NATIVE_UPLOADS
+            for _ in range(MAX_NATIVE_UPLOADS):
+                await _reservation_released(store.natives.get_nowait(), True)
+            await asyncio.wait_for(lens.arrived.wait(), timeout=5)
+        finally:
+            _settle_pending(store)
+            await exporter.aclose()
+    states: Final = {row["request_id"]: _reference(row) for row in lens.drained()}
+    overflow: Final = Owner(team_id="team-a", api_key="hash-a", request_id="overflow")
+    assert states["overflow"] == dict(signed_reference(_KEY, overflow, Unavailable.OVERLOADED))
+    assert sum(isinstance(state, dict) and state["state"] == "stored" for state in states.values()) == (
+        MAX_NATIVE_UPLOADS
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "limits", "reason"),
+    (
+        pytest.param("x" * 9000, ContentLimits(inline_bytes=4096, object_bytes=8192), "too_large", id="object-limit"),
+        pytest.param(
+            [{"content": "\u754c" * 1500}],
+            ContentLimits(inline_bytes=4096, object_bytes=8192),
+            "too_large",
+            id="unicode-escape-expansion",
+        ),
+        pytest.param("\ud800" * 100_000, _SMALL_INLINE, "unserializable", id="lone-surrogate"),
+    ),
+)
+async def test_unstorable_content_is_never_uploaded_and_keeps_cost(
+    messages: object, limits: ContentLimits, reason: str
+) -> None:
+    store: Final = _Store()
+    _, rows, _ = await _export((_request("request-a", messages),), store, limits)
+    assert store.uploads.empty()
+    assert _reference(rows[0]) == _unavailable(Unavailable(reason))
+    assert rows[0]["spend"] == 0.42
+
+
+@pytest.mark.asyncio
+async def test_configured_inline_threshold_moves_smaller_content_to_storage() -> None:
+    store: Final = _Store()
+    _, rows, _ = await _export((_request("request-a", "x" * 5000),), store, _SMALL_INLINE)
+    assert store.uploads.qsize() == 1
+    assert isinstance(reference := _reference(rows[0]), dict) and reference["state"] == "stored"
+
+
+@pytest.mark.asyncio
+async def test_redacted_content_is_never_uploaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    store: Final = _Store()
+    _, rows, _ = await _export((_request("request-a", "x" * MAX_EVENT_BYTES),), store)
+    assert store.uploads.empty()
+    assert (rows[0]["messages"], rows[0]["response"], rows[0]["spend"]) == ("", "", 0.42)
+    assert _reference(rows[0]) is None
+
+
+def test_no_log_requests_never_reach_the_lens_exporter() -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2023, 11, 14, tzinfo=timezone.utc),
+        litellm_call_id="call-no-log",
+        function_id="function-no-log",
+    )
+    exporter: Final = LensExporter(httpx.AsyncClient(base_url="http://lens"))
+    assert logging_obj.should_run_callback(exporter, {"no-log": True}, "async_success") is False
+    assert logging_obj.should_run_callback(exporter, {}, "async_success") is True
+
+
+class _FailingStore(_Store):
+    def upload(self, key: str, body: str) -> "asyncio.Future[bool]":
+        raise RuntimeError("the native sink rejected the call")
+
+
+@pytest.mark.asyncio
+async def test_a_store_that_cannot_start_an_upload_releases_its_reservation() -> None:
+    exporter, rows, _ = await _export((_request("request-a", "x" * 100_000),), _FailingStore(), _SMALL_INLINE)
+    assert _reference(rows[0]) == _unavailable(Unavailable.UPLOAD_FAILED)
+    assert (exporter.native_uploads, exporter.pending_content_bytes, rows[0]["spend"]) == (0, 0, 0.42)
+
+
+class _BlockingValue:
+    def __init__(self) -> None:
+        self.entered: Final = threading.Event()
+        self.release: Final = threading.Event()
+
+    def __str__(self) -> str:
+        self.entered.set()
+        self.release.wait()
+        return "released"
+
+
+@pytest.mark.asyncio
+async def test_raw_content_stays_reserved_until_its_serialization_thread_finishes() -> None:
+    from litellm.integrations.lens.content import MAX_SERIALIZATIONS
+
+    blocker: Final = _BlockingValue()
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = LensExporter(client, content_store=_Store(), signing_key=_KEY, limits=_SMALL_INLINE)
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", ["x" * 70_000, blocker]), None, None, None)
+            assert exporter.pending_content_bytes >= 70_000
+            assert await asyncio.to_thread(blocker.entered.wait, 5)
+            await exporter.aclose()
+            assert _reference(lens.drained()[0]) == _unavailable(Unavailable.CANCELLED)
+            assert exporter.pending_content_bytes >= 70_000
+        finally:
+            blocker.release.set()
+        for _ in range(MAX_SERIALIZATIONS):
+            await asyncio.wait_for(exporter.serialize_slots.acquire(), timeout=5)
+        assert exporter.pending_content_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_closing_before_a_content_job_starts_exports_its_cost_and_releases_reservations() -> None:
+    store: Final = _Store()
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = LensExporter(client, content_store=store, signing_key=_KEY, limits=_SMALL_INLINE)
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", "x" * 100_000), None, None, None)
+            assert exporter.pending_content_bytes >= 100_000
+        finally:
+            await exporter.aclose()
+    rows: Final = lens.drained()
+    assert len(rows) == 1
+    assert _reference(rows[0]) == _unavailable(Unavailable.CANCELLED)
+    assert rows[0]["spend"] == 0.42
+    assert store.uploads.empty()
+    assert (exporter.pending_content_bytes, len(exporter.content_tasks), exporter.serialize_slots.locked()) == (
+        0,
+        0,
+        False,
+    )
 
 
 def _ledger_event(request_id: str) -> dict[str, object]:
@@ -446,3 +877,111 @@ async def test_records_outside_the_ledger_and_unknown_ledger_states_never_wait()
         await direct.aclose()
         await failing.aclose()
     assert (failing.rows_written, failing.rows_dropped) == (0, 2)
+
+
+_CANONICAL: Final = Owner(team_id="team-canonical", api_key="hash-canonical", request_id="request-a")
+
+
+def _committed(spend: float = 0.75) -> dict[str, object]:
+    return {
+        "request_id": "request-a",
+        "delivery_id": "delivery-a",
+        "spend": spend,
+        "prompt_tokens": 2,
+        "completion_tokens": 3,
+        "api_key": _CANONICAL.api_key,
+        "team_id": _CANONICAL.team_id,
+    }
+
+
+def _ledger_exporter(client: httpx.AsyncClient, store: _Store, key: str | None = "request-a") -> LensExporter:
+    from litellm.integrations.lens.ledger import LedgerHandoff
+
+    return LensExporter(
+        client,
+        content_store=store,
+        signing_key=_KEY,
+        limits=_SMALL_INLINE,
+        ledger=LedgerHandoff(),
+        ledger_key=lambda kwargs, response: key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_oversized_ledger_content_is_stored_only_after_commit_under_the_committed_owner() -> None:
+    store: Final = _Store()
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = _ledger_exporter(client, store)
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", "x" * 5000), None, None, None)
+            assert (store.uploads.empty(), exporter.buffered_events) == (True, 0)
+            exporter.ledger_committed((_committed(),))
+            await asyncio.wait_for(lens.arrived.wait(), timeout=5)
+        finally:
+            _settle_pending(store)
+            await exporter.aclose()
+    key, body = store.uploads.get_nowait()
+    row: Final = lens.drained()[0]
+    reference: Final = StoredReference.model_validate(_reference(row))
+    callback_owner: Final = Owner(team_id="team-a", api_key="hash-a", request_id="request-a")
+    assert verified_stored(_KEY, _CANONICAL, reference) is not None
+    assert verified_stored(_KEY, callback_owner, reference) is None
+    assert reference.sha256 == hashlib.sha256(body.encode()).hexdigest() and key == reference.object_key
+    assert (row["team_id"], row["api_key"], row["spend"], row["total_tokens"]) == (
+        _CANONICAL.team_id,
+        _CANONICAL.api_key,
+        0.75,
+        5,
+    )
+    assert (row["messages"], row["response"]) == ("", "")
+
+
+@pytest.mark.asyncio
+async def test_an_uncommitted_ledger_record_is_never_uploaded_or_exported() -> None:
+    store: Final = _Store()
+    async with httpx.AsyncClient(base_url="http://lens") as client:
+        exporter: Final = _ledger_exporter(client, store)
+        try:
+            await exporter.async_log_success_event(_request("request-a", "x" * 5000), None, None, None)
+        finally:
+            await exporter.aclose()
+    assert store.uploads.empty()
+    assert (exporter.rows_written, exporter.rows_dropped, exporter.pending_content_bytes) == (0, 1, 0)
+
+
+@pytest.mark.asyncio
+async def test_without_a_ledger_commit_to_wait_for_content_is_stored_at_callback_time() -> None:
+    store: Final = _Store()
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = _ledger_exporter(client, store, key=None)
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", "x" * 5000), None, None, None)
+            await asyncio.wait_for(lens.arrived.wait(), timeout=5)
+        finally:
+            await exporter.aclose()
+    row: Final = lens.drained()[0]
+    reference: Final = StoredReference.model_validate(_reference(row))
+    assert verified_stored(_KEY, Owner(team_id="team-a", api_key="hash-a", request_id="request-a"), reference)
+    assert (row["spend"], store.uploads.qsize()) == (0.42, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_upload_after_commit_keeps_the_committed_cost() -> None:
+    store: Final = _Store(lambda: asyncio.ensure_future(_rejected()))
+    lens: Final = _Lens()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(lens.accept)) as client:
+        exporter: Final = _ledger_exporter(client, store)
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(_request("request-a", "x" * 5000), None, None, None)
+            exporter.ledger_committed((_committed(spend=1.25),))
+            await asyncio.wait_for(lens.arrived.wait(), timeout=5)
+        finally:
+            await exporter.aclose()
+    row: Final = lens.drained()[0]
+    assert _reference(row) == dict(signed_reference(_KEY, _CANONICAL, Unavailable.UPLOAD_FAILED))
+    assert (row["spend"], row["team_id"], store.uploads.qsize()) == (1.25, _CANONICAL.team_id, 1)

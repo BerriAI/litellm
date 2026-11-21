@@ -11,7 +11,7 @@ use bytes::Bytes;
 use futures_util::FutureExt;
 use litellm_auth_aws::{AwsAuthService, Credentials};
 use litellm_callbacks::{PayloadRef, RenderOptions, render_all};
-use litellm_s3::signed::{Reply, SendError, SignedRequest, send};
+use litellm_s3::signed::{Reply, SendError, SignedRequest, send, send_bounded};
 use reqwest::Method;
 
 use crate::{
@@ -373,6 +373,10 @@ impl Uploader {
     }
 
     pub async fn download(&self, key: &str) -> Option<Bytes> {
+        self.download_bounded(key, None).await
+    }
+
+    pub async fn download_bounded(&self, key: &str, max_bytes: Option<usize>) -> Option<Bytes> {
         let credentials = match self.credentials().await {
             Ok(credentials) => credentials,
             Err(error) => {
@@ -390,7 +394,7 @@ impl Uploader {
             return None;
         };
         let headers = [("x-amz-content-sha256".to_owned(), EMPTY_SHA256.to_owned())];
-        let reply = send(
+        let reply = send_bounded(
             &self.download_client,
             SignedRequest {
                 method: Method::GET,
@@ -402,6 +406,7 @@ impl Uploader {
                 time: (self.clock)(),
                 read_timeout: Some(self.settings.download_read_timeout),
             },
+            max_bytes,
         )
         .await;
         match reply {
