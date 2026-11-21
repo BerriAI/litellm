@@ -324,19 +324,54 @@ def test_speech_forwards_json_config_sent_in_extra_body(gradium_env: None):
         assert _sent_body(route)["only_audio"] is True
 
 
+@pytest.mark.parametrize("extra_body", ["oops", ["json_config"], 5])
+def test_speech_ignores_an_extra_body_that_is_not_an_object(gradium_env: None, extra_body: object):
+    with respx.mock:
+        route: Final = respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        litellm.speech(
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base=_API_BASE,
+            api_key=_API_KEY,
+            extra_body=extra_body,
+        )
+
+        assert "json_config" not in _sent_body(route)
+
+
+def test_speech_keeps_top_level_json_config_when_extra_body_sets_it_to_none(gradium_env: None):
+    with respx.mock:
+        route: Final = respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        litellm.speech(
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base=_API_BASE,
+            api_key=_API_KEY,
+            json_config={"padding_bonus": -1.0},
+            extra_body={"json_config": None},
+        )
+
+        assert _sent_body(route)["json_config"] == {"padding_bonus": -1.0}
+
+
 @pytest.mark.parametrize(
-    ("credentials", "error"),
+    ("credentials", "error", "status_code"),
     [
-        ({"api_base": _API_BASE}, litellm.AuthenticationError),
-        ({"api_key": _API_KEY}, litellm.APIConnectionError),
+        ({"api_base": _API_BASE}, litellm.AuthenticationError, 401),
+        ({"api_key": _API_KEY}, litellm.APIConnectionError, 500),
     ],
 )
 def test_speech_reports_missing_credentials_without_a_server_traceback(
-    gradium_env: None, credentials: dict[str, str], error: type[Exception]
+    gradium_env: None, credentials: dict[str, str], error: type[Exception], status_code: int
 ):
     with pytest.raises(error, match="Set `api_") as excinfo:
         litellm.speech(model="gradium/default", input="Bonjour", voice="alloy", **credentials)
 
+    assert getattr(excinfo.value, "status_code", None) == status_code
     assert "Traceback" not in str(excinfo.value)
 
 
@@ -369,14 +404,30 @@ async def test_aspeech_streams_gradium_audio_only_when_asked(
 ):
     produced: Final[list[bytes]] = []
     with respx.mock:
-        respx.post(_URL).mock(side_effect=lambda _: httpx.Response(200, stream=_RecordingAudioStream(produced)))
+        route: Final = respx.post(_URL).mock(
+            side_effect=lambda _: httpx.Response(200, stream=_RecordingAudioStream(produced))
+        )
 
         response: Final = await litellm.aspeech(
-            model="gradium/default", input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY, stream=stream
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base=_API_BASE,
+            api_key=_API_KEY,
+            stream=stream,
+            json_config={"padding_bonus": -1.0},
         )
 
         assert produced == read_before_caller
         assert b"".join([chunk async for chunk in await response.aiter_bytes()]) == _AUDIO
+        assert route.calls[-1].request.headers["x-api-key"] == _API_KEY
+        assert _sent_body(route) == {
+            "text": "Bonjour",
+            "voice_id": "YTpq7expH9539ERJ",
+            "output_format": "wav",
+            "only_audio": True,
+            "json_config": {"padding_bonus": -1.0},
+        }
 
 
 @pytest.mark.parametrize("voice", [None, " "])
@@ -447,15 +498,16 @@ def test_speech_tracks_cost_per_character(gradium_env: None, local_model_cost_ma
         assert response._hidden_params["response_cost"] == pytest.approx(100 * price_per_character)
 
 
-def test_speech_prices_the_beta_model_like_the_default_one(gradium_env: None, local_model_cost_map: None):
+@pytest.mark.parametrize("model", ["gradium/gradium-tts-beta", "gradium/gradium-tts-202602"])
+def test_speech_prices_other_gradium_models_like_the_default_one(
+    gradium_env: None, local_model_cost_map: None, model: str
+):
     with respx.mock:
         respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
 
-        response: Final = litellm.speech(
-            model="gradium/gradium-tts-beta", input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY
-        )
+        response: Final = litellm.speech(model=model, input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY)
 
-        price_per_character: Final = litellm.model_cost["gradium/gradium-tts-beta"]["input_cost_per_character"]
+        price_per_character: Final = litellm.model_cost[model]["input_cost_per_character"]
         assert price_per_character == litellm.model_cost["gradium/default"]["input_cost_per_character"]
         assert response._hidden_params["response_cost"] == pytest.approx(len("Bonjour") * price_per_character)
 
