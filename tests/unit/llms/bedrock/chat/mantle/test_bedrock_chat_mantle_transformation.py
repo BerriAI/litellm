@@ -266,9 +266,7 @@ def _json_tool_message(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize(
-    "model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5")
-)
+@pytest.mark.parametrize("model", ("bedrock_mantle/anthropic.claude-opus-5-5",))
 def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_tool(model: str) -> None:
     respond: Final = MagicMock(wraps=_json_tool_message)
 
@@ -379,7 +377,9 @@ def test_mantle_claude_answers_400_for_extra_body_messages_without_calling_mantl
     respond: Final = MagicMock(wraps=_text_message)
 
     with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages"):
-        litellm.completion(**_mantle_extra_body_kwargs(model, {"messages": [{"role": "user", "content": "x"}]}, respond))
+        litellm.completion(
+            **_mantle_extra_body_kwargs(model, {"messages": [{"role": "user", "content": "x"}]}, respond)
+        )
 
     assert respond.call_count == 0
 

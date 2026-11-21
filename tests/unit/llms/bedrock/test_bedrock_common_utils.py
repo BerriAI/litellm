@@ -13,6 +13,7 @@ from litellm.llms.bedrock.common_utils import (
     _bedrock_native_output_flag,
     _warn_deprecated_bedrock_native_output_model_info,
     bedrock_strict_tools_fallback,
+    bedrock_chat_uses_native_structured_output,
     bedrock_model_name_without_provider,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
@@ -2606,14 +2607,23 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
 
 
 @pytest.mark.parametrize(
-    ("model", "model_info", "expected"),
+    ("model", "model_info", "expected", "custom_llm_provider", "expected_native"),
     [
-        ("us.anthropic.claude-opus-4-8", None, True),
-        ("global.anthropic.claude-sonnet-5", None, True),
-        ("us-gov.anthropic.claude-opus-4-8", None, True),
-        ("us.anthropic.claude-opus-4-8", {"supports_native_structured_output": False}, False),
-        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
-        ("us.anthropic.claude-4-5", {"supports_bedrock_native_structured_output": True}, True),
+        ("us.anthropic.claude-opus-4-8", None, True, "bedrock", True),
+        ("global.anthropic.claude-sonnet-5", None, True, "bedrock", True),
+        ("us-gov.anthropic.claude-opus-4-8", None, True, "bedrock", True),
+        ("us.anthropic.claude-opus-4-8", {"supports_native_structured_output": False}, False, "bedrock", False),
+        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False, "bedrock", False),
+        ("us.anthropic.claude-4-5", {"supports_bedrock_native_structured_output": True}, True, "bedrock", True),
+        ("anthropic.claude-fable-5-2", None, None, "bedrock", True),
+        ("bedrock/mantle/anthropic.claude-opus-5-5", None, None, "bedrock", True),
+        (
+            "bedrock_mantle/us-gov-west-1/anthropic.claude-fable-5-1",
+            None,
+            None,
+            "bedrock_mantle",
+            True,
+        ),
     ],
     ids=[
         "default_model",
@@ -2622,6 +2632,9 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
         "deployment_opt_out",
         "deprecated_opt_out",
         "deprecated_opt_in_honored",
+        "fable-5-2-unsupported-forced-tool",
+        "mantle-opus-5-5-unsupported-forced-tool",
+        "gov-west-fable-5-1-unsupported-forced-tool",
     ],
 )
 def test_bedrock_native_output_uses_map_defaults_and_deployment_overrides(
@@ -2629,8 +2642,11 @@ def test_bedrock_native_output_uses_map_defaults_and_deployment_overrides(
     model: str,
     model_info: dict[str, object] | None,
     expected: bool | None,
+    custom_llm_provider: str,
+    expected_native: bool,
 ) -> None:
-    assert _bedrock_native_output_flag(model, "bedrock", model_info) is expected
+    assert _bedrock_native_output_flag(model, custom_llm_provider, model_info) is expected
+    assert bedrock_chat_uses_native_structured_output(model, custom_llm_provider, model_info) is expected_native
 
 
 @pytest.mark.parametrize(
