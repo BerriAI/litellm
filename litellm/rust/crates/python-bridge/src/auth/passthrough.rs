@@ -15,7 +15,7 @@ pub(crate) fn auth_route_matches_wildcard(route: &str, pattern: &str) -> bool {
 
 #[pyfunction]
 pub(crate) fn auth_route_matches_prefix(route: &str, allowed_route: &str) -> bool {
-    passthrough::matches_prefix(route, allowed_route)
+    passthrough::matches_key_route_prefix(route, allowed_route)
 }
 
 #[pyfunction]

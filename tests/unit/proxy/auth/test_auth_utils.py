@@ -1712,7 +1712,13 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
     )
 
 
+def test_get_model_from_request_resolves_v1_count_tokens_model_from_url() -> None:
+    assert get_model_from_request(request_data={}, route="/v1/models/provider/model:countTokens") == "provider/model"
+
+
 _URL_SELECTED_MODEL_ROUTES: Final = (
+    ("/v1/models/premium-model:generateContent", "premium-model"),
+    ("/v1/models/provider/premium-model:streamGenerateContent", "provider/premium-model"),
     ("/v1beta/models/premium-model:generateContent", "premium-model"),
     ("/models/premium-model:generateContent", "premium-model"),
     ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
@@ -1750,6 +1756,8 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
 @pytest.mark.parametrize(
     "route, path_params",
     [
+        ("/v1/models/premium-model:generateContent", {"model_name": "cheap-model"}),
+        ("/v1/models/premium-model:streamGenerateContent", {"model_name": "cheap-model"}),
         ("/v1beta/models/premium-model:generateContent", {"model_name": "cheap-model"}),
         ("/models/premium-model:streamGenerateContent", {"model_name": "cheap-model"}),
         ("/openai/deployments/premium-model/images/generations", {"model": "cheap-model"}),
@@ -1770,6 +1778,8 @@ def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_b
 @pytest.mark.parametrize(
     "route, settings, cli_model, expected",
     [
+        ("/v1/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/v1/models/url-model:streamGenerateContent", {}, "cli", "cli"),
         ("/v1beta/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
         ("/models/url-model:streamGenerateContent", {}, "cli", "cli"),
         ("/v1beta/models/url-model:generateContent", {"image_generation_model": "configured"}, None, "url-model"),

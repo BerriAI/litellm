@@ -362,6 +362,7 @@ async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytes
         ("/openai/deployments/openai/model/images/generations", "POST", True),
         ("/openai/deployments/openai/model/images/edits", "POST", True),
         ("/v1beta/models/gemini-model:generateContent", "POST", True),
+        ("/v1/models/provider/gemini-model:generateContent", "POST", True),
         ("/v1/realtime", "GET", True),
         ("/v1/realtime", "POST", False),
         ("/v1/realtime/translations", "GET", True),

@@ -233,6 +233,7 @@ dev = [
     "requests-mock==1.12.1",
     "responses==0.26.0",
     "respx==0.22.0",
+    "httpx-sse==0.4.3",
     "ruff==0.15.3",
     "types-requests==2.32.4.20260107",
     "types-setuptools==75.8.0.20250225",

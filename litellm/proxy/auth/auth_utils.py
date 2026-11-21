@@ -2883,7 +2883,11 @@ def get_model_from_request(
 _HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit"]
 _MODEL_REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 _HANDLER_MODEL_ROUTES: Final[tuple[tuple[re.Pattern[str], str, _HandlerModelKind], ...]] = (
-    (re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
+    (
+        re.compile(r"^(?:/v1beta|/v1)?/models/(.+):(?:generateContent|streamGenerateContent)$"),
+        "model_name",
+        "completion",
+    ),
     (re.compile(r"^/openai/deployments/(.+)/images/generations$"), "model", "image_generation"),
     (re.compile(r"^/openai/deployments/(.+)/images/edits$"), "model", "image_edit"),
 )
@@ -2925,7 +2929,7 @@ def _model_from_route_path(route: str) -> str | None:
         vertex_model: Final = re.search(r"/models/([^:]+)", route)
         return vertex_model.group(1) if vertex_model else None
     google_model: Final = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route) or re.search(
-        r"^/models/([^:]+):", route
+        r"^(?:/v1)?/models/([^:]+):", route
     )
     return google_model.group(1) if google_model else None
 
