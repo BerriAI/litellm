@@ -27,9 +27,9 @@ from litellm.redis.stores.spend_counters import (
 )
 from litellm.redis.store_settings import RedisStoreSettings
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters, SpendRead
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
-from .spend_counters_double import FakeSettlement, FakeSpendCounters
+from .spend_counters_double import FakeSpendCounters
 
 _KEYS: Final = (
     (
@@ -47,6 +47,12 @@ _KEYS: Final = (
     (project_counter("proj-1"), "spend:project:proj-1"),
     (model_access_group_counter("gpt-group"), "spend:model_access_group:gpt-group"),
     (shadow_eval_counter("job-7"), "spend:shadow_eval:job-7"),
+    ("spend:customer_org:tenant:lifetime", "spend:customer_org:tenant:lifetime"),
+    (
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+    ),
+    ("spend:customer_member:user@example.com:lifetime", "spend:customer_member:user@example.com:lifetime"),
     (committed_counter(key_counter("88dc28d0")), "spend:committed:key:88dc28d0"),
     (committed_counter(team_counter("team-a")), "spend:committed:team:team-a"),
     (committed_counter(user_counter("user@example.com")), "spend:committed:user:user@example.com"),
@@ -169,7 +175,7 @@ async def test_post_call_increments_go_on_the_requests_native_post_call_batch_un
     targets: Final[list[str | None]] = []
 
     class Recording(FakeSpendCounters):
-        def increment_many_post_call(self, request: object, increments: object) -> FakeSettlement | None:
+        def increment_many_post_call(self, request: object, increments: object) -> bool:
             targets.append(current_service_target())
             return super().increment_many_post_call(request, increments)  # pyright: ignore[reportArgumentType]  # recorded as given
 
@@ -181,8 +187,8 @@ async def test_post_call_increments_go_on_the_requests_native_post_call_batch_un
         inside: Final = store.increment_many_post_call((("spend:key:k", 1.0),))
         empty: Final = store.increment_many_post_call(())
 
-    assert (outside, empty) == (None, None)
-    assert spend.post_call == [(natives.built[0], (("spend:key:k", 1.0),), inside)]
+    assert (outside, inside, empty) == (False, True, False)
+    assert spend.post_call == [(natives.built[0], (("spend:key:k", 1.0),))]
     assert targets == [SPEND_COUNTERS_TARGET]
 
 

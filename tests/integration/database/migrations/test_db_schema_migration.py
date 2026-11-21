@@ -23,9 +23,9 @@ def test_schema_migration_in_sync():
     """
     db_url = os.environ["DATABASE_URL"]
     source_migrations_dir = Path(
-        "./litellm-proxy-extras/litellm_proxy_extras/migrations"
+        "./litellm/proxy-extras/litellm_proxy_extras/migrations"
     )
-    source_schema_path = Path("./schema.prisma")
+    source_schema_path = Path("./litellm/schema.prisma")
 
     temp_base = Path(tempfile.mkdtemp(prefix="litellm_schema_migration_"))
     schema_path = temp_base / "schema.prisma"
@@ -37,7 +37,7 @@ def test_schema_migration_in_sync():
 
         if not any(migrations_dir.iterdir()):
             pytest.fail(
-                "No existing migrations found. Run `python litellm/ci_cd/baseline_db_migration.py`."
+                "No existing migrations found. Restore the committed SQL migration history before retrying."
             )
 
         subprocess.run(
@@ -67,7 +67,7 @@ def test_schema_migration_in_sync():
             if drift.strip():
                 pytest.fail(
                     "Schema changes detected that no migration captures. Run "
-                    "`python litellm/ci_cd/run_migration.py <migration_name>`.\n\n"
+                    "`python litellm/scripts/ci_cd/run_migration.py <migration_name>`.\n\n"
                     + drift
                 )
         else:

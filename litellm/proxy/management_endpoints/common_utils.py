@@ -2,7 +2,7 @@ import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Final, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -536,7 +536,7 @@ def set_object_metadata_field(
         "UpdateProjectRequest",
     ],
     field_name: str,
-    value: Any,
+    value: object,
 ) -> None:
     """
     Helper function to set metadata fields that require premium user checks
@@ -656,6 +656,8 @@ async def upsert_budget_and_membership(
     A patch whose every field already matches the shared row changes nothing and
     is a no-op rather than a clone.
     """
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
     ignore_default_model_budget_clear: Final = (
         existing_budget_id is not None
         and existing_budget_id == team_default_budget_id
@@ -694,7 +696,10 @@ async def upsert_budget_and_membership(
 
     if existing_budget_id is not None and not is_shared_default:
         existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
+        merged: Final = (
+            _BUDGET_COLUMNS.validate_python(existing_budget.model_dump()) if existing_budget is not None else {}
+        )
+        reject_budget_windows(merged)
         merged.update(write_data)
         if not _has_meaningful_budget_limit(merged):
             await _disconnect()
@@ -713,6 +718,7 @@ async def upsert_budget_and_membership(
         if source_row is not None
         else MappingProxyType({})
     )
+    reject_budget_windows(source)
     if is_shared_default and all(source.get(field) == value for field, value in effective_patch.items()):
         return
 

@@ -2,7 +2,7 @@ import datetime
 import json
 import unittest
 from typing import List, Optional, Tuple
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import httpx
 import pytest
@@ -18,6 +18,22 @@ from litellm.types.utils import StandardCallbackDynamicParams
 @pytest.fixture(autouse=True)
 def setup_anthropic_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-some-key")
+
+
+def _anthropic_message_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-5-sonnet",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
 
 
 class TestCustomPromptManagement(CustomPromptManagement):
@@ -62,7 +78,7 @@ async def test_custom_prompt_management_with_prompt_id(monkeypatch):
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    with patch.object(client, "post", return_value=_anthropic_message_response()) as mock_post:
         await litellm.acompletion(
             model="anthropic/claude-3-5-sonnet",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -90,7 +106,7 @@ async def test_custom_prompt_management_with_prompt_id_and_prompt_variables():
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    with patch.object(client, "post", return_value=_anthropic_message_response()) as mock_post:
         await litellm.acompletion(
             model="anthropic/claude-3-5-sonnet",
             messages=[],
@@ -119,7 +135,7 @@ async def test_custom_prompt_management_without_prompt_id():
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    with patch.object(client, "post", return_value=_anthropic_message_response()) as mock_post:
         await litellm.acompletion(
             model="anthropic/claude-3-5-sonnet",
             messages=[{"role": "user", "content": "Hello, how are you?"}],

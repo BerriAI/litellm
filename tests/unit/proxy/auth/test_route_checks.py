@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_UserTable,
     LiteLLMRoutes,
@@ -235,6 +236,24 @@ def test_latest_release_info_read_open_to_non_admin_roles(role):  # test-quality
     )
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_reference_exchange_rates_read_open_to_non_admin_roles(role: str) -> None:  # test-quality-ok: allowed path returns None, not raising is the observable
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role),
+        _user_role=role,
+        route="/get/reference_exchange_rates",
+        request=MagicMock(spec=Request),
+        valid_token=UserAPIKeyAuth(user_id="test_user", user_role=role),
+        request_data={},
+    )
+
+
 def test_user_banner_update_rejected_for_non_admin():
     """Publishing the banner stays admin-only at the route layer."""
     user_obj = LiteLLM_UserTable(
@@ -382,6 +401,29 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(grou
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
         route=route,
         valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route,method",
+    [
+        ("/model/update", "POST"),
+        ("/model/123e4567-e89b-12d3-a456-426614174000/update", "PATCH"),
+        ("/management/v1/customer_organizations", "POST"),
+        ("/management/v1/customer_organizations/org-1/default_budgets/budget-1", "DELETE"),
+        ("/management/v1/customer_teams/team-1", "PATCH"),
+        ("/management/v1/customer_members/member-1", "GET"),
+    ],
+)
+def test_virtual_key_management_routes_allows_model_update(route: str, method: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["management_routes"])
+
+    result: Final = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request(method),
     )
 
     assert result is True
@@ -759,19 +801,20 @@ def test_virtual_key_management_routes_allows_spend_logs_v2():
     assert result is True
 
 
-def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
-    """AI API virtual keys should not gain spend-log access."""
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
+def test_route_restricted_virtual_key_still_reaches_its_own_spend_logs(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
-    valid_token = UserAPIKeyAuth(
-        user_id="test_user",
-        allowed_routes=["llm_api_routes"],
-    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token) is True
+    assert RouteChecks.key_allowed_routes_grant(route=route, valid_token=valid_token) is False
+
+
+@pytest.mark.parametrize("route", ["/spend/logs/ui", "/global/spend/logs", "/key/list"])
+def test_route_restricted_virtual_key_is_denied_other_spend_and_management_routes(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
     with pytest.raises(HTTPException) as exc_info:
-        RouteChecks.is_virtual_key_allowed_to_call_route(
-            route="/spend/logs/v2",
-            valid_token=valid_token,
-        )
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
 
     assert exc_info.value.status_code == 403
     assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
@@ -1458,15 +1501,6 @@ _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
 }
 
 
-def _jwt_handler_with_team_allowed_routes(team_allowed_routes: list[str]):
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-
-    jwt_handler: Final = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
-    return jwt_handler
-
-
 def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes: list[str]) -> None:
     with (
         patch(
@@ -1475,8 +1509,8 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
         ),
         patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
         patch(
-            "litellm.proxy.proxy_server.jwt_handler",
-            _jwt_handler_with_team_allowed_routes(team_allowed_routes),
+            "litellm.proxy.proxy_server.litellm_jwtauth",
+            LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
         ),
     ):
         RouteChecks.non_proxy_admin_allowed_routes_check(
@@ -1859,6 +1893,49 @@ def test_check_passthrough_route_access_empty_list():
     )
 
     assert result is False
+
+
+@pytest.mark.parametrize(
+    "key_routes",
+    [
+        pytest.param("/custom-endpoint", id="bare_string"),
+        pytest.param(["/custom-endpoint", None], id="null_entry_after_a_match"),
+        pytest.param(5, id="number"),
+        pytest.param(object(), id="unconvertible_object"),
+    ],
+)
+def test_a_malformed_key_list_grants_nothing_and_shadows_the_team_list(key_routes: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        metadata={"allowed_passthrough_routes": key_routes},
+        team_metadata={"allowed_passthrough_routes": ["/custom-endpoint"]},
+    )
+
+    assert (
+        RouteChecks.check_passthrough_route_access(route="/custom-endpoint/x", user_api_key_dict=valid_token) is False
+    )
+
+
+@pytest.mark.parametrize(
+    "key_routes",
+    [
+        pytest.param([], id="empty_list"),
+        pytest.param("", id="empty_string"),
+        pytest.param(0, id="zero"),
+        pytest.param(False, id="false"),
+        pytest.param({}, id="empty_dict"),
+    ],
+)
+def test_an_empty_key_list_falls_back_to_the_team_list(key_routes: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        metadata={"allowed_passthrough_routes": key_routes},
+        team_metadata={"allowed_passthrough_routes": ["/custom-endpoint"]},
+    )
+
+    assert (
+        RouteChecks.check_passthrough_route_access(route="/custom-endpoint/x", user_api_key_dict=valid_token) is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -2305,7 +2382,7 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
 # layer, even though the underlying handlers already gate on PROXY_ADMIN_VIEW_ONLY.
 #
 # Each route below corresponds to a network call made by the Logs page
-# (ui/litellm-dashboard/src/components/logs/) — see the comment on each.
+# (litellm/ui/litellm-dashboard/src/components/logs/) — see the comment on each.
 ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     # Main paginated log list — uiSpendLogsCall in request/useLogFilterLogic.ts & index.tsx
     "/spend/logs/ui",
@@ -2750,6 +2827,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
             "..",
             "..",
             "..",
+            "litellm",
             "enterprise",
             "litellm_enterprise",
             "proxy",
@@ -4501,7 +4579,7 @@ def test_team_service_account_key_allowed_key_management_routes(route):
     assert result is None
 
 
-@pytest.mark.parametrize("route", ["/team/new", "/spend/logs", "/key/delete", "/key/regenerate"])
+@pytest.mark.parametrize("route", ["/team/new", "/spend/logs/ui", "/key/delete", "/key/regenerate"])
 def test_team_service_account_key_rejected_outside_generate_and_update(route):
     """The service account carve-out covers only /key/generate and /key/update; other
     key-management routes lack team scoping for a userless caller and stay denied."""
@@ -4682,6 +4760,71 @@ def test_denied_passthrough_routes_win_over_allow(
 
     assert exc_info.value.status_code == 403
     assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "denied",
+    [
+        pytest.param(["/other", None], id="null_entry"),
+        pytest.param("/other", id="bare_string"),
+        pytest.param(5, id="number"),
+    ],
+)
+def test_a_malformed_deny_list_denies_every_route_instead_of_failing(denied: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"]},
+        team_metadata={"denied_passthrough_routes": denied},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route="/svc/public", valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert "Matched `(not a list of routes)` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "denied",
+    [
+        pytest.param([], id="empty_list"),
+        pytest.param("", id="empty_string"),
+        pytest.param(0, id="zero"),
+        pytest.param(False, id="false"),
+        pytest.param({}, id="empty_dict"),
+    ],
+)
+def test_an_empty_deny_list_denies_nothing(denied: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"]},
+        team_metadata={"denied_passthrough_routes": denied},
+    )
+
+    assert (
+        RouteChecks.matching_denied_passthrough_route(
+            route="/svc/public", metadata_sources=(valid_token.metadata, valid_token.team_metadata)
+        )
+        is None
+    )
+    _check_route_with_registered_routes(route="/svc/public", valid_token=valid_token)
+
+
+@pytest.mark.parametrize(
+    ("team_allowed_routes", "expected"),
+    [(["/openai/*"], True), (["/openai/*", None], False), ("/openai/*", False)],
+    ids=["list", "null_entry", "bare_string"],
+)
+def test_jwt_team_routes_grant_only_from_a_list_of_routes(team_allowed_routes: object, expected: bool) -> None:
+    assert (
+        RouteChecks.jwt_team_routes_grant_pass_through(
+            route="/openai/x",
+            team_allowed_routes=team_allowed_routes,  # pyright: ignore[reportArgumentType]  # malformed on purpose
+        )
+        is expected
+    )
 
 
 @pytest.mark.parametrize(

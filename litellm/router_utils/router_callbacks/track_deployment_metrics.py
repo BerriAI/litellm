@@ -51,6 +51,10 @@ async def count_before_callbacks(
         raise
 
 
+def deployment_successes_key(deployment_id: str) -> str:
+    return f"{deployment_id}:successes"
+
+
 @renamed_router_param("litellm_router_instance")
 def increment_deployment_successes_for_current_minute(
     ctx: "RoutingContext",
@@ -59,7 +63,7 @@ def increment_deployment_successes_for_current_minute(
     """
     In-Memory: Increments the number of successes for the current minute for a deployment_id
     """
-    key: Final = f"{deployment_id}:successes"
+    key: Final = deployment_successes_key(deployment_id)
     ctx.health().store.increment_cache(
         local_only=True,
         key=key,
@@ -96,7 +100,7 @@ def get_deployment_successes_for_current_minute(
 
     Returns 0 if no value found
     """
-    key: Final = f"{deployment_id}:successes"
+    key: Final = deployment_successes_key(deployment_id)
     return (
         ctx.health().store.get_cache(
             local_only=True,

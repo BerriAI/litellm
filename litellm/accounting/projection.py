@@ -1,6 +1,6 @@
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -14,11 +14,13 @@ from litellm.constants import (
     MODEL_INSIGHTS_TASK_TAG_PREFIX,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
+from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
-from litellm.proxy.db.model_usage_rollup import date_from_start_time
-from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.db.model_usage_rollup import date_from_start_time, utc_date_from_start_time
+from litellm.proxy.route_llm_request import spend_endpoint
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
+from litellm.proxy.spend_tracking.customer_cache_cost import recorded_customer_cache_cost
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
@@ -70,9 +72,32 @@ def _spend(table: str, key: tuple[tuple[str, str], ...], spend: float) -> Contri
     return Contribution(table, key, (("spend", spend),))
 
 
+_CUSTOMER_ID_KEYS: Final = ("customer_org_id", "customer_team_id", "customer_member_id")
+
+
+def _customer_ids(metadata: Mapping[str, object]) -> Mapping[str, str | None]:
+    """The customer hierarchy a request is charged to: the member the request named, else the key's attribution."""
+    entities: Final = _fields(metadata.get("accounting_entities"))
+    if isinstance(entities.get("customer_org_id"), str):
+        return {key: value if isinstance(value := entities.get(key), str) else None for key in _CUSTOMER_ID_KEYS}
+    serialized: Final = metadata.get(CUSTOMER_USAGE_METADATA_KEY)
+    if not isinstance(serialized, str):
+        return dict.fromkeys(_CUSTOMER_ID_KEYS)
+    try:
+        attribution: Final = CustomerUsageAttribution.model_validate_json(serialized)
+    except ValidationError:
+        return dict.fromkeys(_CUSTOMER_ID_KEYS)
+    return {
+        "customer_org_id": attribution.customer_org_id,
+        "customer_team_id": attribution.customer_team_id,
+        "customer_member_id": attribution.customer_member_id,
+    }
+
+
 def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:
     spend: Final = _number(row.get("spend"))
     entities: Final = _fields(metadata.get("accounting_entities"))
+    customer: Final = _customer_ids(metadata)
     identities: Final = (
         ("LiteLLM_VerificationToken", "token", entities.get("api_key")),
         ("LiteLLM_UserTable", "user_id", entities.get("user")),
@@ -80,6 +105,9 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         ("LiteLLM_TeamTable", "team_id", entities.get("team_id")),
         ("LiteLLM_OrganizationTable", "organization_id", entities.get("organization_id")),
         ("LiteLLM_EndUserTable", "user_id", entities.get("end_user")),
+        ("LiteLLM_CustomerOrganizationTable", "customer_org_id", customer["customer_org_id"]),
+        ("LiteLLM_CustomerTeamTable", "customer_team_id", customer["customer_team_id"]),
+        ("LiteLLM_CustomerMemberTable", "customer_member_id", customer["customer_member_id"]),
         ("LiteLLM_AgentsTable", "agent_id", entities.get("agent_id")),
         ("LiteLLM_ProjectTable", "project_id", entities.get("project_id")),
     )
@@ -91,8 +119,45 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
             if isinstance(identity, str)
         ),
         *(_spend("LiteLLM_TagTable", (("tag_name", tag),), spend) for tag in _tags(row) if tag),
-        *(_spend("LiteLLM_ModelAccessGroupBudgetTable", (("access_group_name", group),), spend) for group in groups),
+        *(
+            _spend(
+                "LiteLLM_ModelAccessGroupBudgetTable",
+                (("access_group_name", group),),
+                spend,
+            )
+            for group in groups
+        ),
         *_membership_contributions(entities, spend),
+        *_app_contributions(entities, customer, spend),
+    )
+
+
+def _app_contributions(
+    entities: Mapping[str, object],
+    customer: Mapping[str, str | None],
+    spend: float,
+) -> tuple[Contribution, ...]:
+    app_id: Final = entities.get("app_id")
+    if not isinstance(app_id, str) or not app_id:
+        return ()
+    return (
+        _spend("LiteLLM_AppTable", (("app_id", app_id),), spend),
+        *(
+            _spend(table, (("app_id", app_id), (column, identity)), spend)
+            for table, column, identity in (
+                (
+                    "LiteLLM_AppCustomerOrgTable",
+                    "customer_org_id",
+                    customer["customer_org_id"],
+                ),
+                (
+                    "LiteLLM_AppCustomerMemberTable",
+                    "customer_member_id",
+                    customer["customer_member_id"],
+                ),
+            )
+            if identity is not None
+        ),
     )
 
 
@@ -133,6 +198,8 @@ def _daily_counters(row: Mapping[str, object], metadata: Mapping[str, object]) -
         ("prompt_caching_savings_spend", _number(savings.get("prompt_caching"))),
         ("gateway_injected_caching_savings_spend", _number(savings.get("gateway_injected_caching"))),
         ("autorouter_savings_spend", 0.0 if internal else _number(savings.get("autorouter"))),
+        ("guardrail_spend", _number(metadata.get("accounting_guardrail_spend"))),
+        ("customer_margin_spend", _number(metadata.get("accounting_customer_margin_spend"))),
         ("total_response_time_ms", _number(duration) if timed else 0),
         ("timed_requests", int(timed)),
     )
@@ -147,7 +214,7 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     ):
         return ()
     counters: Final = _daily_counters(row, metadata)
-    endpoint: Final = ROUTE_ENDPOINT_MAPPING.get(_text(row.get("call_type")))
+    endpoint: Final = spend_endpoint(_text(row.get("call_type")), metadata)
     shared_key: Final = (
         ("date", date),
         ("api_key", _text(row.get("api_key"))),
@@ -158,23 +225,57 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     )
     # The legacy daily organization writer uses the charged org argument, not
     # SpendLogs' normalized empty-string identity for a request with no org.
-    daily_row: Final = {**row, "organization_id": _fields(metadata.get("accounting_entities")).get("organization_id")}
-    return tuple(_daily_rows(daily_row, shared_key, counters))
+    entities: Final = _fields(metadata.get("accounting_entities"))
+    customer: Final = _customer_ids(metadata)
+    daily_row: Final = {
+        **row,
+        "organization_id": entities.get("organization_id"),
+        "customer_org_id": customer["customer_org_id"],
+        **({"app_id": entities["app_id"]} if isinstance(entities.get("app_id"), str) else {}),
+        **{key: customer[key] or "" for key in ("customer_team_id", "customer_member_id")},
+    }
+    usage: Final = _fields(metadata.get("usage_object"))
+    cache_cost, priced_cache_tokens = recorded_customer_cache_cost(
+        metadata.get("cache_cost_breakdown"), extract_cache_read_tokens(usage), extract_cache_creation_tokens(usage)
+    )
+    return tuple(
+        _daily_rows(
+            daily_row, shared_key, counters, (("cache_cost", cache_cost), ("priced_cache_tokens", priced_cache_tokens))
+        )
+    )
 
 
 def _daily_rows(
     row: Mapping[str, object],
     shared_key: tuple[tuple[str, str], ...],
     counters: tuple[tuple[str, int | float], ...],
+    customer_counters: tuple[tuple[str, int | float], ...],
 ) -> Iterator[Contribution]:
     for entity, table in DAILY_SPEND_TABLES.items():
+        customer_date = _utc_date(row) if entity == "customer_member" else None
+        if entity == "customer_member" and customer_date is None:
+            continue
+        daily_key = tuple(
+            (column, customer_date if column == "date" and customer_date is not None else value)
+            for column, value in shared_key
+        )
+        model_group = (("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),)
         for identity in daily_spend_entity_ids(row, entity):
             yield Contribution(
                 table.name,
-                ((table.entity_id_column, _text(identity)), *shared_key),
-                counters,
                 (
-                    ("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),
+                    (table.entity_id_column, _text(identity)),
+                    *(
+                        (column, _text(row.get(column)))
+                        for column in table.parent_id_columns
+                        if column != "app_id" or row.get(column)
+                    ),
+                    *daily_key,
+                    *((("model_group", _text(row.get("model_group"))),) if table.hashed_identity else ()),
+                ),
+                (*counters, *customer_counters) if entity == "customer_member" else counters,
+                (
+                    *(() if table.hashed_identity else model_group),
                     *((("request_id", _text(row.get("request_id"))),) if table.carries_request_id else ()),
                 ),
             )
@@ -187,7 +288,11 @@ def _window_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
             "LiteLLM_BudgetWindowSpend",
             tuple((column, _text(window[column])) for column in ("entity_type", "entity_id", "window_duration")),
             (("spend", _number(window.get("spend", row.get("spend")))),),
-            (("window_start", _text(window["window_start"])), ("started_at", _text(row.get("startTime")))),
+            (
+                ("window_start", _text(window["window_start"])),
+                ("started_at", _text(row.get("startTime"))),
+                ("reset_at", _text(window.get("reset_at")) or None),
+            ),
         )
         for window in windows
     )
@@ -230,6 +335,8 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     model: Final = _text(row.get("model")) or "unknown"
     caller: Final = not origin
     success: Final = row.get("status") == "success"
+    duration: Final = row.get("request_duration_ms")
+    timed: Final = caller and success and isinstance(duration, int) and duration >= 0
     return (
         Contribution(
             "LiteLLM_DailyModelUsage",
@@ -247,6 +354,8 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
                 ("request_count", int(caller)),
                 ("successful_requests", int(caller and success)),
                 ("failed_requests", int(caller and not success)),
+                ("total_response_time_ms", _number(duration) if timed else 0),
+                ("timed_requests", int(timed)),
             ),
         ),
     )
@@ -254,18 +363,7 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
 
 def _utc_date(row: Mapping[str, object]) -> str | None:
     start: Final = row.get("startTime")
-    try:
-        parsed: Final = datetime.fromisoformat(start.replace("Z", "+00:00")) if isinstance(start, str) else start
-    except ValueError:
-        return None
-    if not isinstance(parsed, datetime):
-        return None
-    return (
-        (parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed)
-        .astimezone(timezone.utc)
-        .date()
-        .isoformat()
-    )
+    return utc_date_from_start_time(start) if isinstance(start, (datetime, str)) else None
 
 
 def _guardrail_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:

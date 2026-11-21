@@ -3,7 +3,7 @@ description: >-
   Cache the Cargo registry and target directory the root package's build needs,
   so only the first job on a given Cargo.lock compiles the bridge from scratch.
 
-  litellm builds through maturin, which compiles litellm-rust/crates/python-bridge
+  litellm builds through maturin, which compiles litellm/rust/crates/python-bridge
   in the dev profile for editable installs. `uv sync` therefore pays a full build
   in every job that installs the workspace. Nothing caught it, because the uv cache
   holds wheels uv downloads rather than wheels it builds, and a path dependency
@@ -31,8 +31,8 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          litellm-rust/target
-        key: ${{ runner.os }}-maturin-${{ inputs.profile }}-${{ hashFiles('litellm-rust/Cargo.lock') }}
+          litellm/rust/target
+        key: ${{ runner.os }}-maturin-${{ inputs.profile }}-${{ hashFiles('litellm/rust/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-maturin-${{ inputs.profile }}-
 
@@ -43,7 +43,7 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          litellm-rust/target
-        key: ${{ runner.os }}-maturin-${{ inputs.profile }}-${{ hashFiles('litellm-rust/Cargo.lock') }}
+          litellm/rust/target
+        key: ${{ runner.os }}-maturin-${{ inputs.profile }}-${{ hashFiles('litellm/rust/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-maturin-${{ inputs.profile }}-

@@ -1,14 +1,27 @@
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypeVar, cast
+from typing import Annotated, Final, TypeAlias, TypeVar, cast
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import (
+    AllowInfNan,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    JsonValue,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    ValidationError,
+)
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
@@ -45,7 +58,11 @@ from litellm.types.utils import (
 )
 
 _JsonDict: TypeAlias = dict[str, object]
-_JsonDictList: TypeAlias = list[_JsonDict]
+
+
+class _GenAICompletionRequest(TypedDict, extra_items=object):
+    model: ReadOnly[str]
+    messages: ReadOnly[list[AllMessageValues]]
 
 
 class _ToolCallAccumulator(TypedDict):
@@ -115,7 +132,22 @@ _RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
 _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "responseSchema", "response_schema")
 _TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
 _JSON_MIME_TYPE: Final = "application/json"
+_TEXT_MIME_TYPE: Final = "text/plain"
+_RESPONSE_FORMAT_CONFIG_KEYS: Final = frozenset({*_RESPONSE_MIME_TYPE_KEYS, *_RESPONSE_SCHEMA_KEYS})
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
+_COMPLETION_PARAM_CONFIG_KEYS: Final = (
+    ("temperature", ("temperature",)),
+    ("max_tokens", ("maxOutputTokens", "max_output_tokens")),
+    ("top_p", ("topP", "top_p")),
+    ("stop", ("stopSequences", "stop_sequences")),
+)
+_ADAPTER_SCALAR_CONFIG_KEYS: Final = frozenset(chain.from_iterable(keys for _, keys in _COMPLETION_PARAM_CONFIG_KEYS))
+_COMPLETION_PARAM_CONFIG_KEY_NAMES: Final = MappingProxyType(
+    {param: "/".join(keys) for param, keys in _COMPLETION_PARAM_CONFIG_KEYS}
+)
+_ADAPTER_DEFAULT_GENERATION_CONFIG: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"responseModalities": ["TEXT"], "response_modalities": ["TEXT"], "candidateCount": 1, "candidate_count": 1}
+)
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
 _Validated: Final = TypeVar("_Validated")
@@ -127,8 +159,77 @@ _GENAI_FUNCTION_CALL: Final = TypeAdapter(_GenAIRequestFunctionCall)
 _GenAIMessagePart: TypeAlias = ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionFileObject
 
 
+def adapter_untranslated_generation_config(config: Mapping[str, object]) -> tuple[str, ...]:
+    keeps_response_format: Final = _asks_for_plain_text(config) or _translate_response_format(config) is not None
+    return tuple(sorted(key for key, value in config.items() if not _adapter_honors(key, value, keeps_response_format)))
+
+
+def _adapter_honors(key: str, value: object, keeps_response_format: bool) -> bool:
+    if key in _RESPONSE_FORMAT_CONFIG_KEYS:
+        return keeps_response_format
+    return key in _ADAPTER_SCALAR_CONFIG_KEYS or (
+        key in _ADAPTER_DEFAULT_GENERATION_CONFIG and _ADAPTER_DEFAULT_GENERATION_CONFIG[key] == value
+    )
+
+
 def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object | None:
     return next((config[key] for key in keys if config.get(key) is not None), None)
+
+
+_INTEGER_STRING: Final = re.compile(r"[+-]?\d+")
+_NUMBER_STRING: Final = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def _google_int(value: object) -> object:
+    if isinstance(value, str) and _INTEGER_STRING.fullmatch(value):
+        return int(value)
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _google_float(value: object) -> object:
+    if isinstance(value, str) and _NUMBER_STRING.fullmatch(value):
+        return float(value)
+    return value
+
+
+_GoogleInt: TypeAlias = Annotated[StrictInt, BeforeValidator(_google_int)]
+_GoogleFloat: TypeAlias = Annotated[StrictFloat, AllowInfNan(False), BeforeValidator(_google_float)]
+
+
+class _CompletionConfigParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    temperature: _GoogleFloat | None = None
+    max_tokens: _GoogleInt | None = None
+    top_p: _GoogleFloat | None = None
+    stop: StrictStr | Sequence[StrictStr] | None = None
+
+
+def _completion_params(config: Mapping[str, object], model: str, llm_provider: str | None) -> Mapping[str, JsonValue]:
+    sent: Final = MappingProxyType(
+        {
+            param: value
+            for param, keys in _COMPLETION_PARAM_CONFIG_KEYS
+            if (value := _first_present(config, keys)) is not None
+        }
+    )
+    try:
+        return MappingProxyType(_CompletionConfigParams.model_validate(sent).model_dump(exclude_none=True))
+    except ValidationError as error:
+        issue: Final = error.errors()[0]
+        raise BadRequestError(
+            message=f"generationConfig {_COMPLETION_PARAM_CONFIG_KEY_NAMES[str(issue['loc'][0])]}: {issue['msg']}",
+            model=model,
+            llm_provider=llm_provider,
+        ) from error
+
+
+def _asks_for_plain_text(config: Mapping[str, object]) -> bool:
+    return _first_present(config, _RESPONSE_SCHEMA_KEYS) is None and _first_present(
+        config, _RESPONSE_MIME_TYPE_KEYS
+    ) in (None, _TEXT_MIME_TYPE)
 
 
 def _validated(adapter: TypeAdapter[_Validated], value: object) -> _Validated | None:
@@ -281,6 +382,10 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
         if calls
         else ChatCompletionAssistantMessage(role="assistant", content=assistant_content),
     )
+
+
+def _is_single_content(contents: object) -> bool:
+    return isinstance(contents, dict)
 
 
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
@@ -456,11 +561,11 @@ class GoogleGenAIAdapter:
     def translate_generate_content_to_completion(
         self,
         model: str,
-        contents: _JsonDictList | _JsonDict,
+        contents: object,
         config: Mapping[str, object] | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
         **kwargs,
-    ) -> dict[str, Any]:
+    ) -> _GenAICompletionRequest:
         """
         Transform generate_content request to litellm completion format
 
@@ -480,19 +585,18 @@ class GoogleGenAIAdapter:
         tool_config: Final = kwargs.get("toolConfig") or kwargs.get("tool_config")
 
         # Normalize contents to list format
-        if isinstance(contents, dict):
-            contents_list = [contents]
-        else:
-            contents_list = contents
+        contents_list: Final = [contents] if _is_single_content(contents) else contents
 
         # Transform contents to OpenAI messages format
         messages: Final = self._transform_contents_to_messages(contents_list, system_instruction=system_instruction)
 
         # Create base request as dict (which is compatible with ChatCompletionRequest)
-        completion_request: Final[_JsonDict] = {
-            "model": model,
-            "messages": messages,
-        }
+        config_fields: Final = _validated(_CONFIG_FIELDS, config) or {}
+        completion_request: Final = _GenAICompletionRequest(
+            model=model,
+            messages=messages,
+            **_completion_params(config_fields, model, litellm_params.custom_llm_provider if litellm_params else None),
+        )
 
         #########################################################
         # Supported OpenAI chat completion params
@@ -506,20 +610,6 @@ class GoogleGenAIAdapter:
         # - tool_choice
         #########################################################
 
-        # Add config parameters if provided
-        if config:
-            # Map common Google GenAI config parameters to OpenAI equivalents
-            if "temperature" in config:
-                completion_request["temperature"] = config["temperature"]
-            if "maxOutputTokens" in config:
-                completion_request["max_tokens"] = config["maxOutputTokens"]
-            if "topP" in config:
-                completion_request["top_p"] = config["topP"]
-            if "topK" in config:
-                # OpenAI doesn't have direct topK, but we can pass it as extra
-                pass
-            if "stopSequences" in config:
-                completion_request["stop"] = config["stopSequences"]
         response_format: Final = _translate_response_format(config)
         if response_format is not None and _deployment_supports_response_format(
             model, litellm_params.custom_llm_provider if litellm_params else None
@@ -545,7 +635,7 @@ class GoogleGenAIAdapter:
         #########################################################
         # forward any litellm specific params
         #########################################################
-        completion_request_dict = dict(completion_request)
+        completion_request_dict = completion_request.copy()
         if litellm_params:
             completion_request_dict = self._add_generic_litellm_params_to_request(
                 completion_request_dict=completion_request_dict,
@@ -556,9 +646,9 @@ class GoogleGenAIAdapter:
 
     def _add_generic_litellm_params_to_request(
         self,
-        completion_request_dict: _JsonDict,
+        completion_request_dict: _GenAICompletionRequest,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> _JsonDict:
+    ) -> _GenAICompletionRequest:
         """Add generic litellm params to request. e.g add api_base, api_key, api_version, etc.
 
         Args:
@@ -628,7 +718,7 @@ class GoogleGenAIAdapter:
 
     def _transform_contents_to_messages(
         self,
-        contents: Sequence[object],
+        contents: object,
         system_instruction: _GenAISystemInstruction | None = None,
     ) -> list[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
@@ -638,7 +728,10 @@ class GoogleGenAIAdapter:
             if system_parts and "text" in system_parts[0]
             else ()
         )
-        return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
+        return [
+            *system_messages,
+            *chain.from_iterable(_genai_content_messages(content) for content in iter_items(contents)),
+        ]
 
     def translate_completion_to_generate_content(
         self,
