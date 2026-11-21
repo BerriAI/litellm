@@ -37,7 +37,6 @@ def test_summaries_carry_only_the_canonical_accounting_projection() -> None:
         **dict.fromkeys(ACCOUNTING_FIELDS),
         "request_id": "request-a",
         "spend": 0.5,
-        "model": "billed-model",
         "delivery_id": "delivery-a",
     }
     assert committed_summary("delivery-b", {"spend": 1.0}, "logged-request")["request_id"] == "logged-request"

@@ -376,12 +376,13 @@ class LensExporter(CustomLogger):
             )
             if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
                 return
+            key: Final = self._ledger_request_id(kwargs, response_obj)
+            if key is None:
+                return
             bare: Final = spend_log_row_from_payload(payload, kwargs)
             messages: Final = raw.get("messages") if _is_mapping(raw) else None
             response: Final = raw.get("response") if _is_mapping(raw) else None
-            key: Final = self._ledger_request_id(kwargs, response_obj)
-            if key is not None:
-                self._log_ledger_backed(key, bare, messages, response)
+            self._log_ledger_backed(key, bare, messages, response)
         except ValidationError as error:
             self._drop(1)
             fields: Final = tuple(
