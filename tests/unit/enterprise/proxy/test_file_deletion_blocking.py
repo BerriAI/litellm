@@ -10,12 +10,16 @@ This ensures cost tracking is not disrupted by premature file deletion.
 
 import base64
 import json
+from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
+
+NOW: Final = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
 
 def _make_unified_file_id(file_id: str = "file-abc123") -> str:
@@ -50,7 +54,7 @@ def _make_batch_db_record(
     mock_batch.status = status
     mock_batch.file_object = json.dumps(file_object)
     mock_batch.created_by = created_by
-    mock_batch.created_at = 1700000000
+    mock_batch.created_at = NOW
     return mock_batch
 
 
@@ -105,6 +109,7 @@ def _make_managed_files_instance_with_batches(
     instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=mock_cache,
         prisma_client=mock_prisma,
+        clock=lambda: NOW,
     )
     return instance
 

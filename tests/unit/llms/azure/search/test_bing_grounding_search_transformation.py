@@ -1,5 +1,6 @@
 import json, litellm
 from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -108,6 +109,27 @@ def test_validate_environment_entra_minter_failure_names_the_options():
     assert "BING_GROUNDING_TOKEN" in message
     assert "https://ai.azure.com/.default" in message
     assert "no az login" in message
+
+
+def test_default_entra_minter_reuses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
+    from litellm.llms.azure import common_utils
+    from litellm.llms.azure.search.transformation import _default_entra_token_minter
+
+    provider_module: Final = importlib.import_module("litellm.secret_managers.get_azure_ad_token_provider")
+    provider_factory: Final = Mock(side_effect=lambda **_: lambda: "entra-token")
+    common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+    monkeypatch.setattr(common_utils, "get_azure_ad_token_provider", provider_factory)
+    monkeypatch.setattr(provider_module, "get_azure_ad_token_provider", provider_factory)
+
+    try:
+        first: Final = _default_entra_token_minter()
+        second: Final = _default_entra_token_minter()
+        assert first == second == "entra-token"
+        assert provider_factory.call_count == 1
+    finally:
+        common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
 
 
 def test_validate_environment_does_not_mutate_and_is_idempotent():
@@ -444,6 +466,12 @@ def _mock_response():
     response.content = json.dumps(MOCK_BING_GROUNDING_RESPONSE).encode()
     return response
 
+async def _search_what_is_litellm(is_async: bool) -> object:
+    if is_async:
+        return await litellm.asearch(query="what is litellm", search_provider="bing_grounding")
+    return litellm.search(query="what is litellm", search_provider="bing_grounding")
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate")
 class TestBingGroundingSearchTransformation:
     """
@@ -523,6 +551,36 @@ class TestBingGroundingSearchTransformation:
                 },
             }
         ]
+
+    @pytest.mark.parametrize("is_async", (False, True))
+    async def test_entra_rejecting_the_default_credential_answers_401_with_only_the_aadsts_reason(
+        self, monkeypatch: pytest.MonkeyPatch, is_async: bool
+    ):
+        from azure.core.exceptions import ClientAuthenticationError
+
+        from litellm.llms.azure import common_utils
+
+        app_client_id: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+        credential = Mock(spec=["get_token"])
+        credential.get_token.side_effect = ClientAuthenticationError(
+            message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being "
+            f"sent in the request is the client secret value, for a secret added to app '{app_client_id}'."
+        )
+        monkeypatch.delenv("BING_GROUNDING_TOKEN")
+        for name in ("AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_CLIENT_SECRET", "AZURE_USERNAME", "AZURE_PASSWORD"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr("azure.identity.DefaultAzureCredential", Mock(return_value=credential))
+        common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+
+        try:
+            with pytest.raises(litellm.AuthenticationError) as excinfo:
+                await _search_what_is_litellm(is_async)
+        finally:
+            common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+
+        assert excinfo.value.status_code == 401
+        assert "AADSTS7000215" in str(excinfo.value)
+        assert app_client_id not in str(excinfo.value)
 
     @pytest.mark.asyncio
     async def test_bing_grounding_asearch(self):

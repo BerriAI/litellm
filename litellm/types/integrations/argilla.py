@@ -1,10 +1,10 @@
-from typing import Any, Final
+from typing import Final
 
 from typing_extensions import TypedDict
 
 
 class ArgillaItem(TypedDict):
-    fields: dict[str, Any]
+    fields: dict[str, object]
 
 
 class ArgillaPayload(TypedDict):

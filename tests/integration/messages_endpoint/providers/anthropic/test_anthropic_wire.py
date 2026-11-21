@@ -10,6 +10,7 @@ from anthropic.types import Message
 from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
+from integration._support.safeguards_rig import DANGEROUS_TOOL_USE_BETA
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -280,7 +281,9 @@ def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(gateway: Ga
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages", request.target
         assert request.headers["x-api-key"] == "synthetic-anthropic-key", request.headers
-        assert sorted(request.headers["anthropic-beta"].split(",")) == sorted(beta.split(",")), request.headers
+        assert sorted(request.headers["anthropic-beta"].split(",")) == sorted(
+            (*beta.split(","), DANGEROUS_TOOL_USE_BETA)
+        ), request.headers
         expected_body: Final = {
             "model": "claude-sonnet-4-6",
             "max_tokens": 32,

@@ -1,7 +1,6 @@
 from typing import Final
 
 import pytest
-
 from pydantic import ValidationError
 
 from litellm.proxy.telemetry.settings import EnvPolicy, TelemetrySettings, describe_errors, env_policy, load_settings

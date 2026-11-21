@@ -15,7 +15,7 @@ import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import ConfigDict, TypeAdapter
 
@@ -31,6 +31,7 @@ from litellm.harness.types import (
     ToolCall,
     ToolResult,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
     HarnessSessionSetup,
@@ -77,13 +78,13 @@ class CodexStreamState:
     started: set[str] = field(default_factory=set)  # mutable-ok: parser records announced tool items
 
 
-def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, Mapping[str, object], bool]:
+def _tool_input(item: Mapping[str, object]) -> tuple[str, str, Mapping[str, object], bool]:
     """(normalized name, native name, input, builtin) for a tool-like item."""
     item_type = item.get("type")
     if item_type == "command_execution":
         return "bash", "command_execution", MappingProxyType({"command": item.get("command", "")}), True
     if item_type == "file_change":
-        changes: Final = list(item.get("changes") or ())  # mutable-ok: JSON array, as codex reports it
+        changes: Final = list(iter_items(item.get("changes") or ()))  # mutable-ok: JSON array, as codex reports it
         return "edit", "apply_patch", MappingProxyType({"changes": changes}), True
     if item_type == "web_search":
         return "web_search", "web_search", MappingProxyType({"query": item.get("query", "")}), True

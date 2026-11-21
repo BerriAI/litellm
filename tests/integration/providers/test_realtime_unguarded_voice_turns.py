@@ -54,7 +54,7 @@ from tests.integration._support.process import (
 from tests.integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 WORKERS: Final = 2
 BURST: Final = 20
@@ -708,6 +708,42 @@ def test_vertex_live_voice_turn_sends_the_upstream_only_the_setup_and_the_audio(
         audio: Final = object_value(object_value(sent[1]["realtimeInput"])["audio"])
         assert audio["data"] == PCM_200MS_24KHZ, audio
         _assert_billed(key, 1)
+
+
+def test_vertex_live_session_closed_after_barge_in_bills_the_interrupted_frames_usage(gateway: Gateway) -> None:
+    interrupted_turn: Final = RealtimeResponse(
+        content_type="application/x-realtime",
+        events=(
+            {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}},
+            {
+                "serverContent": {"interrupted": True},
+                "usageMetadata": {"promptTokenCount": 30, "responseTokenCount": 12, "totalTokenCount": 42},
+            },
+        ),
+    )
+    with gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, interrupted_turn)
+        key: Final = scenario.key()
+        model: Final = _live_deployment(gateway, scenario, handle.scenario_id)
+        session: Final = _drive(
+            _gateway_url(gateway), f"model={model}", key, (Step((APPEND,), "response.output_item.done"),)
+        )
+        item_done: Final = next(event for event in session.events if event["type"] == "response.output_item.done")
+        assert object_value(item_done["item"])["status"] == "incomplete", session
+        assert RESPONSE_DONE not in session.types, session
+        usage_sql: Final = (
+            "SELECT call_type, prompt_tokens, completion_tokens, total_tokens "
+            'FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
+        )
+        rows: Final = eventually(
+            lambda: read_rows(usage_sql, (sha256(key.encode()).hexdigest(),)),
+            lambda found: len(found) == 1,
+            seconds=70,
+        )
+        billed: Final = [
+            (row["call_type"], row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) for row in rows
+        ]
+        assert billed == [("_arealtime", 30, 12, 42)], rows
 
 
 @pytest.mark.parametrize("fields", TRANSCRIPT_FIELDS)

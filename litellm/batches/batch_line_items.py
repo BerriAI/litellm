@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import accumulate, chain, count
-from typing import Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +22,9 @@ from litellm.types.utils import (
     StandardBatchLineItemsPayload,
     StandardBatchLineItemUsage,
 )
+
+if TYPE_CHECKING:
+    from litellm.integrations.s3_v2 import S3Logger
 
 BatchFileProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"]
 
@@ -38,6 +41,7 @@ class BatchLineItemSource:
     cost_provider: BatchFileProvider
     model_info: ModelInfo | None
     metadata: StandardBatchLineItemMetadata
+    vertex_location: str | None = None
 
 
 def line_item_metadata(attribution: Mapping[str, object]) -> StandardBatchLineItemMetadata:
@@ -140,7 +144,11 @@ def _line_item(
     source: BatchLineItemSource, custom_id: str | None, request: Mapping[str, object] | None, entry: dict[str, object]
 ) -> StandardBatchLineItem:
     priced: Final = batch_cost_and_usage(
-        (entry,), source.cost_provider, model_name=source.model, model_info=source.model_info
+        (entry,),
+        source.cost_provider,
+        model_name=source.model,
+        model_info=source.model_info,
+        vertex_location=source.vertex_location,
     )
     succeeded: Final = priced.successful_requests > 0
     return StandardBatchLineItem(
@@ -233,9 +241,11 @@ async def _deliver(
         )
 
 
-def _resolve_logger(callback: litellm.CALLBACK_TYPES) -> CustomLogger | None:
+def _resolve_logger(callback: "litellm.CALLBACK_TYPES | S3Logger") -> "CustomLogger | S3Logger | None":
+    from litellm.integrations.s3_v2 import S3Logger
+
     match callback:
-        case CustomLogger():
+        case CustomLogger() | S3Logger():
             return callback
         case "s3_v2" | "gcs_bucket":
             return init_custom_logger_compatible_class(callback, internal_usage_cache=None, llm_router=None)
@@ -243,7 +253,7 @@ def _resolve_logger(callback: litellm.CALLBACK_TYPES) -> CustomLogger | None:
             return None
 
 
-def _logger_turned_off_message_logging(logger: CustomLogger) -> bool:
+def _logger_turned_off_message_logging(logger: object) -> bool:
     return (
         getattr(logger, "turn_off_message_logging", False) is True
         or getattr(logger, "message_logging", True) is not True
