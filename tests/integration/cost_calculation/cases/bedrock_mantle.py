@@ -575,6 +575,19 @@ def _mantle_gpt_usage(
     }
 
 
+_MANTLE_GPT_INPUT_TRANSFORMATIONS_MODELS: Final = frozenset({"openai.gpt-6.2-sol", "openai.gpt-6.2-astra"})
+
+
+def _mantle_gpt_extra_body(provider_model: str) -> dict[str, JsonValue]:
+    return {"input_transformations": []} if provider_model in _MANTLE_GPT_INPUT_TRANSFORMATIONS_MODELS else {}
+
+
+def _mantle_gpt_stream_instructions(provider_model: str) -> str:
+    if provider_model in _MANTLE_GPT_INPUT_TRANSFORMATIONS_MODELS:
+        return '"input_transformations": [], "instructions": null'
+    return '"instructions": null'
+
+
 def _mantle_gpt_json_case(
     base: CostTrackingTestCase,
     provider_model: str,
@@ -586,7 +599,9 @@ def _mantle_gpt_json_case(
     case: Final = with_usage(base, f"bedrock_mantle-{provider_model}-{shape}", usage, expected)
     if not isinstance(case.response, JsonResponse):
         raise TypeError(f"{case.name}: expected a JSON response fixture")
-    response: Final = case.response.model_copy(update={"body": {**case.response.body, "model": provider_model}})
+    response: Final = case.response.model_copy(
+        update={"body": {**case.response.body, **_mantle_gpt_extra_body(provider_model), "model": provider_model}}
+    )
     return case.model_copy(
         update={"model": f"bedrock_mantle/{provider_model}", "request": dict(request), "response": response}
     )
@@ -601,7 +616,9 @@ def _mantle_gpt_stream_case(
     old_usage: Final = json.dumps(_mantle_gpt_usage(1840, 412, 0))
     new_usage: Final = json.dumps(dict(usage))
     frames: Final = tuple(
-        frame.replace("openai.gpt-6-sol", provider_model).replace(old_usage, new_usage)
+        frame.replace("openai.gpt-6-sol", provider_model)
+        .replace(old_usage, new_usage)
+        .replace('"instructions": null', _mantle_gpt_stream_instructions(provider_model))
         for frame in base.response.frames
     )
     response: Final = base.response.model_copy(update={"frames": frames})
@@ -828,6 +845,42 @@ _MANTLE_GPT_56_TERRA_CASES: Final = _mantle_gpt_cases(
     ExactExpected(spend=0.75062064, input_cost=0.7392, output_cost=0.01142064, prompt_tokens=300000, completion_tokens=412),
     ExactExpected(spend=0.84537376, input_cost=0.83776, output_cost=0.00761376, prompt_tokens=272000, completion_tokens=412),
 )
+_MANTLE_GPT_62_SOL_CASES: Final = _mantle_gpt_cases(
+    "openai.gpt-6.2-sol",
+    0,
+    ExactExpected(spend=0.0010857, input_cost=0.0000297, output_cost=0.001056, prompt_tokens=9, completion_tokens=64),
+    _mantle_gpt_usage(9, 128, 0),
+    ExactExpected(spend=0.0021417, input_cost=0.0000297, output_cost=0.002112, prompt_tokens=9, completion_tokens=128),
+    0,
+    ExactExpected(spend=0.00078903, input_cost=0.00052503, output_cost=0.000264, prompt_tokens=3144, completion_tokens=16),
+    ExactExpected(spend=1.990197, input_cost=1.98, output_cost=0.010197, prompt_tokens=300000, completion_tokens=412),
+    ExactExpected(spend=0.736197, input_cost=0.726, output_cost=0.010197, prompt_tokens=300000, completion_tokens=412),
+    ExactExpected(spend=0.904398, input_cost=0.8976, output_cost=0.006798, prompt_tokens=272000, completion_tokens=412),
+)
+_MANTLE_GPT_62_ASTRA_CASES: Final = _mantle_gpt_cases(
+    "openai.gpt-6.2-astra",
+    10,
+    ExactExpected(spend=0.00463232, input_cost=0.00012672, output_cost=0.0045056, prompt_tokens=9, completion_tokens=64),
+    _mantle_gpt_usage(9, 128, 10),
+    ExactExpected(spend=0.00913792, input_cost=0.00012672, output_cost=0.0090112, prompt_tokens=9, completion_tokens=128),
+    0,
+    ExactExpected(spend=0.003366528, input_cost=0.002240128, output_cost=0.0011264, prompt_tokens=3144, completion_tokens=16),
+    ExactExpected(spend=8.4915072, input_cost=8.448, output_cost=0.0435072, prompt_tokens=300000, completion_tokens=412),
+    ExactExpected(spend=3.1411072, input_cost=3.0976, output_cost=0.0435072, prompt_tokens=300000, completion_tokens=412),
+    ExactExpected(spend=3.8587648, input_cost=3.82976, output_cost=0.0290048, prompt_tokens=272000, completion_tokens=412),
+)
+_MANTLE_GPT_61_TERRA_CASES: Final = _mantle_gpt_cases(
+    "openai.gpt-6.1-terra",
+    64,
+    ExactExpected(spend=0.00061523, input_cost=0.00001683, output_cost=0.0005984, prompt_tokens=9, completion_tokens=64),
+    _mantle_gpt_usage(9, 81, 47),
+    ExactExpected(spend=0.00077418, input_cost=0.00001683, output_cost=0.00075735, prompt_tokens=9, completion_tokens=81),
+    16,
+    ExactExpected(spend=0.000447117, input_cost=0.000297517, output_cost=0.0001496, prompt_tokens=3144, completion_tokens=16),
+    ExactExpected(spend=1.1277783, input_cost=1.122, output_cost=0.0057783, prompt_tokens=300000, completion_tokens=412),
+    ExactExpected(spend=0.4171783, input_cost=0.4114, output_cost=0.0057783, prompt_tokens=300000, completion_tokens=412),
+    ExactExpected(spend=0.5124922, input_cost=0.50864, output_cost=0.0038522, prompt_tokens=272000, completion_tokens=412),
+)
 
 _MANTLE_GPT_AUDIT3_CASES: Final = (
     *_mantle_gpt_audit3_cases(
@@ -903,6 +956,36 @@ _MANTLE_GPT_AUDIT3_CASES: Final = (
             completion_tokens=28,
             cache_creation_cost=0.00641025,
         ),
+    ),
+    *_mantle_gpt_audit3_cases(
+        "openai.gpt-6.2-sol",
+        46,
+        18,
+        0,
+        ExactExpected(spend=0.0004488, input_cost=0.0001518, output_cost=0.000297, prompt_tokens=46, completion_tokens=18),
+        38,
+        0,
+        ExactExpected(spend=0.007501725, input_cost=0.006874725, output_cost=0.000627, prompt_tokens=1667, completion_tokens=38, cache_creation_cost=0.006868125),
+    ),
+    *_mantle_gpt_audit3_cases(
+        "openai.gpt-6.2-astra",
+        46,
+        39,
+        0,
+        ExactExpected(spend=0.00339328, input_cost=0.00064768, output_cost=0.0027456, prompt_tokens=46, completion_tokens=39),
+        38,
+        0,
+        ExactExpected(spend=0.03200736, input_cost=0.02933216, output_cost=0.0026752, prompt_tokens=1667, completion_tokens=38, cache_creation_cost=0.029304),
+    ),
+    *_mantle_gpt_audit3_cases(
+        "openai.gpt-6.1-terra",
+        46,
+        46,
+        26,
+        ExactExpected(spend=0.00051612, input_cost=0.00008602, output_cost=0.0004301, prompt_tokens=46, completion_tokens=46),
+        29,
+        14,
+        ExactExpected(spend=0.0041668275, input_cost=0.0038956775, output_cost=0.00027115, prompt_tokens=1667, completion_tokens=29, cache_creation_cost=0.0038919375),
     ),
 )
 
@@ -1137,22 +1220,35 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_STREAM: Final = BEDROCK_MANTLE_CLAUDE_O
     }
 )
 
+_MANTLE_GPT_CASE_SETS: Final = (
+    _MANTLE_GPT_61_SOL_CASES,
+    _MANTLE_GPT_6_LUNA_CASES,
+    _MANTLE_GPT_6_ASTRA_CASES,
+    _MANTLE_GPT_56_TERRA_CASES,
+    _MANTLE_GPT_62_SOL_CASES,
+    _MANTLE_GPT_62_ASTRA_CASES,
+    _MANTLE_GPT_61_TERRA_CASES,
+)
+
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     _mantle_gpt_bridge(_MANTLE_GPT_61_SOL_CASES[0]),
     _mantle_gpt_bridge(_MANTLE_GPT_6_LUNA_CASES[0]),
     _mantle_gpt_bridge(_MANTLE_GPT_6_ASTRA_CASES[0]),
     _mantle_gpt_bridge(_MANTLE_GPT_56_TERRA_CASES[0]),
+    _mantle_gpt_bridge(_MANTLE_GPT_62_SOL_CASES[0]),
+    _mantle_gpt_bridge(_MANTLE_GPT_62_ASTRA_CASES[0]),
+    _mantle_gpt_bridge(_MANTLE_GPT_61_TERRA_CASES[0]),
     BridgeCostParityTestCase(
         native=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
         bridged=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON,
     ),
     *tuple(
         BridgeCostParityTestCase(native=cases[0], bridged=cases[9])
-        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+        for cases in _MANTLE_GPT_CASE_SETS
     ),
     *tuple(
         BridgeCostParityTestCase(native=cases[1], bridged=cases[10])
-        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+        for cases in _MANTLE_GPT_CASE_SETS
     ),
 )
 
@@ -1169,6 +1265,9 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     *_MANTLE_GPT_6_LUNA_CASES,
     *_MANTLE_GPT_6_ASTRA_CASES,
     *_MANTLE_GPT_56_TERRA_CASES,
+    *_MANTLE_GPT_62_SOL_CASES,
+    *_MANTLE_GPT_62_ASTRA_CASES,
+    *_MANTLE_GPT_61_TERRA_CASES,
     *_MANTLE_GPT_AUDIT3_CASES,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM,
@@ -1192,6 +1291,9 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=_MANTLE_GPT_6_LUNA_CASES[0], streamed=_MANTLE_GPT_6_LUNA_CASES[1]),
     StreamParityTestCase(plain=_MANTLE_GPT_6_ASTRA_CASES[0], streamed=_MANTLE_GPT_6_ASTRA_CASES[1]),
     StreamParityTestCase(plain=_MANTLE_GPT_56_TERRA_CASES[0], streamed=_MANTLE_GPT_56_TERRA_CASES[1]),
+    StreamParityTestCase(plain=_MANTLE_GPT_62_SOL_CASES[0], streamed=_MANTLE_GPT_62_SOL_CASES[1]),
+    StreamParityTestCase(plain=_MANTLE_GPT_62_ASTRA_CASES[0], streamed=_MANTLE_GPT_62_ASTRA_CASES[1]),
+    StreamParityTestCase(plain=_MANTLE_GPT_61_TERRA_CASES[0], streamed=_MANTLE_GPT_61_TERRA_CASES[1]),
     StreamParityTestCase(
         plain=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM
     ),
@@ -1205,10 +1307,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     ),
     *tuple(
         StreamParityTestCase(plain=cases[3], streamed=cases[8])
-        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+        for cases in _MANTLE_GPT_CASE_SETS
     ),
     *tuple(
         StreamParityTestCase(plain=cases[9], streamed=cases[10])
-        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+        for cases in _MANTLE_GPT_CASE_SETS
     ),
 )
