@@ -17,6 +17,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils import model_cost_table
 from litellm.litellm_core_utils.fallback_generalizations import match_fill_missing_generalizations
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -70,13 +71,20 @@ def gemini_media_capability(
 ) -> bool:
     name: Final = model.rsplit("/", 1)[-1]
     qualified_name: Final = f"gemini/{name}"
+    catalog: Final = cast(  # cast-ok: the published catalog contains model rows
+        Mapping[str, Mapping[str, object]], model_cost_table.published()
+    )
     for candidate in (model, qualified_name, f"vertex_ai/{name}", name):
-        row: Mapping[str, object] | None = litellm.model_cost.get(candidate)
-        if row is not None and isinstance(flag := row.get(key), bool):
+        row = catalog.get(candidate)
+        if row is None:
+            continue
+        flag = row.get(key)
+        if isinstance(flag, bool):
             return flag
     defaults: Final = match_fill_missing_generalizations(qualified_name, "gemini")
-    if defaults is not None and isinstance(flag := defaults.get(key), bool):
-        return flag
+    default_flag: Final = defaults.get(key) if defaults is not None else None
+    if isinstance(default_flag, bool):
+        return default_flag
 
     from .gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
