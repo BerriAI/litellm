@@ -1,9 +1,8 @@
 mod agentic;
-mod answer;
 mod host;
 mod model_catalog;
 mod modify_params;
-mod pre_request;
+mod plan;
 mod requests_reason;
 mod safeguards;
 mod transport;
@@ -15,6 +14,7 @@ use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_llms::vertex_ai::common_utils::EXPLICIT_LOCATION_PARAMS;
 use litellm_llms_types::formats::messages::MessagesOptionalParams;
 use modify_params::ModifyParams;
+use plan::MessagesPlan;
 use pyo3::prelude::*;
 
 use super::NativeCall;
@@ -32,10 +32,7 @@ fn vertex_explicit_location() -> LoggedCallParam {
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let (arguments, logging) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
-    let host_client = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let hooks = logging
-        .with_host_client(std::sync::Arc::clone(&host_client))
-        .with_logged_call_param(vertex_explicit_location());
+    let hooks = logging.with_logged_call_param(vertex_explicit_location());
     let hooked_request = agentic::HookedRequest::default();
     let hooks = litellm_host_python::HookChain::new()
         .with(agentic::AgenticLoop::new(
@@ -44,13 +41,10 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
         ))
         .with(hooks);
     let modify_params = ModifyParams::new(&call.args, &call.kwargs)?;
-    let classifies = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let classified = std::sync::Arc::clone(&classifies);
     crate::routes::run_public_call_after_policy(
         py,
         arguments,
-        move |py, arguments, request| {
-            let hooked = pre_request::runs_pre_request_hooks(py)?;
+        move |py, arguments, plan: MessagesPlan| {
             let context = litellm_host_python::PythonContext::capture(py)?;
             let secrets = std::sync::Arc::new(crate::secrets::seeded::SeededSecrets::new(
                 crate::secrets::source(py)?,
@@ -76,60 +70,17 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                         arguments.clone().unbind(),
                     )),
                 });
-            Ok(litellm_host::call::hosted_call(
-                request,
-                None,
-                move |(call, selection, transport): (
-                    _,
-                    crate::cache::Selection,
-                    transport::Selected,
-                ),
-                      services,
-                      interceptors,
-                      observers| async move {
-                    secrets.seed(transport.read);
-                    host_client.store(transport.hosted, std::sync::atomic::Ordering::Release);
-                    let route = if transport.hosted {
-                        route.with_transport(std::sync::Arc::new(transport::PythonTransport::new(
-                            services.clone(),
-                        )))
-                    } else {
-                        route
-                    };
-                    let route = match hooked {
-                        true => route.with_pre_request_hooks(std::sync::Arc::new(
-                            pre_request::HostPreRequestHooks::new(services.clone()),
-                        )),
-                        false => route,
-                    };
-                    let route = match classified.load(std::sync::atomic::Ordering::Acquire) {
-                        true => route.with_safeguards(std::sync::Arc::new(
-                            safeguards::PythonSafeguards::new(services.clone()),
-                        )),
-                        false => route,
-                    };
-                    let route = route.with_host_answer(std::sync::Arc::new(
-                        answer::PythonAnswer::new(services.clone()),
-                    ));
-                    let (cache, options) = selection.attach(services);
-                    let route = match cache {
-                        Some(cache) => route.with_cache(cache),
-                        None => route,
-                    };
-                    route
-                        .execute(
-                            call,
-                            &interceptors,
-                            litellm_inference::CallOptions {
-                                cache: Some(options.policy),
-                                observers,
-                            },
-                        )
-                        .await
+            let route = route.with_host_services(plan.host_services());
+            secrets.seed(plan.transport.read);
+            Ok(route.machine(
+                plan.call,
+                litellm_inference::CallOptions {
+                    cache: Some(plan.cache.policy),
+                    observers: None,
                 },
             ))
         },
-        MessagesPythonHost::new(call.view()?, asynchronous, hooked_request, classifies),
+        MessagesPythonHost::new(call.view()?, asynchronous, hooked_request),
         hooks,
         modify_params,
         asynchronous,
