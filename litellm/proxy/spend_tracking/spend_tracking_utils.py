@@ -557,7 +557,7 @@ def get_logging_payload(
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params: Final = kwargs.get("litellm_params", {})
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-    completion_start_time: Final = kwargs.get("completion_start_time", end_time)
+    completion_start_time: Final = kwargs.get("completion_start_time") or end_time
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
 

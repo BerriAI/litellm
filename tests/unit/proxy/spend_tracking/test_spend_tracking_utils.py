@@ -120,6 +120,23 @@ def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_token
     assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
 
 
+def test_get_logging_payload_dates_a_call_with_no_first_token_at_its_end_time():
+    start_time: Final = datetime.datetime(2026, 11, 21, 10, 0, tzinfo=timezone.utc)
+    end_time: Final = datetime.datetime(2026, 11, 21, 10, 0, 5, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "completion_start_time": None,
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=None,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert payload["completionStartTime"] == end_time
+
+
 class _HashingCache(litellm.Cache):
     def __init__(self) -> None:
         pass
