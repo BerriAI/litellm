@@ -47,11 +47,11 @@ from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAG
 from litellm.files.types import FileContentStreamingResult
 from litellm.images.fan_out import (
     billed_answers,
-    merge_billed_image_responses,
     outcomes_of,
     partition_outcomes,
     record_partial_image_spend,
     run_concurrently,
+    settle_image_answers,
     split_outcomes,
 )
 from litellm.integrations.custom_logger_v2.enums import Hook
@@ -7558,13 +7558,10 @@ class BaseLLMHTTPHandler:
                 responses,
             )
         )
-        if failure is not None or unserved:
-            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
         if failure is not None:
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
-        if unserved:
-            raise unserved[0]
-        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        image_edit_response: Final = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
@@ -7669,13 +7666,10 @@ class BaseLLMHTTPHandler:
                 responses,
             )
         )
-        if failure is not None or unserved:
-            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
         if failure is not None:
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
-        if unserved:
-            raise unserved[0]
-        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        image_edit_response: Final = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
@@ -7804,13 +7798,10 @@ class BaseLLMHTTPHandler:
                 responses,
             )
         )
-        if failure is not None or unserved:
-            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
         if failure is not None:
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
-        if unserved:
-            raise unserved[0]
-        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        model_response: Final[ImageResponse] = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
@@ -7924,13 +7915,10 @@ class BaseLLMHTTPHandler:
                 return_exceptions=True,
             )
         )
-        if failure is not None or unserved:
-            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
         if failure is not None:
+            record_partial_image_spend(logging_obj, billed_answers(served, unserved))
             raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
-        if unserved:
-            raise unserved[0]
-        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        model_response: Final[ImageResponse] = settle_image_answers(logging_obj, served, unserved)
         set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response

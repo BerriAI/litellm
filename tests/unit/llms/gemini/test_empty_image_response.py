@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from collections.abc import Mapping
 from io import BytesIO
 from typing import Final
@@ -336,9 +337,48 @@ def _replying(*replies: tuple[int, Mapping[str, object]]) -> httpx.MockTransport
     return httpx.MockTransport(reply)
 
 
-async def _edit_two_images_asynchronously(model: str, transport: httpx.MockTransport, failure_log: _FailureCost) -> None:
+class _Spend(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cost: float | None = None
+        self.logged: Final = threading.Event()
+
+    def _record(self, kwargs: dict[str, object]) -> None:
+        response_cost: Final = kwargs.get("response_cost")
+        self.cost = float(response_cost) if isinstance(response_cost, (int, float)) else None
+        self.logged.set()
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    def log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+
+def _spend_log(monkeypatch: pytest.MonkeyPatch) -> _Spend:
+    spend: Final = _Spend()
+    for callbacks in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callbacks, [spend])
+    return spend
+
+
+async def _edit_two_images_asynchronously(model: str, transport: httpx.MockTransport, spend: _Spend) -> ImageResponse:
     try:
-        await litellm.aimage_edit(
+        return await litellm.aimage_edit(
             model=model,
             image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
             prompt="two small red dots",
@@ -348,13 +388,13 @@ async def _edit_two_images_asynchronously(model: str, transport: httpx.MockTrans
             client=AsyncHTTPHandler(transport=transport),
         )
     finally:
-        await asyncio.wait_for(failure_log.logged.wait(), timeout=10)
+        await asyncio.to_thread(spend.logged.wait, 10)
 
 
-def _request_two_images(route: str, model: str, transport: httpx.MockTransport, failure_log: _FailureCost) -> None:
+def _request_two_images(route: str, model: str, transport: httpx.MockTransport, spend: _Spend) -> ImageResponse:
     match route:
         case "generation":
-            litellm.image_generation(
+            return litellm.image_generation(
                 model=model,
                 prompt="two small red dots",
                 n=2,
@@ -363,7 +403,7 @@ def _request_two_images(route: str, model: str, transport: httpx.MockTransport, 
                 client=HTTPHandler(client=httpx.Client(transport=transport)),
             )
         case "edit":
-            litellm.image_edit(
+            return litellm.image_edit(
                 model=model,
                 image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
                 prompt="two small red dots",
@@ -372,31 +412,71 @@ def _request_two_images(route: str, model: str, transport: httpx.MockTransport, 
                 api_base="https://google.invalid/v1",
                 client=HTTPHandler(client=httpx.Client(transport=transport)),
             )
-        case "async-edit":
-            asyncio.run(_edit_two_images_asynchronously(model, transport, failure_log))
+        case _:
+            return asyncio.run(_edit_two_images_asynchronously(model, transport, spend))
 
 
-def _cost_of_two_images(
-    monkeypatch: pytest.MonkeyPatch, route: str, model: str, *replies: tuple[int, Mapping[str, object]]
+def _cost_of_two_failed_images(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, transport: httpx.MockTransport
 ) -> float | None:
-    failure_log: Final = _FailureCost()
-    monkeypatch.setattr(litellm, "failure_callback", [failure_log])
-    monkeypatch.setattr(litellm, "_async_failure_callback", [failure_log])
+    spend: Final = _spend_log(monkeypatch)
     with pytest.raises(openai.APIStatusError):
-        _request_two_images(route, model, _replying(*replies), failure_log)
-    return failure_log.cost
+        _request_two_images(route, model, transport, spend)
+    spend.logged.wait(timeout=10)
+    return spend.cost
+
+
+def _two_served_images(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, transport: httpx.MockTransport
+) -> tuple[ImageResponse, float | None]:
+    spend: Final = _spend_log(monkeypatch)
+    response: Final = _request_two_images(route, model, transport, spend)
+    spend.logged.wait(timeout=10)
+    return response, spend.cost
+
+
+_FAILED_ANSWERS: Final = pytest.mark.parametrize(
+    "failed_answer", (_REFUSED, _CHARGED_REFUSAL, _UNANSWERED), ids=("free-refusal", "charged-refusal", "unanswered")
+)
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _TWO_IMAGE_CALLS)
-@pytest.mark.parametrize(
-    "failed_answer", (_REFUSED, _CHARGED_REFUSAL, _UNANSWERED), ids=("free-refusal", "charged-refusal", "unanswered")
-)
-def test_image_served_beside_a_failed_answer_is_billed_with_it(
+@_FAILED_ANSWERS
+def test_image_served_beside_an_answer_without_one_is_returned_and_billed_with_it(
     monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str, failed_answer: Mapping[str, object]
 ):
-    served_alone: Final = _cost_of_two_images(monkeypatch, route, model, (200, _SERVED), _UNAVAILABLE)
-    failed_alone: Final = _cost_of_two_images(monkeypatch, route, model, (200, failed_answer), _UNAVAILABLE)
-    together: Final = _cost_of_two_images(monkeypatch, route, model, (200, _SERVED), (200, failed_answer))
+    served_alone: Final = _cost_of_two_failed_images(monkeypatch, route, model, _replying((200, _SERVED), _UNAVAILABLE))
+    failed_alone: Final = _cost_of_two_failed_images(
+        monkeypatch, route, model, _replying((200, failed_answer), _UNAVAILABLE)
+    )
+    response, together = _two_served_images(monkeypatch, route, model, _replying((200, _SERVED), (200, failed_answer)))
 
+    assert [image.b64_json for image in response.data or []] == ["aW1n"]
     assert served_alone is not None and served_alone > 0
     assert together == pytest.approx(served_alone + (failed_alone or 0))
+
+
+@pytest.mark.parametrize(("route", "model", "provider"), _TWO_IMAGE_CALLS)
+@_FAILED_ANSWERS
+def test_answers_that_all_lack_an_image_fail_the_request_and_bill_each(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str, failed_answer: Mapping[str, object]
+):
+    failed_alone: Final = _cost_of_two_failed_images(
+        monkeypatch, route, model, _replying((200, failed_answer), _UNAVAILABLE)
+    )
+    both_failed: Final = _cost_of_two_failed_images(
+        monkeypatch, route, model, _replying((200, failed_answer), (200, failed_answer))
+    )
+
+    assert both_failed == pytest.approx(2 * (failed_alone or 0))
+
+
+@pytest.mark.parametrize(("route", "model", "provider"), _TWO_IMAGE_CALLS)
+def test_an_unreadable_answer_beside_a_served_image_still_fails_the_request(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str
+):
+    replies: Final = iter((httpx.Response(200, json=_SERVED), httpx.Response(200, content=b"not json")))
+    spend: Final = _spend_log(monkeypatch)
+
+    with pytest.raises(litellm.APIConnectionError):
+        _request_two_images(route, model, httpx.MockTransport(lambda request: next(replies)), spend)

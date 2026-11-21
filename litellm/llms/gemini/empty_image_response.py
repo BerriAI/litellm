@@ -25,7 +25,7 @@ class UnservedImageError(UnprocessableEntityError):
         self.billed_answer: Final = billed_answer
 
 
-class ChargedImageRefusalError(ContentPolicyViolationError):
+class ImageRefusalError(ContentPolicyViolationError):
     def __init__(
         self,
         message: str,
@@ -33,7 +33,7 @@ class ChargedImageRefusalError(ContentPolicyViolationError):
         llm_provider: str,
         response: httpx.Response,
         provider_specific_fields: Mapping[str, str | None],
-        billed_answer: ImageResponse,
+        billed_answer: ImageResponse | None,
     ) -> None:
         super().__init__(
             message=message,
@@ -106,23 +106,14 @@ def _refusal_error(
     llm_provider: str,
     raw_response: httpx.Response,
     answer: ImageResponse,
-) -> ContentPolicyViolationError:
-    response: Final = _answered_as(400, raw_response)
-    if reason in _REFUSALS_GOOGLE_DOES_NOT_CHARGE:
-        return ContentPolicyViolationError(
-            message=message,
-            model=model,
-            llm_provider=llm_provider,
-            response=response,
-            provider_specific_fields=dict(fields),
-        )
-    return ChargedImageRefusalError(
+) -> ImageRefusalError:
+    return ImageRefusalError(
         message=message,
         model=model,
         llm_provider=llm_provider,
-        response=response,
+        response=_answered_as(400, raw_response),
         provider_specific_fields=fields,
-        billed_answer=answer,
+        billed_answer=None if reason in _REFUSALS_GOOGLE_DOES_NOT_CHARGE else answer,
     )
 
 
@@ -132,7 +123,7 @@ def empty_image_response_error(
     llm_provider: str,
     raw_response: httpx.Response,
     answer: ImageResponse,
-) -> ContentPolicyViolationError | UnservedImageError:
+) -> ImageRefusalError | UnservedImageError:
     result: Final = _parsed(response)
     feedback: Final = result.prompt_feedback
     if feedback is not None and feedback.block_reason:

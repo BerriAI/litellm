@@ -22,9 +22,9 @@ class _Price(Protocol):
 
 
 @runtime_checkable
-class _BilledFailure(Protocol):
+class _AnswerWithoutAnImage(Protocol):
     @property
-    def billed_answer(self) -> ImageResponse: ...
+    def billed_answer(self) -> ImageResponse | None: ...
 
 
 class _SpendLog(Protocol):
@@ -124,7 +124,8 @@ def split_outcomes(outcomes: Sequence[_T | BaseException]) -> tuple[tuple[_T, ..
 
 def billed_answers(answers: Sequence[ImageResponse], failures: Sequence[Exception]) -> tuple[ImageResponse, ...]:
     """A failed answer the provider still charges for is billed beside the images that were served."""
-    return (*answers, *(failure.billed_answer for failure in failures if isinstance(failure, _BilledFailure)))
+    charged: Final = tuple(failure.billed_answer for failure in failures if isinstance(failure, _AnswerWithoutAnImage))
+    return (*answers, *(answer for answer in charged if answer is not None))
 
 
 def _summed_cost(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> float | None:
@@ -141,6 +142,17 @@ def merge_billed_image_responses(logging_obj: _SpendLog, responses: Sequence[Ima
     if cost is not None:
         merged.hidden_params = {**merged.hidden_params, "response_cost": cost}
     return merged
+
+
+def settle_image_answers(
+    logging_obj: _SpendLog, served: Sequence[ImageResponse], unserved: Sequence[Exception]
+) -> ImageResponse:
+    """Answers without an image fail the request only when no answer served one, as candidates of one call do."""
+    billed: Final = billed_answers(served, unserved)
+    if served and all(isinstance(failure, _AnswerWithoutAnImage) for failure in unserved):
+        return merge_billed_image_responses(logging_obj, billed)
+    record_partial_image_spend(logging_obj, billed)
+    raise unserved[0]
 
 
 def record_partial_image_spend(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> None:
