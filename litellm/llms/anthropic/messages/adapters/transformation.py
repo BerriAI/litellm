@@ -251,7 +251,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices, LlmProviders, ModelResponse, StreamingChoices, Usage
 from litellm.utils import supports_mid_conversation_system
 
-from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
+from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper, streamed_reasoning_details_signature
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -338,14 +338,6 @@ def _anthropic_thinking_blocks(source: object) -> tuple[Mapping[str, object], ..
 
 def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]:
     return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
-
-
-def streamed_reasoning_details_signature(delta: object) -> str:
-    return "".join(
-        signature
-        for item in attribute_items(delta, "reasoning_details")
-        if isinstance(signature := (as_str_mapping(item) or {}).get("signature"), str)
-    )
 
 
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:

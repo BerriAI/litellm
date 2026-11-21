@@ -1735,3 +1735,72 @@ async def test_openrouter_reasoning_details_piece_before_tool_call_stays_in_the_
         if event.get("type") == "content_block_delta" and event["delta"]["type"] == "input_json_delta"
     ) == '{"a": 17, "b": 23}'
     _assert_deltas_match_their_block_type(events)
+
+
+_OPENROUTER_SIGNATURE_DETAIL: Final = {
+    "type": "reasoning.text",
+    "signature": "sig-abc",
+    "format": "anthropic-claude-v1",
+    "index": 0,
+}
+
+_OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS: Final = MappingProxyType(
+    {
+        "signature-with-answer-text": (
+            _openrouter_reasoning_text_line("anthropic-claude-v1"),
+            _openrouter_sse_line({"content": "The answer is 391.", "reasoning_details": [_OPENROUTER_SIGNATURE_DETAIL]}),
+            _openrouter_sse_line({"content": ""}, finish_reason="stop"),
+            "data: [DONE]",
+        ),
+        "signature-with-thinking-text": (
+            _openrouter_sse_line(
+                {
+                    "content": "",
+                    "role": "assistant",
+                    "reasoning": "I need to multiply.",
+                    "reasoning_details": [{**_OPENROUTER_SIGNATURE_DETAIL, "text": "I need to multiply."}],
+                }
+            ),
+            _openrouter_sse_line({"content": "The answer is 391."}),
+            _openrouter_sse_line({"content": ""}, finish_reason="stop"),
+            "data: [DONE]",
+        ),
+        "signature-answer-and-finish-in-one-frame": (
+            _openrouter_reasoning_text_line("anthropic-claude-v1"),
+            _openrouter_sse_line(
+                {"content": "The answer is 391.", "reasoning_details": [_OPENROUTER_SIGNATURE_DETAIL]},
+                finish_reason="stop",
+            ),
+            "data: [DONE]",
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "stream",
+    list(_OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS),
+    ids=list(_OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS),
+)
+@pytest.mark.asyncio
+async def test_openrouter_signature_bundled_with_another_payload_keeps_both(is_async: bool, stream: str):
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_openrouter_chat_stream(
+            _OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS[stream], is_async
+        ),
+        model="openrouter/anthropic/claude-haiku-4.5",
+    )
+
+    events: Final = await _drain_async(wrapper) if is_async else _drain_sync(wrapper)
+
+    assert [event["content_block"]["type"] for event in events if event.get("type") == "content_block_start"] == [
+        "thinking",
+        "text",
+    ]
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="I need to multiply.", signature="sig-abc"),
+    )
+    assert "".join(_text_deltas(events)) == "The answer is 391."
+    assert [event["delta"]["stop_reason"] for event in events if event.get("type") == "message_delta"] == ["end_turn"]
+    _assert_deltas_match_their_block_type(events)
