@@ -44,6 +44,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     related_budget,
     utc_now,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.rust_bridge._native import jwt_claims
@@ -128,14 +129,6 @@ class CustomerBudgetExceededError(litellm.BudgetExceededError):
             entity_id=error.entity_id,
         )
         self.customer_hierarchy: Final = hierarchy
-
-
-def customer_member_cache_key(customer_member_id: str) -> str:
-    return f"customer_member_id:{customer_member_id}"
-
-
-def customer_org_alias_cache_key(customer_org_alias: str) -> str:
-    return f"customer_org_alias:{customer_org_alias}"
 
 
 def _header_value(headers: Mapping[str, object] | None, header: str) -> str | None:
@@ -362,7 +355,7 @@ async def get_customer_hierarchy(
     user_api_key_cache: UserApiKeyCache,
     now: datetime | None = None,
 ) -> CustomerHierarchyAuth | None:
-    cache_key: Final = customer_member_cache_key(customer_member_id)
+    cache_key: Final = AuthObject.customer_member(customer_member_id)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
@@ -451,7 +444,7 @@ async def get_customer_organization_hierarchy(
     now: datetime | None = None,
 ) -> CustomerHierarchyAuth | AmbiguousOrganizationAlias | None:
     """The organization-only hierarchy behind an alias, None when no organization carries it."""
-    cache_key: Final = customer_org_alias_cache_key(customer_org_alias)
+    cache_key: Final = AuthObject.customer_org_alias(customer_org_alias)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
@@ -885,7 +878,7 @@ def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object], m
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def forget_customer_hierarchies(customer_member_ids: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
     """Drop the cached hierarchies of members whose own, team, org or template budget changed so auth reloads them."""
-    await evict_and_broadcast(tuple(customer_member_cache_key(m) for m in customer_member_ids), user_api_key_cache)
+    await evict_and_broadcast(tuple(AuthObject.customer_member(m).key for m in customer_member_ids), user_api_key_cache)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -893,6 +886,6 @@ async def forget_customer_organization_aliases(
     aliases: Sequence[str | None], user_api_key_cache: UserApiKeyCache
 ) -> None:
     """Drop the cached organization hierarchies behind aliases whose organization changed so request auth reloads them."""
-    keys: Final = tuple(customer_org_alias_cache_key(alias) for alias in dict.fromkeys(aliases) if alias)
+    keys: Final = tuple(AuthObject.customer_org_alias(alias).key for alias in dict.fromkeys(aliases) if alias)
     if keys:
         await evict_and_broadcast(keys, user_api_key_cache)

@@ -23,8 +23,9 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
 
@@ -221,7 +222,7 @@ async def invalidate_cached_object_permissions(
     upsert keeps that id, so pass both the outgoing and incoming ids since a change can also mint a new row.
     """
     cache_keys: Final = tuple(
-        object_permission_cache_key(object_permission_id)
+        AuthObject.object_permission(object_permission_id).key
         for object_permission_id in dict.fromkeys(pid for pid in object_permission_ids if isinstance(pid, str))
     )
     await evict_and_broadcast(cache_keys, user_api_key_cache)

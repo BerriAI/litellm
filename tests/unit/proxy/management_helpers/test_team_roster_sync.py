@@ -12,14 +12,8 @@ import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    team_membership_auth_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
     RosterDelta,
@@ -30,6 +24,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     sync_team_roster,
 )
 from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
+from litellm.redis.stores.auth_cache import AuthObject
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
@@ -301,10 +296,10 @@ def _writes(prisma: _FakePrisma) -> list[str]:
     return [s for s in prisma.ledger.statements if s not in READS]
 
 
-def _cache_with(*keys: str) -> UserApiKeyCache:
+def _cache_with(*keys: AuthObject) -> UserApiKeyCache:
     cache = UserApiKeyCache()
     for key in keys:
-        cache.set_cache(key=key, value={"cache_key": key})
+        cache.set_cache(key=key, value={"cache_key": key.key})
     return cache
 
 
@@ -327,7 +322,7 @@ async def test_target_adds_the_missing_members_and_removes_the_extra_ones():
         teams=[_team(_member("alice", role="admin"), _member("bob"))],
         memberships=[(TEAM, "alice"), (TEAM, "bob")],
     )
-    cache = _cache_with("bob", "carol", f"team_id:{TEAM}")
+    cache = _cache_with(AuthObject.user("bob"), AuthObject.user("carol"), AuthObject.team(TEAM))
 
     outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"alice", "carol"})), cache)
 
@@ -342,7 +337,11 @@ async def test_target_adds_the_missing_members_and_removes_the_extra_ones():
     assert _roster(prisma) == [("alice", "admin"), ("carol", "user")]
     assert _memberships(prisma) == [(TEAM, "alice"), (TEAM, "carol")]
     assert (_teams_of(prisma, "bob"), _teams_of(prisma, "carol")) == (["t2"], [TEAM])
-    assert (cache.get_cache("bob"), cache.get_cache("carol"), cache.get_cache(f"team_id:{TEAM}")) == (None, None, None)
+    assert (
+        cache.get_cache(AuthObject.user("bob")),
+        cache.get_cache(AuthObject.user("carol")),
+        cache.get_cache(AuthObject.team(TEAM)),
+    ) == (None, None, None)
 
 
 @pytest.mark.asyncio
@@ -373,14 +372,14 @@ async def test_a_plan_matching_the_roster_only_takes_the_lock_and_leaves_the_cac
         teams=[_team(_member("alice"), _member("bob"))],
         memberships=[(TEAM, "alice"), (TEAM, "bob")],
     )
-    cache = _cache_with(f"team_id:{TEAM}")
+    cache = _cache_with(AuthObject.team(TEAM))
 
     outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"alice", "bob"})), cache)
 
     assert isinstance(outcome, RosterSync)
     assert (outcome.added, outcome.removed) == (frozenset(), frozenset())
     assert prisma.ledger.statements == ["query_raw", "teamtable.find_unique"]
-    assert cache.get_cache(f"team_id:{TEAM}") is not None
+    assert cache.get_cache(AuthObject.team(TEAM)) is not None
 
 
 @pytest.mark.asyncio
@@ -449,7 +448,7 @@ async def test_a_team_deleted_before_the_roster_write_answers_team_gone_and_roll
         tokens=[{"token": "k-alice", "user_id": "alice", "team_id": TEAM}],
         team_deleted_before_update=True,
     )
-    cache = _cache_with("k-alice", "alice")
+    cache = _cache_with(AuthObject.virtual_key("k-alice"), AuthObject.user("alice"))
 
     outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"bob"})), cache)
 
@@ -458,7 +457,8 @@ async def test_a_team_deleted_before_the_roster_write_answers_team_gone_and_roll
     assert (_teams_of(prisma, "alice"), _teams_of(prisma, "bob")) == ([TEAM], [])
     assert _tokens(prisma) == {"k-alice"}
     assert prisma.writer_db.litellm_deletedverificationtoken.rows == []
-    assert cache.get_cache("k-alice") is not None and cache.get_cache("alice") is not None
+    assert cache.get_cache(AuthObject.virtual_key("k-alice")) is not None
+    assert cache.get_cache(AuthObject.user("alice")) is not None
 
 
 @pytest.mark.asyncio
@@ -537,8 +537,10 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
     rust_auth_stores.jwt_key_mapping.mappings.append(
         JwtMapping(token="k-bob", jwt_claim_name="sub", jwt_claim_value="bob-claim")
     )
-    jwt_key = jwt_key_mapping_cache_key("sub", "bob-claim", None)
-    cache = _cache_with("k-bob", "k-alice", jwt_key, "bob")
+    jwt_key = AuthObject.jwt_key_mapping("sub", "bob-claim", None)
+    cache = _cache_with(
+        AuthObject.virtual_key("k-bob"), AuthObject.virtual_key("k-alice"), jwt_key, AuthObject.user("bob")
+    )
 
     outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"alice"})), cache)
 
@@ -548,8 +550,12 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
         ("k-bob", "admin")
     ]
     assert _teams_of(prisma, "bob") == ["t2"]
-    assert (cache.get_cache("k-bob"), cache.get_cache(jwt_key), cache.get_cache("bob")) == (None, None, None)
-    assert cache.get_cache("k-alice") is not None
+    assert (
+        cache.get_cache(AuthObject.virtual_key("k-bob")),
+        cache.get_cache(jwt_key),
+        cache.get_cache(AuthObject.user("bob")),
+    ) == (None, None, None)
+    assert cache.get_cache(AuthObject.virtual_key("k-alice")) is not None
 
 
 class _Pipeline:
@@ -663,18 +669,15 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
         key
         for u in removed
         for key in (
-            u,
-            token_of[u],
-            team_membership_auth_cache_key(team_id=TEAM, user_id=u),
-            team_membership_reservation_cache_key(user_id=u, team_id=TEAM),
+            AuthObject.user(u),
+            AuthObject.virtual_key(token_of[u]),
+            AuthObject.team_membership(team_id=TEAM, user_id=u),
+            AuthObject.team_membership_reservation(user_id=u, team_id=TEAM),
         )
     ]  # comprehension-ok: a test fixture listing each member's four cache keys
-    cache = UserApiKeyCache(
-        in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
-        key_object_in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
-    )
+    cache = UserApiKeyCache(max_size_in_memory=5_000)
     for key in member_keys:
-        cache.set_local(key, {"cache_key": key}, None)
+        cache.set_local(key, {"cache_key": key.key}, None)
     seeded = [key for key in member_keys if cache.get_local(key) is not None]
     prisma = _FakePrisma(
         users=[_user(u, TEAM) for u in removed],
@@ -713,15 +716,15 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
         key
         for u in removed
         for key in (
-            u,
-            token_of[u],
-            team_membership_auth_cache_key(team_id=TEAM, user_id=u),
-            team_membership_reservation_cache_key(user_id=u, team_id=TEAM),
+            AuthObject.user(u),
+            AuthObject.virtual_key(token_of[u]),
+            AuthObject.team_membership(team_id=TEAM, user_id=u),
+            AuthObject.team_membership_reservation(user_id=u, team_id=TEAM),
         )
     ]  # comprehension-ok: a test fixture listing each member's four cache keys
-    cache, redis = shared_cache(FakeAuthCache(redis={key: {"cache_key": key} for key in member_keys}))
+    cache, redis = shared_cache(FakeAuthCache(redis={key.key: {"cache_key": key.key} for key in member_keys}))
     for key in member_keys:
-        cache.set_local(key, {"cache_key": key}, None)
+        cache.set_local(key, {"cache_key": key.key}, None)
     prisma = _FakePrisma(
         users=[_user(u, TEAM) for u in removed],
         teams=[_team(*(_member(u) for u in removed))],
@@ -742,7 +745,7 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
     assert refilled == []
-    assert not any(key in redis.redis for key in member_keys)
+    assert not any(key.key in redis.redis for key in member_keys)
 
 
 class _SlowToAcknowledgeRedis(FakeAuthCache):
@@ -764,7 +767,7 @@ async def test_a_removed_members_team_key_cannot_refill_from_redis_while_the_evi
     monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     token = hashlib.sha256(b"key-bob").hexdigest()
     cache, redis = shared_cache(_SlowToAcknowledgeRedis({token: {"token": token}}))
-    cache.set_local(token, {"token": token}, None)
+    cache.set_local(AuthObject.virtual_key(token), {"token": token}, None)
     prisma = _FakePrisma(
         users=[_user("bob", TEAM)],
         teams=[_team(_member("bob"))],
@@ -774,7 +777,7 @@ async def test_a_removed_members_team_key_cannot_refill_from_redis_while_the_evi
 
     sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
     await _until_reached_or_done(redis.reached, sync)
-    served_while_waiting = await cache.async_get_cache(key=token)
+    served_while_waiting = await cache.async_get_cache(key=AuthObject.virtual_key(token))
     redis.acknowledge.set()
     outcome = await sync
 
@@ -792,13 +795,13 @@ def _removal_of(removed: Sequence[str]) -> tuple[_FakePrisma, set[str]]:
         tokens=[{"token": token_of[u], "user_id": u, "team_id": TEAM} for u in removed],
     )
     evicted = {
-        key
+        key.key
         for u in removed
         for key in (
-            u,
-            token_of[u],
-            team_membership_auth_cache_key(team_id=TEAM, user_id=u),
-            team_membership_reservation_cache_key(user_id=u, team_id=TEAM),
+            AuthObject.user(u),
+            AuthObject.virtual_key(token_of[u]),
+            AuthObject.team_membership(team_id=TEAM, user_id=u),
+            AuthObject.team_membership_reservation(user_id=u, team_id=TEAM),
         )
     }  # comprehension-ok: a test fixture listing each member's four cache keys
     return prisma, evicted
@@ -859,7 +862,7 @@ async def test_a_failed_commit_leaves_every_table_and_cache_entry_as_it_was():
         tokens=[{"token": "k-bob", "user_id": "bob", "team_id": TEAM}],
         fail_commit=True,
     )
-    cache = _cache_with("k-bob", "carol")
+    cache = _cache_with(AuthObject.virtual_key("k-bob"), AuthObject.user("carol"))
 
     with pytest.raises(RuntimeError, match="connection reset"):
         await _sync(prisma, RosterTarget(member_ids=frozenset({"alice", "carol"})), cache)
@@ -869,7 +872,8 @@ async def test_a_failed_commit_leaves_every_table_and_cache_entry_as_it_was():
     assert (_teams_of(prisma, "bob"), _teams_of(prisma, "carol")) == ([TEAM], [])
     assert _tokens(prisma) == {"k-bob"}
     assert prisma.writer_db.litellm_deletedverificationtoken.rows == []
-    assert cache.get_cache("k-bob") is not None and cache.get_cache("carol") is not None
+    assert cache.get_cache(AuthObject.virtual_key("k-bob")) is not None
+    assert cache.get_cache(AuthObject.user("carol")) is not None
 
 
 def _replace_with(member_ids: Sequence[str]) -> RosterPlan:
