@@ -392,3 +392,22 @@ async def test_async_increment_pipeline_keeps_each_key_for_its_own_ttl() -> None
 
     assert cache.get_cache("minute") is None
     assert cache.get_cache("day") == 1
+
+
+@pytest.mark.asyncio
+async def test_async_get_ttl_reports_seconds_remaining_not_the_expiry_timestamp() -> None:
+    now: Final = {"t": 1_000.0}
+    cache: Final = InMemoryCache(default_ttl=600, clock=lambda: now["t"])
+
+    cache.set_cache("default", "v")
+    cache.set_cache("explicit", "v", ttl=30)
+
+    assert await cache.async_get_ttl("default") == 600
+    assert await cache.async_get_ttl("explicit") == 30
+    assert await cache.async_get_ttl("absent") is None
+
+    now["t"] += 20
+    assert await cache.async_get_ttl("explicit") == 10
+
+    now["t"] += 11
+    assert await cache.async_get_ttl("explicit") is None
