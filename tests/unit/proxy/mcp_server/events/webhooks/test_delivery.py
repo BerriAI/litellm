@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Final
 
 import anyio
@@ -261,3 +261,37 @@ def test_only_an_exact_echo_of_the_challenge_verifies_the_endpoint(body: bytes, 
     from litellm.proxy.mcp_server.events.webhooks.verification import echoed_challenge
 
     assert echoed_challenge(CallbackResponse(status=200, body=body), "abc") is matches
+
+
+class _Streamed(httpx.AsyncByteStream):
+    """A body that arrives over the wire in chunks, as a real socket delivers it."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for start in range(0, len(self._body), 4096):
+            yield self._body[start : start + 4096]
+
+
+@pytest.mark.asyncio
+async def test_a_compressed_callback_body_is_capped_on_the_wire_and_never_inflated() -> None:
+    import gzip
+
+    inflated: Final = b"0" * (10 * 1024 * 1024)
+    sent_encodings: Final[list[str | None]] = []  # mutable-ok: records what the gateway asked for
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_encodings.append(request.headers.get("accept-encoding"))
+        return httpx.Response(200, stream=_Streamed(gzip.compress(inflated)), headers={"content-encoding": "gzip"})
+
+    response: Final = await post_callback(
+        "https://hook.example/in",
+        b"{}",
+        {},
+        resolve=_resolver("93.184.216.34"),  # pyright: ignore[reportArgumentType]  # test resolver
+        transport=httpx.MockTransport(handler),
+    )
+    assert sent_encodings == ["identity"]
+    assert isinstance(response, Ok) and len(response.ok.body) <= 64 * 1024
+    assert response.ok.body[:2] == b"\x1f\x8b"

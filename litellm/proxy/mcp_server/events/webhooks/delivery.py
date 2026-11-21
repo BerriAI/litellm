@@ -150,7 +150,7 @@ async def _post_once(
             "POST",
             target,
             content=body,
-            headers={**headers, "host": pinned.host_header},
+            headers={**headers, "host": pinned.host_header, "accept-encoding": "identity"},
             extensions={"sni_hostname": pinned.hostname},
         ) as response:
             received: Final = await _read_capped(response)
@@ -166,9 +166,13 @@ async def _post_once(
 
 
 async def _read_capped(response: httpx.Response) -> bytes:
+    """At most the cap of the bytes on the wire; they are never decompressed, so a small compressed body
+    cannot expand past the cap, and a callback that compresses anyway simply fails verification."""
+    if response.is_stream_consumed:
+        return response.content[:_MAX_RESPONSE_BYTES]
     chunks: Final[list[bytes]] = []  # mutable-ok: bounded response buffer
     size = 0  # rebind-ok: running byte count of the capped read
-    async for chunk in response.aiter_bytes():
+    async for chunk in response.aiter_raw():
         chunks.append(chunk[: _MAX_RESPONSE_BYTES - size])
         size += len(chunks[-1])
         if size >= _MAX_RESPONSE_BYTES:
