@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
 from functools import partial
@@ -36,6 +37,7 @@ _TransportStreams: TypeAlias = tuple[
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_callback", "logging_callback"]
+_ResponseRetry: TypeAlias = Callable[[Callable[[], Awaitable[httpx2.Response]]], Awaitable[httpx2.Response]]
 
 
 SESSION_CLEANUP_TIMEOUT_MESSAGE: Final = "MCP session cleanup timed out"
@@ -291,14 +293,53 @@ class _MCPResponseStream(httpx2.AsyncByteStream):
             raise
 
 
+class ToolListingSession:
+    def __init__(self, session_id: str | None = None, protocol_version: str | None = None) -> None:
+        self.session_id = session_id
+        self.protocol_version = protocol_version
+        self.initialized = False
+        self.keep_alive = False
+        self.response_retry: _ResponseRetry | None = None
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        if self.session_id is None:
+            return {}
+        return {
+            "Mcp-Session-Id": self.session_id,
+            **({"MCP-Protocol-Version": self.protocol_version} if self.protocol_version is not None else {}),
+        }
+
+    def mark_initialized(self, protocol_version: str | None) -> None:
+        self.protocol_version = protocol_version
+        self.initialized = True
+
+    def stop_retaining(self) -> None:
+        self.keep_alive = False
+
+    async def observe_response(self, response: httpx2.Response) -> None:
+        if self.session_id is None:
+            self.session_id = response.headers.get("mcp-session-id")
+
+
 class _MCPHTTPClient(httpx2.AsyncClient):
     cleanup_scope: anyio.CancelScope | None = None
     cleanup_errors: tuple[Exception, ...] = ()
     post_failure: asyncio.Future[Exception] | None = None
+    response_retry: _ResponseRetry | None = None
 
     def _record_cleanup_error(self, error: Exception) -> None:
         if self.cleanup_scope is not None and self.cleanup_scope.shield:
             self.cleanup_errors += (error,)
+
+    def _record_post_failure(self, request: httpx2.Request, error: Exception) -> None:
+        if request.method != "POST":
+            return
+        if not isinstance(error, httpx2.HTTPStatusError):
+            return
+        if self.post_failure is None or self.post_failure.done():
+            return
+        self.post_failure.set_result(error)
 
     async def send(
         self,
@@ -318,22 +359,29 @@ class _MCPHTTPClient(httpx2.AsyncClient):
                 return termination
 
             return await _run_bounded_cleanup(terminate, self.cleanup_scope.deadline)
-        try:
-            response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+
+        async def send_once() -> httpx2.Response:
+            response: Final = await super(_MCPHTTPClient, self).send(
+                request, stream=stream, auth=auth, follow_redirects=follow_redirects
+            )
             if request.method == "POST" and response.is_error and response.status_code != 404:
                 await response.aclose()
-                try:
-                    response.raise_for_status()
-                except httpx2.HTTPStatusError as error:
-                    if self.post_failure is not None and not self.post_failure.done():
-                        self.post_failure.set_result(error)
-                    raise
+                response.raise_for_status()
             if stream:
                 response.stream = _MCPResponseStream(
                     cast(httpx2.AsyncByteStream, response.stream), self._record_cleanup_error
                 )
             return response
+
+        try:
+            response: Final = (
+                await self.response_retry(send_once)
+                if request.method == "POST" and self.response_retry is not None
+                else await send_once()
+            )
+            return response
         except Exception as error:
+            self._record_post_failure(request, error)
             self._record_cleanup_error(error)
             raise
 
@@ -612,6 +660,7 @@ class MCPClient:
 
     def _create_transport_context(
         self,
+        listing_session: ToolListingSession | None = None,
     ) -> tuple[_TransportContext, httpx2.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
@@ -647,19 +696,19 @@ class MCPClient:
             )
         # HTTP transport (default)
         headers = self._get_auth_headers()
-        httpx_client_factory = (
-            self._create_httpx_client_factory()
-            if self._upstream_transport is None
-            else self._create_httpx_client_factory(transport=self._upstream_transport)
+        streamable_http_client_factory: Final = self._create_httpx_client_factory(
+            transport=self._upstream_transport,
+            listing_session=listing_session,
         )
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
-        http_client = httpx_client_factory(
-            headers=headers,
+        http_client = streamable_http_client_factory(
+            headers=headers | dict(listing_session.headers if listing_session is not None else {}),
             timeout=httpx2.Timeout(self.timeout),
         )
         transport_ctx: Final = streamable_http_client(
             url=self.server_url,
             http_client=http_client,
+            terminate_on_close=listing_session is None,
             max_sse_event_size=MCP_MAX_SSE_EVENT_SIZE_BYTES,
         )
         return transport_ctx, http_client
@@ -759,6 +808,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -804,11 +854,14 @@ class MCPClient:
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
-                        init_result: Final = await self._prepare_session(session)
-                        instructions: Final = getattr(init_result, "instructions", None)
-                        self._last_initialize_instructions = (
-                            instructions.strip() or None if isinstance(instructions, str) else None
-                        )
+                        if listing_session is None or listing_session.session_id is None:
+                            init_result: Final = await self._prepare_session(session)
+                            instructions: Final = getattr(init_result, "instructions", None)
+                            self._last_initialize_instructions = (
+                                instructions.strip() or None if isinstance(instructions, str) else None
+                            )
+                            if listing_session is not None:
+                                listing_session.mark_initialized(session.protocol_version)
                         result: Final = await operation(session)
                     except BaseException as operation_error:
                         in_flight_error = operation_error
@@ -866,6 +919,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -874,9 +928,14 @@ class MCPClient:
         not emit a warning per call; every other caller keeps the operator-visible warning."""
         http_client: httpx2.AsyncClient | None = None
         close_cancellation: asyncio.CancelledError | None = None
+        in_flight_error: BaseException | None = None
         try:
             self._last_initialize_instructions = None
-            transport_ctx, http_client = self._create_transport_context()
+            transport_ctx, http_client = (  # rebind-ok: retain the created client for bounded cleanup
+                self._create_transport_context(listing_session)
+                if listing_session is not None
+                else self._create_transport_context()
+            )
             execution: Final = (
                 self._execute_session_operation(
                     transport_ctx,
@@ -885,12 +944,21 @@ class MCPClient:
                     on_stream_error=on_stream_error,
                     on_cleanup=on_cleanup,
                     on_notification=on_notification,
+                    listing_session=listing_session,
                 )
-                if on_stream_error is not None or on_cleanup is not None or on_notification is not None
+                if (
+                    on_stream_error is not None
+                    or on_cleanup is not None
+                    or on_notification is not None
+                    or listing_session is not None
+                )
                 else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
             )
             result: Final = await execution
         except Exception as e:
+            in_flight_error = e  # rebind-ok: preserve the operation failure over cleanup cancellation
+            if listing_session is not None:
+                listing_session.stop_retaining()
             read_timeout: Final = as_mcp_read_timeout(e)
             if read_timeout is not None:
                 verbose_logger.warning(
@@ -902,13 +970,41 @@ class MCPClient:
             _log: Final = verbose_logger.debug if quiet_on_error else verbose_logger.warning
             _log("MCP client run_with_session failed for %s", self.server_url or "stdio")
             raise
+        except asyncio.CancelledError as e:
+            in_flight_error = e  # rebind-ok: preserve the operation cancellation over cleanup cancellation
+            if listing_session is not None:
+                listing_session.stop_retaining()
+            raise
         finally:
             if http_client is not None:
+                try:
+                    if (
+                        listing_session is not None
+                        and listing_session.session_id is not None
+                        and not listing_session.keep_alive
+                    ):
+                        await _run_bounded_cleanup(
+                            partial(
+                                http_client.delete,
+                                self.server_url,
+                                headers=listing_session.headers,
+                                follow_redirects=False,
+                            ),
+                            anyio.current_time() + 1,
+                        )
+                except (Exception, asyncio.CancelledError) as termination_error:  # noqa: BLE001  # cleanup failures must not replace the listing outcome
+                    verbose_logger.debug("MCP tool listing session termination failed")
+                    if (
+                        isinstance(termination_error, asyncio.CancelledError)
+                        and in_flight_error is None
+                        and close_cancellation is None
+                    ):
+                        close_cancellation = termination_error
                 try:
                     await _run_bounded_cleanup(http_client.aclose, anyio.current_time() + 1)
                 except (Exception, asyncio.CancelledError) as e:
                     verbose_logger.debug("Error during http_client cleanup: %s", e)
-                    if isinstance(e, asyncio.CancelledError):
+                    if isinstance(e, asyncio.CancelledError) and in_flight_error is None and close_cancellation is None:
                         close_cancellation = e
 
         if close_cancellation is not None:
@@ -978,7 +1074,10 @@ class MCPClient:
         return _strip_header_whitespace(headers)
 
     def _create_httpx_client_factory(
-        self, *, transport: httpx2.AsyncBaseTransport | None = None
+        self,
+        *,
+        transport: httpx2.AsyncBaseTransport | None = None,
+        listing_session: ToolListingSession | None = None,
     ) -> Callable[..., httpx2.AsyncClient]:
         """
         Create a custom httpx2 client factory that uses LiteLLM's SSL configuration.
@@ -1005,7 +1104,7 @@ class MCPClient:
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
             guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
-            return _MCPHTTPClient(
+            http_client: Final = _MCPHTTPClient(
                 transport=transport,
                 headers=headers,
                 timeout=timeout,
@@ -1018,11 +1117,14 @@ class MCPClient:
                             self._session_callbacks_override["response_hooks"]
                             if self._session_callbacks_override is not None
                             else _mcp_response_hooks()
-                        ),
+                        )
+                        + ([listing_session.observe_response] if listing_session is not None else []),
                         "request": [guard] if guard else [],
                     }
                 ),
             )
+            http_client.response_retry = listing_session.response_retry if listing_session is not None else None
+            return http_client
 
         return factory
 
@@ -1067,9 +1169,37 @@ class MCPClient:
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
             return await self.run_with_session(fetch, quiet_on_error=True)
 
-    async def list_tools_page(self, params: PaginatedRequestParams) -> ListToolsResult:
+    async def list_tools_page(
+        self, params: PaginatedRequestParams, *, listing_session: ToolListingSession | None = None
+    ) -> ListToolsResult:
+        retained: Final = listing_session if self.transport_type == MCPTransport.http else None
+        if retained is not None and params.cursor is None:
+            retained.session_id = None
+            retained.protocol_version = None
+            retained.initialized = False
+            retained.keep_alive = False
+
+        async def fetch(session: ClientSession) -> ListToolsResult:
+            # Reattached SDK sessions restart their request counter; IDs must remain unique upstream.
+            result: Final = (
+                ListToolsResult.model_validate(
+                    await session._dispatcher.send_raw_request(  # pyright: ignore[reportPrivateUsage]  # SDK lacks request ID override
+                        "tools/list",
+                        {"cursor": params.cursor},
+                        {"request_id": uuid.uuid4().hex, "timeout": self.timeout},
+                    )
+                )
+                if retained is not None and retained.session_id is not None and not retained.initialized
+                else await session.list_tools(params=params)
+            )
+            if retained is not None:
+                retained.keep_alive = bool(result.next_cursor)
+            return result
+
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
-            return await self.run_with_session(lambda session: session.list_tools(params=params), quiet_on_error=True)
+            if retained is None:
+                return await self.run_with_session(fetch, quiet_on_error=True)
+            return await self.run_with_session(fetch, quiet_on_error=True, listing_session=retained)
 
     async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
         return (await self.list_tools_result(raise_on_error=raise_on_error)).tools

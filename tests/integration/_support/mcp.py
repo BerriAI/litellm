@@ -155,7 +155,12 @@ def _cancel_on_disconnect(app: ASGIApp) -> ASGIApp:
     return connected
 
 
-def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Queue[dict[str, object]]):
+def _capturing(
+    app: Callable[[Scope, Receive, Send], object],
+    observed: queue.Queue[dict[str, object]],
+    *,
+    include_delete: bool = False,
+):
     async def capture(scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await app(scope, receive, send)
@@ -167,6 +172,8 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
         assert len(body) <= 65536
         if body:
             observed.put({"body": json.loads(body), "headers": dict(scope["headers"]), "path": scope["path"]})
+        elif scope["method"] == "DELETE" and include_delete:
+            observed.put({"method": "DELETE", "headers": dict(scope["headers"]), "path": scope["path"]})
         message: Final = {"type": "http.request", "body": body, "more_body": False}
         pending: Final = iter((message,))
 
@@ -827,10 +834,12 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
 def paginated_mcp_peer(
     *,
     page_size: int = 1,
+    total_tools: int = 3,
     ttl_ms: int = 0,
     repeat_cursor: bool = False,
     fail_listing: bool = False,
     fail_continuation: bool = False,
+    session_bound: bool = False,
     metadata: dict[str, JsonValue] | None = None,
 ) -> Iterator[McpPeer]:
     from contextlib import asynccontextmanager
@@ -851,18 +860,33 @@ def paginated_mcp_peer(
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    def window(params):
+    def window(context, params):
         if fail_listing or (fail_continuation and params is not None and params.cursor):
             from mcp import MCPError
             from mcp.types import INTERNAL_ERROR
 
             raise MCPError(code=INTERNAL_ERROR, message="untrusted upstream message")
-        start = int(params.cursor) if params is not None and params.cursor else 0
-        end = min(start + page_size, 3)
-        return range(start, end), "1" if repeat_cursor else str(end) if end < 3 else None
+        cursor = params.cursor if params is not None else None
+        session_id = context.request.headers.get("mcp-session-id") if session_bound and context.request else None
+        if session_bound and not session_id:
+            from mcp import MCPError
+            from mcp.types import INVALID_PARAMS
+
+            raise MCPError(code=INVALID_PARAMS, message="request has no Mcp-Session-Id")
+        start = int(cursor.partition(":")[2]) if cursor and session_bound else int(cursor or "0")
+        if cursor and session_bound and cursor.partition(":")[0] != session_id:
+            from mcp import MCPError
+            from mcp.types import INVALID_PARAMS
+
+            raise MCPError(code=INVALID_PARAMS, message="Stale pagination cursor for this session")
+        end = min(start + page_size, total_tools)
+        following = "1" if repeat_cursor else str(end) if end < total_tools else None
+        if session_bound and following is not None:
+            following = f"{session_id}:{following}"
+        return range(start, end), following
 
     async def tools(context, params):
-        indexes, cursor = window(params)
+        indexes, cursor = window(context, params)
         return ListToolsResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -882,7 +906,7 @@ def paginated_mcp_peer(
         )
 
     async def prompts(context, params):
-        indexes, cursor = window(params)
+        indexes, cursor = window(context, params)
         return ListPromptsResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -892,7 +916,7 @@ def paginated_mcp_peer(
         )
 
     async def resources(context, params):
-        indexes, cursor = window(params)
+        indexes, cursor = window(context, params)
         return ListResourcesResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -902,7 +926,7 @@ def paginated_mcp_peer(
         )
 
     async def templates(context, params):
-        indexes, cursor = window(params)
+        indexes, cursor = window(context, params)
         return ListResourceTemplatesResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -929,17 +953,22 @@ def paginated_mcp_peer(
     )
     manager = StreamableHTTPSessionManager(
         service,
-        stateless=True,
+        stateless=not session_bound,
         json_response=True,
         security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
 
     @asynccontextmanager
     async def lifespan(app):
+        AppStatus.should_exit = False
         async with manager.run():
             yield
+        watchers: Final = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
+        for watcher in watchers:
+            watcher.cancel()
+        await asyncio.gather(*watchers, return_exceptions=True)
 
     app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
     observed = queue.Queue()
-    with asgi_server(_capturing(app, observed)) as url:
+    with asgi_server(_capturing(app, observed, include_delete=session_bound)) as url:
         yield McpPeer(url + "/mcp/", observed)

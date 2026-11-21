@@ -79,6 +79,7 @@ from litellm.mcp_client.client import (
     SESSION_CLEANUP_TIMEOUT_MESSAGE,
     MCPClient,
     PersistentMCPSession,
+    ToolListingSession,
     UpstreamSessionClosedError,
     strip_auth_scheme,
     to_basic_credentials,
@@ -1978,6 +1979,23 @@ class _UpstreamToolListing(BaseModel):
 
 def _tool_page_cursor(params: PaginatedRequestParams | None) -> tuple[str | None] | None:
     return None if params is None else (params.cursor,)
+
+
+def _needs_initial_page_refetch(
+    listing_session: ToolListingSession | None,
+    transport_type: MCPTransport,
+    params: PaginatedRequestParams | None,
+    page: ListToolsResult,
+) -> bool:
+    if listing_session is None:
+        return False
+    if transport_type != MCPTransport.http:
+        return False
+    if params is None or params.cursor is not None:
+        return False
+    if not page.next_cursor:
+        return False
+    return not listing_session.initialized
 
 
 def _mcp_tools_list_cache_ttl() -> int | None:
@@ -4602,6 +4620,7 @@ class MCPServerManager:
         record_listing: bool = False,
         listing_updates: ExitStack | None = None,
         use_tool_list_cache: bool = True,
+        listing_session: ToolListingSession | None = None,
     ) -> ListToolsResult:
         from litellm.proxy.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -4741,6 +4760,7 @@ class MCPServerManager:
                         page_cursor=_tool_page_cursor(params),
                     ),
                     use_cache=use_tool_list_cache and extra_headers is headers_before_signing,
+                    listing_session=listing_session,
                 )
                 tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
@@ -4810,13 +4830,27 @@ class MCPServerManager:
         return self._tools_list_cache_ttl if per_server is None else per_server
 
     def _tools_fetch(
-        self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams | None
+        self,
+        client: MCPClient,
+        server: MCPServer,
+        params: PaginatedRequestParams | None,
+        listing_session: ToolListingSession | None = None,
     ) -> Callable[[], Awaitable[ListToolsResult]]:
         if params is None:
             return partial(self._fetch_tools_with_timeout, client, server.name)
+        fetch_page: Final = partial(
+            self._fetch_tools_page_with_timeout, client, server, params, listing_session=listing_session
+        )
+        if listing_session is not None and server.transport == MCPTransport.http:
+            listing_session.response_retry = partial(  # rebind-ok: the request-local session owns this retry callback
+                retry_upstream_rate_limit,
+                server_name=server.name,
+                deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+            )
+            return fetch_page
         return partial(
             retry_upstream_rate_limit,
-            partial(self._fetch_tools_page_with_timeout, client, server, params),
+            fetch_page,
             server.name,
             deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
         )
@@ -4829,8 +4863,9 @@ class MCPServerManager:
         key_for_credential: Callable[[str], _DiscoveryKey],
         *,
         use_cache: bool,
+        listing_session: ToolListingSession | None = None,
     ) -> ListToolsResult:
-        fetch_page: Final = self._tools_fetch(client, server, params)
+        fetch_page: Final = self._tools_fetch(client, server, params, listing_session)
 
         async def fetch() -> _UpstreamToolListing:
             return _UpstreamToolListing.fetched_by(client, await fetch_page())
@@ -4838,6 +4873,8 @@ class MCPServerManager:
         listing: Final = await self._cached_or_upstream_tools(
             server, client, params, key_for_credential, fetch, use_cache
         )
+        if _needs_initial_page_refetch(listing_session, server.transport, params, listing.page):
+            return (await fetch()).page_to_serve()
         self._remember_instructions_if_missing(server, listing.upstream_instructions)
         return listing.page_to_serve()
 
@@ -5954,13 +5991,20 @@ class MCPServerManager:
             raise_classified_list_failure(e, server_name)
 
     async def _fetch_tools_page_with_timeout(
-        self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams
+        self,
+        client: MCPClient,
+        server: MCPServer,
+        params: PaginatedRequestParams,
+        *,
+        listing_session: ToolListingSession | None = None,
     ) -> ListToolsResult:
         deadline: Final = (
             MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
         )
         try:
             with anyio.fail_after(deadline):
+                if listing_session is not None:
+                    return await client.list_tools_page(params, listing_session=listing_session)
                 return await client.list_tools_page(params)
         except TimeoutError as e:
             verbose_logger.warning("Timeout while listing tools from %s", server.name)
