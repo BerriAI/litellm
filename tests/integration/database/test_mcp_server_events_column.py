@@ -16,7 +16,7 @@ EVENTS: Final = MCPServerEventsConfig(enabled=True, allowed_events=("build.*",))
 
 async def _stored(client: PrismaClient, server_id: str) -> MCPServerEventsConfig | None:
     row: Final = await client.db.litellm_mcpservertable.find_unique(where={"server_id": server_id})
-    return _stored_events_config(row.events if row is not None else None)
+    return _stored_events_config(row.model_dump().get("events") if row is not None else None)
 
 
 @pytest.mark.asyncio
