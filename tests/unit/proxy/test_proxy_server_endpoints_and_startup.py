@@ -16424,6 +16424,27 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     assert proxy_server_module.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
 
 
+@pytest.mark.parametrize("field", ["audience", "public_key_url"])
+def test_initialize_jwt_auth_refuses_a_global_audience_or_jwks_url_naming_an_unset_variable(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy.proxy_server import ProxyConfig, ProxyStartupEvent
+
+    for name in ("JWT_AUDIENCE", "JWT_PUBLIC_KEY_URL", "UNSET_GATEWAY_JWT_SETTING"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(proxy_server_module, "litellm_jwtauth", proxy_server_module.litellm_jwtauth)
+    general_settings: Final = ProxyConfig()._check_for_os_environ_vars(
+        config={"enable_jwt_auth": True, "litellm_jwtauth": {field: "os.environ/UNSET_GATEWAY_JWT_SETTING"}}
+    )
+
+    with pytest.raises(ValidationError, match=field):
+        ProxyStartupEvent.initialize_jwt_auth(
+            general_settings=general_settings, prisma_client=None, user_api_key_cache=DualCache()
+        )
+
+
 def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):
     from pydantic import ValidationError
 
