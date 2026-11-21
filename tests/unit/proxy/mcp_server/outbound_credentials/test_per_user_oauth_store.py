@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -59,7 +60,7 @@ async def test_credential_persistence_preserves_known_and_unknown_scopes(credent
     [((), None, []), (("read", "write"), "", []), (("read", "write"), None, ["read", "write"])],
 )
 async def test_native_refresh_persists_actual_grant_through_storage_adapter(
-    credentials_prisma,
+    credentials_prisma: SimpleNamespace,
     prior_scopes,
     response_scope,
     expected,
