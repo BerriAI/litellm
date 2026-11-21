@@ -267,3 +267,42 @@ async def test_provider_config_non_streaming_forwards_timeout_and_ignores_unrela
 async def test_provider_config_non_streaming_requires_api_base() -> None:
     with pytest.raises(ValueError, match="api_base is required for PydanticAIProviderConfig"):
         await PydanticAIProviderConfig().handle_non_streaming("req-5", _user_params())
+
+
+@pytest.mark.asyncio
+async def test_provider_config_keeps_the_agents_json_rpc_error(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    error: Final = {"code": -32602, "message": "Invalid params"}
+    respx_mock.post("http://agent.test/").mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-6", "error": error})
+    )
+
+    response: Final = await PydanticAIProviderConfig().handle_non_streaming(
+        "req-6", _user_params(), "http://agent.test"
+    )
+    streamed: Final = [
+        event
+        async for event in PydanticAIProviderConfig().handle_streaming("req-7", _user_params(), "http://agent.test")
+    ]
+
+    assert response == {"jsonrpc": "2.0", "id": "req-6", "error": error}
+    assert streamed == [{"jsonrpc": "2.0", "id": "req-7", "error": error}]
+
+
+@pytest.mark.asyncio
+async def test_provider_config_reads_an_agent_that_answers_with_a_message(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    message: Final = {"kind": "message", "role": "agent", "messageId": "m-1", "parts": [{"kind": "text", "text": "ok"}]}
+    respx_mock.post("http://agent.test/").mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-8", "result": message})
+    )
+
+    response: Final = await PydanticAIProviderConfig().handle_non_streaming(
+        "req-8", _user_params(), "http://agent.test"
+    )
+
+    assert response["result"]["parts"] == [{"kind": "text", "text": "ok"}]

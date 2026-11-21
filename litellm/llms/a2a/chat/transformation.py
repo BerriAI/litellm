@@ -3,7 +3,7 @@ A2A Protocol Transformation for LiteLLM
 """
 
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -325,17 +325,35 @@ class A2AConfig(BaseConfig):
                 headers=dict(raw_response.headers),
             )
 
+        return self.model_response_from_reply(
+            reply=_JSON_OBJECT.validate_python(response_json),
+            model_response=model_response,
+            model=model,
+            messages=messages,
+            status_code=raw_response.status_code,
+            headers=dict(raw_response.headers),
+        )
+
+    def model_response_from_reply(
+        self,
+        reply: Mapping[str, object],
+        model_response: ModelResponse,
+        model: str,
+        messages: Sequence[AllMessageValues],
+        status_code: int,
+        headers: Mapping[str, str],
+    ) -> ModelResponse:
         # Check for JSON-RPC error
-        if "error" in response_json:
-            error: Final = _JSON_OBJECT.validate_python(response_json["error"])
+        if "error" in reply:
+            error: Final = _JSON_OBJECT.validate_python(reply["error"])
             raise A2AError(
-                status_code=raw_response.status_code,
+                status_code=status_code,
                 message=f"A2A error: {error.get('message', 'Unknown error')}",
-                headers=dict(raw_response.headers),
+                headers=dict(headers),
             )
 
         # Extract text from A2A response
-        text: Final = extract_text_from_a2a_response(_JSON_OBJECT.validate_python(response_json))
+        text: Final = extract_text_from_a2a_response(reply)
 
         # Populate model response
         model_response.choices = [
@@ -353,14 +371,15 @@ class A2AConfig(BaseConfig):
         model_response.model = model
 
         # Set ID from response
-        model_response.id = response_json.get("id", str(uuid.uuid4()))
+        reply_id: Final = reply.get("id")
+        model_response.id = reply_id if isinstance(reply_id, str) else str(uuid.uuid4())
 
         # A2A agents don't return token usage; estimate it so per-token pricing
         # produces real cost and callers don't receive usage of 0/0/0.
         try:
             from litellm.utils import token_counter
 
-            prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=messages)
+            prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=list(messages))
             completion_tokens: Final = token_counter(model="gpt-3.5-turbo", text=text, count_response_tokens=True)
             setattr(
                 model_response,
