@@ -194,7 +194,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         return join_api_base(api_base, "v2/vectordb/entities/search"), {
             "collectionName": vector_store_id,
             "data": [query_vector],
-            "annsField": "anns_field",
+            "annsField": anns_field,
             **vector_store_search_optional_params,
             **scope,
         }
