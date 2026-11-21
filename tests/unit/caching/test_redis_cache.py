@@ -1610,6 +1610,75 @@ class _SetRecordingPipeline:
         return [True] * len(self.sets)
 
 
+class _GatedSetPipeline(_SetRecordingPipeline):
+    def __init__(self, stored: dict[str, str]) -> None:
+        super().__init__()
+        self.stored = stored
+        self.started: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def execute(self) -> list[bool]:
+        self.started.set()
+        await self.release.wait()
+        self.stored.update((name, value) for name, value, _ in self.sets)
+        return await super().execute()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_buffer_flushes_preserve_writes_arriving_between_completions(redis_no_ping: None) -> None:
+    stored: Final[dict[str, str]] = {}  # mutable-ok: storage shared by the fake Redis pipelines
+    first, second, final = (_GatedSetPipeline(stored) for _ in range(3))
+    final.release.set()
+    client: Final = MagicMock()
+    client.pipeline.side_effect = (first, second, final)
+
+    with (
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_async_client", return_value=client),
+    ):  # test-quality-ok: RedisCache constructs its Redis clients without an injection point
+        cache: Final = RedisCache(host="buffer-race.test", redis_flush_size=2, namespace="buffer")
+        await cache.batch_cache_write("a", "a")
+        first_flush: Final = asyncio.create_task(cache.batch_cache_write("b", "b"))
+        await first.started.wait()
+        next_write: Final = asyncio.create_task(cache.batch_cache_write("c", "c"))
+        await asyncio.sleep(0)
+        first.release.set()
+        await first_flush
+        last_write: Final = asyncio.create_task(cache.batch_cache_write("d", "d"))
+        await second.started.wait()
+        second.release.set()
+        await asyncio.gather(next_write, last_write)
+        await cache.flush_cache_buffer()
+
+    assert stored == {f"buffer:{key}": f'"{key}"' for key in ("a", "b", "c", "d")}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_buffer_flush_keeps_pending_writes_for_the_next_flush(redis_no_ping: None) -> None:
+    stored: Final[dict[str, str]] = {}  # mutable-ok: storage shared by the fake Redis pipelines
+    interrupted: Final = _GatedSetPipeline(stored)
+    retry: Final = _GatedSetPipeline(stored)
+    retry.release.set()
+    client: Final = MagicMock()
+    client.pipeline.side_effect = (interrupted, retry)
+
+    with (
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_async_client", return_value=client),
+    ):  # test-quality-ok: RedisCache constructs its Redis clients without an injection point
+        cache: Final = RedisCache(host="buffer-cancel.test", redis_flush_size=3, namespace="buffer")
+        await cache.batch_cache_write("a", "a")
+        flushing: Final = asyncio.create_task(cache.flush_cache_buffer())
+        await interrupted.started.wait()
+        await cache.batch_cache_write("b", "b")
+        flushing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await flushing
+        await cache.flush_cache_buffer()
+
+    assert stored == {f"buffer:{key}": f'"{key}"' for key in ("a", "b")}
+
+
 @pytest.mark.asyncio
 async def test_async_set_cache_pipeline_with_ttls_keeps_each_entry_ttl(monkeypatch, redis_no_ping):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
