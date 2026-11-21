@@ -159,7 +159,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "tool_choice",
             "parallel_tool_calls",
             "reasoning",
-            "previous_response_id",
             "truncation",
             "text",
             "max_output_tokens",
