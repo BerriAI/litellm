@@ -203,7 +203,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
         <div className="flex flex-wrap items-center gap-2">
           <PageHeaderTitle>
             <BarChart3 />
-            {t("shell.nav.items.costTracking")}
+            {t("costTracking.settings.title")}
           </PageHeaderTitle>
           <DocsMenu
             className="ml-auto sm:ml-0"

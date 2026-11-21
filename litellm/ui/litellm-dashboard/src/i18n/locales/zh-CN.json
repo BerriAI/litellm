@@ -822,6 +822,7 @@
   },
   "vectorStores": {
     "page": {
+      "title": "向量存储",
       "lastRefreshed": "上次刷新：{{time}}",
       "refresh": "刷新",
       "description": "可以使用向量存储来保存和检索模型嵌入向量。",
@@ -3712,6 +3713,7 @@
         "removing": "正在移除…",
         "remove": "移除"
       },
+      "title": "成本追踪",
       "description": "为不同模型提供商配置折扣和加价，修改将自动保存。",
       "loading": "正在加载配置…",
       "discounts": {
@@ -9024,6 +9026,7 @@
         "reset": "主题设置已恢复默认！",
         "resetFailed": "重置主题设置失败，请重试"
       },
+      "title": "界面主题",
       "description": "使用自定义标志和网站图标，定制 LiteLLM 管理界面。",
       "logoUrl": {
         "label": "自定义标志地址",
@@ -19468,6 +19471,7 @@
       "reloadButton": "重新加载价格数据"
     },
     "page": {
+      "title": "模型管理",
       "adminDescription": "添加和管理代理中的模型",
       "userDescription": "查看可用模型，并管理已获授权团队的路由。",
       "lastRefreshed": "上次刷新：{{time}}",

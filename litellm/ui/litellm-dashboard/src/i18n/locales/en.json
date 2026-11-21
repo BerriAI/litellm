@@ -886,6 +886,7 @@
   },
   "vectorStores": {
     "page": {
+      "title": "Vector Stores",
       "lastRefreshed": "Last Refreshed: {{time}}",
       "refresh": "Refresh",
       "description": "You can use vector stores to store and retrieve LLM embeddings.",
@@ -3779,6 +3780,7 @@
         "removing": "Removing…",
         "remove": "Remove"
       },
+      "title": "Cost Tracking",
       "description": "Configure cost discounts and margins for different LLM providers. Changes are saved automatically.",
       "loading": "Loading configuration...",
       "discounts": {
@@ -9092,6 +9094,7 @@
         "reset": "Theme settings reset to default!",
         "resetFailed": "Failed to reset theme settings"
       },
+      "title": "UI Theme",
       "description": "Customize your LiteLLM admin dashboard with a custom logo and favicon.",
       "logoUrl": {
         "label": "Custom Logo URL",
@@ -19560,6 +19563,7 @@
       "reloadButton": "Reload Price Data"
     },
     "page": {
+      "title": "Model Management",
       "adminDescription": "Add and manage models for the proxy",
       "userDescription": "View your models and manage routers for teams that allow it.",
       "lastRefreshed": "Last Refreshed: {{time}}",
