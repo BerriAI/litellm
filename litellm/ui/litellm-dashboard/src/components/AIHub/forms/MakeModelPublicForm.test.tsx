@@ -170,7 +170,11 @@ describe("MakeModelPublicForm", () => {
     });
 
     await waitFor(() => {
-      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith("test-token", ["gpt-4", "gpt-3.5-turbo"]);
+      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith(
+        "test-token",
+        ["gpt-4", "gpt-3.5-turbo"],
+        ["gpt-3.5-turbo"],
+      );
       expect(mockProps.onSuccess).toHaveBeenCalled();
       expect(mockProps.onClose).toHaveBeenCalled();
     });
@@ -315,6 +319,21 @@ describe("MakeModelPublicForm", () => {
     expect(selectAllCheckbox).toBePartiallyChecked();
   });
 
+  it("sends the model groups public when the modal opened next to the edited selection", async () => {
+    mockMakeModelGroupPublic.mockResolvedValueOnce({});
+    render(<MakeModelPublicForm {...mockProps} />);
+
+    const [, gpt4Checkbox, gpt35Checkbox] = screen.getAllByRole("checkbox");
+    fireEvent.click(gpt4Checkbox);
+    fireEvent.click(gpt35Checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Make Public" }));
+
+    await waitFor(() =>
+      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith("test-token", ["gpt-4"], ["gpt-3.5-turbo"]),
+    );
+  });
+
   it("should display model badges and information", () => {
     render(<MakeModelPublicForm {...mockProps} />);
 
@@ -364,7 +383,7 @@ describe("MakeModelPublicForm", () => {
 
     // Should handle error and show error notification
     await waitFor(() => {
-      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith("test-token", ["gpt-3.5-turbo"]);
+      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith("test-token", ["gpt-3.5-turbo"], ["gpt-3.5-turbo"]);
     });
 
     // Should not call onSuccess or onClose on error

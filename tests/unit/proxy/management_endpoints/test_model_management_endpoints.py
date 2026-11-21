@@ -56,6 +56,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
+from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma
 
 
 async def _passthrough_row(update_data):
@@ -2120,6 +2121,244 @@ class TestUpdateModel:
         mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
         persisted = json.loads(mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
         assert persisted["litellm_credential_name"] == "shared-credential"
+
+
+@pytest.mark.asyncio
+async def test_update_useful_links_from_the_dashboard_keeps_a_link_another_admin_edited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_useful_links
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import UpdateUsefulLinksRequest
+
+    docs: Final = {"url": "https://docs.example.com", "index": 0}
+    status_before: Final = {"url": "https://status.example.com", "index": 1}
+    status_edited_by_other_admin: Final = {"url": "https://status.example.com/v2", "index": 1}
+    retired: Final = {"url": "https://retired.example.com", "index": 2}
+    docs_edited: Final = {"url": "https://docs.example.com/v2", "index": 0}
+    blog: Final = {"url": "https://blog.example.com", "index": 2}
+    rows: Final = ConfigRows(
+        {
+            "litellm_settings": {
+                "public_model_groups_links": {"Docs": docs, "Status": status_edited_by_other_admin, "Retired": retired}
+            }
+        }
+    )
+    monkeypatch.setattr(litellm, "public_model_groups_links", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    response: Final = await update_useful_links(
+        request=UpdateUsefulLinksRequest(
+            useful_links={"Docs": docs_edited, "Status": status_before, "Blog": blog},
+            previous_useful_links={"Docs": docs, "Status": status_before, "Retired": retired},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    expected: Final = {"Docs": docs_edited, "Status": status_edited_by_other_admin, "Blog": blog}
+    assert response["useful_links"] == expected
+    assert rows.stored("litellm_settings")["public_model_groups_links"] == expected
+    assert litellm.public_model_groups_links == expected
+
+
+@pytest.mark.parametrize(
+    ("stored", "previous", "requested", "expected"),
+    [
+        pytest.param(
+            {"A": {"url": "https://a.example.com", "index": 0}, "C": {"url": "https://c.example.com/v2", "index": 2}},
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "C": {"url": "https://c.example.com", "index": 2},
+            },
+            {"B": {"url": "https://b.example.com", "index": 0}, "C": {"url": "https://c.example.com", "index": 1}},
+            {"C": {"url": "https://c.example.com/v2", "index": 1}},
+            id="a stale delete keeps another admin's edit and removal",
+        ),
+        pytest.param(
+            {"Docs": "https://docs.example.com/v2", "Status": "https://status.example.com"},
+            {"Docs": "https://docs.example.com", "Status": "https://status.example.com"},
+            {
+                "Docs": {"url": "https://docs.example.com", "index": 0},
+                "Status": {"url": "https://status.example.com", "index": 1},
+                "Blog": {"url": "https://blog.example.com", "index": 2},
+            },
+            {
+                "Docs": "https://docs.example.com/v2",
+                "Status": {"url": "https://status.example.com", "index": 1},
+                "Blog": {"url": "https://blog.example.com", "index": 2},
+            },
+            id="links stored as plain urls keep another admin's edit",
+        ),
+        pytest.param(
+            {"A": {"url": "https://a.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            {"A": {"url": "https://a.example.com", "index": 0}},
+            {"A": {"url": "https://a.example.com", "index": 0}, "C": {"url": "https://c.example.com", "index": 1}},
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "C": {"url": "https://c.example.com", "index": 2},
+            },
+            id="a link added at a taken position goes after the last link",
+        ),
+        pytest.param(
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "Y": {"url": "https://y.example.com", "index": 2},
+            },
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "C": {"url": "https://c.example.com", "index": 2},
+            },
+            {
+                "C": {"url": "https://c.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "A": {"url": "https://a.example.com", "index": 2},
+            },
+            {
+                "A": {"url": "https://a.example.com", "index": 3},
+                "B": {"url": "https://b.example.com", "index": 1},
+                "Y": {"url": "https://y.example.com", "index": 2},
+            },
+            id="a link moved to a taken position goes after the last link",
+        ),
+        pytest.param(
+            {"A": {"url": "https://a.example.com", "index": 0}, "Y": {"url": "https://y.example.com", "index": 1}},
+            {"A": {"url": "https://a.example.com", "index": 0}, "C": {"url": "https://c.example.com", "index": 1}},
+            {"A": {"url": "https://a.example.com", "index": 0}, "C": {"url": "https://c.example.com/v2", "index": 1}},
+            {
+                "A": {"url": "https://a.example.com", "index": 0},
+                "Y": {"url": "https://y.example.com", "index": 1},
+                "C": {"url": "https://c.example.com/v2", "index": 2},
+            },
+            id="a link edited at a taken position goes after the last link",
+        ),
+        pytest.param(
+            {
+                "Docs": {"url": "https://docs.example.com/v2", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {"Docs": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            {
+                "Documentation": {"url": "https://docs.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {
+                "Documentation": {"url": "https://docs.example.com/v2", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            id="a stale rename keeps another admin's url edit",
+        ),
+        pytest.param(
+            {"B": {"url": "https://b.example.com", "index": 1}},
+            {"Docs": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            {
+                "Documentation": {"url": "https://docs.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {"B": {"url": "https://b.example.com", "index": 1}},
+            id="a stale rename of a link another admin removed keeps it removed",
+        ),
+        pytest.param(
+            {
+                "Documentation": {"url": "https://docs.example.com", "index": 0},
+                "B": {"url": "https://b.example.com", "index": 1},
+            },
+            {
+                "Docs": {"url": "https://docs.example.com", "index": 0},
+                "Documentation": {"url": "https://docs.example.com", "index": 1},
+                "B": {"url": "https://b.example.com", "index": 2},
+            },
+            {"Guide": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            {"Guide": {"url": "https://docs.example.com", "index": 0}, "B": {"url": "https://b.example.com", "index": 1}},
+            id="a stale rename of two same-url links keeps the one still stored",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_useful_links_from_a_stale_dashboard_changes_only_what_that_admin_changed(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: dict[str, object],
+    previous: dict[str, str | dict[str, object]],
+    requested: dict[str, str | dict[str, object]],
+    expected: dict[str, object],
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_useful_links
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import UpdateUsefulLinksRequest
+
+    rows: Final = ConfigRows({"litellm_settings": {"public_model_groups_links": stored}})
+    monkeypatch.setattr(litellm, "public_model_groups_links", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    response: Final = await update_useful_links(
+        request=UpdateUsefulLinksRequest(useful_links=requested, previous_useful_links=previous),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["useful_links"] == expected
+    assert rows.stored("litellm_settings")["public_model_groups_links"] == expected
+    assert litellm.public_model_groups_links == expected
+
+
+@pytest.mark.asyncio
+async def test_update_useful_links_that_change_nothing_create_no_settings_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_useful_links
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import UpdateUsefulLinksRequest
+
+    rows: Final = ConfigRows({})
+    monkeypatch.setattr(litellm, "public_model_groups_links", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    response: Final = await update_useful_links(
+        request=UpdateUsefulLinksRequest(useful_links={}, previous_useful_links={}),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["useful_links"] == {}
+    assert "litellm_settings" not in rows.serialized_rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [["gpt-a", "gpt-b"], ["gpt-a", 7, "gpt-b"]], ids=["groups-listed", "a-number-listed"])
+async def test_update_public_model_groups_from_the_modal_keeps_a_group_another_admin_published(
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int]
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        UpdatePublicModelGroupsRequest,
+        update_public_model_groups,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    rows: Final = ConfigRows({"litellm_settings": {"public_model_groups": stored}})
+    monkeypatch.setattr(litellm, "public_model_groups", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    response: Final = await update_public_model_groups(
+        request=UpdatePublicModelGroupsRequest(model_groups=["gpt-c"], previous_model_groups=["gpt-b"]),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["public_model_groups"] == ["gpt-a", "gpt-c"]
+    assert rows.stored("litellm_settings")["public_model_groups"] == ["gpt-a", "gpt-c"]
+    assert litellm.public_model_groups == ["gpt-a", "gpt-c"]
 
 
 class TestUpdatePublicModelGroups:

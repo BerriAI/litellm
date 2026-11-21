@@ -50,12 +50,14 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [preselectedModels, setPreselectedModels] = useState<Set<string>>(new Set());
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [loading, setLoading] = useState(false);
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedModels(new Set());
+    setPreselectedModels(new Set());
     setFilteredData([]);
     onClose();
   };
@@ -111,6 +113,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         .map((model) => model.model_group);
 
       setSelectedModels(new Set(alreadyPublicModels));
+      setPreselectedModels(new Set(alreadyPublicModels));
     }
   }, [visible, modelHubData]);
 
@@ -123,7 +126,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
     setLoading(true);
     try {
       const modelGroupsToMakePublic = Array.from(selectedModels);
-      await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
+      await makeModelGroupPublic(accessToken, modelGroupsToMakePublic, Array.from(preselectedModels));
 
       toast.success(t("aiHub.makeModelPublic.success", { total: modelGroupsToMakePublic.length }));
       handleClose();

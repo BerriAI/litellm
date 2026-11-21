@@ -25,7 +25,7 @@ describe("UsefulLinksManagement", () => {
       litellm_version: "1.0.0",
       useful_links: {},
     });
-    mockedUpdateUsefulLinksCall.mockResolvedValue({});
+    mockedUpdateUsefulLinksCall.mockImplementation(async (_accessToken, useful_links) => ({ useful_links }));
     mockedGetProxyBaseUrl.mockReturnValue("https://proxy.example.com");
   });
 
@@ -52,14 +52,74 @@ describe("UsefulLinksManagement", () => {
     await user.click(screen.getByRole("button", { name: /add link/i }));
 
     await waitFor(() =>
-      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith("token", {
-        Docs: { url: "https://docs.example.com", index: 0 },
-      }),
+      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith(
+        "token",
+        { Docs: { url: "https://docs.example.com", index: 0 } },
+        {},
+      ),
     );
 
     expect(await screen.findByText("Docs")).toBeInTheDocument();
     expect(screen.getByText("https://docs.example.com")).toBeInTheDocument();
     expect(mockedNotifications.success).toHaveBeenCalledWith("Link added successfully");
+  });
+
+  it("should send the links it last saved as the starting point of the next save", async () => {
+    const user = userEvent.setup();
+    render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
+
+    const displayNameInput = await screen.findByPlaceholderText("Friendly name");
+    const urlInput = screen.getByPlaceholderText("https://example.com");
+    fireEvent.change(displayNameInput, { target: { value: "Docs" } });
+    fireEvent.change(urlInput, { target: { value: "https://docs.example.com" } });
+    await user.click(screen.getByRole("button", { name: /add link/i }));
+    expect(await screen.findByText("Docs")).toBeInTheDocument();
+
+    fireEvent.change(displayNameInput, { target: { value: "Status" } });
+    fireEvent.change(urlInput, { target: { value: "https://status.example.com" } });
+    await user.click(screen.getByRole("button", { name: /add link/i }));
+
+    await waitFor(() =>
+      expect(mockedUpdateUsefulLinksCall).toHaveBeenLastCalledWith(
+        "token",
+        {
+          Docs: { url: "https://docs.example.com", index: 0 },
+          Status: { url: "https://status.example.com", index: 1 },
+        },
+        { Docs: { url: "https://docs.example.com", index: 0 } },
+      ),
+    );
+  });
+
+  it("should show the links the proxy kept after a save from a stale list", async () => {
+    const user = userEvent.setup();
+    const hubInfoInStaleTab = {
+      docs_title: "Docs",
+      custom_docs_description: null,
+      litellm_version: "1.0.0",
+      useful_links: {
+        "qa-one": { url: "https://example.com/one", index: 0 },
+        "qa-two": { url: "https://example.com/two", index: 1 },
+        "qa-three": { url: "https://example.com/three", index: 2 },
+      },
+    };
+    mockedGetPublicModelHubInfo.mockResolvedValue(hubInfoInStaleTab);
+    const keptByProxy = { "qa-three": { url: "https://example.com/three-v2", index: 1 } };
+    mockedUpdateUsefulLinksCall.mockResolvedValueOnce({ useful_links: keptByProxy });
+
+    render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
+    expect(await screen.findByText("qa-one")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("delete-link-0-qa-one"));
+
+    expect(await screen.findByText("https://example.com/three-v2")).toBeInTheDocument();
+    expect(screen.queryByText("qa-one")).not.toBeInTheDocument();
+    expect(screen.queryByText("qa-two")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://example.com/three")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("delete-link-0-qa-three"));
+
+    await waitFor(() => expect(mockedUpdateUsefulLinksCall).toHaveBeenLastCalledWith("token", {}, keptByProxy));
   });
 
   it("should rearrange links and save the new order", async () => {
@@ -87,11 +147,19 @@ describe("UsefulLinksManagement", () => {
     await user.click(screen.getByRole("button", { name: /save order/i }));
 
     await waitFor(() =>
-      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith("token", {
-        "Second Link": { url: "https://second.example.com", index: 0 },
-        "First Link": { url: "https://first.example.com", index: 1 },
-        "Third Link": { url: "https://third.example.com", index: 2 },
-      }),
+      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith(
+        "token",
+        {
+          "Second Link": { url: "https://second.example.com", index: 0 },
+          "First Link": { url: "https://first.example.com", index: 1 },
+          "Third Link": { url: "https://third.example.com", index: 2 },
+        },
+        {
+          "First Link": "https://first.example.com",
+          "Second Link": "https://second.example.com",
+          "Third Link": "https://third.example.com",
+        },
+      ),
     );
 
     expect(mockedNotifications.success).toHaveBeenCalledWith("Link order saved successfully");
@@ -155,9 +223,11 @@ describe("UsefulLinksManagement", () => {
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() =>
-      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith("token", {
-        "Updated Link": { url: "https://test.example.com", index: 0 },
-      }),
+      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith(
+        "token",
+        { "Updated Link": { url: "https://test.example.com", index: 0 } },
+        { "Test Link": "https://test.example.com" },
+      ),
     );
 
     expect(mockedNotifications.success).toHaveBeenCalledWith("Link updated successfully");
