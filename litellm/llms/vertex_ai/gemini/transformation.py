@@ -63,6 +63,7 @@ from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 from ..common_utils import (
     GEMINI_FILES_API_URI_PREFIXES,
     check_text_in_content,
+    gemini_media_capability,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
@@ -147,9 +148,7 @@ def _get_highest_media_resolution(current: str | None, new_detail: str | None) -
 
 
 def gemini_part_media_resolution(model: str | None, detail: str | None) -> Mapping[str, str] | None:
-    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-
-    if model is None or not VertexGeminiConfig.is_gemini_3_or_newer(model):
+    if model is None or detail is None or not gemini_media_capability(model, "supports_part_media_resolution"):
         return None
     return _convert_detail_to_media_resolution_enum(detail)
 
@@ -205,11 +204,9 @@ def _apply_gemini_metadata(
     if model is None:
         return part
 
-    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-
     part_dict: Final = dict(part)
 
-    if media_resolution_enum is not None and VertexGeminiConfig.is_gemini_3_or_newer(model):
+    if media_resolution_enum is not None and gemini_media_capability(model, "supports_part_media_resolution"):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -1070,7 +1067,8 @@ def gemini_convert_messages_with_history(
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
                     allow_gemini_file_references=custom_llm_provider == "gemini",
-                    supports_media_in_tool_response=model is None or VertexGeminiConfig.is_gemini_3_or_newer(model),
+                    supports_media_in_tool_response=model is None
+                    or gemini_media_capability(model, "supports_media_in_tool_response"),
                     model=model,
                 )
                 msg_i += 1
@@ -1244,7 +1242,7 @@ def transform_request_body(
         # For Gemini 2.x models, also add media_resolution to generation_config (global)
         # as a fallback, since some 2.x versions may not support per-part media_resolution.
         # Gemini 1.x does not support mediaResolution at all.
-        if "gemini-2" in model:
+        if "gemini-2" in model and not gemini_media_capability(model, "supports_part_media_resolution"):
             max_media_resolution: Final = _extract_max_media_resolution_from_messages(messages)
             if max_media_resolution:
                 media_resolution_value: Final = _convert_detail_to_media_resolution_enum(max_media_resolution)

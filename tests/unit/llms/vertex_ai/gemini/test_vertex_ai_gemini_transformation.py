@@ -92,6 +92,62 @@ def test_files_api_reference_in_gemini_tool_result(version: str) -> None:
     }
 
 
+@pytest.mark.parametrize(("part_resolution", "nested_media"), [(False, True), (True, False)])
+def test_gemini_tool_file_media_uses_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch, part_resolution: bool, nested_media: bool
+) -> None:
+    model: Final = "gemini-4-argon"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "supports_part_media_resolution": part_resolution,
+            "supports_media_in_tool_response": nested_media,
+        },
+    )
+    uri: Final = "https://generativelanguage.googleapis.com/v1/files/report"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_report",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", "resolution": "high"}}],
+        },
+    ]
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    file_part: Final = {"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}
+    expected: Final = (
+        [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                    "parts": [file_part],
+                }
+            }
+        ]
+        if nested_media
+        else [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                }
+            },
+            {**file_part, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
+        ]
+    )
+    assert result[-1]["parts"] == expected
+
+
+
 @pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
 @pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-2.5-flash"])
 @pytest.mark.parametrize(
@@ -1924,8 +1980,6 @@ def test_file_data_field_order():
 
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
-    import json
-
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
     # Test with GCS URL
