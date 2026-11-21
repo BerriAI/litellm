@@ -23,7 +23,7 @@ use std::sync::{
 };
 
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger, SentRequest,
+    DeploymentHooks, LegacyCallbacks, LoggedCallParam, PublicCall, PythonLogger, SentRequest,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call, messages_input,
     python::{Logging, Streaming},
@@ -72,6 +72,8 @@ pub struct LegacyLogging {
     /// Set once the route sends through the host's own client, whose timed `post` already
     /// reports the exchange.
     host_client: Arc<AtomicBool>,
+    /// The params the route's provider logs from the caller's own kwargs.
+    logged_call_params: Vec<LoggedCallParam>,
 }
 
 fn retry_reason(reason: &RetryReason) -> Value {
@@ -115,6 +117,7 @@ impl LegacyLogging {
             host_answered: false,
             stream_starts_on_first_read: false,
             host_client: Arc::default(),
+            logged_call_params: Vec::new(),
         }
     }
 
@@ -125,6 +128,13 @@ impl LegacyLogging {
             host_client,
             ..self
         }
+    }
+
+    /// Logs `param` in the Messages `litellm_params` for calls to its provider.
+    #[must_use]
+    pub fn with_logged_call_param(mut self, param: LoggedCallParam) -> Self {
+        self.logged_call_params.push(param);
+        self
     }
 
     /// The kwargs `Logging.update_from_kwargs` sees. Python's Messages handler takes `metadata` as
@@ -151,24 +161,54 @@ impl LegacyLogging {
     }
 
     /// Python's Messages handler hands the logger its request params, validated `metadata`
-    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag.
+    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag and the
+    /// [`LoggedCallParam`]s the route's provider adds.
     fn logged_request_params(
         &self,
+        py: Python<'_>,
         context: &RequestContext,
-    ) -> Option<serde_json::Map<String, Value>> {
+    ) -> PyResult<Option<serde_json::Map<String, Value>>> {
         if self.operation != LoggingOperation::Messages {
-            return None;
+            return Ok(None);
         }
-        let mut params = context
-            .optional_params
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let mut params = serde_json::Map::new();
+        for param in &self.logged_call_params {
+            if context.custom_llm_provider != param.provider {
+                continue;
+            }
+            if let Some(value) = self.first_text(py, param.read_from)? {
+                params.insert(param.logged_as.to_owned(), Value::String(value));
+            }
+        }
+        params.extend(
+            context
+                .optional_params
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
         params.insert(
             "aanthropic_messages".to_owned(),
             Value::Bool(self.asynchronous),
         );
-        Some(params)
+        Ok(Some(params))
+    }
+
+    /// The first of the call's `names` that holds non-empty text.
+    fn first_text(&self, py: Python<'_>, names: &[&str]) -> PyResult<Option<String>> {
+        for name in names {
+            let Some(value) = self.call.lookup(py, name)? else {
+                continue;
+            };
+            let Ok(text) = value.cast::<PyString>() else {
+                continue;
+            };
+            let text = text.to_str()?;
+            if !text.is_empty() {
+                return Ok(Some(text.to_owned()));
+            }
+        }
+        Ok(None)
     }
 
     // Compared as Python compares them, so a caller's `0` is kept over a typed float's `0.0`.
@@ -624,7 +664,7 @@ impl LegacyLogging {
             &self.logging_kwargs(py, false)?,
             &wire,
             context,
-            self.logged_request_params(context).as_ref(),
+            self.logged_request_params(py, context)?.as_ref(),
         )?;
         let lossless = self.operation == LoggingOperation::Messages;
         let body = if lossless {
@@ -1747,6 +1787,47 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
             secret_fields: vec![],
             api_key: Some(SecretValue::new("route-key")),
         }
+    }
+
+    const LOGGED_LOCATION: crate::LoggedCallParam = crate::LoggedCallParam {
+        provider: "regional",
+        read_from: &["location", "location_alias"],
+        logged_as: "location",
+    };
+
+    #[rstest]
+    #[case::first_name(c"kwargs = {'location': 'eu', 'location_alias': 'us'}", "regional", json!({}), Some("eu"))]
+    #[case::empty_falls_through(c"kwargs = {'location': '', 'location_alias': 'us'}", "regional", json!({}), Some("us"))]
+    #[case::text_only(c"kwargs = {'location': 7, 'location_alias': 'us'}", "regional", json!({}), Some("us"))]
+    #[case::from_the_bound_request(c"bound = {'location': 'eu'}", "regional", json!({}), Some("eu"))]
+    #[case::route_params_win(c"kwargs = {'location': 'eu'}", "regional", json!({"location": "routed"}), Some("routed"))]
+    #[case::other_provider(c"kwargs = {'location': 'eu'}", "elsewhere", json!({}), None)]
+    fn messages_log_a_provider_s_call_param(
+        #[case] source: &CStr,
+        #[case] provider: &str,
+        #[case] optional_params: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = pyo3::types::PyDict::new(py);
+            py.run(source, Some(&locals), Some(&locals)).unwrap();
+            let logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                ..legacy_call(py, &locals, false)
+            }
+            .with_logged_call_param(LOGGED_LOCATION);
+            let context = RequestContext {
+                custom_llm_provider: provider.into(),
+                optional_params,
+                ..route_context()
+            };
+            let params = logging
+                .logged_request_params(py, &context)
+                .unwrap()
+                .unwrap();
+            assert_eq!(params.get("location").and_then(Value::as_str), expected);
+        });
     }
 
     fn route_wire() -> WireRequest {

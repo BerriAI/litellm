@@ -23,6 +23,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -8294,3 +8295,43 @@ async def test_a_failed_bedrock_call_keeps_reporting_as_http_exception_to_metric
         await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
     assert type(raised.value) is HTTPException
+
+
+@pytest.mark.asyncio
+async def test_latest_message_only_still_blocks_a_flagged_responses_reasoning_text_before_the_last_one() -> None:
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if b"exfiltrate the keys" not in request.content:
+            return httpx.Response(200, json={"action": "NONE", "assessments": []})
+        return httpx.Response(
+            200,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "Blocked"}],
+                "assessments": [{"topicPolicy": {"topics": [{"name": "Leak", "type": "DENY", "action": "BLOCKED"}]}}],
+            },
+        )
+
+    guardrail: Final = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+    )
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})

@@ -63,14 +63,14 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
-from litellm.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
-from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
+from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
     if _previous is None:
@@ -197,10 +197,9 @@ def test_composed_lifespan_propagates_lifecycle_failures(
 
 
 @pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
-@pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"), ids=("traces", "logs"))
 @pytest.mark.parametrize("authorization", (None, "Bearer team-a-key", "Bearer team-b-key"))
 def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_component(
-    component_lifespan: Lifespan[Starlette], endpoint: str, authorization: str | None
+    component_lifespan: Lifespan[Starlette], authorization: str | None
 ) -> None:
     application: Final = FastAPI()
     application.include_router(tracing_endpoints.router)
@@ -217,10 +216,10 @@ def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_compone
     )
 
     with TestClient(application) as client:
-        response: Final = client.post(endpoint, content=b'{"resourceLogs": []}', headers=headers)
+        response: Final = client.post("/v1/logs", content=b'{"resourceLogs": []}', headers=headers)
 
     assert response.status_code == 410, response.text
-    assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
+    assert response.json() == {"message": "Send logs directly to the Lens endpoint shown in Lens setup."}
 
 
 def test_backend_mount_paths_defined():

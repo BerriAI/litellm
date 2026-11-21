@@ -285,7 +285,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   return (
     <TooltipProvider>
       {canModify && (
-        <div className="flex items-center">
+        <div className="mb-4 flex items-center">
           <AddFallbacks
             accessToken={accessToken || ""}
             value={routerSettings.fallbacks || []}

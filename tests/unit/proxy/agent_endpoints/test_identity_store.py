@@ -21,6 +21,7 @@ from litellm.types.proxy.agent_identity import (
     ManagedAgentContext,
     MicrosoftInteractiveSubject,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 TENANT: Final = "11111111-1111-4111-8111-111111111111"
 CLIENT: Final = "22222222-2222-4222-8222-222222222222"
@@ -64,7 +65,6 @@ def setup_store(
     humans: Final = AsyncMock()
     agents.find_unique.return_value = agent
     identities.find_unique.return_value = BINDING
-    identities.update_many.return_value = 1
     humans.find_unique.return_value = human
     db: Final = SimpleNamespace(
         db=SimpleNamespace(
@@ -198,19 +198,16 @@ async def test_delegated_subject_uses_canonical_sso_user_not_email_claim() -> No
 
 
 @pytest.mark.asyncio
-async def test_rebinding_during_authentication_does_not_mark_new_identity_verified() -> None:
-    store, _, identities, _ = setup_store()
-    identities.update_many.return_value = 0
+async def test_rebinding_during_authentication_does_not_mark_new_identity_verified(
+    rust_auth_stores: RustAuthStores,
+) -> None:
+    store, _, _, _ = setup_store()
+    rust_auth_stores.agent_identity.current.add(("agent-one", "new-revision"))
     context: Final = ManagedAgentContext(agent_id="agent-one", binding_revision="old-revision", mode="autonomous")
     result: Final = await store.record_authentication(context)
     assert isinstance(result, AgentIdentityFailure)
     assert "changed" in result.message
-    assert identities.update_many.call_args.kwargs["where"] == {
-        "agent_id": "agent-one",
-        "revision": "old-revision",
-        "active": True,
-        "agent": {"is": {"enabled": True, "identity_managed": True}},
-    }
+    assert rust_auth_stores.agent_identity.recorded == []
 
 
 @pytest.mark.asyncio
@@ -281,18 +278,19 @@ async def test_retired_client_cannot_fall_back_to_ordinary_user_authentication()
 
 
 @pytest.mark.asyncio
-async def test_missing_revision_cannot_create_entra_authentication_evidence() -> None:
-    store, _, identities, _ = setup_store()
+async def test_missing_revision_cannot_create_entra_authentication_evidence(rust_auth_stores: RustAuthStores) -> None:
+    store, _, _, _ = setup_store()
+    rust_auth_stores.agent_identity.current.add(("agent-one", "revision-one"))
     result: Final = await store.record_authentication(ManagedAgentContext(agent_id="agent-one", mode="autonomous"))
     assert isinstance(result, AgentIdentityFailure)
     assert result.code == "identity_denied"
-    identities.update_many.assert_not_awaited()
+    assert rust_auth_stores.agent_identity.recorded == []
 
 
 @pytest.mark.asyncio
-async def test_authentication_evidence_write_failure_is_not_success() -> None:
-    store, _, identities, _ = setup_store()
-    identities.update_many.side_effect = RuntimeError("writer unavailable")
+async def test_authentication_evidence_write_failure_is_not_success(rust_auth_stores: RustAuthStores) -> None:
+    store, _, _, _ = setup_store()
+    rust_auth_stores.agent_identity.error = RuntimeError("writer unavailable")
     result: Final = await store.record_authentication(
         ManagedAgentContext(agent_id="agent-one", binding_revision="revision-one", mode="autonomous")
     )
@@ -400,15 +398,16 @@ async def test_interactive_enrollment_outage_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_matching_revision_records_successful_authentication() -> None:
-    store, _, identities, _ = setup_store()
+async def test_matching_revision_records_successful_authentication(rust_auth_stores: RustAuthStores) -> None:
+    store, _, _, _ = setup_store()
+    rust_auth_stores.agent_identity.current.add(("agent-one", "revision-one"))
     assert (
         await store.record_authentication(
             ManagedAgentContext(agent_id="agent-one", binding_revision="revision-one", mode="autonomous")
         )
         is None
     )
-    identities.update_many.assert_awaited_once()
+    assert rust_auth_stores.agent_identity.recorded == [("agent-one", "revision-one")]
 
 
 @pytest.mark.asyncio

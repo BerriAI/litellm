@@ -79,6 +79,25 @@ it("opens the packaged demo trace and preserves its shareable selection in the g
   expect(network).not.toHaveBeenCalled();
 });
 
+it("lets the user hide activity to make room for traces and still open a recorded run", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<EmbeddedLens accessToken="gateway-session" userRole="Admin" readOnly={false} />, {
+    searchParams: "?demo=true&tab=traces",
+  });
+  const run = await screen.findByText("Where is order #1042?");
+  expect(screen.getByRole("region", { name: "Run activity" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Hide activity" }));
+
+  expect(screen.queryByRole("region", { name: "Run activity" })).not.toBeInTheDocument();
+  expect(run).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Show activity" }));
+  expect(screen.getByRole("region", { name: "Run activity" })).toBeVisible();
+  await user.click(run);
+  const details = await screen.findByRole("complementary", { name: "Trace details" });
+  expect(await within(details).findByRole("tab", { name: "Thread" })).toBeVisible();
+  expect(network).not.toHaveBeenCalled();
+});
+
 it("keeps manual installation on the unconfigured gateway landing and copies its observed setup context", async () => {
   const user = userEvent.setup();
   network.mockImplementation(async (input, init) => {

@@ -5,26 +5,33 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 import json
 import os
 import platform
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._version import version as _LITELLM_VERSION
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes, subscript
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
+_DECODED_JSON: Final = TypeAdapter(object)
+
 _MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
 _STR_ADAPTER: Final = TypeAdapter(str)
 
 _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
+
+
+class _ProviderEntries(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
 
 
 class SimpleProviderConfig:
@@ -46,12 +53,12 @@ class SimpleProviderConfig:
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
             data.get("model_supported_endpoints", {})
         )
-        self.model_base_urls: Mapping[str, str] = (
+        self.model_base_urls: Final[Mapping[str, str]] = (
             _MODEL_BASE_URLS_ADAPTER.validate_python(data["model_base_urls"])
             if "model_base_urls" in data
             else MappingProxyType({})
         )
-        self.model_special_handling: Mapping[str, Mapping[str, bool]] = (
+        self.model_special_handling: Final[Mapping[str, Mapping[str, bool]]] = (
             _MODEL_SPECIAL_HANDLING_ADAPTER.validate_python(data["model_special_handling"])
             if "model_special_handling" in data
             else MappingProxyType({})
@@ -84,6 +91,14 @@ class SimpleProviderConfig:
         }
 
 
+def _provider_config(slug: str, config: object) -> SimpleProviderConfig:
+    mapping: Final = as_str_mapping(config)
+    if isinstance(mapping, dict):
+        return SimpleProviderConfig(slug, mapping)
+    subscript(config, "base_url")
+    return SimpleProviderConfig(slug, require_attributes(config, dict[str, object], "__getitem__"))
+
+
 class JSONProviderRegistry:
     """Load providers from JSON once on import"""
 
@@ -105,10 +120,10 @@ class JSONProviderRegistry:
 
         try:
             with open(json_path) as f:
-                data: Final = json.load(f)
+                data: Final = _DECODED_JSON.validate_python(json.load(f))
 
-            for slug, config in data.items():
-                cls._providers[slug] = SimpleProviderConfig(slug, config)
+            for slug, config in require_attributes(data, _ProviderEntries, "items").items():
+                cls._providers[slug] = _provider_config(slug, config)
 
             cls._loaded = True
         except Exception as e:

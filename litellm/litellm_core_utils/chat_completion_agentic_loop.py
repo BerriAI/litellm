@@ -623,8 +623,8 @@ async def maybe_run_chat_completion_agentic_loop(
             kwargs=hook_kwargs,
         )
 
-        if plan.response_override is not None:
-            return plan.response_override
+        if (response_override := plan.response_override) is not None:
+            return response_override
         if plan.terminate:
             return response
         if not plan.run_agentic_loop:
