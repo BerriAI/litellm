@@ -5,17 +5,29 @@ Provides create, list, get, update, delete, and cancel operations for evals
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
 from typing import Final
 
 import httpx
 
 import litellm
-from litellm.constants import request_timeout
+from litellm.constants import (
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    request_timeout,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.integrations.anthropic_cache_control_hook import (
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
+)
 from litellm.types.llms.openai_evals import (
     CancelEvalResponse,
     CancelRunResponse,
@@ -39,6 +51,66 @@ from litellm.utils import ProviderConfigManager, client
 # Initialize HTTP handler
 base_llm_http_handler = BaseLLMHTTPHandler()
 DEFAULT_OPENAI_API_BASE: Final = "https://api.openai.com"
+
+INTERNAL_METADATA_KEY_PREFIXES: Final = ("user_api_key_", "litellm_")
+
+INTERNAL_METADATA_KEYS: Final = frozenset(
+    {
+        "headers",
+        "requester_metadata",
+        "user_api_key",
+        "user_api_end_user_max_budget",
+        "global_max_parallel_requests",
+        "endpoint",
+        "requester_ip_address",
+        "user_agent",
+        "spend_logs_metadata",
+        "proxy_server_request",
+        "standard_logging_object",
+        "disable_global_guardrails",
+        "disable_global_guardrail",
+        "opted_out_global_guardrails",
+        "applied_guardrails",
+        "applied_policies",
+        "policy_sources",
+        "guardrail_scan_ids",
+        "guardrail_scan_metadata",
+        "routing_decision",
+        "secret_fields",
+        "client_disconnected",
+        "error_information",
+        "_guardrail_pipelines",
+        "_pipeline_managed_guardrails",
+        "pillar_response_headers",
+        "_pillar_response_headers_trusted",
+        "pillar_flagged",
+        "pillar_scanners",
+        "pillar_evidence",
+        "pillar_evidence_truncated",
+        "pillar_session_id_response",
+        GATEWAY_INJECTED_CACHE_METADATA_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        CONSUMED_REQUEST_TAGS_METADATA_KEY,
+        ROUTING_REQUEST_TAGS_METADATA_KEY,
+        INTERNAL_CALL_ORIGIN_METADATA_KEY,
+        BILLED_RETRY_ATTEMPT_METADATA_KEY,
+        MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+        PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    }
+)
+
+
+def _is_internal_metadata_key(key: str) -> bool:
+    return key in INTERNAL_METADATA_KEYS or key.startswith(INTERNAL_METADATA_KEY_PREFIXES)
+
+
+def _user_metadata(
+    metadata: Mapping[str, object] | None,
+) -> dict[str, object] | None:  # mutable-ok: request metadata is typed as a dict
+    if metadata is None:
+        return None
+    filtered: Final = {k: v for k, v in metadata.items() if not _is_internal_metadata_key(k)}
+    return filtered or None
 
 
 @client
@@ -169,6 +241,10 @@ def create_eval(
         }
         if name is not None:
             create_request["name"] = name
+
+        filtered_metadata: Final = _user_metadata(metadata)
+        if filtered_metadata is not None:
+            create_request["metadata"] = filtered_metadata
 
         # Merge extra_body if provided
         if extra_body:
@@ -684,44 +760,9 @@ def update_eval(
             update_request["name"] = name
 
         # Filter metadata to exclude internal LiteLLM fields
-        if metadata is not None:
-            # List of internal LiteLLM metadata keys that should NOT be sent to OpenAI
-            internal_keys: Final = {
-                "headers",
-                "requester_metadata",
-                "user_api_key_hash",
-                "user_api_key_alias",
-                "user_api_key_spend",
-                "user_api_key_max_budget",
-                "user_api_key_team_id",
-                "user_api_key_user_id",
-                "user_api_key_org_id",
-                "user_api_key_team_alias",
-                "user_api_key_end_user_id",
-                "user_api_key_user_email",
-                "user_api_key_request_route",
-                "user_api_key_budget_reset_at",
-                "user_api_key_auth_metadata",
-                "user_api_key",
-                "user_api_end_user_max_budget",
-                "user_api_key_auth",
-                "litellm_api_version",
-                "global_max_parallel_requests",
-                "user_api_key_team_max_budget",
-                "user_api_key_team_spend",
-                "user_api_key_model_max_budget",
-                "user_api_key_user_spend",
-                "user_api_key_user_max_budget",
-                "user_api_key_metadata",
-                "endpoint",
-                "litellm_parent_otel_span",
-                "requester_ip_address",
-                "user_agent",
-            }
-            # Only include user-provided metadata keys
-            filtered_metadata: Final = {k: v for k, v in metadata.items() if k not in internal_keys}
-            if filtered_metadata:  # Only add if there's user metadata
-                update_request["metadata"] = filtered_metadata
+        filtered_metadata: Final = _user_metadata(metadata)
+        if filtered_metadata is not None:
+            update_request["metadata"] = filtered_metadata
 
         # Merge extra_body if provided
         if extra_body:
@@ -1218,8 +1259,10 @@ def create_run(
         }
         if name is not None:
             create_request["name"] = name
-        # if metadata is not None:
-        #     create_request["metadata"] = metadata
+
+        filtered_metadata: Final = _user_metadata(metadata)
+        if filtered_metadata is not None:
+            create_request["metadata"] = filtered_metadata
 
         # Merge extra_body if provided
         if extra_body:
