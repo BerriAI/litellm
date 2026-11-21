@@ -174,7 +174,6 @@ class TestGetSupportedOpenAiParams:
             "top_p",
             "max_tokens",
             "max_completion_tokens",
-            "stop",
             "tools",
             "tool_choice",
             "functions",
