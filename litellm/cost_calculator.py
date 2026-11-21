@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.litellm_core_utils.service_tier_utils import GEMINI_TRAFFIC_TYPE_SERVICE_TIERS
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -1275,19 +1276,6 @@ def _get_response_model(completion_response: object) -> str | None:
     return None
 
 
-_GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
-    # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
-    "ON_DEMAND_PRIORITY": "priority",
-    # FLEX / BATCH / ON_DEMAND_FLEX maps to "flex" — selects input_cost_per_token_flex, etc.
-    # Vertex AI reports flex/shared-capacity traffic as ON_DEMAND_FLEX, not FLEX.
-    "FLEX": "flex",
-    "BATCH": "flex",
-    "ON_DEMAND_FLEX": "flex",
-    # ON_DEMAND is standard pricing — no service_tier suffix applied
-    "ON_DEMAND": None,
-}
-
-
 def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     """
     Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
@@ -1303,7 +1291,7 @@ def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     """
     if traffic_type is None:
         return None
-    service_tier: Final = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(str(traffic_type).upper())
+    service_tier: Final = GEMINI_TRAFFIC_TYPE_SERVICE_TIERS.get(str(traffic_type).upper())
     return service_tier
 
 
