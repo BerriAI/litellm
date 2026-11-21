@@ -40,7 +40,6 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     BedrockError,
-    bedrock_model_is_gpt_5_6_or_newer,
     bedrock_model_is_openai_gpt,
     bedrock_rejects_stop_sequences,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
@@ -488,12 +487,10 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         )
 
     def _keeps_content_part_prompt_cache_breakpoints(self, model: str, litellm_params: Mapping[str, object]) -> bool:
-        """GPT 5.6 and newer read a content part's ``prompt_cache_breakpoint`` on AWS's native surface, so it
-        survives drop_params there unless the deployment or cost map declares the model does not."""
+        """Keep native content-part breakpoints when the deployment or catalog declares support."""
         from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support
 
-        declared: Final = deployment_prompt_cache_breakpoint_support(model, "bedrock", litellm_params)
-        return bedrock_model_is_gpt_5_6_or_newer(model) if declared is None else declared
+        return deployment_prompt_cache_breakpoint_support(model, "bedrock", litellm_params) is True
 
     def _inference_params(
         self, optional_params: Mapping[str, object]

@@ -475,7 +475,8 @@ def test_native_chat_sends_the_client_cache_breakpoint_untouched_without_drop_pa
     "model, model_info, keeps_breakpoint",
     [
         ("global.openai.gpt-6.2-sol", None, True),
-        ("global.openai.gpt-7-sol", None, True),
+        ("global.openai.gpt-7-sol", None, False),
+        ("vendor.native-model-v1:0", {"supports_openai_prompt_cache_breakpoint": True}, True),
         ("global.openai.gpt-6.2-sol", {"supports_openai_prompt_cache_breakpoint": False}, False),
         ("global.openai.gpt-5.5", None, False),
         ("openai.gpt-oss-20b-1:0", None, False),
@@ -493,6 +494,27 @@ async def test_native_chat_keeps_a_cache_breakpoint_under_drop_params_only_where
     )
 
     marker: Final = {"prompt_cache_breakpoint": EXPLICIT_BREAKPOINT} if keeps_breakpoint else {}
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": "stable prefix", **marker},
+        {"type": "text", "text": "variable suffix"},
+    ]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("supported", [True, False])
+async def test_native_chat_reads_breakpoint_support_from_the_catalog_for_any_model_name(
+    local_cost_map, supported, is_async
+):
+    model: Final = "vendor.native-model-v1:0"
+    litellm.register_model(
+        {model: {"litellm_provider": "bedrock", "supports_openai_prompt_cache_breakpoint": supported}}
+    )
+
+    body: Final = await _transformed_body(
+        model, _messages_with_a_marked_prefix(EXPLICIT_BREAKPOINT), {"drop_params": True}, is_async
+    )
+
+    marker: Final = {"prompt_cache_breakpoint": EXPLICIT_BREAKPOINT} if supported else {}
     assert body["messages"][0]["content"] == [
         {"type": "text", "text": "stable prefix", **marker},
         {"type": "text", "text": "variable suffix"},
