@@ -110,7 +110,7 @@ def test_the_native_partition_rule_is_is_user_key_cache_key(key: str, key_object
         (AuthObject.jwt_key_mapping("sub", "a:b"), "jwt_key_mapping:sub:a:b"),
         (AuthObject.jwt_key_mapping("sub", "a", issuer=""), "jwt_key_mapping:sub:a"),
         (AuthObject.jwt_key_mapping("sub", "a", issuer="https://idp"), "jwt_key_mapping:https://idp:sub:a"),
-        (AuthObject.agent_identity("t\u00e9", 'c"1'), 'agent_identity:["t\\u00e9", "c\\"1"]'),
+        (AuthObject.agent_identity("okta", "t\u00e9", 'c"1'), 'agent_identity:["okta", "t\\u00e9", "c\\"1"]'),
         (AuthObject.global_proxy_spend(), "default_user_id:spend"),
     ],
     ids=lambda case: case.key if isinstance(case, AuthObject) else None,
@@ -119,10 +119,10 @@ def test_each_object_is_cached_under_mains_key(auth_object: AuthObject, key: str
     assert auth_object.key == key
 
 
-def test_mains_agent_identity_key_is_json_dumps_of_the_pair() -> None:
-    pair: Final = ("t\u00e9", 'c"1')
+def test_agent_identity_key_is_json_dumps_of_the_provider_tenant_and_client() -> None:
+    key: Final = ("okta", "t\u00e9", 'c"1')
 
-    assert AuthObject.agent_identity(*pair).key == "agent_identity:" + json.dumps(pair)
+    assert AuthObject.agent_identity(*key).key == "agent_identity:" + json.dumps(key)
 
 
 @pytest.mark.parametrize(("value", "encoded", "printed"), _WRITTEN, ids=[encoded for _, encoded, _ in _WRITTEN])
