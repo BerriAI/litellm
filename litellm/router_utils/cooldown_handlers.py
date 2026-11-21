@@ -87,14 +87,14 @@ _AWS_FIELDS: Final = (
     _CallerField("aws_region_name", _NOT_FOUND),
 )
 _VERTEX_FIELDS: Final = (
-    _CallerField("vertex_credentials", _ANY_FAILURE, ("vertex_ai_credentials",)),
-    _CallerField("vertex_ai_credentials", _ANY_FAILURE, ("vertex_credentials",)),
+    _CallerField("vertex_credentials", _AUTH_REJECTED, ("vertex_ai_credentials",)),
+    _CallerField("vertex_ai_credentials", _AUTH_REJECTED, ("vertex_credentials",)),
     _CallerField("vertex_project", _NOT_FOUND, ("vertex_ai_project",)),
     _CallerField("vertex_ai_project", _NOT_FOUND, ("vertex_project",)),
     _CallerField("vertex_location", _NOT_FOUND, ("vertex_ai_location",)),
     _CallerField("vertex_ai_location", _NOT_FOUND, ("vertex_location",)),
 )
-_AZURE_FIELDS: Final = (_CallerField("azure_ad_token", _ANY_FAILURE), _CallerField("api_version", _NOT_FOUND))
+_AZURE_FIELDS: Final = (_CallerField("azure_ad_token", _AUTH_REJECTED), _CallerField("api_version", _NOT_FOUND))
 _OPENAI_FIELDS: Final = (_CallerField("organization", _AUTH_REJECTED),)
 _CALLER_FIELDS_BY_PROVIDER: Final[Mapping[str, tuple[_CallerField, ...]]] = MappingProxyType(
     {

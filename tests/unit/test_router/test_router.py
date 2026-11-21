@@ -15539,6 +15539,20 @@ async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deploym
             None,
             id="openai_organization_on_a_rate_limit",
         ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.RateLimitError,
+            None,
+            id="azure_token_on_a_rate_limit",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_credentials": "caller-credentials"},
+            litellm.RateLimitError,
+            None,
+            id="vertex_credentials_on_a_rate_limit",
+        ),
     ],
 )
 async def test_router_failure_a_caller_field_cannot_cause_cools_down_the_shared_deployment(
