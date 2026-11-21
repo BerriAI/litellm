@@ -515,6 +515,70 @@ class TestVertexAIImagenImageEditTransformation:
         assert "maskImageConfig" in reference_images[1]
         assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
 
+    @pytest.mark.parametrize("image", [None, [], [None]])
+    def test_transform_image_edit_request_without_image_is_a_bad_request(self, image: object) -> None:
+        """Missing or empty reference images must raise BadRequestError (HTTP 400), not raw ValueError."""
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self.config.transform_image_edit_request(
+                model=self.model,
+                prompt=self.prompt,
+                image=image,  # type: ignore[arg-type]
+                image_edit_optional_request_params={},
+                litellm_params=MagicMock(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.llm_provider == "vertex_ai"
+        assert "reference image" in str(exc_info.value).lower()
+        assert not isinstance(exc_info.value, ValueError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("image", [None, [], [None]])
+    async def test_async_transform_image_edit_request_without_image_is_a_bad_request(self, image: object) -> None:
+        """Async path must hit the same validation and raise BadRequestError (HTTP 400)."""
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await self.config.async_transform_image_edit_request(
+                model=self.model,
+                prompt=self.prompt,
+                image=image,  # type: ignore[arg-type]
+                image_edit_optional_request_params={},
+                litellm_params=MagicMock(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.llm_provider == "vertex_ai"
+
+    def test_transform_image_edit_request_without_prompt_is_a_bad_request(self) -> None:
+        """Missing prompt must raise BadRequestError (HTTP 400), not raw ValueError."""
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self.config.transform_image_edit_request(
+                model=self.model,
+                prompt=None,
+                image=BytesIO(b"fake_image"),
+                image_edit_optional_request_params={},
+                litellm_params=MagicMock(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.llm_provider == "vertex_ai"
+        assert "prompt" in str(exc_info.value).lower()
+        assert not isinstance(exc_info.value, ValueError)
+
+    @pytest.mark.asyncio
+    async def test_async_transform_image_edit_request_without_prompt_is_a_bad_request(self) -> None:
+        """Async path with missing prompt must raise BadRequestError (HTTP 400)."""
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await self.config.async_transform_image_edit_request(
+                model=self.model,
+                prompt=None,
+                image=BytesIO(b"fake_image"),
+                image_edit_optional_request_params={},
+                litellm_params=MagicMock(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.llm_provider == "vertex_ai"
+
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
