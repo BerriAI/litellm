@@ -3527,6 +3527,7 @@ class ModelResponseIterator:
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
+        self._token_after_unsent_images: str | None = None
         self._first_response_id: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
@@ -3822,6 +3823,28 @@ class ModelResponseIterator:
             }
         )
 
+    def _take_unsent_thought_images(self) -> Mapping[int, tuple[ImageURLListItem, ...]]:
+        unsent: Final = MappingProxyType(
+            {
+                index: held
+                for index, held in self._held_thought_images.items()
+                if held and index not in self._image_settled_indexes
+            }
+        )
+        self._image_settled_indexes = self._image_settled_indexes | frozenset(unsent)
+        return unsent
+
+    def _unsent_thought_images_end(self) -> Optional["ModelResponseStream"]:
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        unsent: Final = self._take_unsent_thought_images()
+        if not unsent:
+            return None
+        return ModelResponseStream(
+            id=self._first_response_id,
+            choices=[StreamingChoices(index=index, delta=Delta(images=list(held))) for index, held in unsent.items()],
+        )
+
     def _plan_resume(self, processed_chunk: GenerateContentResponseBody, model_response: "ModelResponseStream") -> None:
         if self._output_cap is None:
             return
@@ -3858,6 +3881,9 @@ class ModelResponseIterator:
     def _truncated_stream_end(self, token: str) -> "ModelResponseStream":
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
+        if (images_end := self._unsent_thought_images_end()) is not None:
+            self._token_after_unsent_images = token
+            return images_end
         return ModelResponseStream(
             id=self._first_response_id,
             choices=[
@@ -3868,6 +3894,13 @@ class ModelResponseIterator:
                 )
             ],
         )
+
+    def _end_after_unsent_images(self) -> Optional["ModelResponseStream"]:
+        token: Final = self._token_after_unsent_images
+        if token is None:
+            return None
+        self._token_after_unsent_images = None
+        return self._truncated_stream_end(token)
 
     def _end_of_unanswered_hop(
         self, reason: Exception | str = "the continuation stream ended without a readable frame"
@@ -3976,6 +4009,8 @@ class ModelResponseIterator:
             raise
 
     def __next__(self) -> Optional["ModelResponseStream"]:
+        if (end_after_images := self._end_after_unsent_images()) is not None:
+            return end_after_images
         try:
             return self._next_chunk()
         except HOP_FAILURES as e:
@@ -3996,6 +4031,8 @@ class ModelResponseIterator:
                 if (unanswered_end := self._end_of_unanswered_hop()) is not None:
                     return unanswered_end
                 if (token := self._pending_hop_token) is None:
+                    if (images_end := self._unsent_thought_images_end()) is not None:
+                        return images_end
                     raise StopIteration
                 self._pending_hop_token = None
                 if (truncated_end := self._open_next_hop_sync(token)) is not None:
@@ -4017,6 +4054,8 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self) -> Optional["ModelResponseStream"]:
+        if (end_after_images := self._end_after_unsent_images()) is not None:
+            return end_after_images
         try:
             return await self._anext_chunk()
         except HOP_FAILURES as e:
@@ -4037,6 +4076,8 @@ class ModelResponseIterator:
                 if (unanswered_end := self._end_of_unanswered_hop()) is not None:
                     return unanswered_end
                 if (token := self._pending_hop_token) is None:
+                    if (images_end := self._unsent_thought_images_end()) is not None:
+                        return images_end
                     raise StopAsyncIteration
                 self._pending_hop_token = None
                 if (truncated_end := await self._open_next_hop_async(token)) is not None:
