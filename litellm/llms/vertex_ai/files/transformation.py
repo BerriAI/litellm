@@ -71,6 +71,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -1066,7 +1067,11 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
-        optional_params=map_openai_to_vertex_params(chat_request_body),
+        optional_params=map_openai_to_vertex_params(
+            {**chat_request_body, "drop_params": entry_body["drop_params"]}
+            if "drop_params" in entry_body
+            else chat_request_body
+        ),
         custom_llm_provider="vertex_ai",
         litellm_params={},
         cached_content=None,
@@ -1523,7 +1528,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             allow_parameters_json_schema=False,
             allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
         )
-        if "service_tier" in vertex_params and not drop_params:
+        if (
+            "service_tier" in vertex_params
+            and vertex_params["service_tier"] in VERTEX_SHARED_REQUEST_TIERS
+            and not drop_params
+        ):
             raise UnsupportedParamsError(
                 message=(
                     "Vertex AI batch requests do not support `service_tier`, since batch jobs run on the batch tier. "
