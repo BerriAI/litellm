@@ -15605,6 +15605,7 @@ async def test_router_caller_organization_is_compared_with_the_deployment_creden
 async def test_router_vertex_stream_failing_on_a_caller_project_leaves_the_shared_deployment_routable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from litellm.router_rust.invoke.streaming import _RECORDINGS
     from tests.integration._support.vertex import service_account_json
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -15640,7 +15641,7 @@ async def test_router_vertex_stream_failing_on_a_caller_project_leaves_the_share
                 stream=True,
                 vertex_project="caller-project",
             )
-        await asyncio.sleep(0.2)
+        await asyncio.gather(*_RECORDINGS)
 
     assert "/projects/caller-project/" in str(stream_route.calls.last.request.url)
     assert await router.health().cooldowns.async_get_active_cooldowns(["vertex-deployment"], None) == []
