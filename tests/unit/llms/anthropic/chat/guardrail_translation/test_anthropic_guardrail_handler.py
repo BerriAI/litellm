@@ -3355,8 +3355,6 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
 
 
 class ToolsSeenGuardrail(CustomGuardrail):
-    """Records the tools it is shown and returns the ones `keep` accepts."""
-
     def __init__(self, keep: Callable[[Mapping[str, object]], bool] = lambda _tool: True) -> None:
         super().__init__(guardrail_name="test")
         self._keep: Final = keep
@@ -3418,6 +3416,16 @@ class TestWebSearchToolIsShownToTheGuardrail:
 
         assert tools[1] == self._WEB_SEARCH
         assert [tool["name"] for tool in tools] == ["Read", "web_search"]
+
+    async def test_web_search_declared_by_name_alone_reaches_the_provider_as_sent(self):
+        by_name_alone: Final[dict[str, object]] = {"name": "web_search"}
+        guardrail: Final = ToolsSeenGuardrail()
+
+        tools: Final = await self._run(guardrail, [self._READ, by_name_alone])
+
+        assert guardrail.seen_tools is not None
+        assert guardrail.seen_tools[1] == by_name_alone
+        assert tools[1] == by_name_alone
 
     async def test_web_search_the_guardrail_removed_does_not_reach_the_provider(self):
         tools: Final = await self._run(

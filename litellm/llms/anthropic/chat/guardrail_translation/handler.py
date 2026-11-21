@@ -1035,6 +1035,11 @@ class AnthropicMessagesHandler(BaseTranslation):
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
                 for tool in guardrailed_tools:
+                    if _is_web_search_tool(tool):
+                        anthropic_tools.append(
+                            cast(AllAnthropicToolsValues, tool)  # cast-ok: shown to the guardrail in Anthropic format
+                        )
+                        continue
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
                         _with_original_name(tool, original_tool_names.declared)
                     )
