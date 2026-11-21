@@ -310,18 +310,16 @@ impl Request<'_> {
 
     fn key_model_limit(
         &self,
-        own: Value,
+        own: &Value,
         team: &Value,
         default: Option<i64>,
-        group: &str,
-    ) -> Value {
-        if !own.is_null() {
-            return own;
+        model: &RateLimitedModel,
+    ) -> Result<Value, BuildError> {
+        let limit = limit_in(if own.is_null() { team } else { own }, model)?;
+        if !limit.is_null() || (!own.is_null() && !limit_in(team, model)?.is_null()) {
+            return Ok(limit);
         }
-        if !team.is_null() {
-            return team.clone();
-        }
-        default.map_or(Value::Null, |limit| json!({ group: limit }))
+        Ok(default.map_or(Value::Null, Value::from))
     }
 
     fn inherited_team_limit(
@@ -395,26 +393,20 @@ impl Request<'_> {
         let tokens = if borrows_tpm {
             Value::Null
         } else {
-            limit_in(
-                &self.key_model_limit(
-                    self.key_own_tpm(),
-                    &self.metadata.team_model_tpm_limit,
-                    defaults.tpm,
-                    &model.group,
-                ),
+            self.key_model_limit(
+                &self.key_own_tpm(),
+                &self.metadata.team_model_tpm_limit,
+                defaults.tpm,
                 &model,
             )?
         };
         let requests = if borrows_rpm {
             Value::Null
         } else {
-            limit_in(
-                &self.key_model_limit(
-                    self.key_own_rpm(),
-                    &self.metadata.team_model_rpm_limit,
-                    defaults.rpm,
-                    &model.group,
-                ),
+            self.key_model_limit(
+                &self.key_own_rpm(),
+                &self.metadata.team_model_rpm_limit,
+                defaults.rpm,
                 &model,
             )?
         };
@@ -1222,6 +1214,76 @@ mod tests {
                     60
                 ),
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::empty_team_map(json!(null), json!({}))]
+    #[case::team_map_without_the_model(json!(null), json!({"other": 10}))]
+    #[case::key_map_without_the_model(json!({"other": 10}), json!(null))]
+    fn a_map_without_the_model_falls_back_to_the_deployment_default(
+        #[case] key_limit: Value,
+        #[case] team_limit: Value,
+    ) {
+        let mut found = lookups(&["gpt-4o"]);
+        found.deployment_limits.insert(
+            "gpt-4o".to_owned(),
+            DeploymentLimits {
+                rpm: Some(9),
+                tpm: None,
+            },
+        );
+        let descriptors = built(
+            json!({"api_key": "k", "team_id": "t"}),
+            AuthMetadata {
+                key_model_rpm_limit: key_limit,
+                team_model_rpm_limit: team_limit,
+                ..AuthMetadata::default()
+            },
+            &found,
+            "gpt-4o",
+        );
+        assert_eq!(
+            descriptors,
+            vec![descriptor(
+                "model_per_key",
+                json!("k:gpt-4o"),
+                json!(9),
+                json!(null),
+                60
+            )]
+        );
+    }
+
+    #[rstest]
+    fn a_team_limit_for_the_model_keeps_the_deployment_default_off_a_key_with_its_own_map() {
+        let mut found = lookups(&["gpt-4o"]);
+        found.deployment_limits.insert(
+            "gpt-4o".to_owned(),
+            DeploymentLimits {
+                rpm: Some(9),
+                tpm: None,
+            },
+        );
+        let descriptors = built(
+            json!({"api_key": "k", "team_id": "t"}),
+            AuthMetadata {
+                key_model_rpm_limit: json!({"other": 10}),
+                team_model_rpm_limit: json!({"gpt-4o": 20}),
+                ..AuthMetadata::default()
+            },
+            &found,
+            "gpt-4o",
+        );
+        assert_eq!(
+            descriptors,
+            vec![descriptor(
+                "model_per_team",
+                json!("t:gpt-4o"),
+                json!(20),
+                json!(null),
+                60
+            )]
         );
     }
 

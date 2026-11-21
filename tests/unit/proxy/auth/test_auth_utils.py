@@ -1083,20 +1083,34 @@ class TestGetKeyModelRpmLimit:
         result = get_key_model_rpm_limit(user_api_key_dict)
         assert result is None
 
-    def test_team_metadata_empty_rpm_dict_falls_through_to_deployment_default(self):
-        """Explicitly empty team model_rpm_limit ({}) should be returned as-is, not fallen through."""
-        # An empty dict is a valid team limit map (no per-model limits configured).
-        # It should be returned directly rather than falling through to deployment defaults,
-        # so a team with an empty map is treated as unconstrained at the team level.
+    @pytest.mark.parametrize(
+        "key_metadata, team_metadata",
+        [
+            pytest.param({}, {"model_rpm_limit": {}}, id="empty_team_map"),
+            pytest.param({}, {"model_rpm_limit": {"other-model": 10}}, id="team_map_without_the_model"),
+            pytest.param({"model_rpm_limit": {"other-model": 10}}, {}, id="key_map_without_the_model"),
+        ],
+    )
+    def test_rpm_map_without_the_model_falls_through_to_deployment_default(self, key_metadata, team_metadata):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123", metadata=key_metadata, team_metadata=team_metadata)
+        mock_router = MagicMock()
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=5)]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 5}
+
+    def test_team_rpm_entry_for_the_model_keeps_deployment_default_off_a_key_with_its_own_map(self):
         user_api_key_dict = UserAPIKeyAuth(
             api_key="sk-123",
-            team_metadata={"model_rpm_limit": {}},
+            metadata={"model_rpm_limit": {"other-model": 10}},
+            team_metadata={"model_rpm_limit": {"model1": 20}},
         )
-        result = get_key_model_rpm_limit(user_api_key_dict)
-        assert result == {}
+        mock_router = MagicMock()
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=5)]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"other-model": 10}
 
-
-class TestGetKeyMcpRpmLimit:
     def test_empty_dict_limits_are_returned(self):
         key_override = UserAPIKeyAuth(
             api_key="sk-123",
@@ -1175,17 +1189,33 @@ class TestGetKeyModelTpmLimit:
         result = get_key_model_tpm_limit(user_api_key_dict)
         assert result == {"gpt-4": 10000}
 
-    def test_team_metadata_empty_tpm_dict_falls_through_to_deployment_default(self):
-        """Explicitly empty team model_tpm_limit ({}) should be returned as-is, not fallen through."""
-        # An empty dict is a valid team limit map (no per-model limits configured).
-        # It should be returned directly rather than falling through to deployment defaults,
-        # so a team with an empty map is treated as unconstrained at the team level.
+    @pytest.mark.parametrize(
+        "key_metadata, team_metadata",
+        [
+            pytest.param({}, {"model_tpm_limit": {}}, id="empty_team_map"),
+            pytest.param({}, {"model_tpm_limit": {"other-model": 10}}, id="team_map_without_the_model"),
+            pytest.param({"model_tpm_limit": {"other-model": 10}}, {}, id="key_map_without_the_model"),
+        ],
+    )
+    def test_tpm_map_without_the_model_falls_through_to_deployment_default(self, key_metadata, team_metadata):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123", metadata=key_metadata, team_metadata=team_metadata)
+        mock_router = MagicMock()
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=5)]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 5}
+
+    def test_team_tpm_entry_for_the_model_keeps_deployment_default_off_a_key_with_its_own_map(self):
         user_api_key_dict = UserAPIKeyAuth(
             api_key="sk-123",
-            team_metadata={"model_tpm_limit": {}},
+            metadata={"model_tpm_limit": {"other-model": 10}},
+            team_metadata={"model_tpm_limit": {"model1": 20}},
         )
-        result = get_key_model_tpm_limit(user_api_key_dict)
-        assert result == {}
+        mock_router = MagicMock()
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=5)]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"other-model": 10}
 
     def test_skips_deployments_with_malformed_limit_value(self):
         """Deployments with non-integer-parseable limit values are skipped without raising."""
