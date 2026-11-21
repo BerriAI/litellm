@@ -2,7 +2,7 @@ import asyncio
 import json
 import math
 import ssl as ssl_module
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -100,6 +100,9 @@ class LiveAttach:
 class LiveUpstream:
     url: str
     headers: Mapping[str, str]
+
+
+LiveClientFrameDenial: TypeAlias = Callable[[str], Awaitable[str | None]]
 
 
 class LiveClientWebSocket(Protocol):
@@ -285,6 +288,20 @@ def _is_session_close_message(message: str) -> bool:
     return _live_event_type(message) == "session.close"
 
 
+async def _close_after_relay_failure(websocket: LiveClientWebSocket, error: Exception) -> None:
+    redacted_error: Final = redact_secrets(str(error))
+    with suppress(Exception):
+        await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
+    try:
+        await websocket.close(
+            code=1011,
+            reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
+        )
+    except RuntimeError as close_error:
+        if "already completed" not in str(close_error) and "websocket.close" not in str(close_error):
+            raise RuntimeError(f"Unexpected error while closing WebSocket: {close_error}") from close_error
+
+
 def _is_session_closed_message(message: str) -> bool:
     return _live_event_type(message) == "session.closed"
 
@@ -352,8 +369,13 @@ async def _forward_live_client_frames(
     backend_websocket: LiveBackendWebSocket,
     client_gone: asyncio.Event,
     client_close_sent: asyncio.Event,
+    client_frame_denial: LiveClientFrameDenial | None = None,
 ) -> None:
     async for message in _live_client_messages(websocket, client_gone):
+        denial = None if client_frame_denial is None else await client_frame_denial(message)
+        if denial is not None:
+            await websocket.send_text(realtime_error_event(denial, error_type="invalid_request_error"))
+            continue
         await backend_websocket.send(message)
         if _is_session_close_message(message):
             client_close_sent.set()
@@ -489,6 +511,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         api_key: str | None,
         upstream: LiveUpstream | None = None,
         attach: LiveAttach | None = None,
+        client_frame_denial: LiveClientFrameDenial | None = None,
     ) -> None:
         resolved_upstream: Final = upstream if upstream is not None else self.openai_upstream(api_base, api_key)
         from websockets.exceptions import InvalidStatus
@@ -529,6 +552,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                         event_retention=event_retention,
                         upstream_ended_abnormally=session_ended_abnormally,
                         closes_session_with_client=attach is None,
+                        client_frame_denial=client_frame_denial,
                     )
                 except Exception:
                     session_ended_abnormally.set()
@@ -565,17 +589,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         except InvalidStatus as error:
             await close_after_upstream_handshake_refusal(websocket, error.response.status_code)
         except Exception as error:  # noqa: BLE001  # any relay failure must still close the client socket with a redacted reason
-            redacted_error: Final = redact_secrets(str(error))
-            with suppress(Exception):
-                await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
-            try:
-                await websocket.close(
-                    code=1011,
-                    reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
-                )
-            except RuntimeError as close_error:
-                if "already completed" not in str(close_error) and "websocket.close" not in str(close_error):
-                    raise RuntimeError(f"Unexpected error while closing WebSocket: {close_error}") from close_error
+            await _close_after_relay_failure(websocket, error)
 
     async def _bidirectional_forward(
         self,
@@ -585,6 +599,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         event_retention: _LiveEventRetention,
         upstream_ended_abnormally: asyncio.Event,
         closes_session_with_client: bool = True,
+        client_frame_denial: LiveClientFrameDenial | None = None,
     ) -> None:
         from websockets.exceptions import ConnectionClosed
 
@@ -596,6 +611,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                 backend_websocket=backend_websocket,
                 client_gone=client_gone,
                 client_close_sent=client_close_sent,
+                client_frame_denial=client_frame_denial,
             )
         )
         backend_forward_task: Final = asyncio.create_task(

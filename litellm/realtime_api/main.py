@@ -63,7 +63,7 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_pr
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
 from ..llms.openai.common_utils import is_openai_backed_api_base
-from ..llms.openai.live.handler import LiveAttach, LiveUpstream, OpenAILiveSessions
+from ..llms.openai.live.handler import LiveAttach, LiveClientFrameDenial, LiveUpstream, OpenAILiveSessions
 from ..llms.openai.realtime.handler import (
     OpenAIRealtime,
     confirm_gateway_session_started,
@@ -840,6 +840,7 @@ async def _alive_session(
     litellm_metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
     attach: LiveAttach | None = None,
+    client_frame_denial: LiveClientFrameDenial | None = None,
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
@@ -855,6 +856,7 @@ async def _alive_session(
             api_key=api_key,
             upstream=azure_upstream,
             attach=attach,
+            client_frame_denial=client_frame_denial,
         )
         return
     resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
@@ -868,6 +870,7 @@ async def _alive_session(
             static_api_key=openai_static_api_key(api_key), api_base=resolved_api_base, litellm_params=litellm_params
         ),
         attach=attach,
+        client_frame_denial=client_frame_denial,
     )
 
 
@@ -914,6 +917,7 @@ async def _arealtime(
     live_session_start: Mapping[str, object] | None = None,
     realtime_mode: str = "realtime",
     live_attach: LiveAttach | None = None,
+    live_client_frame_denial: LiveClientFrameDenial | None = None,
     **kwargs,
 ) -> None:
     """
@@ -987,6 +991,7 @@ async def _arealtime(
             litellm_metadata=session_litellm_metadata,
             litellm_params=deployment_params,
             attach=live_attach,
+            client_frame_denial=live_client_frame_denial,
         )
         return
 

@@ -1442,3 +1442,40 @@ async def test_a_metering_sideband_bills_the_session_total_less_what_earlier_sid
         if event["type"] in ("session.closed", "session.usage.updated")
     ] == [billed_event], "the logged events must bill what the sideband reports it billed, once"
     assert reported == [billed_event[1]]
+
+
+@pytest.mark.asyncio
+async def test_a_client_frame_the_proxy_denies_is_answered_with_an_error_and_never_reaches_the_provider() -> None:
+    denied_frame: Final = '{"type":"session.update","session":{"delegation":{"responses":{"model":"other"}}}}'
+    client_frames: Final = (
+        '{"type":"input_audio.append","audio":"client-a"}',
+        denied_frame,
+        '{"type":"session.close"}',
+    )
+    upstream_frames: Final = (
+        '{"type":"session.started","session":{"model":"gpt-live-1"}}',
+        '{"type":"session.closed","usage":{"seconds":4}}',
+    )
+    upstream: Final = _FakeUpstream(client_frames=(client_frames[0], client_frames[2]), upstream_frames=upstream_frames)
+    client: Final = _FakeClientWebSocket(messages=client_frames)
+
+    async def _denial(client_frame: str) -> str | None:
+        return "key not allowed to access model" if client_frame == denied_frame else None
+
+    await OpenAILiveSessions(
+        logging_worker=_FakeLoggingWorker(), websocket_connector=_FakeConnector(upstream)
+    ).async_live_session(
+        model="gpt-live-1",
+        websocket=client,
+        logging_obj=cast(Logging, _FakeLogging()),
+        session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        client_frame_denial=_denial,
+    )
+
+    sent_upstream: Final = tuple(upstream.sent_text.get_nowait() for _ in range(upstream.sent_text.qsize()))
+    sent_to_client: Final = tuple(json.loads(client.sent_text.get_nowait()) for _ in range(client.sent_text.qsize()))
+    assert sent_upstream[1:] == (client_frames[0], client_frames[2])
+    errors: Final = tuple(event["error"] for event in sent_to_client if event["type"] == "error")
+    assert tuple(error["message"] for error in errors) == ("key not allowed to access model",)

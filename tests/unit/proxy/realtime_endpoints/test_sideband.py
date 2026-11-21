@@ -62,7 +62,7 @@ async def test_a_sideband_has_joined_once_the_relay_to_the_provider_runs(
             with pytest.raises(WebSocketDisconnect):
                 await client.receive_text()
 
-    assert await join_sideband("/v1/realtime", _session, rejoin_delay=_NEVER) is joined
+    assert await join_sideband("/v1/realtime", _session, rejoin_delays=(_NEVER,)) is joined
 
 
 @pytest.mark.asyncio
@@ -99,6 +99,8 @@ async def test_a_refused_sideband_finishes_releasing_its_holds_before_it_is_stop
 
 _DROPPED: Final = ('{"type":"session.created"}',)
 _REFUSED: Final = ('{"type":"error","error":{"message":"Upstream realtime handshake rejected with HTTP 404"}}',)
+_RATE_LIMITED: Final = ('{"type":"error","error":{"message":"Upstream realtime handshake rejected with HTTP 429"}}',)
+_UNREACHABLE: Final = ('{"type":"error","error":{"message":"Cannot connect to host"}}',)
 _CLOSED_BY_PROVIDER: Final = ('{"type":"session.started"}', '{"type":"session.closed"}')
 
 
@@ -109,8 +111,16 @@ _CLOSED_BY_PROVIDER: Final = ('{"type":"session.started"}', '{"type":"session.cl
         ((_DROPPED, _DROPPED, _CLOSED_BY_PROVIDER, _DROPPED), 3),
         ((_DROPPED, _REFUSED, _DROPPED), 2),
         ((_CLOSED_BY_PROVIDER, _DROPPED), 1),
+        ((_DROPPED, _RATE_LIMITED, _UNREACHABLE, _DROPPED, _CLOSED_BY_PROVIDER), 5),
+        ((_DROPPED, _UNREACHABLE, _UNREACHABLE, _UNREACHABLE, _DROPPED), 4),
     ],
-    ids=["rejoined-after-each-drop-until-the-session-closes", "call-gone-at-the-provider", "session-closed"],
+    ids=[
+        "rejoined-after-each-drop-until-the-session-closes",
+        "call-gone-at-the-provider-is-not-tried-again",
+        "session-closed",
+        "a-rejoin-that-fails-is-tried-again",
+        "given-up-on-after-the-last-delay",
+    ],
 )
 async def test_a_joined_sideband_is_reopened_when_it_drops_while_the_call_still_runs(
     sessions: tuple[tuple[str, ...], ...], sessions_opened: int
@@ -127,7 +137,7 @@ async def test_a_joined_sideband_is_reopened_when_it_drops_while_the_call_still_
         if len(opened) == sessions_opened:
             idle.set()
 
-    assert await join_sideband("/v1/realtime", _session, rejoin_delay=0) is True
+    assert await join_sideband("/v1/realtime", _session, rejoin_delays=(0, 0, 0)) is True
     await asyncio.wait_for(idle.wait(), 1)
     for _ in range(20):
         await asyncio.sleep(0)
@@ -150,7 +160,7 @@ async def test_a_rejoined_session_is_told_the_seconds_the_sessions_before_it_bil
         if client.session_ended:
             idle.set()
 
-    assert await join_sideband("/v1/live/sessions", _session, rejoin_delay=0) is True
+    assert await join_sideband("/v1/live/sessions", _session, rejoin_delays=(0, 0, 0)) is True
     await asyncio.wait_for(idle.wait(), 1)
 
     assert told == [0.0, 6.5, 6.5, 15.75]

@@ -20,6 +20,7 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_live_websocket
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.realtime_endpoints.live_delegation import authorize_live_delegation, live_delegation_denial
 from litellm.proxy.realtime_endpoints.sideband import join_sideband
 from litellm.realtime_api.main import live_guardrails_configured, live_session_upstream
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -187,6 +188,7 @@ async def create_live_session(
         llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy model list
         llm_router=llm_router,
     )
+    await authorize_live_delegation(session, user_api_key_dict)
     request_data: Final = as_str_mapping(
         await add_litellm_data_to_request(  # pyright: ignore[reportUnknownArgumentType]  # returns an untyped dict
             data={"model": model},
@@ -280,7 +282,7 @@ async def attach_live_session(
     await _release_realtime_budget_reservation(upgrade_auth)
     try:
         session_auth: Final = await _authorize_live_session_model(
-            live_session_model_authorizer(), websocket, attachable.model
+            live_session_model_authorizer(), websocket, attachable.model, None
         )
     except (ProxyException, HTTPException):
         await _reject_realtime_session(websocket, upgrade_auth, code=1008, reason="Session not allowed")
@@ -298,5 +300,6 @@ async def attach_live_session(
         request_path=websocket.url.path,
         live_session_start={"type": "session.start", "session": {"model": attachable.model}},
         live_attach=LiveAttach(session_id=attachable.session_id, metered=False),
+        live_client_frame_denial=lambda client_frame: live_delegation_denial(client_frame, session_auth),
         pinned_deployment_id=attachable.deployment_id,
     )
