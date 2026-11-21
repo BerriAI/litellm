@@ -13,9 +13,12 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.destinations.ternary_destination import FocusTernaryDestination
 from litellm.integrations.focus.focus_logger import FocusLogger
+from litellm.litellm_core_utils.url_utils import validate_url
 
 if TYPE_CHECKING:
     from litellm.integrations.focus.export_engine import FocusExportEngine
+
+    from .export_engine import TernaryExportEngine
 
 TERNARY_USAGE_DATA_JOB_NAME: Final = "ternary_export_usage_data"
 
@@ -100,6 +103,7 @@ class TernaryLogger(FocusLogger):
             prefix="ternary_exports",
             destination_config=destination_config,
         )
+        self._ternary_engine: TernaryExportEngine | None = None
 
         verbose_logger.debug(
             "TernaryLogger initialized (connection_id=%s)",
@@ -116,16 +120,31 @@ class TernaryLogger(FocusLogger):
         start_time: Final = (now_utc - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
         return FocusTimeWindow(start_time=start_time, end_time=now_utc, frequency=self.frequency)
 
+    def scheduled_window(self, now: datetime) -> FocusTimeWindow:
+        """The window a scheduled export at `now` sends."""
+        return self._compute_time_window(now)
+
+    async def export_days(
+        self, *, start_time_utc: datetime, end_time_utc: datetime, limit: int | None
+    ) -> tuple[str, ...]:
+        """Export the window now and return the UTC days that had rows to upload."""
+        window: Final = FocusTimeWindow(start_time=start_time_utc, end_time=end_time_utc, frequency=self.frequency)
+        return await self._ternary_export_engine().export_days(window=window, limit=limit)
+
     def _ensure_engine(self) -> FocusExportEngine:
+        return self._ternary_export_engine()
+
+    def _ternary_export_engine(self) -> TernaryExportEngine:
         """Instantiate the polars-backed Ternary export engine lazily."""
-        if self._engine is None:
+        if self._ternary_engine is None:
             from .export_engine import TernaryExportEngine  # noqa: PLC0415  # polars is a proxy extra
 
-            self._engine = TernaryExportEngine(
+            self._ternary_engine = TernaryExportEngine(
                 prefix=self.prefix,
                 destination=FocusTernaryDestination(prefix=self.prefix, config=self._destination_config),
             )
-        return self._engine
+            self._engine = self._ternary_engine
+        return self._ternary_engine
 
     @staticmethod
     async def init_ternary_background_job(
@@ -149,4 +168,35 @@ class TernaryLogger(FocusLogger):
         )
 
 
-__all__ = ("TernaryLogger",)
+class SettingsTernaryLogger(TernaryLogger):
+    """A TernaryLogger built from the settings stored through the proxy's /ternary admin endpoints, not from config.
+
+    Its base URL comes from the admin API rather than the operator's config, so every export first checks it
+    against the proxy's outbound URL policy (`user_url_allowed_hosts` admits an internal host).
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        connection_id: str,
+        base_url: str,
+        frequency: str | None = None,
+        interval_seconds: int | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            connection_id=connection_id,
+            base_url=base_url,
+            frequency=frequency,
+            interval_seconds=interval_seconds,
+        )
+        self._admin_base_url: Final = base_url
+
+    def _ternary_export_engine(self) -> TernaryExportEngine:
+        """Refuse a base URL that resolves to a private or internal address, checked again on every export."""
+        validate_url(self._admin_base_url)
+        return super()._ternary_export_engine()
+
+
+__all__ = ("SettingsTernaryLogger", "TernaryLogger")
