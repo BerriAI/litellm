@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
@@ -65,6 +66,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "n",
             "size",
             "imageConfig",
+            "image_config",
             "aspectRatio",
             "aspect_ratio",
             "imageSize",
@@ -98,22 +100,43 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    elif k == "imageConfig":
+                    elif k in ("imageConfig", "image_config"):
+                        if isinstance(v, str):
+                            try:
+                                v = json.loads(v)
+                            except Exception:
+                                pass
                         if isinstance(v, dict):
                             mapped_params["imageConfig"] = v
+                        elif not drop_params:
+                            raise litellm.UnsupportedParamsError(
+                                message=f"imageConfig must be a dict, got {type(v).__name__}",
+                                model=model,
+                            )
                         else:
                             verbose_logger.warning("imageConfig must be a dict, got %s — ignoring.", type(v).__name__)
-                    elif k not in ("tools", "web_search_options", "imageConfig"):
+                    elif k not in ("tools", "web_search_options", "imageConfig", "image_config"):
                         mapped_params[k] = v
+                elif not drop_params:
+                    raise litellm.UnsupportedParamsError(
+                        message=f"{model} does not support {k}. Set drop_params=True to drop it.",
+                        model=model,
+                    )
 
         if "size" in non_default_params and "size" not in optional_params:
             image_params: Final = _JSON_OBJECT.validate_python(mapped_params)
             image_config: Final = _JSON_OBJECT.validate_python(image_params.get("imageConfig", {}))
+            mapped_size = map_vertex_image_size(non_default_params["size"], model)
+            if mapped_size is None:
+                if not drop_params:
+                    raise litellm.UnsupportedParamsError(
+                        message=f"Unsupported size {non_default_params['size']} for model {model}",
+                        model=model,
+                    )
+                mapped_size = {"aspectRatio": "1:1"}
             size_params: Final = {
                 key: value
-                for key, value in (
-                    map_vertex_image_size(non_default_params["size"], model) or {"aspectRatio": "1:1"}
-                ).items()
+                for key, value in mapped_size.items()
                 if key not in image_config
             }
             return map_gemini_image_tools_params(
