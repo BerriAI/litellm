@@ -1890,6 +1890,8 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
 class TeamMemberBudgetWrite(BudgetNewRequest):
     model_config = ConfigDict(frozen=True)
 
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
     rollover_max_budget: BudgetRolloverCap | None = None
 
 

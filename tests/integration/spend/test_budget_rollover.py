@@ -77,7 +77,7 @@ def test_personal_monthly_budget_carries_unused_allowance_only_when_enabled(
         )
         for spend, expected in zip(("30", "0", "0"), credits, strict=True):
             _personal_close_period(proxy, user_id, spend)
-            info: Final = object_value(proxy.get("/user/info", {"user_id": user_id})["user_info"])
+            info = object_value(proxy.get("/user/info", {"user_id": user_id})["user_info"])
             assert info["spend"] == 0.0
             assert info["max_budget"] == 100.0
             if cap is not None:
@@ -278,3 +278,40 @@ def test_management_responses_omit_rollover_cap_without_opt_in(rollover_proxy: G
         assert response.status_code == 200, response.text
         rows: Final = _MEMBERS.validate_json(response.content)
         assert len(rows) == 1 and "rollover_max_budget" not in rows[0], rows
+
+
+def test_team_can_save_legacy_member_rate_limits_without_enabling_rollover(rollover_proxy: Gateway) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        team: Final = scenario.team(team_member_rpm_limit=-1, team_member_tpm_limit=-1)
+        initial: Final = proxy.get("/team/info", {"team_id": team})
+        budget: Final = object_value(object_value(initial["team_info"])["team_member_budget_table"])
+        assert (budget["rpm_limit"], budget["tpm_limit"]) == (-1, -1), budget
+
+        alias: Final = f"renamed-{team}"
+        proxy.post(
+            "/team/update",
+            {
+                "team_id": team,
+                "team_alias": alias,
+                "team_member_rpm_limit": budget["rpm_limit"],
+                "team_member_tpm_limit": budget["tpm_limit"],
+            },
+        )
+        updated: Final = object_value(proxy.get("/team/info", {"team_id": team})["team_info"])
+        assert updated["team_alias"] == alias, updated
+        saved_budget: Final = object_value(updated["team_member_budget_table"])
+        assert (saved_budget["rpm_limit"], saved_budget["tpm_limit"]) == (-1, -1), saved_budget
+
+
+def test_budget_info_preserves_the_utc_timestamp_format(rollover_proxy: Gateway) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        reset_at: Final = "2040-01-01T00:00:00Z"
+        budget: Final = proxy.post("/budget/new", {"budget_reset_at": reset_at})
+        budget_id: Final = string_value(budget["budget_id"])
+        scenario.cleanups.callback(scenario.delete_budget, budget_id)
+        response: Final = proxy.request("POST", "/budget/info", {"budgets": [budget_id]})
+        assert response.status_code == 200, response.text
+        budgets: Final = _MEMBERS.validate_json(response.content)
+        assert [row["budget_reset_at"] for row in budgets] == [reset_at], budgets

@@ -403,12 +403,11 @@ async def update_budget(
     return response
 
 
-def _budget_response(row: PrismaRecord | None) -> Mapping[str, object] | None:
+def _budget_response(row: "prisma_models.LiteLLM_BudgetTable | None") -> Mapping[str, object] | None:
     if row is None:
         return None
-    return {
-        field: value for field, value in row.model_dump().items() if field != "rollover_max_budget" or value is not None
-    }
+    excluded: Final = {"rollover_max_budget"} if row.rollover_max_budget is None else None
+    return row.model_dump(mode="json", exclude=excluded)
 
 
 @router.post(
