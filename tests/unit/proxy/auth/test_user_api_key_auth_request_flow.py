@@ -7384,7 +7384,7 @@ def _proxy_attrs_for_db_lookup():
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     return {
         "prisma_client": prisma_with_empty_config(),
-        "user_api_key_cache": DualCache(),
+        "user_api_key_cache": UserApiKeyCache(),
         "proxy_logging_obj": proxy_logging_obj,
         "master_key": "sk-test-master",
         "general_settings": {"allow_requests_on_db_unavailable": False},
@@ -8089,7 +8089,7 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
         with patch(
-            "litellm.proxy.auth.resolvers.store.fetch_key_object_from_db_with_reconnect",
+            "litellm.proxy.auth.resolvers.store.load_key_object",
             fetch_from_db,
         ):
             result = await user_api_key_auth_builder(

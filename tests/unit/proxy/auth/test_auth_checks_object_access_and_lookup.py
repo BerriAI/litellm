@@ -59,7 +59,12 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGr
 from litellm.types.agents import AgentCaller
 from litellm.proxy.auth import auth_checks
 from litellm.repositories import rust_database
-from litellm.rust_bridge._native import RustTagRepository, RustTeamMembershipRepository, RustTeamRepository
+from litellm.rust_bridge._native import (
+    RustObjectPermissionRepository,
+    RustTagRepository,
+    RustTeamMembershipRepository,
+    RustTeamRepository,
+)
 from litellm.proxy.auth.auth_checks import (
     LITELLM_SESSION_TOKEN_PREFIX,
     CallerTeamLoader,
@@ -77,7 +82,7 @@ from litellm.proxy.auth.auth_checks import (
     can_object_call_model,
     check_end_user_budget,
     common_checks,
-    fetch_key_object_from_db_with_reconnect,
+    load_key_object,
     get_key_object,
     get_user_object,
     read_email_verified,
@@ -724,15 +729,11 @@ async def test_get_key_object_miss_keeps_the_looked_up_value_out_of_the_401_and_
     key a caller sent, a provider key included, so a miss must not log that value."""
     from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
 
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
-
     with caplog.at_level("INFO", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
         await get_key_object(
             hashed_token="a-secret-looking-hash",
             prisma_client=MagicMock(),
-            user_api_key_cache=mock_cache,
+            user_api_key_cache=UserApiKeyCache(),
         )
 
     assert int(exc_info.value.code) == 401
@@ -748,11 +749,11 @@ async def test_get_key_object_without_a_rust_database_raises_no_db_connected(mon
     from litellm.repositories import rust_database
 
     monkeypatch.setattr(rust_database, "repository", lambda kind: None)
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
 
     with pytest.raises(Exception, match="No db connected"):
-        await get_key_object(hashed_token="hashed-token", prisma_client=MagicMock(), user_api_key_cache=mock_cache)
+        await get_key_object(
+            hashed_token="hashed-token", prisma_client=MagicMock(), user_api_key_cache=UserApiKeyCache()
+        )
 
 
 @dataclass
@@ -782,11 +783,12 @@ async def test_fetch_key_object_from_db_bounds_in_flight_store_reads(monkeypatch
 
     results: Final = await asyncio.gather(
         *(
-            fetch_key_object_from_db_with_reconnect(
+            load_key_object(
                 hashed_token=f"hashed-token-{i}",
                 prisma_client=MagicMock(),
                 parent_otel_span=None,
                 proxy_logging_obj=None,
+                user_api_key_cache=UserApiKeyCache(),
             )
             for i in range(burst)
         )
@@ -795,6 +797,78 @@ async def test_fetch_key_object_from_db_bounds_in_flight_store_reads(monkeypatch
     assert len(results) == burst
     assert {r.token for r in results if r is not None} == {f"hashed-token-{i}" for i in range(burst)}
     assert store.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
+
+
+class _SkippableClockLoop(asyncio.SelectorEventLoop):
+    """An event loop whose clock a test moves forward, so a deadline passes without anyone waiting for it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.skipped = 0.0
+
+    def time(self) -> float:
+        return super().time() + self.skipped
+
+
+@dataclass
+class _StalledObjectPermissionStore:
+    reached: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def find_by_object_permission_id(self, object_permission_id: str, *, use_writer: bool = False) -> str | None:
+        self.reached.set()
+        await _stall_forever()
+        return None
+
+
+@pytest.mark.parametrize("check_db_only", [False, True], ids=["cached_read", "writer_read"])
+def test_get_key_object_serves_a_key_whose_object_permission_read_outlasts_its_deadline(
+    monkeypatch: pytest.MonkeyPatch, _clear_db_lookup_stall: None, check_db_only: bool
+):
+    """The object permission table does not answer, for twice the database deadline. The key the database did answer
+    for is served and cached without the permission, as it was when ``get_object_permission`` had a deadline of its
+    own. A writer read, which must see the permission, fails."""
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            key=FakeKeyStore(rows={"hashed-token-db": {"token": "hashed-token-db", "object_permission_id": "perm-1"}})
+        ),
+    )
+    stalled: Final = _StalledObjectPermissionStore()
+    answer: Final = rust_database.repository
+    monkeypatch.setattr(
+        rust_database,
+        "repository",
+        lambda kind: stalled if kind is RustObjectPermissionRepository else answer(kind),
+    )
+    cache: Final = UserApiKeyCache()
+    loop: Final = _SkippableClockLoop()
+
+    async def read_while_the_permission_table_stalls() -> UserAPIKeyAuth:
+        reading: Final = asyncio.ensure_future(
+            get_key_object(
+                hashed_token="hashed-token-db",
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                check_db_only=check_db_only,
+            )
+        )
+        await stalled.reached.wait()
+        loop.skipped += PROXY_DB_LOOKUP_DEADLINE_SECONDS * 2
+        return await reading
+
+    try:
+        if check_db_only:
+            with pytest.raises(DBLookupDeadlineExceeded):
+                loop.run_until_complete(read_while_the_permission_table_stalls())
+            return
+        key: Final = loop.run_until_complete(read_while_the_permission_table_stalls())
+    finally:
+        loop.close()
+
+    assert (key.token, key.object_permission) == ("hashed-token-db", None)
+    assert cache.get_local(AuthObject.virtual_key("hashed-token-db")) is not None
 
 
 @pytest.fixture
@@ -837,11 +911,12 @@ async def test_fetch_key_object_from_db_fails_a_stalled_burst_within_the_deadlin
 
     results: Final = await asyncio.gather(
         *(
-            fetch_key_object_from_db_with_reconnect(
+            load_key_object(
                 hashed_token=f"hashed-token-{i}",
                 prisma_client=MagicMock(),
                 parent_otel_span=None,
                 proxy_logging_obj=None,
+                user_api_key_cache=UserApiKeyCache(),
                 deadline_seconds=0.2,
             )
             for i in range(burst)
@@ -859,11 +934,12 @@ async def test_fetch_key_object_from_db_fails_a_stalled_burst_within_the_deadlin
     after: Final = await asyncio.wait_for(
         asyncio.gather(
             *(
-                fetch_key_object_from_db_with_reconnect(
+                load_key_object(
                     hashed_token=f"after-{i}",
                     prisma_client=MagicMock(),
                     parent_otel_span=None,
                     proxy_logging_obj=None,
+                    user_api_key_cache=UserApiKeyCache(),
                 )
                 for i in range(PROXY_DB_LOOKUP_MAX_CONCURRENCY)
             )
@@ -1324,6 +1400,19 @@ class TestAuthCacheRedisWritePolicy:
         writes: Final = [command[1] for command in auth_store.commands if command[0] != "GET"]
         assert writes == ["hashed-token-db"]
         assert "hashed-token-db" in auth_store.redis
+
+    @pytest.mark.asyncio
+    async def test_get_key_object_for_an_unknown_key_costs_redis_nothing_beyond_the_cache_read(
+        self, rust_auth_stores: RustAuthStores
+    ):
+        """A flood of invalid keys must not buy a Redis round trip each on top of the cache read that missed."""
+        cache, auth_store = shared_cache()
+
+        with pytest.raises(ProxyException):
+            await get_key_object(hashed_token="hashed-token-db", prisma_client=MagicMock(), user_api_key_cache=cache)
+
+        assert [command[0] for command in auth_store.commands] == ["GET"]
+        assert rust_auth_stores.key.lookups == [("hashed-token-db", False)]
 
 
 def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
