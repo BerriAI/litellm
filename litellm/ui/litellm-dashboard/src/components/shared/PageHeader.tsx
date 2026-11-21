@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cva.config";
 
 export function PageHeader({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("shrink-0", className)} {...props} />;
+  return <div data-slot="page-header" className={cn("shrink-0", className)} {...props} />;
 }
 
 export function PageHeaderTitle({ className, ...props }: ComponentProps<"h1">) {
