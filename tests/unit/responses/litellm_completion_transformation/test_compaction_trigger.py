@@ -9,6 +9,7 @@ import respx
 from pydantic import BaseModel
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.responses.litellm_completion_transformation.compaction_items import summary_only_compaction_content
 from litellm.responses.litellm_completion_transformation.compaction_trigger import (
     SUMMARY_PROMPT,
@@ -404,7 +405,7 @@ def _output_tokens_billed_on_disconnect(respx_mock: respx.MockRouter, input: lis
     stream: Final = litellm.responses(
         model=_MODEL, api_key="mock_api_key", input=input, tools=list(_TOOLS), stream=True
     )
-    with pytest.raises(Exception):
+    with pytest.raises(MidStreamFallbackError, match="connection dropped"):
         _ = tuple(stream)
     partial: Final = stream.partial_response_on_disconnect()
     assert partial is not None and partial.response.usage is not None
