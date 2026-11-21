@@ -20,6 +20,8 @@ from integration._support.mcp import EntryPoint, McpCaller, McpPeer, echo_tool, 
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 AKTO_KEY: Final = "synthetic-akto-mcp-log-key"
 BLOCK_MARK: Final = "SYNTHETIC-AKTO-BLOCK"
 RESPONSE_CHECK: Final = {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"}

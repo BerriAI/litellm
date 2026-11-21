@@ -1,9 +1,11 @@
-from typing import Any, Final
+from typing import Final
 
 from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 
 class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
@@ -31,8 +33,8 @@ class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
 class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
-    def __getitem__(self, key):
-        return self.__dict__[key]
+    def __getitem__(self, key) -> object:
+        return _ATTRIBUTE_VALUE.validate_python(self.__dict__[key])
 
     def get(self, key, default=None):
         return self.__dict__.get(key, default)
@@ -45,7 +47,7 @@ class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
 
 
 class HiddenParams(OpenAIObject):
-    original_response: str | Any | None = None
+    original_response: str | object | None = None
     model_id: str | None = None  # used in Router for individual deployments
     api_base: str | None = None  # returns api base used for making completion call
     _response_ms: float | None = None
@@ -57,9 +59,9 @@ class HiddenParams(OpenAIObject):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes

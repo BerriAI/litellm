@@ -13,17 +13,26 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+)
 from litellm.integrations.clickhouse.clickhouse_spend_logger import (
     ClickHouseSpendLogger,
     parse_traceparent,
     spend_log_row_from_payload,
     strip_cache_hit_suffix,
 )
-from litellm.integrations.clickhouse.context import lens_analysis
+from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
 from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.secret_redaction import REDACTED
-from litellm.tracing.types import SpendLogRecord
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, StandardLoggingPayload
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(Mapping[str, JsonValue])
 
@@ -206,11 +215,16 @@ def test_success_row_mapping():
 def test_provider_request_id_stays_separate_from_message_and_gateway_ids(header_source: str) -> None:
     headers: Final = {"request-id": "req_native"}
     hidden: Final = {"additional_headers": headers} if header_source == "additional_headers" else {}
-    kwargs: Final = {"response_cost": 0.00042, "response_headers": headers if header_source == "response_headers" else None}
+    kwargs: Final = {
+        "response_cost": 0.00042,
+        "response_headers": headers if header_source == "response_headers" else None,
+    }
     payload: Final = cast(StandardLoggingPayload, _payload(id="msg_native", hidden_params=hidden))
     row: Final = spend_log_row_from_payload(payload, kwargs)
     assert (row["provider_request_id"], row["response_id"], row["litellm_call_id"]) == (
-        "req_native", "msg_native", "gateway-call"
+        "req_native",
+        "msg_native",
+        "gateway-call",
     )
 
 
@@ -241,11 +255,12 @@ async def test_custom_request_metadata_is_redacted_before_clickhouse_logging(
             "litellm_metadata": {
                 "integration": "agent",
                 "shared": "model",
-                "litellm_lens_internal": True,
                 "user_api_key_auth": {"api_key": "internal-api-key"},
                 "user_api_key_budget_reservation": {"token": "internal-token"},
                 "proxy_server_request": {"headers": {"authorization": "internal-auth"}},
                 "parent_otel_span": object(),
+                ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 35,
+                USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: 35,
             },
         },
     }
@@ -275,6 +290,8 @@ async def test_custom_request_metadata_is_redacted_before_clickhouse_logging(
     assert "user_api_key_auth" not in metadata
     assert "user_api_key_budget_reservation" not in metadata
     assert "proxy_server_request" not in metadata
+    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
+    assert USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY not in metadata
     litellm_params: Final = cast(Mapping[str, object], kwargs["litellm_params"])
     request_metadata: Final = cast(Mapping[str, object], litellm_params["metadata"])
     assert request_metadata == {
@@ -312,10 +329,7 @@ async def test_turn_off_message_logging_omits_all_custom_request_metadata() -> N
     metadata_json: Final = cast(str, log_rows[0]["metadata"])
     metadata: Final = _JSON_OBJECT_ADAPTER.validate_json(metadata_json)
     standard_metadata: Final = cast(Mapping[str, object], payload["metadata"])
-    assert metadata == {
-        **standard_metadata,
-        "litellm_lens_internal": False,
-    }
+    assert metadata == standard_metadata
     assert {"project", "api_key", "auth", "prompt"}.isdisjoint(metadata)
 
 
@@ -347,6 +361,41 @@ def test_cache_hit_id_is_stripped_for_response_id():
     assert row["litellm_call_id"] == "gateway-call"
     assert row["cache_hit"] is True
     assert strip_cache_hit_suffix("chatcmpl-xyz") == "chatcmpl-xyz"
+
+
+@pytest.mark.parametrize(
+    "cost_kwargs",
+    (
+        pytest.param(
+            {
+                "call_type": "aget_responses",
+                "litellm_params": {
+                    "metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}
+                },
+            },
+            id="cost-poll",
+        ),
+        pytest.param(
+            {
+                "call_type": "pass_through_endpoint",
+                "litellm_params": {"metadata": {}},
+                SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES,
+            },
+            id="passthrough-settlement",
+        ),
+    ),
+)
+def test_background_cost_row_keeps_its_own_request_id_beside_its_create(cost_kwargs: Mapping[str, object]) -> None:
+    payload: Final = cast(StandardLoggingPayload, _payload(id="resp_YWJjZA", call_type="aresponses"))
+    create_kwargs: Final[Mapping[str, object]] = {"call_type": "aresponses", "litellm_params": {"metadata": {}}}
+
+    rows: Final = [spend_log_row_from_payload(payload, kwargs) for kwargs in (create_kwargs, cost_kwargs)]
+
+    assert [row["request_id"] for row in rows] == [
+        "resp_YWJjZA",
+        f"resp_YWJjZA{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}",
+    ]
+    assert [row["response_id"] for row in rows] == ["resp_YWJjZA", "resp_YWJjZA"]
 
 
 def test_parse_traceparent_valid_missing_malformed():
@@ -418,29 +467,6 @@ async def test_clickhouse_callback_resolves_via_factory(monkeypatch):
     assert isinstance(created, ClickHouseSpendLogger)
     assert litellm_logging._init_custom_logger_compatible_class("clickhouse", None, None) is created
     assert litellm_logging.get_custom_logger_compatible_class("clickhouse") is created
-
-
-@pytest.mark.asyncio
-async def test_caller_tags_cannot_impersonate_internal_lens_analysis():
-    import asyncio
-
-    payload: Final = _payload(
-        request_tags=["litellm-engine"],
-        metadata={"litellm_lens_internal": True},
-    )
-
-    async def logged_internal():
-        return spend_log_row_from_payload(payload, {})
-
-    external: Final = spend_log_row_from_payload(payload, {})
-    with lens_analysis():
-        callback: Final = asyncio.create_task(logged_internal())
-    internal: Final = await callback
-    following: Final = spend_log_row_from_payload(payload, {})
-    assert json.loads(external["metadata"])["litellm_lens_internal"] is False
-    assert json.loads(internal["metadata"])["litellm_lens_internal"] is True
-    assert json.loads(following["metadata"])["litellm_lens_internal"] is False
-    assert external["request_tags"] == ["litellm-engine"]
 
 
 def _minimal_payload(request_id: str, *, status: str, cost: float) -> dict[str, object]:

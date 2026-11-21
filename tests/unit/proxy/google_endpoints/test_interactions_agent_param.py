@@ -6,9 +6,16 @@ The proxy must not pass the agent name as ``model`` or LiteLLM may route to
 openai/* wildcards instead of Gemini interactions.
 """
 
+import asyncio
+import json
+from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
+from fastapi.testclient import TestClient
 
 
 class TestInteractionsAgentParameter:
@@ -101,3 +108,37 @@ class TestInteractionsAgentOnlyProviderRouting:
 
         mock_get_llm_provider.assert_not_called()
         assert mock_handler.create_interaction.call_args.kwargs["model"] is None
+
+
+_PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "test_configs" / "test_bad_config.yaml"
+
+
+@pytest.fixture
+def proxy_client(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> TestClient:
+    from litellm.proxy.proxy_server import app, cleanup_router_config_variables, initialize
+
+    monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+    cleanup_router_config_variables()
+    asyncio.run(initialize(config=str(_PROXY_CONFIG)))
+    return TestClient(app)
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_create_interaction_route_forwards_agent_config(proxy_client: TestClient, respx_mock: respx.MockRouter):
+    request_body: Final = {
+        "agent": "antigravity-preview-09-2026",
+        "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+        "input": "Say hi in one word.",
+        "environment": "remote",
+    }
+    upstream: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "interaction-agent", "object": "interaction", "status": "completed"},
+        )
+    )
+
+    response: Final = proxy_client.post("/v1beta/interactions", json=request_body)
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == request_body

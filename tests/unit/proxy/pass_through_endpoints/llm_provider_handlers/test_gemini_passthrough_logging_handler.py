@@ -1,4 +1,7 @@
+import asyncio
+import base64
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,9 +11,13 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.openai_files_endpoints.common_utils import get_model_id_from_unified_batch_id
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -79,6 +86,7 @@ class TestGeminiPassthroughLoggingHandler:
         mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {}
         mock_logging_obj.optional_params = {}
+        mock_logging_obj.litellm_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-123"
         return mock_logging_obj
 
@@ -140,12 +148,8 @@ class TestGeminiPassthroughLoggingHandler:
         assert model == "gemini-1.5-pro"
 
     @patch("litellm.completion_cost")
-    @patch(
-        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
-    )
-    def test_gemini_passthrough_handler_success(
-        self, mock_get_standard_logging, mock_completion_cost
-    ):
+    @patch("litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload")
+    def test_gemini_passthrough_handler_success(self, mock_get_standard_logging, mock_completion_cost):
         """Test successful cost tracking for Gemini generateContent endpoint"""
         # Arrange
         mock_completion_cost.return_value = 0.000045
@@ -186,7 +190,6 @@ class TestGeminiPassthroughLoggingHandler:
         mock_completion_cost.assert_called_once()
 
         # Verify logging object was updated
-        assert mock_logging_obj.model_call_details["response_cost"] == 0.000045
         assert mock_logging_obj.model_call_details["model"] == "gemini-1.5-flash"
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "gemini"
 
@@ -274,9 +277,7 @@ class TestGeminiPassthroughLoggingHandler:
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.gemini_passthrough_logging_handler.litellm.completion_cost",
         return_value=0.000050,
     )
-    async def test_pass_through_success_handler_gemini_routing(
-        self, mock_completion_cost
-    ):
+    async def test_pass_through_success_handler_gemini_routing(self, mock_completion_cost):
         """Test that the success handler correctly routes Gemini requests to the Gemini handler"""
         handler = PassThroughEndpointLogging()
 
@@ -310,8 +311,6 @@ class TestGeminiPassthroughLoggingHandler:
         # Assert - The success handler returns None on success (following the pattern from other tests)
         assert result is None
 
-        # Verify that the logging object has the cost set (from Gemini handler)
-        assert mock_logging_obj.model_call_details["response_cost"] == 0.000050
         assert mock_logging_obj.model_call_details["model"] == "gemini-2.0-flash"
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "gemini"
 
@@ -342,11 +341,7 @@ class TestGeminiPassthroughLoggingHandler:
 
         # Request body with durationSeconds
         request_body = {
-            "instances": [
-                {
-                    "prompt": "A close up of two people staring at a cryptic drawing on a wall,"
-                }
-            ],
+            "instances": [{"prompt": "A close up of two people staring at a cryptic drawing on a wall,"}],
             "parameters": {"durationSeconds": 8},
         }
 
@@ -479,3 +474,222 @@ def test_build_complete_streaming_response_assembles_gemini_sse_chunks():
     assert response.choices[0].message.content == "Hello there!"
     assert response.choices[0].finish_reason == "stop"
     assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (10, 8, 18)
+
+
+_PROBE_MODEL: Final = "gemini-pricing-probe"
+_LIST_INPUT_RATE: Final = 1e-06
+_LIST_OUTPUT_RATE: Final = 4e-06
+_CUSTOM_RATES: Final = {"input_cost_per_token": 2e-09, "output_cost_per_token": 3e-09}
+_CUSTOM_PRICED_DEPLOYMENT: Final = "gemini-custom-priced-deployment"
+_PROBE_REPLY: Final = {
+    "candidates": [{"content": {"parts": [{"text": "pong"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
+    "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 1, "totalTokenCount": 8},
+    "modelVersion": _PROBE_MODEL,
+}
+
+
+@pytest.fixture
+def probe_rate_card(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    rates: Final = {
+        "input_cost_per_token": _LIST_INPUT_RATE,
+        "output_cost_per_token": _LIST_OUTPUT_RATE,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+    }
+    monkeypatch.setitem(litellm.model_cost, f"gemini/{_PROBE_MODEL}", rates)
+    monkeypatch.setitem(
+        litellm.model_cost, _CUSTOM_PRICED_DEPLOYMENT, {**_CUSTOM_RATES, "litellm_provider": "gemini", "mode": "chat"}
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def _cost_the_logger_records_for_gemini(*, stream: bool, model_info: dict[str, object] | None) -> float:
+    method: Final = "streamGenerateContent?alt=sse" if stream else "generateContent"
+    url_route: Final = f"https://generativelanguage.googleapis.com/v1beta/models/{_PROBE_MODEL}:{method}"
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_info": model_info}} if model_info is not None else {}, optional_params={}
+    )
+    if stream:
+        asyncio.run(
+            PassThroughStreamingHandler.route_streaming_logging_to_handler(
+                litellm_logging_obj=logging_obj,
+                passthrough_success_handler_obj=PassThroughEndpointLogging(),
+                url_route=url_route,
+                request_body={},
+                endpoint_type=HttpPassThroughEndpointHelpers.get_endpoint_type(url_route),
+                start_time=datetime(2026, 1, 1),
+                raw_bytes=[f"data: {json.dumps(_PROBE_REPLY)}\n\n".encode()],
+                end_time=datetime(2026, 1, 1),
+            )
+        )
+        return logging_obj.model_call_details["response_cost"]
+    response: Final = httpx.Response(200, json=_PROBE_REPLY)
+    result: Final = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
+        httpx_response=response,
+        response_body=_PROBE_REPLY,
+        logging_obj=logging_obj,
+        url_route=url_route,
+        result=response.text,
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1),
+        cache_hit=False,
+        request_body={},
+    )
+    logging_obj._process_hidden_params_and_response_cost(
+        result["result"], datetime(2026, 1, 1), datetime(2026, 1, 1), build_logging_payload=False
+    )
+    return logging_obj.model_call_details["response_cost"]
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+@pytest.mark.parametrize(
+    "model_info, input_rate, output_rate",
+    [
+        (None, _LIST_INPUT_RATE, _LIST_OUTPUT_RATE),
+        (
+            {"id": _CUSTOM_PRICED_DEPLOYMENT, **_CUSTOM_RATES},
+            _CUSTOM_RATES["input_cost_per_token"],
+            _CUSTOM_RATES["output_cost_per_token"],
+        ),
+    ],
+    ids=["list-price", "custom-price"],
+)
+def test_gemini_passthrough_spend_matches_whether_or_not_the_call_streams(
+    probe_rate_card: None,
+    stream: bool,
+    model_info: dict[str, object] | None,
+    input_rate: float,
+    output_rate: float,
+) -> None:
+    recorded: Final = _cost_the_logger_records_for_gemini(stream=stream, model_info=model_info)
+
+    assert recorded == pytest.approx(7 * input_rate + 1 * output_rate), stream
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+@pytest.mark.parametrize("base_model", [123, [f"gemini/{_PROBE_MODEL}"], {"model": f"gemini/{_PROBE_MODEL}"}])
+def test_gemini_passthrough_bills_the_list_price_when_the_model_info_base_model_is_not_a_string(
+    probe_rate_card: None, stream: bool, base_model: object
+) -> None:
+    recorded: Final = _cost_the_logger_records_for_gemini(stream=stream, model_info={"base_model": base_model})
+
+    assert recorded == pytest.approx(7 * _LIST_INPUT_RATE + 1 * _LIST_OUTPUT_RATE), stream
+
+
+_BATCH_OPERATION: Final = {
+    "name": "batches/wire7h3x9batch",
+    "metadata": {
+        "@type": "type.googleapis.com/google.ai.generativelanguage.v1main.GenerateContentBatch",
+        "model": "models/gemini-3.8-flash",
+        "inputConfig": {"fileName": "files/wireinput123"},
+        "createTime": "2026-11-11T23:15:29.000000Z",
+        "updateTime": "2026-11-11T23:15:29.000000Z",
+        "state": "BATCH_STATE_PENDING",
+    },
+}
+_BATCH_ROUTE: Final = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:batchGenerateContent"
+
+
+def _decoded(unified_object_id: str) -> str:
+    return base64.urlsafe_b64decode(unified_object_id + "=" * (-len(unified_object_id) % 4)).decode()
+
+
+def _gemini_router(model: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": model, "litellm_params": {"model": f"vertex_ai/{model}", "vertex_project": "p"}},
+            {
+                "model_name": model,
+                "litellm_params": {"model": f"gemini/{model}", "api_key": "scripted"},
+                "model_info": {"id": "gemini-deployment-1"},
+            },
+        ]
+    )
+
+
+def _batch_create_through_passthrough(
+    status_code: int, body: dict[str, object], router: litellm.Router | None
+) -> tuple[PassThroughEndpointLoggingTypedDict, MagicMock]:
+    hook = MagicMock()
+    hook.store_unified_object_id = AsyncMock()
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {}
+    kwargs = {"litellm_params": {"metadata": {"user_api_key": "hashed-key", "user_api_key_team_id": "team-3"}}}
+    response = httpx.Response(status_code, json=body, request=httpx.Request("POST", _BATCH_ROUTE))
+
+    async def run():
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
+            patch("litellm.proxy.proxy_server.llm_router", router),
+        ):
+            proxy_logging.get_proxy_hook.return_value = hook
+            outcome = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
+                httpx_response=response,
+                response_body=body,
+                logging_obj=logging_obj,
+                url_route=_BATCH_ROUTE,
+                result="",
+                start_time=datetime(2026, 11, 11, 23, 15, 29),
+                end_time=datetime(2026, 11, 11, 23, 15, 30),
+                cache_hit=False,
+                request_body={"batch": {"inputConfig": {"fileName": "files/wireinput123"}}},
+                **kwargs,
+            )
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return outcome
+
+    return asyncio.run(run()), hook
+
+
+def test_batch_generate_content_is_a_tracked_gemini_route():
+    assert PassThroughEndpointLogging().is_gemini_route(_BATCH_ROUTE, "gemini") is True
+
+
+def test_a_created_gemini_batch_is_registered_against_the_gemini_deployment_at_zero_cost():
+    outcome, hook = _batch_create_through_passthrough(200, _BATCH_OPERATION, _gemini_router("gemini-3.8-flash"))
+
+    stored = hook.store_unified_object_id.await_args.kwargs
+    assert stored["model_object_id"] == "wire7h3x9batch"
+    assert get_model_id_from_unified_batch_id(_decoded(stored["unified_object_id"])) == "gemini-deployment-1"
+    assert stored["file_purpose"] == "batch"
+    assert stored["file_object"].status == "validating"
+    assert stored["user_api_key_dict"].api_key == "hashed-key"
+    assert stored["user_api_key_dict"].team_id == "team-3"
+    assert stored["unified_object_id"] == outcome["kwargs"]["unified_object_id"]
+    assert outcome["kwargs"]["model"] == "gemini-3.8-flash"
+    assert outcome["kwargs"]["custom_llm_provider"] == "gemini"
+    assert outcome["kwargs"]["batch_id"] == "wire7h3x9batch"
+    assert outcome["kwargs"]["response_cost"] == 0.0
+    assert outcome["result"].object == "batch"
+
+
+def test_a_created_gemini_batch_without_a_gemini_deployment_registers_nothing_but_names_the_model():
+    outcome, hook = _batch_create_through_passthrough(200, _BATCH_OPERATION, _gemini_router("gemini-other"))
+
+    hook.store_unified_object_id.assert_not_awaited()
+    assert outcome["result"] is None
+    assert outcome["kwargs"]["model"] == "gemini-3.8-flash"
+    assert outcome["kwargs"]["batch_id"] == "wire7h3x9batch"
+
+
+def test_a_rejected_gemini_batch_create_registers_nothing():
+    outcome, hook = _batch_create_through_passthrough(
+        400, {"error": {"code": 400, "message": "bad file"}}, _gemini_router("gemini-3.8-flash")
+    )
+
+    hook.store_unified_object_id.assert_not_awaited()
+    assert outcome["result"] is None
+    assert outcome["kwargs"]["model"] == "gemini-3.8-flash"
+    assert "batch_id" not in outcome["kwargs"]

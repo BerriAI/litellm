@@ -21,7 +21,9 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -32,6 +34,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
     GuardrailToolParam,
+    tool_calls_to_write_back,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -43,7 +46,11 @@ GUARDRAIL_NAME: Final = "generic_guardrail_api"
 _CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
 _SENT_ROW: Final = TypeAdapter(Mapping[str, object])
 _SENT_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_SENT_TOOL_CALLS: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = TypeAdapter(
+    tuple[Mapping[str, object], ...] | None
+)
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -63,6 +70,21 @@ _HEADER_VALUE_ALLOWLIST: Final = frozenset(
 # Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
 _HEADER_PRESENT_PLACEHOLDER: Final = "[present]"
 
+_AFTER_CONNECT_FAILURES: Final = (
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
+
+
+def _after_connect_failure(error: Timeout | httpx.TransportError) -> httpx.TransportError | None:
+    """AsyncHTTPHandler re-raises connect and read timeouts as the same litellm Timeout, so the phase comes from
+    the httpx error it was raised while handling."""
+    origin: Final = error if isinstance(error, httpx.TransportError) else error.__cause__ or error.__context__
+    return origin if isinstance(origin, _AFTER_CONNECT_FAILURES) else None
+
 
 def _header_value_allowed(
     header_name: str,
@@ -81,7 +103,7 @@ def _header_value_allowed(
 
 
 def _sanitize_inbound_headers(
-    headers: object,
+    headers: Mapping[object, object] | None,
     extra_allowlist: set[str] | None = None,
 ) -> dict[str, str] | None:
     """
@@ -108,6 +130,13 @@ def _sanitize_inbound_headers(
             sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
 
     return sanitized or None
+
+
+def _logged_inbound_headers(details: Mapping[str, object]) -> Mapping[object, object] | None:
+    litellm_params: Final = as_str_mapping(details.get("litellm_params", {}))
+    metadata: Final = as_str_mapping(litellm_params.get("metadata", {})) if litellm_params is not None else None
+    headers: Final = metadata.get("headers", None) if metadata is not None else None
+    return headers if isinstance(headers, dict) else None
 
 
 def _extract_inbound_headers(
@@ -147,7 +176,7 @@ def _extract_inbound_headers(
     if logging_obj and getattr(logging_obj, "model_call_details", None):
         try:
             details: Final = logging_obj.model_call_details or {}
-            headers = details.get("litellm_params", {}).get("metadata", {}).get("headers", None)
+            headers = _logged_inbound_headers(details)
             if headers:
                 return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
         except Exception:
@@ -218,6 +247,16 @@ def _structured_rows_to_write_back(
     )
 
 
+def _guardrail_response_from_json(response_json: object) -> GenericGuardrailAPIResponse:
+    if isinstance(response_json, dict):
+        return GenericGuardrailAPIResponse.from_dict(response_json)
+    raise AttributeError(
+        f"{type(response_json).__name__!r} object has no attribute 'get'",
+        name="get",
+        obj=response_json,
+    )
+
+
 class GenericGuardrailAPI(CustomGuardrail):
     """
     Generic Guardrail API integration for LiteLLM.
@@ -254,11 +293,20 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         streaming_buffer_until_moderated: bool | None = None,
+        num_retries: int | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
+        fresh_handler_factory: Callable[[], AsyncHTTPHandler] | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+        self.fresh_handler_factory: Callable[[], AsyncHTTPHandler] = fresh_handler_factory or (
+            lambda: AsyncHTTPHandler(timeout=self.async_handler.timeout)
+        )
+        self.num_retries: int = num_retries or 0
         self.headers = headers or {}
-        self.extra_headers = extra_headers or []
+        self.extra_headers: Sequence[object] = extra_headers or []
 
         # If api_key is provided, add it as x-api-key header
         if api_key:
@@ -363,7 +411,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
         error: Exception,
-        http_status_code: int | None = None,
+        http_status_code: object = None,
     ) -> GenericGuardrailAPIInputs:
         status_suffix: Final = f" http_status_code={http_status_code}" if http_status_code else ""
         error_type: Final = "HTTPStatusError" if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
@@ -384,12 +432,9 @@ class GenericGuardrailAPI(CustomGuardrail):
         return_inputs.update(inputs)
         return return_inputs
 
-    def _build_request_headers(self) -> dict:
+    def _build_request_headers(self) -> Mapping[str, str]:
         """Build HTTP headers for the guardrail API request."""
-        headers: Final = {"Content-Type": "application/json"}
-        if self.headers:
-            headers.update(self.headers)
-        return headers
+        return {"Content-Type": "application/json", **self.headers}
 
     def _request_body(
         self,
@@ -412,12 +457,16 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
         shown_messages: Sequence[AllMessageValues] | None,
+        sent_tool_calls: Sequence[Mapping[str, object]] | None,
         guardrail_response: GenericGuardrailAPIResponse,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
         return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
         if guardrail_response.texts:
             return_inputs["texts"] = guardrail_response.texts
+        rewritten_tool_calls: Final = tool_calls_to_write_back(sent_tool_calls, guardrail_response.tool_calls)
+        if rewritten_tool_calls is not None:
+            return_inputs["tool_calls"] = list(rewritten_tool_calls)
         if guardrail_response.images:
             return_inputs["images"] = guardrail_response.images
         elif images:
@@ -452,7 +501,7 @@ class GenericGuardrailAPI(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         unreachable_fail_open: Final = is_unreachable and self.unreachable_fallback == "fail_open"
         if unreachable_fail_open or not self.fail_on_error:
-            http_status_code: Final = getattr(getattr(error, "response", None), "status_code", None)
+            http_status_code: Final = attribute_or_none(attribute_or_none(error, "response"), "status_code")
             return self._fail_open_passthrough(
                 inputs=inputs,
                 input_type=input_type,
@@ -462,6 +511,35 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
         verbose_proxy_logger.error("Generic Guardrail API: failed to make request: %s", str(error))
         raise Exception(f"Generic Guardrail API failed: {error}")
+
+    async def _post_check(
+        self,
+        payload: Mapping[str, object],
+        headers: Mapping[str, str],
+        retries_left: int,
+        fresh: bool = False,
+    ) -> httpx.Response:
+        handler: Final = self.fresh_handler_factory() if fresh else self.async_handler
+        try:
+            return await handler.post(
+                url=self.api_base, json=dict(payload), headers=dict(headers), timeout=self.timeout
+            )
+        except (Timeout, httpx.TransportError) as error:
+            failure: Final = _after_connect_failure(error)
+            if retries_left < 1 or failure is None:
+                raise
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API check timed out or lost its connection, retrying on a fresh connection. "
+                "guardrail_name=%s api_base=%s error_type=%s retries_left=%d",
+                getattr(self, "guardrail_name", None),
+                self.api_base,
+                type(failure).__name__,
+                retries_left - 1,
+            )
+        finally:
+            if fresh:
+                await handler.close()
+        return await self._post_check(payload, headers, retries_left - 1, fresh=True)
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -505,15 +583,9 @@ class GenericGuardrailAPI(CustomGuardrail):
         if request_data is None:
             request_data = {}
 
-        request_body: Final = request_data.get("body") or {}
-
         # Merge additional provider specific params from config and dynamic params
-        additional_params: Final = {**self.additional_provider_specific_params}
-
-        # Get dynamic params from request if available
-        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_body)
-        if dynamic_params:
-            additional_params.update(dynamic_params)
+        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data) or {}
+        additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata
         user_metadata: Final = self._extract_user_api_key_metadata(request_data)
@@ -546,19 +618,15 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
-            response: Final = await self.async_handler.post(
-                url=self.api_base,
-                json=dict(self._request_body(guardrail_request, structured_messages)),
-                headers=headers,
-                timeout=self.timeout,
-            )
+            guardrail_request_body: Final = self._request_body(guardrail_request, structured_messages)
+            response: Final = await self._post_check(guardrail_request_body, headers, self.num_retries)
 
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final = _DECODED_JSON.validate_python(response.json())
 
             verbose_proxy_logger.debug("Generic Guardrail API response: %s", response_json)
 
-            guardrail_response: Final = GenericGuardrailAPIResponse.from_dict(response_json)
+            guardrail_response: Final = _guardrail_response_from_json(response_json)
 
             # Handle the response
             if guardrail_response.action == "BLOCKED":
@@ -578,6 +646,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 tools=tools,
                 structured_messages=structured_messages,
                 shown_messages=guardrail_request.structured_messages,
+                sent_tool_calls=_SENT_TOOL_CALLS.validate_python(guardrail_request_body.get("tool_calls")),
                 guardrail_response=guardrail_response,
             )
 
@@ -610,4 +679,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]

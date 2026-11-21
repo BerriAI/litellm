@@ -22,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import claude_hosted_web_tool_arguments
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
@@ -110,9 +111,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_id: str,
         text: str,
         activity: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         block_on_violation: bool = True,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         """Evaluate content against Purview DLP policies.
 
         Args:
@@ -127,7 +128,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         """
         start_time: Final = datetime.now()
         status: GuardrailStatus = "success"
-        response: dict[str, object] = {}
+        response: Mapping[str, object] = {}
 
         try:
             etag, _ = await self._compute_protection_scopes(user_id)
@@ -227,6 +228,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         if not output:
             return args
         for item in output:
+            hosted_arguments = claude_hosted_web_tool_arguments(item)
+            if hosted_arguments:
+                args.append(hosted_arguments)
             if isinstance(item, dict):
                 item_type = item.get("type")
                 arguments = item.get("arguments")
@@ -321,6 +325,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data if input_data is not None else "",
                 responses_api_request=data,
+                replay_tool_search=True,
             )
             return self.get_prompt_text_for_dlp(cast(list["AllMessageValues"], messages))
         except Exception:
@@ -395,7 +400,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict[str, Any],
+        data: dict[str, object],
         call_type: "CallTypesLiteral",
     ) -> dict[str, object] | None:
         """Check user prompt against Purview DLP policies before LLM call."""
@@ -429,7 +434,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 )
             prompt_text = self.completion_prompt_to_str(raw_prompt)
         else:
-            messages: Final[list | None] = data.get("messages")
+            messages: Final = data.get("messages")
             if messages:
                 prompt_text = self.get_prompt_text_for_dlp(cast(list["AllMessageValues"], messages))
 
