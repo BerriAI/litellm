@@ -167,8 +167,10 @@ def test_an_existing_team_answers_503_while_the_database_is_down_and_is_served_o
         _assert_served(_chat(proxy, private_key, model, served_team))
 
         missing: Final = _chat(proxy, private_key, model, missing_team)
-        assert missing.status_code == 404, missing.text
-        assert f"Team doesn't exist in db. Team={missing_team}." in str(_error(missing)["message"]), missing.text
+        assert (missing.status_code, _error(missing).get("message")) == (
+            401,
+            "Authentication Error, invalid credentials",
+        ), missing.text
 
         relay.arm()
         during: Final = _chat(proxy, private_key, model, unread_team)
