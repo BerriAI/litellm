@@ -372,7 +372,7 @@ jobs:
     name: smoke passed
     needs: [rust-bridge, dashboard-build, core-checks, all-extras]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
     steps:
