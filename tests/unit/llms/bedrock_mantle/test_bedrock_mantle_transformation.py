@@ -21,6 +21,7 @@ import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
 from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import LlmProviders
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
@@ -1094,3 +1095,184 @@ def test_mantle_signing_reports_only_missing_aws_dependency(missing):
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+_CHAT_COMPLETIONS_REPLY: Final = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion",
+    "created": 1733529600,
+    "model": "google.gemma-4-31b",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _chat_completions_reply(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(status_code=200, json=_CHAT_COMPLETIONS_REPLY, request=request)
+
+
+def _use_mantle_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE", "BEDROCK_MANTLE_REGION"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "test-key")
+
+
+def _recording_client(handler: Mock) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+_GEMMA_4_REFUSED_KEYWORDS: Final = (
+    "propertyNames",
+    "contains",
+    "minContains",
+    "maxContains",
+    "dependentRequired",
+    "dependentSchemas",
+    "dependencies",
+    "if",
+    "then",
+    "else",
+    "minProperties",
+    "maxProperties",
+    "unevaluatedProperties",
+    "unevaluatedItems",
+    "uniqueItems",
+    "$dynamicRef",
+    "$dynamicAnchor",
+    "$recursiveRef",
+    "$recursiveAnchor",
+)
+
+
+def _ask_user_question_parameters() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "object", "properties": {"question": {"type": "string"}}},
+            },
+            "answers": {"type": "object", "propertyNames": {"type": "string"}, "additionalProperties": {"type": "string"}},
+            "contains": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+        },
+        "required": ["questions"],
+    }
+
+
+def _schema_paths(body: Mapping[str, object]) -> tuple[object, ...]:
+    tools: Final = body["tools"]
+    functions: Final = body["functions"]
+    response_format: Final = body["response_format"]
+    assert isinstance(tools, list) and isinstance(functions, list) and isinstance(response_format, dict)
+    return (tools[0]["function"]["parameters"], functions[0]["parameters"], response_format["json_schema"]["schema"])
+
+
+class TestBedrockMantleGemma4SchemaKeywords:
+    """Mantle's gemma-4 models answered 400 "The task request was rejected by the target" to Claude
+    Code's AskUserQuestion tool, whose answers property carries propertyNames."""
+
+    def test_claude_code_tool_reaches_mantle_gemma_4_without_the_refused_keywords(
+        self, monkeypatch, local_cost_map
+    ) -> None:
+        _use_mantle_bearer(monkeypatch)
+        handler: Final = Mock(side_effect=_chat_completions_reply)
+
+        response: Final = litellm.completion(
+            model="bedrock_mantle/google.gemma-4-31b",
+            messages=[{"role": "user", "content": "hello"}],
+            aws_region_name="us-east-1",
+            tools=[{"type": "function", "function": {"name": "AskUserQuestion", "parameters": _ask_user_question_parameters()}}],
+            client=_recording_client(handler),
+        )
+
+        sent: Final = handler.call_args_list[0].args[0]
+        assert response.choices[0].message.content == "ok"
+        assert sent.url.path == "/openai/v1/chat/completions"
+        assert json.loads(sent.content)["tools"][0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "object", "properties": {"question": {"type": "string"}}},
+                },
+                "answers": {"type": "object", "additionalProperties": {"type": "string"}},
+                "contains": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["questions"],
+        }
+
+    @pytest.mark.parametrize(
+        "model, drops",
+        [
+            ("google.gemma-4-31b", True),
+            ("google.gemma-4-26b-a4b", True),
+            ("google.gemma-4-e2b", True),
+            ("eu-central-1/google.gemma-4-31b", True),
+            ("google.gemma-3-27b-it", False),
+            ("openai.gpt-oss-120b", False),
+        ],
+    )
+    def test_only_gemma_4_loses_the_refused_keywords_in_tools_functions_and_response_format(
+        self, model: str, drops: bool
+    ) -> None:
+        schema: Final = _ask_user_question_parameters()
+        body: Final = BedrockMantleChatConfig().transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "tools": [{"type": "function", "function": {"name": "AskUserQuestion", "parameters": schema}}],
+                "functions": [{"name": "AskUserQuestion", "parameters": schema}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "reply", "schema": schema}},
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        sent_schemas: Final = _schema_paths(body)
+        assert all(("propertyNames" in json.dumps(sent)) is not drops for sent in sent_schemas)
+        assert all(("uniqueItems" in json.dumps(sent)) is not drops for sent in sent_schemas)
+        assert all(sent["properties"].keys() == schema["properties"].keys() for sent in sent_schemas)
+        assert schema == _ask_user_question_parameters()
+
+    def test_gemma_4_request_carries_none_of_the_keywords_mantle_refused(self) -> None:
+        """Each keyword answered 400 alone in a gemma-4-31b tool schema on Mantle us-east-1, 2026-11-20."""
+        nested: Final = {"type": "object", "properties": {"x": {"type": "string"}}, **{kw: {} for kw in _GEMMA_4_REFUSED_KEYWORDS}}
+        body: Final = BedrockMantleChatConfig().transform_request(
+            model="google.gemma-4-31b",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "t",
+                            "parameters": {"type": "object", "properties": {"nested": nested}, "$defs": {"d": nested}},
+                        },
+                    }
+                ]
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert body["tools"][0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {"nested": {"type": "object", "properties": {"x": {"type": "string"}}}},
+            "$defs": {"d": {"type": "object", "properties": {"x": {"type": "string"}}}},
+        }
+
+    def test_gemma_4_request_passes_a_function_entry_that_is_not_an_object_through_unchanged(self) -> None:
+        body: Final = BedrockMantleChatConfig().transform_request(
+            model="google.gemma-4-31b",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "functions": ["not-a-function", {"name": "ask", "parameters": _ask_user_question_parameters()}]
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert body["functions"][0] == "not-a-function"
+        assert "propertyNames" not in json.dumps(body["functions"][1])

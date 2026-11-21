@@ -10,17 +10,22 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import with_sanitized_schema_at
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
+    drop_schema_keywords_gemma_4_rejects,
+    is_mantle_gemma_4_model,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
@@ -37,6 +42,34 @@ if TYPE_CHECKING:
     from litellm.llms.openai.chat.gpt_transformation import (
         OpenAIChatCompletionStreamingHandler,
     )
+
+
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+_CHAT_SCHEMA_PATHS: Final = MappingProxyType(
+    {
+        "tools": ("function", "parameters"),
+        "functions": ("parameters",),
+        "response_format": ("json_schema", "schema"),
+    }
+)
+
+
+def _chat_entry_gemma_4_accepts(entry: object, path: tuple[str, ...]) -> object:
+    if not isinstance(entry, dict):
+        return entry
+    return with_sanitized_schema_at(_JSON_OBJECT.validate_python(entry), path, drop_schema_keywords_gemma_4_rejects)
+
+
+def _chat_value_gemma_4_accepts(key: str, value: object) -> object:
+    path: Final = _CHAT_SCHEMA_PATHS.get(key)
+    if path is None:
+        return value
+    if isinstance(value, list):
+        return [_chat_entry_gemma_4_accepts(entry, path) for entry in _JSON_ARRAY.validate_python(value)]
+    return _chat_entry_gemma_4_accepts(value, path)
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -157,6 +190,21 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
             if param != "max_tokens"
         }
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        litellm_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+    ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        request: Final = _REQUEST_BODY.validate_python(
+            super().transform_request(model, messages, optional_params, litellm_params, headers)  # pyright: ignore[reportUnknownMemberType]  # OpenAIGPTConfig.transform_request types its params and result as bare dicts
+        )
+        if not is_mantle_gemma_4_model(model):
+            return request
+        return {key: _chat_value_gemma_4_accepts(key, value) for key, value in request.items()}
 
     def _supports_reasoning(self, model: str) -> bool:
         try:
