@@ -136,6 +136,11 @@ async def prepare_object_permission_upsert(
             if "mcp_tool_permissions" in merged
             else {}
         ),
+        **(
+            {"mcp_event_permissions": safe_dumps(merged["mcp_event_permissions"])}
+            if "mcp_event_permissions" in merged
+            else {}
+        ),
     }
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 
@@ -259,6 +264,8 @@ async def set_object_permission(
     # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
     if "mcp_tool_permissions" in clean_data:
         clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
+    if "mcp_event_permissions" in clean_data:
+        clean_data["mcp_event_permissions"] = safe_dumps(clean_data["mcp_event_permissions"])
 
     created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=clean_data)
 

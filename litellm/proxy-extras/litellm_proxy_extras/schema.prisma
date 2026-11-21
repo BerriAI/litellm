@@ -504,6 +504,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_servers           String[]       @default([])
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
+  mcp_event_permissions Json?          // Event-type permissions for MCP servers. Format: {"server_id": ["incident.created"]}
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
@@ -584,6 +585,7 @@ model LiteLLM_MCPServerTable {
   timeout               Float?
   max_concurrent_requests Int?
   rpm                   Int?
+  events                Json?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -592,6 +594,53 @@ model LiteLLM_MCPServerTable {
   review_notes     String?
 
   @@index([approval_status])
+}
+
+// Webhook subscriptions relayed by the MCP gateway (MCP Events extension)
+model LiteLLM_MCPEventSubscription {
+  id                       String    @id
+  principal                String
+  key_hash                 String?
+  user_id                  String?
+  team_id                  String?
+  server_id                String
+  event_name               String
+  arguments                Json      @default("{}")
+  client_url               String
+  client_secret            String
+  upstream_subscription_id String?
+  upstream_secret          String
+  upstream_refresh_before  DateTime?
+  refresh_before           DateTime?
+  cursor                   String?
+  status                   String    @default("pending")
+  verified_at              DateTime?
+  last_delivery_at         DateTime?
+  last_error               String?
+  failed_since             DateTime?
+  consecutive_failures     Int       @default(0)
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @default(now()) @updatedAt
+
+  @@index([principal])
+  @@index([server_id])
+  @@index([key_hash])
+  @@index([status])
+}
+
+// Durable queue of webhook deliveries awaiting the MCP events delivery worker
+model LiteLLM_MCPEventDelivery {
+  delivery_id     String    @id
+  subscription_id String
+  body            String
+  webhook_id      String
+  attempt         Int       @default(0)
+  next_attempt_at DateTime  @default(now())
+  claimed_until   DateTime?
+  created_at      DateTime  @default(now())
+
+  @@index([next_attempt_at])
+  @@index([subscription_id])
 }
 
 // Named collection of {server_id, tool_name} pairs that can be granted to keys/teams

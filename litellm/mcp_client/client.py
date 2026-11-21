@@ -545,6 +545,7 @@ class MCPClient:
         self._logging_callback: Callable | None = logging_callback
         self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         self._session_callbacks_override: _SessionCallbackMap | None = None
+        self._session_type_override: type[ClientSession] | None = None
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -571,6 +572,9 @@ class MCPClient:
 
     def route_session_callbacks(self, callbacks: _SessionCallbackMap) -> None:
         self._session_callbacks_override = callbacks
+
+    def route_session_type(self, session_type: type[ClientSession]) -> None:
+        self._session_type_override = session_type
 
     async def discovery_auth_fingerprint(self) -> str:
         return self._hash_discovery_auth(await self.prepare_request_auth(), self._aws_identity())
@@ -788,7 +792,7 @@ class MCPClient:
                     )
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
-                    session_type: Final = (
+                    session_type: Final = self._session_type_override or (
                         _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
                     )
                     session_ctx: Final = session_type(
