@@ -24,8 +24,8 @@ from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
-from litellm import verbose_logger
 from litellm._lazy_imports import get_default_encoding
+from litellm._logging import verbose_logger
 from litellm.constants import (
     ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
     ANTHROPIC_IMAGE_MAX_PIXELS,

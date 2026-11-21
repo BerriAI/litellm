@@ -10173,6 +10173,23 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.completion_tokens_details.reasoning_tokens == 5
 
 
+def test_streaming_print_verbose_redacts_interpolated_content(capsys, monkeypatch):
+    from litellm.constants import REDACTED_BY_LITELLM
+    from litellm.litellm_core_utils.streaming_handler import print_verbose as stream_print_verbose
+
+    reply: Final = "private-stream-reply-42896"
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    stream_print_verbose(f"completion obj content: {reply}")
+    assert reply in capsys.readouterr().out
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    stream_print_verbose(f"completion obj content: {reply}")
+    private_out: Final = capsys.readouterr().out
+    assert reply not in private_out
+    assert REDACTED_BY_LITELLM in private_out
+
+
 def _stream_of(chunks: Sequence[object], sync_mode: bool) -> Iterator[object] | AsyncIterator[object]:
     return iter(chunks) if sync_mode else _as_async(iter(chunks))
 
