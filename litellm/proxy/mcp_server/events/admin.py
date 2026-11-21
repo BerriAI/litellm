@@ -1,10 +1,10 @@
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Annotated, Final, TypeAlias
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_logger
@@ -57,6 +57,7 @@ class SubscriptionList(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     subscriptions: tuple[SubscriptionView, ...]
+    next_offset: int | None = None
 
 
 class TestEventRequest(BaseModel):
@@ -99,6 +100,7 @@ class AdminServices:
     runtime: EventsRuntime
     post: Poster
     lookup: Callable[[str], MCPServer | None]
+    key_for_alias: Callable[[str], Awaitable[str | None]]
 
     def require_store(self) -> EventStore:
         if self.store is None:
@@ -107,7 +109,13 @@ class AdminServices:
 
 
 def admin_services() -> AdminServices:
-    return AdminServices(store=default_store(), runtime=DEFAULT_RUNTIME, post=post_callback, lookup=registered_server)
+    return AdminServices(
+        store=default_store(),
+        runtime=DEFAULT_RUNTIME,
+        post=post_callback,
+        lookup=registered_server,
+        key_for_alias=key_for_alias,
+    )
 
 
 Services: TypeAlias = Annotated[AdminServices, Depends(admin_services)]
@@ -149,22 +157,31 @@ async def terminate_key_subscriptions(
         return
     for token in (item for item in token_hashes if item):
         try:
-            rows = await services.store.find(SubscriptionQuery(key_hash=token, live_only=True, limit=1000))
-            for row in rows:
-                await terminate_subscription(row, forbidden("Key revoked"), services, notify=notify)
+            await _terminate_for_key(token, services, notify)
         except Exception as error:  # noqa: BLE001  # key lifecycle must not fail on event cleanup; deliveries re-authorize anyway
             verbose_logger.warning("Failed to terminate MCP event subscriptions for a revoked key: %s", error)
 
 
+async def _terminate_for_key(token: str, services: AdminServices, notify: bool) -> None:
+    store: Final = services.require_store()
+    for row in await store.find(SubscriptionQuery(key_hash=token, live_only=True, limit=1000)):
+        await terminate_subscription(row, forbidden("Key revoked"), services, notify=notify)
+
+
 @router.get("/types", response_model=tuple[EventType, ...])
 async def list_event_types(
+    request: Request,
     server_id: Annotated[str, Query()],
     caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     services: Services,
 ) -> tuple[EventType, ...]:
     """List the event types one events-enabled MCP server publishes to this caller, under their upstream names."""
+    from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
     runtime: Final = services.runtime
-    context: Final = OperationContext(_caller=caller)
+    context: Final = OperationContext(
+        _caller=caller, client_ip=IPAddressUtils.get_mcp_client_ip(request), raw_headers=dict(request.headers)
+    )
     allowed: Final = await runtime.allowed_servers(context)
     server: Final = next((item for item in event_servers(allowed) if item.server.server_id == server_id), None)
     if server is None:
@@ -181,9 +198,11 @@ async def list_subscriptions(
     server_id: str | None = None,
     status: SubscriptionStatus | None = None,
     key_alias: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> SubscriptionList:
     store: Final = services.require_store()
-    key_hash: Final = await _token_for_alias(key_alias) if key_alias is not None and _is_admin(caller) else None
+    key_hash: Final = await services.key_for_alias(key_alias) if key_alias is not None and _is_admin(caller) else None
     if key_alias is not None and key_hash is None:
         return SubscriptionList(subscriptions=())
     query: Final = SubscriptionQuery(
@@ -191,18 +210,29 @@ async def list_subscriptions(
         key_hash=key_hash,
         server_id=server_id,
         status=status,
+        limit=limit + 1,
+        offset=offset,
     )
-    return SubscriptionList(subscriptions=tuple(_view(row) for row in await store.find(query)))
+    rows: Final = await store.find(query)
+    return SubscriptionList(
+        subscriptions=tuple(_view(row) for row in rows[:limit]),
+        next_offset=offset + limit if len(rows) > limit else None,
+    )
 
 
-async def _token_for_alias(alias: str) -> str | None:
+async def key_for_alias(alias: str) -> str | None:
+    """The stored key hash for an alias; 400 when the alias names more than one key, as the key lookup does."""
     from litellm.proxy.proxy_server import prisma_client
     from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
     if prisma_client is None:
         return None
-    record: Final = await VerificationTokenRepository(prisma_client).table.find_first(where={"key_alias": alias})
-    return record.token if record is not None else None
+    records: Final = await VerificationTokenRepository(prisma_client).table.find_many(
+        where={"key_alias": alias}, take=2
+    )
+    if len(records) > 1:
+        raise HTTPException(status_code=400, detail="More than one key has this alias; filter by key instead")
+    return records[0].token if records else None
 
 
 @router.delete("/subscriptions/{subscription_id}", response_model=SubscriptionView)

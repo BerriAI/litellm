@@ -114,7 +114,7 @@ class MemoryStore:
         )
 
     async def find(self, query: SubscriptionQuery) -> tuple[SubscriptionRow, ...]:
-        return tuple(
+        matching: Final = tuple(
             row
             for row in self.rows.values()
             if (query.principal is None or row.principal == query.principal)
@@ -123,6 +123,7 @@ class MemoryStore:
             and (query.status is None or row.status == query.status)
             and (not query.live_only or row.status in LIVE_STATUSES)
         )
+        return matching[query.offset : query.offset + query.limit]
 
     async def due_for_upstream_refresh(self, before: datetime) -> tuple[SubscriptionRow, ...]:
         return ()

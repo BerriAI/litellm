@@ -1,7 +1,7 @@
 import json
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 import httpx
@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import EventGrant, principal_of
 from litellm.proxy.mcp_server.events.admin import AdminServices, admin_services, router, terminate_key_subscriptions
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
@@ -61,6 +62,10 @@ class Callback:
         return Error(self.failure) if self.failure is not None else Ok(CallbackResponse(status=self.status, body=b""))
 
 
+async def _no_alias(_alias: str) -> str | None:
+    return None
+
+
 def _lookup(server_id: str) -> MCPServer | None:
     return server() if server_id == "srv-ci" else None
 
@@ -68,7 +73,9 @@ def _lookup(server_id: str) -> MCPServer | None:
 def _client(caller: UserAPIKeyAuth, store: MemoryStore | None, callback: Callback) -> httpx.AsyncClient:
     app: Final = FastAPI()
     app.include_router(router)
-    services: Final = AdminServices(store=store, runtime=runtime((server(),)), post=callback.post, lookup=_lookup)
+    services: Final = AdminServices(
+        store=store, runtime=runtime((server(),)), post=callback.post, lookup=_lookup, key_for_alias=_no_alias
+    )
     app.dependency_overrides[user_api_key_auth] = lambda: caller
     app.dependency_overrides[admin_services] = lambda: services
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw")
@@ -190,7 +197,9 @@ async def test_a_revoked_key_ends_its_subscriptions_and_notifies_only_while_even
 ) -> None:
     store: Final = _store()
     callback: Final = Callback()
-    services: Final = AdminServices(store=store, runtime=runtime((server(),)), post=callback.post, lookup=_lookup)
+    services: Final = AdminServices(
+        store=store, runtime=runtime((server(),)), post=callback.post, lookup=_lookup, key_for_alias=_no_alias
+    )
     await terminate_key_subscriptions((ALICE.token, None), notify=notify, services=services)
     assert (store.rows["sub_a"].status, store.rows["sub_b"].status) == ("terminated", "active")
     assert [json.loads(body)["type"] for _, body, _ in callback.sent] == envelopes
@@ -211,9 +220,43 @@ async def test_event_types_list_only_what_the_server_publishes_and_the_caller_is
     app: Final = FastAPI()
     app.include_router(router)
     events_runtime: Final = runtime((server(events=config),), (BUILD_FAILED, DEPLOY_DONE), grant=grant)
-    services: Final = AdminServices(store=None, runtime=events_runtime, post=Callback().post, lookup=_lookup)
+    services: Final = AdminServices(
+        store=None, runtime=events_runtime, post=Callback().post, lookup=_lookup, key_for_alias=_no_alias
+    )
     app.dependency_overrides[user_api_key_auth] = lambda: ALICE
     app.dependency_overrides[admin_services] = lambda: services
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw") as client:
         response = await client.get("/events/types", params={"server_id": "srv-ci"})
     assert [item["name"] for item in response.json()] == names
+
+
+@pytest.mark.asyncio
+async def test_the_subscription_list_pages_with_a_continuation_offset() -> None:
+    store: Final = MemoryStore(rows={f"sub_{index}": _row(f"sub_{index}", ALICE) for index in range(5)})
+    async with _client(ADMIN, store, Callback()) as client:
+        first = (await client.get("/events/subscriptions", params={"limit": 2})).json()
+        last = (await client.get("/events/subscriptions", params={"limit": 2, "offset": 4})).json()
+    assert (len(first["subscriptions"]), first["next_offset"]) == (2, 2)
+    assert (len(last["subscriptions"]), last["next_offset"]) == (1, None)
+
+
+@pytest.mark.asyncio
+async def test_event_types_filter_servers_by_the_callers_network_address() -> None:
+    seen: Final[list[str | None]] = []  # mutable-ok: records the client IP each lookup saw
+
+    async def allowed(context: OperationContext) -> tuple[MCPServer, ...]:
+        seen.append(context.client_ip)
+        return (server(),)
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    events_runtime: Final = replace(runtime((server(),)), allowed_servers=allowed)
+    services: Final = AdminServices(
+        store=None, runtime=events_runtime, post=Callback().post, lookup=_lookup, key_for_alias=_no_alias
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: ALICE
+    app.dependency_overrides[admin_services] = lambda: services
+    transport: Final = httpx.ASGITransport(app=app, client=("203.0.113.9", 4100))
+    async with httpx.AsyncClient(transport=transport, base_url="http://gw") as client:
+        await client.get("/events/types", params={"server_id": "srv-ci"})
+    assert seen == ["203.0.113.9"]
