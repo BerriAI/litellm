@@ -4,10 +4,10 @@ Each app carries the answer for its own requests, and one gateway setting answer
 app. A request that may not register runs for the customers the proxy already knows and is refused for any other.
 """
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from fastapi import status
+from fastapi import Request, status
 
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.app_auth import authenticated_resource_alias, authenticated_resource_id
@@ -37,7 +37,7 @@ HierarchyResolver: TypeAlias = Callable[
 async def registration_refusal(
     prisma_client: "PrismaClient | None",
     authenticated: UserAPIKeyAuth,
-    headers: Mapping[str, object],
+    request: Request | None,
     route: str,
 ) -> str | None:
     """Why this request may not register a new customer, or None when it may."""
@@ -46,7 +46,7 @@ async def registration_refusal(
     from litellm.proxy.proxy_server import user_api_key_cache
 
     missing_header: Final = await missing_required_customer_header(
-        headers, route, authenticated, prisma_client, user_api_key_cache
+        request, route, authenticated, prisma_client, user_api_key_cache
     )
     if missing_header is not None:
         return f"Missing required customer header {missing_header}."

@@ -645,6 +645,32 @@ async def test_team_require_trace_id_skips_non_dict_team_metadata() -> None:
     assert await _run_team_trace_id_check(route="/v1/chat/completions", team_object=team) is True
 
 
+@pytest.mark.parametrize(
+    ("route", "registered_pass_through_endpoint"),
+    [("/anthropic/v1/messages", False), ("/configured-passthrough/infer", True)],
+    ids=["provider-pass-through", "registered-pass-through"],
+)
+@pytest.mark.parametrize("with_header", [False, True])
+@pytest.mark.asyncio
+async def test_team_required_customer_headers_apply_to_pass_through_routes(
+    route: str, registered_pass_through_endpoint: bool, with_header: bool
+) -> None:
+    run: Final = _run_team_trace_id_check(
+        route=route,
+        request_body={},
+        headers={"X-Tenant-ID": "tenant"} if with_header else {},
+        team_metadata={"required_customer_headers": ["X-Tenant-ID"]},
+        registered_pass_through_endpoint=registered_pass_through_endpoint,
+    )
+    if with_header:
+        assert await run is True
+        return
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await run
+    assert (exc_info.value.code, exc_info.value.param) == (str(status.HTTP_403_FORBIDDEN), "X-Tenant-ID")
+
+
 class _ReadCountingHeaders(UserDict[str, str]):
     reads = 0
 

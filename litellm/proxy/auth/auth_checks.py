@@ -388,12 +388,21 @@ def _missing_customer_header(headers: Mapping[str, str], required: tuple[str, ..
     return next((header for header in required if header.lower() not in present), None)
 
 
-def _route_requires_customer_headers(route: str) -> bool:
-    return RouteChecks.runs_inference_checks(route) and not RouteChecks.is_info_route(route)
+def _is_pass_through_route(route: str, request: Request | None) -> bool:
+    return RouteChecks.check_route_access(
+        route=route,
+        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
+    ) or request_dispatched_to_pass_through_endpoint(request)
+
+
+def _route_requires_customer_headers(route: str, request: Request | None) -> bool:
+    return (
+        RouteChecks.runs_inference_checks(route) or _is_pass_through_route(route, request)
+    ) and not RouteChecks.is_info_route(route)
 
 
 async def missing_required_customer_header(
-    headers: Mapping[str, object],
+    request: Request | None,
     route: str,
     authenticated: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
@@ -402,7 +411,7 @@ async def missing_required_customer_header(
     """The first header this route's required-customer-header policy needs that the request lacks, or None."""
     from litellm.proxy import proxy_server
 
-    if not _route_requires_customer_headers(route):
+    if not _route_requires_customer_headers(route, request):
         return None
     team: Final = (
         await get_team_object(
@@ -412,7 +421,7 @@ async def missing_required_customer_header(
         else None
     )
     return _missing_customer_header(
-        _REQUEST_HEADERS_ADAPTER.validate_python(headers),
+        _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
         _required_customer_headers(
             (
                 getattr(proxy_server, "general_settings", None),
@@ -1504,10 +1513,7 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
-    pass_through_route: Final = RouteChecks.check_route_access(
-        route=route,
-        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
-    ) or request_dispatched_to_pass_through_endpoint(request)
+    pass_through_route: Final = _is_pass_through_route(route, request)
     headers_only: Final = (
         RouteChecks.check_route_access(
             route=route,
@@ -1565,7 +1571,7 @@ async def common_checks(
                 getattr(valid_token, "metadata", None),
             )
         )
-        if _route_requires_customer_headers(route)
+        if _route_requires_customer_headers(route, request)
         else ()
     )
     missing_customer_header: Final = (

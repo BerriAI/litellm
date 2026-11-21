@@ -12590,12 +12590,13 @@ async def test_preflight_logging_drops_unsafe_or_unparsable_bodies(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/v1/messages", "/configured-passthrough/infer"])
 @pytest.mark.parametrize("with_required_header", [False, True])
 async def test_a_request_missing_a_required_customer_header_registers_no_customer(
     monkeypatch: pytest.MonkeyPatch, route: str, with_required_header: bool
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
     from tests.unit.proxy.management_helpers.test_apps import AppDatabase
 
@@ -12622,6 +12623,10 @@ async def test_a_request_missing_a_required_customer_header_registers_no_custome
             "headers": [(b"x-tenant-id", b"new-customer"), *([(b"x-user-id", b"member")] if with_required_header else [])],
         }
     )
+    if route == "/configured-passthrough/infer":
+        endpoint: Final = SimpleNamespace()
+        setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+        request.scope["endpoint"] = endpoint
     auth: Final = UserAPIKeyAuth(token="sk-test-master", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     if with_required_header:
