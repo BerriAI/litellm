@@ -9,7 +9,7 @@ from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.admission import admit, binding_for, caller_key, screen_all, still_authorized
 from litellm.proxy.mcp_server.events.catalog import PreparedEvent
 from litellm.proxy.mcp_server.events.config import EventsSettings
-from litellm.proxy.mcp_server.events.cursors import CursorBinding, open_cursor, seal_cursor
+from litellm.proxy.mcp_server.events.cursors import CursorBinding, ensure_sealable, open_cursor, seal_cursor
 from litellm.proxy.mcp_server.events.errors import EventsFailure, forbidden
 from litellm.proxy.mcp_server.events.observability import EventActivity, EventOutcome
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime, Frames
@@ -112,7 +112,11 @@ class PushRelay:
             return None
         if caller_key(fresh) != self._binding.caller:
             return None
-        return fresh if await still_authorized(fresh, self._prepared, self._runtime) else None
+        try:
+            allowed: Final = await still_authorized(fresh, self._prepared, self._runtime)
+        except Exception:  # noqa: BLE001  # a permission lookup that fails ends the subscription like a denial
+            return None
+        return fresh if allowed else None
 
     async def _announce(self, upstream_cursor: JsonValue | None, truncated: bool) -> None:
         self._cursor = self._seal(upstream_cursor) or self._cursor
@@ -152,6 +156,8 @@ class PushRelay:
         try:
             occurrence: Final = EventOccurrence.model_validate(params)
         except ValidationError:
+            await self._announce(params.get("cursor"), True)
+            await self._record("failed")
             return
         admitted: Final = await screen_all(
             (occurrence,), fresh, self._prepared, self._settings, str(self._subscription_id), self._runtime
@@ -206,6 +212,9 @@ async def push(
     if isinstance(prepared, Error):
         raise prepared.error.to_mcp()
     binding: Final = binding_for(context, prepared.ok, params.arguments)
+    unsealable: Final = ensure_sealable(binding, runtime.now())
+    if unsealable is not None:
+        raise unsealable.to_mcp()
     opened: Final = open_cursor(params.cursor, binding, runtime.now())
     if isinstance(opened, Error):
         raise opened.error.to_mcp()

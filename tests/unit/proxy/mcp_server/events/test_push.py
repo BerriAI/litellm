@@ -1,15 +1,19 @@
+from dataclasses import replace
 from typing import Final
 
 import anyio
 import pytest
+from mcp.shared.exceptions import MCPError
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
-from litellm.proxy.mcp_server.events.access import principal_of
+from litellm.proxy.mcp_server.events.access import EventGrant, principal_of
 from litellm.proxy.mcp_server.events.catalog import prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import CursorBinding, arguments_digest, open_cursor
 from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.push import PushRelay, granted_heartbeat, push
+from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import Overflow, StreamFrame
 from litellm.proxy.mcp_server.outbound_credentials.result import Ok
 from litellm.types.mcp_server.events import JsonObject, StreamEventsParams
@@ -162,3 +166,62 @@ async def test_the_gateway_sends_heartbeats_only_after_the_upstream_confirms() -
     assert "notifications/events/heartbeat" in methods[1:]
     heartbeat: Final = next(params for method, params in sent if method == "notifications/events/heartbeat")
     assert _opened(heartbeat["cursor"]) == "3"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_upstream_event_becomes_a_truncated_active() -> None:
+    unreadable: Final = StreamFrame("notifications/events/event", {"cursor": "3", "not": "an occurrence"})
+    sent, _ = await _run((_active("1"), unreadable))
+    assert [(method, params.get("truncated"), _opened(params.get("cursor"))) for method, params in sent] == [
+        ("notifications/events/active", False, "1"),
+        ("notifications/events/active", True, "3"),
+    ]
+
+
+async def _push_with(
+    events_runtime: EventsRuntime, frames: tuple[object, ...] | None = None
+) -> list[tuple[str, JsonObject]]:
+    sent: Final[list[tuple[str, JsonObject]]] = []  # mutable-ok: collects downstream notifications
+
+    async def send(method: str, params: JsonObject) -> None:
+        sent.append((method, params))
+
+    await push(
+        send,
+        SUBSCRIPTION,
+        context(),
+        StreamEventsParams(name="ci-build.failed", arguments=ARGS, heartbeat_ms=1),
+        None,
+        SETTINGS,
+        _authorized,
+        events_runtime if frames is None else replace(events_runtime, stream=FakeUpstream(frames=frames).stream),
+    )
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_a_permission_lookup_that_fails_mid_stream_terminates_the_stream() -> None:
+    calls: Final[list[str]] = []  # mutable-ok: counts grant lookups
+
+    async def flaky_grant(_server_id: str, _caller: UserAPIKeyAuth | None) -> EventGrant:
+        calls.append("grant")
+        if len(calls) > 1:
+            raise ConnectionError("permission store unreachable")
+        return None
+
+    sent: Final = await _push_with(
+        replace(runtime((server(),)), grant=flaky_grant), (_active("1"), _event("evt_1", "2"))
+    )
+    assert [method for method, _ in sent][-1] == "notifications/events/terminated"
+
+
+@pytest.mark.asyncio
+async def test_a_stream_is_refused_before_any_upstream_work_when_cursors_cannot_be_sealed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    upstream: Final = FakeUpstream(frames=(_active("1"),))
+    with pytest.raises(MCPError):
+        await _push_with(runtime((server(),), upstream=upstream))
+    assert upstream.stream_calls == []

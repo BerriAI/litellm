@@ -12,7 +12,13 @@ from litellm.proxy.mcp_server.events.access import holds_webhooks, principal_of,
 from litellm.proxy.mcp_server.events.admission import admit, binding_for, check_routing_headers
 from litellm.proxy.mcp_server.events.catalog import PreparedEvent, prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
-from litellm.proxy.mcp_server.events.cursors import CursorBinding, OpenedCursor, open_cursor, seal_cursor
+from litellm.proxy.mcp_server.events.cursors import (
+    CursorBinding,
+    OpenedCursor,
+    ensure_sealable,
+    open_cursor,
+    seal_cursor,
+)
 from litellm.proxy.mcp_server.events.errors import (
     EventsFailure,
     callback_error,
@@ -297,9 +303,9 @@ async def _prepare(
     opened: Final = open_cursor(params.cursor, binding, runtime.now())
     if isinstance(opened, Error):
         return Error(opened.error)
-    sealable: Final = seal_cursor(binding, "probe", runtime.now())
-    if isinstance(sealable, Error):
-        return Error(sealable.error)
+    unsealable: Final = ensure_sealable(binding, runtime.now())
+    if unsealable is not None:
+        return Error(unsealable)
     found: Final = await request.store.get(sid)
     existing: Final = await _retire_if_moved(found, prepared.ok, settings, runtime, request.store)
     live: Final = existing if existing is not None and existing.status != "terminated" else None

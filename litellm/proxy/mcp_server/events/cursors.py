@@ -89,3 +89,9 @@ def open_cursor(token: str | None, binding: CursorBinding, now: int) -> Result[O
     ):
         return Error(invalid_params("Event cursor does not belong to this subscription"))
     return Ok(OpenedCursor(upstream=state.upstream))
+
+
+def ensure_sealable(binding: CursorBinding, now: int) -> EventsFailure | None:
+    """Fail before any upstream work when cursors cannot be sealed, so no event is consumed and then lost."""
+    probe: Final = seal_cursor(binding, "probe", now)
+    return probe.error if isinstance(probe, Error) else None

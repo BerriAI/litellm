@@ -130,3 +130,20 @@ async def test_an_invalid_upstream_result_is_an_internal_error() -> None:
         runtime((server(),), upstream=FakeUpstream(responses={"events/poll": {"events": "nope"}})),
     )
     assert isinstance(result, Error) and result.error.code is EventsErrorCode.INTERNAL_ERROR
+
+
+@pytest.mark.asyncio
+async def test_a_poll_is_refused_before_reading_upstream_when_cursors_cannot_be_sealed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    upstream: Final = _upstream((occurrence(),))
+    result: Final = await poll(
+        context(),
+        PollEventsParams(name="ci-build.failed", arguments=ARGS),
+        None,
+        SETTINGS,
+        runtime((server(),), upstream=upstream),
+    )
+    assert isinstance(result, Error) and upstream.calls == []

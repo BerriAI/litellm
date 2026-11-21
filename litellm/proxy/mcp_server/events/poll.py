@@ -6,7 +6,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.admission import Admitted, admit, binding_for, screen_all
 from litellm.proxy.mcp_server.events.config import EventsSettings
-from litellm.proxy.mcp_server.events.cursors import open_cursor, seal_cursor
+from litellm.proxy.mcp_server.events.cursors import ensure_sealable, open_cursor, seal_cursor
 from litellm.proxy.mcp_server.events.errors import EventsFailure, internal_error
 from litellm.proxy.mcp_server.events.observability import EventActivity, EventOutcome
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
@@ -35,6 +35,9 @@ async def poll(
         return Error(prepared.error)
     resolved: Final = prepared.ok.resolved
     binding: Final = binding_for(context, prepared.ok, params.arguments)
+    unsealable: Final = ensure_sealable(binding, runtime.now())
+    if unsealable is not None:
+        return Error(unsealable)
     opened: Final = open_cursor(params.cursor, binding, runtime.now())
     if isinstance(opened, Error):
         return Error(opened.error)
