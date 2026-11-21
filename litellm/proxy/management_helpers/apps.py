@@ -16,7 +16,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm.constants import AUTH_OBJECTS_TARGET
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (

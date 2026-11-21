@@ -86,7 +86,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_and_broadcast,
 )
 from litellm.proxy.common_utils.callback_config_validation import (

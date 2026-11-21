@@ -47,7 +47,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions
+from litellm.proxy.common_utils.cache_invalidation_pubsub import broadcast_evictions
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,

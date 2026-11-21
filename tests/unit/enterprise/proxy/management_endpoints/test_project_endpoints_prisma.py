@@ -664,7 +664,7 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
 
     project_id = f"project-{uuid.uuid4()}"
     with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new=AsyncMock(),
     ) as mock_publish:
         await delete_cached_project_object(

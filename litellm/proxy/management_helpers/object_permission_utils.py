@@ -22,7 +22,7 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     SpecialMCPServerNames,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthObject

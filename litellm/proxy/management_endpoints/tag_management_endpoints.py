@@ -156,7 +156,7 @@ async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
     enforced and a newly created one stays invisible to the cached name registry until the TTL
     expires: auth reads tags cache-first, with no freshness check.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
     from litellm.proxy.proxy_server import user_api_key_cache

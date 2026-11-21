@@ -76,7 +76,6 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
-    LiteLLM_VerificationTokenView,
     LiteLLMRoutes,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -107,14 +106,14 @@ from litellm.proxy.auth.model_access_denied import (
     model_access_denied_client_message,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipients as _parse_email_list
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     evict_local,
     evict_shared,
-    publish_auth_cache_invalidation,
+    publish_cache_invalidation,
 )
-from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipients as _parse_email_list
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -3449,9 +3448,9 @@ async def invalidate_team_member_spend_state(
     first, so returning success would leave the old value authoritative for
     every worker despite the DB write having committed.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
-        publish_auth_cache_invalidation,
+        publish_cache_invalidation,
     )
 
     await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
@@ -3497,8 +3496,8 @@ async def invalidate_team_member_spend_state(
             value=new_spend,
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
         )
-        await publish_auth_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
-        await publish_auth_cache_invalidation(
+        await publish_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
+        await publish_cache_invalidation(
             cache_key=spend_db_floor_key,
             new_value=new_spend,
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
@@ -3553,7 +3552,7 @@ async def delete_cache_team_object(
                 key,
                 e,
             )
-        await publish_auth_cache_invalidation(cache_key=key)
+        await publish_cache_invalidation(cache_key=key)
 
 
 async def cache_key_object(
@@ -3615,7 +3614,7 @@ async def delete_cache_key_object(
             e,
         )
 
-    await publish_auth_cache_invalidation(cache_key=key)
+    await publish_cache_invalidation(cache_key=key)
     await evict_and_broadcast((AuthObject.customer_app_key_resource(hashed_token).key,), user_api_key_cache)
     await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.KEY, entity_id=hashed_token)
 
@@ -3628,7 +3627,7 @@ async def evict_budget_windows_absent_marker(entity_type: Litellm_EntityType, en
 
     marker: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
     budget_windows_absent_cache.delete_cache(marker)
-    await publish_auth_cache_invalidation(cache_key=marker)
+    await publish_cache_invalidation(cache_key=marker)
 
 
 async def delete_cache_key_objects(
@@ -4339,33 +4338,76 @@ class ExperimentalUIJWTToken:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
 
-async def fetch_key_object_from_db_with_reconnect(
+async def load_key_object(
     hashed_token: str,
     prisma_client: PrismaClient,
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
     deadline_seconds: float | None = None,
     *,
+    user_api_key_cache: UserApiKeyCache,
     check_db_only: bool = False,
-) -> LiteLLM_VerificationTokenView | None:
+) -> UserAPIKeyAuth | None:
     """
-    The key's ``combined_view`` row from the Rust key store, which also resolves a hash rotated away from a key
-    within its grace period. The gate wait and the read share one deadline, so a stalled database fails the
-    request with ``DBLookupDeadlineExceeded`` instead of parking it. ``check_db_only`` reads the writer.
+    The key from the Rust key repository, which also resolves a hash rotated away from a key within its grace
+    period, with the object permission it points at nested, cached as ``cache_key_object`` caches it.
+
+    The gate wait and the read share one deadline, so a stalled database fails the request with
+    ``DBLookupDeadlineExceeded`` instead of parking it. ``check_db_only`` reads the writer and leaves the cache
+    as it is.
     """
-    return await bounded_db_lookup(
-        _fetch_key_view(hashed_token, prisma_client, proxy_logging_obj, use_writer=check_db_only),
+    found: Final = await bounded_db_lookup(
+        _fetch_key(hashed_token, prisma_client, proxy_logging_obj, use_writer=check_db_only),
         name="key",
         deadline_seconds=deadline_seconds,
     )
+    if found is None:
+        return None
+    key: Final = UserAPIKeyAuth.model_validate(
+        dict(
+            await _with_object_permission(
+                found, prisma_client, proxy_logging_obj, user_api_key_cache, check_db_only=check_db_only
+            )
+        )
+    )
+    if not check_db_only:
+        await cache_key_object(
+            hashed_token=hashed_token,
+            user_api_key_obj=key,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    return key
 
 
-_fetch_key_object_from_db_with_reconnect: Final = fetch_key_object_from_db_with_reconnect
+async def _with_object_permission(
+    key: Mapping[str, object],
+    prisma_client: PrismaClient,
+    proxy_logging_obj: ProxyLogging | None,
+    user_api_key_cache: UserApiKeyCache,
+    *,
+    check_db_only: bool,
+) -> Mapping[str, object]:
+    """``key`` with the object permission it points at nested. The permission is read under its own deadline, after
+    the key's. ``get_object_permission`` answers None for a permission table that stalls or a row its model refuses,
+    which leaves a key the database answered for without it. A writer read must see the permission, so there it
+    raises instead and fails the read."""
+    object_permission_id: Final = key.get("object_permission_id")
+    if not isinstance(object_permission_id, str) or not object_permission_id:
+        return key
+    permission: Final = await get_object_permission(
+        object_permission_id=object_permission_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
+    )
+    return key if permission is None else {**key, "object_permission": permission.model_dump(mode="json")}
 
 
-async def _fetch_key_view(
+async def _fetch_key(
     hashed_token: str, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging | None, *, use_writer: bool
-) -> LiteLLM_VerificationTokenView | None:
+) -> Mapping[str, object] | None:
     async with db_lookup_gate.current():
         try:
             return await VerificationTokenRepository(prisma_client).find_for_auth(hashed_token, use_writer=use_writer)
@@ -4456,55 +4498,23 @@ async def get_key_object(
     if check_cache_only:
         raise Exception(f"Key doesn't exist in cache + check_cache_only=True. key={hashed_token}.")
 
-    # else, check db
-    _valid_token: Final[BaseModel | None] = await fetch_key_object_from_db_with_reconnect(
+    # else, read the database, which caches the key it finds
+    _response: Final = await load_key_object(
         hashed_token=hashed_token,
         prisma_client=prisma_client,
         parent_otel_span=parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
         check_db_only=check_db_only,
     )
 
-    if _valid_token is None:
+    if _response is None:
         raise ProxyException(
             message=INVALID_API_KEY_ERROR_MESSAGE,
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
             code=status.HTTP_401_UNAUTHORIZED,
         )
-
-    _response: Final = UserAPIKeyAuth.model_validate(_valid_token.model_dump(exclude_none=True))
-
-    # Load object_permission if object_permission_id exists but object_permission is not loaded
-    if _response.object_permission_id and (check_db_only or not _response.object_permission):
-        try:
-            _response.object_permission = await get_object_permission(
-                object_permission_id=_response.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                check_db_only=check_db_only,
-            )
-        except Exception as e:
-            if check_db_only:
-                raise
-            verbose_proxy_logger.debug(
-                "Failed to load object_permission for key with object_permission_id=%s: %s",
-                _response.object_permission_id,
-                e,
-            )
-
-    if check_db_only:
-        return _response
-
-    # save the key object to cache
-    await cache_key_object(
-        hashed_token=hashed_token,
-        user_api_key_obj=_response,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
 
     return _response
 
@@ -7950,7 +7960,7 @@ async def delete_cached_project_object(
     Every endpoint that mutates litellm_projecttable must call this, or a stale project (e.g. a
     pre-update empty model allowlist) keeps being enforced until the TTL expires (LIT-3803).
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
         cache_keys=(AuthObject.project(project_id).key, AuthObject.customer_app("project", project_id).key),
