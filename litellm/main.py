@@ -62,6 +62,7 @@ from litellm.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.health_check_helpers import HealthCheckLogDeployment
     from litellm.router import Router
     from litellm.types.utils import TokenCountResponse
 
@@ -9744,6 +9745,8 @@ async def ahealth_check(
     mode: str | None = None,
     prompt: str | None = None,
     input: list | None = None,
+    *,
+    log_deployment: "HealthCheckLogDeployment | None" = None,
 ):
     """
     Support health checks for different providers. Return remaining rate limit, etc.
@@ -9779,7 +9782,7 @@ async def ahealth_check(
     )
     model_params["litellm_logging_obj"] = litellm_logging_obj
     model_params = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
-        model_params=model_params
+        model_params=model_params, log_deployment=log_deployment
     )
     #########################################################
     try:

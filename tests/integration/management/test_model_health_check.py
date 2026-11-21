@@ -1,6 +1,8 @@
 import json
 import os
 import uuid
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
@@ -10,7 +12,15 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    eventually,
+    list_value,
+    object_value,
+    string_value,
+)
 from integration._support.database import scratch_database
 from integration._support.process import owned_proxy
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
@@ -399,6 +409,64 @@ def _health_chat_reply(request: Request, *, api_key: str, model: str, status: in
             }
         ).encode(),
     )
+
+
+def test_request_logs_filter_probes_by_their_deployment(gateway: Gateway) -> None:
+    suffix: Final = uuid.uuid4().hex
+    id_a: Final = f"deployment-a-{suffix}"
+    id_b: Final = f"deployment-b-{suffix}"
+    call_a: Final = f"chatcmpl-a-{suffix}"
+    call_b: Final = f"chatcmpl-b-{suffix}"
+    provider_model: Final = "gpt-4o-mini"
+    now: Final = datetime.now(timezone.utc)
+    window: Final = {
+        "start_date": (now - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"),
+        "end_date": (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    def probe_reply(request: Request, call_id: str) -> Reply:
+        reply: Final = _health_chat_reply(request, api_key="synthetic-probe-key", model=provider_model)
+        return replace(reply, body=reply.body.replace(b"chatcmpl-health", call_id.encode()))
+
+    def logs(**filters: str) -> tuple[dict[str, JsonValue], ...]:
+        page: Final = gateway.get("/spend/logs/ui", params={**window, **filters})
+        return tuple(object_value(row) for row in list_value(page["data"]))
+
+    with (
+        gateway.scenario() as scenario,
+        wire_server(lambda request: probe_reply(request, call_a)) as wire_a,
+        wire_server(lambda request: probe_reply(request, call_b)) as wire_b,
+    ):
+        model_a: Final = scenario.model(
+            api_base=f"{wire_a.url}/v1",
+            api_key="synthetic-probe-key",
+            model="openai/gpt-4o",
+            model_info={"id": id_a, "health_check_model": f"openai/{provider_model}"},
+        )
+        model_b: Final = scenario.model(
+            api_base=f"{wire_b.url}/v1",
+            api_key="synthetic-probe-key",
+            model="openai/gpt-4o",
+            model_info={"id": id_b, "health_check_model": f"openai/{provider_model}"},
+        )
+        assert _health_report(gateway, model_a)["healthy_count"] == 1
+        assert _health_report(gateway, model_b)["healthy_count"] == 1
+        assert len(wire_a.drain()) == len(wire_b.drain()) == 1
+
+        (probe_a,) = eventually(lambda: logs(request_id=call_a), lambda rows: len(rows) == 1, seconds=45)
+        (probe_b,) = eventually(lambda: logs(request_id=call_b), lambda rows: len(rows) == 1, seconds=45)
+        assert not probe_a["model_id"] and not probe_a["model_group"]
+        assert not probe_b["model_id"] and not probe_b["model_group"]
+        assert probe_a["model"] == probe_b["model"]
+        assert probe_a["spend"] == probe_b["spend"]
+
+        for grouped in ("true", "false"):
+            assert tuple(row["request_id"] for row in logs(model_id=id_a, group_by_session=grouped)) == (call_a,)
+            assert tuple(row["request_id"] for row in logs(model_group=model_b, group_by_session=grouped)) == (call_b,)
+            assert logs(model_id=id_a, model_group=model_b, group_by_session=grouped) == ()
+            assert logs(model_id=id_a, exclude_internal_health_checks="true", group_by_session=grouped) == ()
+        public_page: Final = gateway.get("/spend/logs/v2", params={**window, "model_id": id_a})
+        assert public_page["data"] == []
 
 
 def _create_team_health_deployment(

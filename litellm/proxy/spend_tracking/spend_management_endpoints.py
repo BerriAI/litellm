@@ -2999,10 +2999,22 @@ async def ui_view_spend_logs(
             ("end_user", "end_user"),
         ]:
             val = where_conditions.get(wc_key)
-            if val is not None and isinstance(val, str):
-                sql_conditions.append(f"{sql_col} = ${p}")
-                sql_params.append(val)
-                p += 1
+            if not isinstance(val, str):
+                continue
+            if not is_v2 and not exclude_internal_health_checks and sql_col in ("model_id", "model_group"):
+                probe_field: Final = (
+                    "health_check_deployment_id" if sql_col == "model_id" else "health_check_model_group"
+                )
+                sql_conditions.append(
+                    f"({sql_col} = ${p} OR (api_key IN (${p + 1}, ${p + 2}) "
+                    f"AND metadata->'spend_logs_metadata'->>'{probe_field}' = ${p}))"
+                )
+                sql_params.extend((val, *_INTERNAL_HEALTH_CHECK_API_KEYS))
+                p += 3
+                continue
+            sql_conditions.append(f"{sql_col} = ${p}")
+            sql_params.append(val)
+            p += 1
 
         request_id_filter: Final = where_conditions.get("request_id")
         exact_request_id_first: Final = f"(request_id = ${p}) DESC, " if isinstance(request_id_filter, str) else ""

@@ -477,7 +477,7 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
         patch.object(
             HealthCheckHelpers,
             "update_model_params_with_health_check_tracking_information",
-            staticmethod(lambda model_params: model_params),
+            staticmethod(lambda model_params, **_kwargs: model_params),
         ),
     ):
         result = await litellm.ahealth_check(
@@ -1255,7 +1255,7 @@ async def test_image_generation_health_check_prompt(monkeypatch):
     async def run_health_check(health_check_module):
         health_check_calls = []
 
-        async def mock_health_check(litellm_params, mode=None, prompt=None, input=None):
+        async def mock_health_check(litellm_params, mode=None, prompt=None, input=None, **_kwargs):
             health_check_calls.append(
                 {
                     "mode": mode,

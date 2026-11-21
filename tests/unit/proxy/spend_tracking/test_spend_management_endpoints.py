@@ -147,8 +147,11 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         api_key_any = re.fullmatch(r"api_key = ANY\(\$(\d+)::text\[\]\)", cond)
         organization_any = re.fullmatch(r'"?organization_id"? = ANY\(\$(\d+)::text\[\]\)', cond)
         req_or_call = re.fullmatch(r"\(request_id = \$(\d+) OR litellm_call_id = \$\1\)", cond)
+        probe_or_model = re.match(r"\((model_id|model_group) = \$(\d+) OR ", cond)
         if req_or_call:
             where["request_id_or_call_id"] = params[int(req_or_call.group(1)) - 1]
+        elif probe_or_model:
+            where[probe_or_model.group(1)] = params[int(probe_or_model.group(2)) - 1]
         elif gte:
             date_bounds["gte"] = _iso(params[int(gte.group(1)) - 1])
         elif lte:
