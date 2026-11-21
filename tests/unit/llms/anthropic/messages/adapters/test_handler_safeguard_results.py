@@ -147,6 +147,11 @@ def _events(sse: bytes) -> Sequence[Mapping[str, object]]:
     return tuple(json.loads(line[len("data: ") :]) for line in sse.decode().splitlines() if line.startswith("data: "))
 
 
+async def _drain_stream(stream: object) -> None:
+    assert hasattr(stream, "__aiter__")
+    _ = [chunk async for chunk in stream]  # pyright: ignore[reportGeneralTypeIssues]  # the handler's union narrows to an async iterator once stream is on
+
+
 def _available_tool_uses(results: object) -> Mapping[str, object]:
     assert isinstance(results, (list, tuple)) and len(results) == 1
     assert results[0]["type"] == "dangerous_tool_use"
@@ -174,6 +179,25 @@ async def test_non_stream_response_carries_a_verdict_for_the_tool_use_and_bills_
         "headers": {},
     }
     assert json.dumps({"command": "npm ci"}) in str(classifier_call["messages"][1]["content"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+async def test_classifier_call_carries_the_caller_headers_the_proxy_forwards_to_the_parent_model(stream: bool):
+    backend: Final = _Backend(stream=stream)
+    router: Final = _ClassifierRouter('{"verdicts": {"call_main": {"flagged": false}}}')
+    caller_headers: Final = {"X-User-Id": "user-42", "X-Tenant": "acme"}
+    response: Final = await _call(
+        backend,
+        router,
+        stream,
+        {"safeguards_classifier_model": "classifier"},
+        safeguards=SAFEGUARDS,
+        headers=caller_headers,
+    )
+    if stream:
+        await _drain_stream(response)
+    assert router.calls[0]["headers"] == caller_headers
 
 
 @pytest.mark.asyncio

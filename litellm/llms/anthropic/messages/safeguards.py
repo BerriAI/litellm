@@ -92,6 +92,7 @@ class ClassifierCallKwargs(ProxySubCallLoggingKwargs):
     litellm_metadata: ReadOnly[Mapping[str, object]]
     user: ReadOnly[NotRequired[str]]
     allowed_model_region: ReadOnly[NotRequired[str]]
+    headers: ReadOnly[NotRequired[Mapping[str, str]]]
 
 
 class ClassifierAcompletion(Protocol):
@@ -145,6 +146,7 @@ class SafeguardsEvaluator:
     allowed_model_region: str | None
     acompletion: ClassifierAcompletion
     caller_model_verdict: CallerModelGate
+    forwarded_headers: Mapping[str, str] | None = None
     timeout_seconds: float = CLASSIFIER_TIMEOUT_SECONDS
     logging_kwargs: ProxySubCallLoggingKwargs = field(default_factory=ProxySubCallLoggingKwargs)
 
@@ -242,9 +244,12 @@ class SafeguardsEvaluator:
         with_user: Final[ClassifierCallKwargs] = (
             {**base, "user": end_user_id} if isinstance(end_user_id, str) and end_user_id else base
         )
+        with_headers: Final[ClassifierCallKwargs] = (
+            {**with_user, "headers": self.forwarded_headers} if self.forwarded_headers else with_user
+        )
         if self.allowed_model_region is None:
-            return with_user
-        return {**with_user, "allowed_model_region": self.allowed_model_region}
+            return with_headers
+        return {**with_headers, "allowed_model_region": self.allowed_model_region}
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
@@ -290,6 +295,7 @@ def build_safeguards_evaluator(
     llm_router: "Router | None",
     logging_kwargs: ProxySubCallLoggingKwargs,
     parent_trace_id: str | None = None,
+    forwarded_headers: Mapping[str, str] | None = None,
 ) -> SafeguardsEvaluator | None:
     request: Final = requested_dangerous_tool_use(safeguards)
     if request is None:
@@ -317,6 +323,7 @@ def build_safeguards_evaluator(
         acompletion=router_acompletion if router_acompletion is not None else litellm.acompletion,
         caller_model_verdict=caller_verdict,
         logging_kwargs=logging_kwargs,
+        forwarded_headers=forwarded_headers,
     )
 
 
