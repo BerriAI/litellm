@@ -24,18 +24,25 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
 _SPELLED_UNIT_MAP: Final[dict[str, str]] = {
     "months": "mo",
     "month": "mo",
+    "mos": "mo",
     "days": "d",
     "day": "d",
     "hours": "h",
     "hour": "h",
+    "hrs": "h",
+    "hr": "h",
     "minutes": "m",
     "minute": "m",
     "mins": "m",
+    "min": "m",
     "seconds": "s",
     "second": "s",
     "secs": "s",
+    "sec": "s",
     "weeks": "w",
     "week": "w",
+    "wks": "w",
+    "wk": "w",
 }
 
 
@@ -44,7 +51,7 @@ def normalize_duration(duration: str) -> str:
     if stripped in _BUDGET_DURATION_WORD_ALIASES:
         return _BUDGET_DURATION_WORD_ALIASES[stripped]
     # Normalize long-form unit suffixes: "7days" → "7d", "12months" → "12mo"
-    m = re.match(r"(\d+)([a-z]+)", stripped)
+    m = re.match(r"(\d+)([a-z]+)$", stripped)
     if m:
         short = _SPELLED_UNIT_MAP.get(m.group(2))
         if short:

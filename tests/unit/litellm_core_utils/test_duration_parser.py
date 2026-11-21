@@ -254,9 +254,17 @@ def test_annual_reset_and_window_start(
         ("1month", "1mo"),
         ("7days", "7d"),
         ("2weeks", "2w"),
+        ("2wks", "2w"),
+        ("1wk", "1w"),
         ("1hour", "1h"),
+        ("2hrs", "2h"),
+        ("1hr", "1h"),
         ("5min", "5m"),
+        ("5minutes", "5m"),
+        ("1minute", "1m"),
         ("30sec", "30s"),
+        ("30seconds", "30s"),
+        ("10secs", "10s"),
     ],
 )
 def test_long_unit_spelling_resets_on_the_schedule_it_is_charged_for(long_spelling: str, short_form: str) -> None:
