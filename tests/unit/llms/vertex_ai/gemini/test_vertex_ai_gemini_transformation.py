@@ -1,6 +1,6 @@
 import base64
-from copy import deepcopy
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from itertools import chain
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -96,6 +96,62 @@ def test_tool_files_api_reference_is_nested_file_data(version):
             }
         ],
     }
+
+
+@pytest.mark.parametrize(("part_resolution", "nested_media"), [(False, True), (True, False)])
+def test_gemini_tool_file_media_uses_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch, part_resolution: bool, nested_media: bool
+) -> None:
+    model: Final = "gemini-4-argon"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "supports_part_media_resolution": part_resolution,
+            "supports_media_in_tool_response": nested_media,
+        },
+    )
+    uri: Final = "https://generativelanguage.googleapis.com/v1/files/report"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_report",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", "resolution": "high"}}],
+        },
+    ]
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    file_part: Final = {"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}
+    expected: Final = (
+        [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                    "parts": [file_part],
+                }
+            }
+        ]
+        if nested_media
+        else [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                }
+            },
+            {**file_part, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
+        ]
+    )
+    assert result[-1]["parts"] == expected
+
 
 
 @pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])

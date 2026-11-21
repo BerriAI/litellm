@@ -217,6 +217,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
+    supports_part_media_resolution: ReadOnly[bool | None]
+    supports_media_in_tool_response: ReadOnly[bool | None]
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
     supports_bedrock_native_structured_output: ReadOnly[bool | None]

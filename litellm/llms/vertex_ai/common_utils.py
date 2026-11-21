@@ -17,6 +17,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.fallback_generalizations import match_fill_missing_generalizations
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -61,6 +62,26 @@ GEMINI_FILES_API_URI_PREFIXES: Final = (
     GEMINI_FILES_API_URI_PREFIX,
     GEMINI_FILES_API_V1_URI_PREFIX,
 )
+
+
+def gemini_media_capability(
+    model: str,
+    key: Literal["supports_part_media_resolution", "supports_media_in_tool_response"],
+) -> bool:
+    name: Final = model.rsplit("/", 1)[-1]
+    qualified_name: Final = f"gemini/{name}"
+    for candidate in (model, qualified_name, f"vertex_ai/{name}", name):
+        row: Mapping[str, object] | None = litellm.model_cost.get(candidate)
+        if row is not None and isinstance(flag := row.get(key), bool):
+            return flag
+    defaults: Final = match_fill_missing_generalizations(qualified_name, "gemini")
+    if defaults is not None and isinstance(flag := defaults.get(key), bool):
+        return flag
+
+    from .gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    # Older cost maps lack these flags, including for models no longer listed in the catalog.
+    return VertexGeminiConfig.is_gemini_3_or_newer(model)
 
 
 # https://cloud.google.com/vertex-ai/generative-ai/docs/image/configure-aspect-ratio

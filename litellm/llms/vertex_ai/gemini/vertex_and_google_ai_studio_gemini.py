@@ -117,6 +117,7 @@ from ..common_utils import (
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
+    gemini_media_capability,
     has_bare_root_union,
     parameters_json_schema_for,
     supports_response_json_schema,
@@ -1030,7 +1031,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @classmethod
     def supports_multimodal_function_responses(cls, model: str) -> bool:
-        return cls.is_gemini_3_or_newer(model)
+        return gemini_media_capability(model, "supports_media_in_tool_response")
 
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
