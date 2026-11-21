@@ -4,10 +4,14 @@ use axum::extract::FromRef;
 use litellm_config::{Config, Environment};
 use litellm_db::Pools;
 use litellm_env::Lookup;
-use litellm_gateway_auth::{Auth, BearerOrXApiKey};
+use litellm_gateway_auth::Auth;
 use litellm_license::Entitlements;
 
-use crate::{Error, Gateway, RedisClients, Resources, db, license::build_license};
+use crate::{
+    Error, Gateway, RedisClients, Resources, db,
+    host::{self, NativeRows},
+    license::build_license,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -44,9 +48,10 @@ impl AppState {
         })
     }
 
-    /// Who the inference routes and `admit` authenticate: the master key of `config`.
-    pub(crate) fn auth(&self, config: &Config) -> Auth {
-        Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey))
+    /// Who the inference routes and `admit` authenticate, which the core decides over the native
+    /// host whether or not a database is configured.
+    pub(crate) fn auth(&self, config: &Config) -> Auth<NativeRows> {
+        host::auth::auth(config)
     }
 
     pub async fn close(&self) {

@@ -1,5 +1,7 @@
+use std::{ops::Deref, sync::Arc};
+
 use axum::{
-    extract::{FromRequestParts, MatchedPath, Request, State},
+    extract::{FromRequestParts, Request, State},
     http::{
         header::{AUTHORIZATION, AsHeaderName},
         request::Parts,
@@ -7,9 +9,10 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use litellm_gateway_auth_core::{Caller, Rows};
 use litellm_secret_value::SecretValue;
 
-use crate::{AccessRequest, Auth, AuthenticatedRequest, Credential, Error};
+use crate::{Auth, Credential, Error};
 
 pub trait CredentialExtractor: Send + Sync {
     fn extract(&self, parts: &Parts) -> Result<Credential, Error>;
@@ -90,30 +93,42 @@ fn token(value: &str) -> Option<SecretValue> {
         .map(SecretValue::new)
 }
 
-pub async fn authenticate(
-    State(auth): State<Auth>,
+pub async fn authenticate<R: Rows>(
+    State(auth): State<Auth<R>>,
     request: Request,
     next: Next,
 ) -> Result<Response, Error> {
     let (mut parts, body) = request.into_parts();
-    let identity = auth.authenticate_parts(&parts).await?;
-    let route = AccessRequest::Route {
-        method: parts.method.to_string(),
-        path: parts
-            .extensions
-            .get::<MatchedPath>()
-            .map_or(parts.uri.path(), MatchedPath::as_str)
-            .into(),
-    };
-    identity
-        .authorize(route.clone())
-        .await?
-        .consume(identity.caller(), &route)?;
-    parts.extensions.insert(identity);
+    let caller = auth.authenticate_parts(&parts).await?;
+    parts.extensions.insert(caller);
     Ok(next.run(Request::from_parts(parts, body)).await)
 }
 
-impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedRequest {
+/// The caller a request was authenticated as, which a handler extracts and reads as the core's
+/// [`Caller`].
+pub struct Authenticated<R: Rows>(Arc<Caller<R>>);
+
+impl<R: Rows> Clone for Authenticated<R> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<R: Rows> Deref for Authenticated<R> {
+    type Target = Caller<R>;
+
+    fn deref(&self) -> &Caller<R> {
+        &self.0
+    }
+}
+
+impl<R: Rows> From<Caller<R>> for Authenticated<R> {
+    fn from(caller: Caller<R>) -> Self {
+        Self(Arc::new(caller))
+    }
+}
+
+impl<R: Rows, S: Send + Sync> FromRequestParts<S> for Authenticated<R> {
     type Rejection = Error;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Error> {
@@ -125,21 +140,28 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedRequest {
     }
 }
 
+/// The bearer token of `parts`, or no token at all. The authenticator answers that too, so a
+/// server with no master key says so before it calls a token missing.
+fn presented(parts: &Parts) -> Credential {
+    bearer(parts).map_or(Credential::Transport, Credential::Token)
+}
+
 pub struct RequireMasterKey;
 
-impl FromRequestParts<Auth> for RequireMasterKey {
+impl<R: Rows> FromRequestParts<Auth<R>> for RequireMasterKey {
     type Rejection = Error;
 
-    async fn from_request_parts(parts: &mut Parts, state: &Auth) -> Result<Self, Error> {
-        state.validate().await?;
-        let identity = state
-            .authenticate_request(&Credential::Token(bearer(parts)?), parts)
+    async fn from_request_parts(parts: &mut Parts, state: &Auth<R>) -> Result<Self, Error> {
+        let caller = state
+            .authenticate_credential(&presented(parts), parts)
             .await?;
-        if identity.caller().authentication().method != crate::AuthenticationMethod::MasterKey {
-            return Err(Error::InvalidToken);
+        match *caller {
+            Caller::MasterKey => {
+                parts.extensions.insert(caller);
+                Ok(Self)
+            }
+            Caller::Key(_) => Err(Error::InvalidToken),
         }
-        parts.extensions.insert(identity);
-        Ok(Self)
     }
 }
 

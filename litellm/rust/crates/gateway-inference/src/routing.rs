@@ -1,15 +1,17 @@
-//! How a route is served through router-core. [`call`] authorizes the name the request asks for,
-//! then runs it through [`litellm_router_core::Router::call`], where the core picks a deployment,
-//! retries and falls back, and each attempt runs the request's own [`RouteAttempt`]. Every other
-//! hostcall the core makes is answered by the [`Host`] the gateway was built with. The route's
-//! typed outcome comes back with the routing facts, and the route renders it once. A served
-//! stream is held until it sends content, so one the provider fails before that is answered by
-//! a retry or a fallback instead.
+//! How a route is served through router-core. [`call`] checks the name the request asks for is
+//! one the router knows, then runs it through [`litellm_router_core::Router::call`], where the
+//! core picks a deployment, retries and falls back, and each attempt runs the request's own
+//! [`RouteAttempt`]. Every other hostcall the core makes is answered by the [`Host`] the gateway
+//! was built with. The route's typed outcome comes back with the routing facts, and the route
+//! renders it once. A served stream is held until it sends content, so one the provider fails
+//! before that is answered by a retry or a fallback instead.
 
 use std::{future::Future, time::Duration};
 
 use futures_util::{StreamExt, stream};
-use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Permissions};
+use litellm_config::LitellmRole;
+use litellm_gateway_auth::Authenticated;
+use litellm_gateway_auth_core::Rows;
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, Router,
@@ -40,14 +42,17 @@ pub trait Host: Send + Sync + Sized + 'static {
 
     type Hooks: CallHooks;
 
+    /// The rows of the callers this host authenticates.
+    type Rows: Rows;
+
     /// The callback hooks of one call `identity` makes on the `call_type` route.
-    fn hooks(&self, identity: &AuthenticatedRequest, call_type: CallType) -> Self::Hooks;
+    fn hooks(&self, identity: &Authenticated<Self::Rows>, call_type: CallType) -> Self::Hooks;
 
     /// router-core's host for one call that runs `route` on each attempt for `identity`.
     fn router_host<'a, A: RouteAttempt>(
         &'a self,
         gateway: &'a Gateway<Self>,
-        identity: &'a AuthenticatedRequest,
+        identity: &'a Authenticated<Self::Rows>,
         route: &'a A,
     ) -> Self::RouterHost<'a, A>;
 }
@@ -98,9 +103,8 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
     })
 }
 
-/// The litellm model of the first deployment the request's name resolves to for its caller,
-/// default targets included, which main authorizes the name against.
-fn first_model<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> Option<String> {
+/// Whether the request's name resolves to a deployment for its caller, default targets included.
+fn known<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> bool {
     let settings = gateway.router.settings();
     let routable = resolve::routable(
         &gateway.router.registry(),
@@ -108,23 +112,7 @@ fn first_model<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> Option
         request,
         settings.enable_cross_model_group_collision_check,
     );
-    Some(routable.first()?.params.model.clone())
-}
-
-async fn authorize(
-    identity: &AuthenticatedRequest,
-    name: &str,
-    model: String,
-) -> Result<(), Error> {
-    let access = AccessRequest::Model {
-        name: name.to_owned(),
-        deployment: model,
-    };
-    identity
-        .authorize(access.clone())
-        .await?
-        .consume(identity.caller(), &access)?;
-    Ok(())
+    !routable.is_empty()
 }
 
 fn retry_after(headers: &[(String, String)]) -> Option<Duration> {
@@ -187,59 +175,34 @@ pub fn attempt_failure(attempt: &Attempt, error: Error) -> AttemptFailure<Error>
     }
 }
 
-/// Whether `identity` may be served `target`, which a fallback is only taken to when it may.
-pub async fn allows<H: Host>(
-    gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
-    target: &str,
-) -> bool {
-    match first_model(gateway, &caller_request(identity, target)) {
-        Some(model) => authorize(identity, target, model).await.is_ok(),
-        None => true,
-    }
-}
-
-/// The model names a caller's grants name, which the core narrows access groups by.
-fn allowed_models(identity: &AuthenticatedRequest) -> Vec<String> {
-    match identity.caller().permissions() {
-        Permissions::Only(grants) => grants
-            .iter()
-            .filter_map(|grant| match grant {
-                AccessRequest::Model { name, .. } => Some(name.clone()),
-                _ => None,
-            })
-            .collect(),
-        Permissions::All | Permissions::None => Vec::new(),
-    }
-}
-
-/// A request for `model` carrying what the caller's grants say.
-fn caller_request(identity: &AuthenticatedRequest, model: &str) -> RouterRequest {
+/// A request for `model` by `identity`, an admin by the role the auth core gives it and never
+/// by the kind of credential it presented.
+fn caller_request<R: Rows>(identity: &Authenticated<R>, model: &str) -> RouterRequest {
     RouterRequest {
         model: model.to_owned(),
-        proxy_admin: matches!(identity.caller().permissions(), Permissions::All),
-        allowed_models: allowed_models(identity),
+        proxy_admin: identity.role() == LitellmRole::ProxyAdmin,
         ..RouterRequest::default()
     }
 }
 
-/// Authorize `model`, then serve it through the router: pick, run `route` on each attempt,
-/// retry and fall back. A call that ends on an attempt's error names the deployment the router
-/// says raised it.
+/// Serve `model` through the router: pick, run `route` on each attempt, retry and fall back. A
+/// call that ends on an attempt's error names the deployment the router says raised it.
 pub(crate) async fn call<H: Host, A: RouteAttempt>(
     gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
+    identity: &Authenticated<H::Rows>,
     op: Op,
     path: &'static str,
     model: &str,
     route: &A,
 ) -> Result<RouterResponse<A::Outcome>, Ended> {
     let request = caller_request(identity, model);
-    let first = first_model(gateway, &request).ok_or_else(|| Error::UnknownModel {
-        route: path,
-        model: model.to_owned(),
-    })?;
-    authorize(identity, model, first).await?;
+    if !known(gateway, &request) {
+        return Err(Error::UnknownModel {
+            route: path,
+            model: model.to_owned(),
+        }
+        .into());
+    }
     let host = gateway.host.router_host(gateway, identity, route);
     let ended = gateway
         .router
@@ -461,11 +424,26 @@ pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
 mod tests {
     use std::sync::Arc;
 
+    use litellm_gateway_auth_core::Caller;
     use litellm_router_core::DeploymentSpec;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::{Held, key};
+
+    #[rstest]
+    #[case::the_master_key(Caller::MasterKey, true)]
+    #[case::a_key_its_row_calls_an_admin(key("stored", true), true)]
+    #[case::any_other_key(key("stored", false), false)]
+    fn only_a_caller_with_the_admin_role_is_routed_as_a_proxy_admin(
+        #[case] caller: Caller<Held>,
+        #[case] proxy_admin: bool,
+    ) {
+        let request = caller_request(&Authenticated::from(caller), "public/model");
+
+        assert_eq!(request.proxy_admin, proxy_admin);
+    }
 
     fn attempt(params: Value, router_timeout: Option<u64>) -> Attempt {
         let spec: DeploymentSpec = serde_json::from_value(json!({

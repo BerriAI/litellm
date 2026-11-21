@@ -35,8 +35,12 @@ pub(crate) async fn authenticate<H: AuthHost>(
         Verified::UserAuthRoute => Ok(KeyIdentity::UserAuthRoute),
         Verified::MasterKey { hash, end_user } => Ok(KeyIdentity::MasterKey { hash, end_user }),
         Verified::CachedAdmin { key, end_user } => Ok(KeyIdentity::CachedAdmin { key, end_user }),
-        Verified::VirtualKey { key, end_user } => {
-            let principal = identity::key::principal(host, key, end_user).await?;
+        Verified::VirtualKey {
+            stored,
+            key,
+            end_user,
+        } => {
+            let principal = identity::key::principal(host, stored, key, end_user).await?;
             let admitted = crate::admission::key(host, principal, request, settings).await?;
             Ok(KeyIdentity::VirtualKey(Box::new(KeyContext::from(
                 admitted,
@@ -364,22 +368,26 @@ mod tests {
     #[case::fresh(None)]
     #[case::not_yet_expired(Some(at(1_001)))]
     #[tokio::test]
-    async fn cached_admin_key_carries_its_row(
+    async fn cached_admin_key_carries_its_row_and_what_it_stores(
         settings: KeySettings,
         #[case] expires: Option<Timestamp>,
     ) {
+        let record = KeyRecord {
+            is_proxy_admin: true,
+            expires,
+            ..virtual_key()
+        };
         let host = ScriptedHost {
-            cached: Some(KeyRecord {
-                is_proxy_admin: true,
-                expires,
-                ..virtual_key()
-            }),
+            cached: Some(record.clone()),
             ..ScriptedHost::default()
         };
         assert_eq!(
             run(&host, "sk-admin", "/chat/completions", &settings).await,
             Ok(KeyIdentity::CachedAdmin {
-                key: "cached".to_owned(),
+                key: Keyed {
+                    record,
+                    row: "cached".to_owned()
+                },
                 end_user: "end-user".to_owned()
             })
         );
@@ -548,13 +556,14 @@ mod tests {
             proxy_budget: true,
             ..settings
         };
+        let record = KeyRecord {
+            user_id: Some("u".to_owned()),
+            team_id: Some("t".to_owned()),
+            project_id: Some("p".to_owned()),
+            ..virtual_key()
+        };
         let host = ScriptedHost {
-            db: Some(KeyRecord {
-                user_id: Some("u".to_owned()),
-                team_id: Some("t".to_owned()),
-                project_id: Some("p".to_owned()),
-                ..virtual_key()
-            }),
+            db: Some(record.clone()),
             key_owner: Some(false),
             key_team_found: true,
             ..ScriptedHost::default()
@@ -562,7 +571,11 @@ mod tests {
         assert_eq!(
             context(run(&host, "sk-1", "/chat/completions", &settings).await),
             KeyContext {
-                key: "db+prepared".to_owned(),
+                hash: KeyHash::new("hashed"),
+                key: Keyed {
+                    record,
+                    row: "db+prepared".to_owned()
+                },
                 end_user: "end-user".to_owned(),
                 owner: Some("owner u".to_owned()),
                 team: TeamGrant::Loaded("team t".to_owned()),
@@ -822,7 +835,9 @@ mod tests {
             ..ScriptedHost::default()
         };
         assert_eq!(
-            context(run(&host, "sk-1", "/chat/completions", &settings).await).key,
+            context(run(&host, "sk-1", "/chat/completions", &settings).await)
+                .key
+                .row,
             key
         );
     }
@@ -867,7 +882,7 @@ mod tests {
             ..ScriptedHost::default()
         };
         let context = context(run(&host, "sk-1", "/chat/completions", &settings).await);
-        assert_eq!((context.key.as_str(), context.owner), (key, None));
+        assert_eq!((context.key.row.as_str(), context.owner), (key, None));
     }
 
     #[rstest]
@@ -902,7 +917,7 @@ mod tests {
         let host = ScriptedHost::default();
         let outcome = run_resolved(&host, virtual_key(), &settings).await;
         assert_eq!(
-            context(outcome.map_err(|refused| *refused.error)).key,
+            context(outcome.map_err(|refused| *refused.error)).key.row,
             "mapped+prepared"
         );
         assert_eq!(

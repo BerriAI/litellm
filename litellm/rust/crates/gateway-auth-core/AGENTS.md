@@ -1,6 +1,6 @@
 # Gateway auth core
 
-Every proxy auth decision for the planner, the master key, virtual keys and JWTs, behind one `AuthHost` trait. The Python proxy is the only host, and runs it through `python-bridge/src/auth/`. `common_checks`, the authorization stage that runs after either path, is still Python. Design and scope live in the Notion page "Auth" under "Rust Migration Depth First Plan"
+Every proxy auth decision for the planner, the master key, virtual keys and JWTs, behind one `AuthHost` trait. The Python proxy runs it through `python-bridge/src/auth/`, and the gateway's native host through `gateway/src/host/auth`. `common_checks`, the authorization stage that runs after either path, is still Python. Design and scope live in the Notion page "Auth" under "Rust Migration Depth First Plan"
 
 These are target invariants. Where the code still lags them, the Notion page lists the gap, and new code follows the invariant, not the gap
 
@@ -23,6 +23,14 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - No generic methods such as `cached_json(key)` or `run_step()`. One method per question, typed in and out
 - The order of host calls is behavior, since it decides which reads and writes happen before a denial. Tests share the scripted host in `testing.rs` and assert the result and the calls in order
 - Where one path hands off to another, such as a mapped JWT continuing on the key path, a test at the entry point in `lib.rs` covers it, with inputs built by the stage that produces them. A test that seeds a record by hand proves only its own stage
+
+## The caller
+
+- Every answer about who the caller is and what it may reach is decided here, with no IO. A host asks, it never works one out from a row
+- `Caller` in `identity/caller.rs` is the only thing a host carries past authentication. An identity that is not a caller a host serves, as no master key, the user auth route, a cached admin key and a JWT are, is `NotACaller` and never becomes one, so a host cannot serve it by accident
+- The role is derived here, by `Caller::role`. Admin is a role and never a kind of credential, so a host never reads it off how the caller authenticated or off a permission it holds
+- A key's id is the hash its row is stored under, `Caller::hash`. The key path refuses a key whose row has none and carries the hash it proved as `KeyContext::hash`, so a caller that is a key always has one and only the master key has none. It is never the hash of the token the request presented, which a key a JWT maps to does not have
+- For access, the host supplies the layers it read (the key's, the team's and so on) and the core decides. A host that did not read a layer a key has must have declined that key at authentication, so no decision is ever made on a layer that is missing
 
 ## No Python semantics
 
@@ -86,7 +94,7 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - On the Python side, `litellm/proxy/auth/core.py` drives a call and converts its outcome, `litellm/proxy/auth/host/python.py::PythonAuthHost` answers the trait's methods under the same names, and `tests/unit/proxy/auth/host/test_answer.py` fails when a `RustAuthStep` has no `answer.py` case, the way `router_rust/core.py` and `router_python_host.py` pair for the router. Rust never imports either, so neither is a `litellm/rust_bridge/host/` module
 - `plan/mod.rs` picks the credential path in the proxy's order. The two paths the core owns, key and JWT, run as stages, each its own module with typed inputs and outputs:
   - `authn/` decides whether the credential is genuine and accepted: `key/` prechecks the token, reads the key (`lookup.rs` names the end user, the key's own id before the request's, then reads the key with its team values) and refuses a blocked, expired or tokenless one. `jwt/` verifies the signature or reads UserInfo, runs `custom_validate`, and resolves the virtual key a JWT maps to
-  - `identity/` reads who is acting: a key's owner, team and project, or a JWT's caller (`caller.rs`), team, user and organization. It may provision, and collects the writes a request earns as `commit::Grants`
+  - `identity/` reads who is acting: a key's owner, team and project, or a JWT's caller (`jwt/caller.rs`), team, user and organization. It may provision, and collects the writes a request earns as `commit::Grants`. `caller.rs` is what a host keeps of it once the call is over
   - `authz/` decides whether that caller may call the route or model. Every check is pure and takes no host. `TeamEligibility` is the one place identity's team selection reads the route
   - `admission/` runs the checks that need reads after identity: the key's temporary budget, the model it resolves to and its budgets
   - `commit.rs` applies the grants (`record_agent_authentication`, `add_team_member`, `create_key_mapping`) once nothing refuses the request, and is the only caller of those methods

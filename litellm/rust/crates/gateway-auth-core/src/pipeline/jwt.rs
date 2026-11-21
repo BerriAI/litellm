@@ -12,7 +12,7 @@ use crate::{
     commit::{self, Grant, Grants},
     host::{KeyRow, UserRow},
     identity::{
-        Caller, CallerKind, Principal,
+        CallerKind, ClaimedCaller, Principal,
         jwt::{
             AgentMode, ClaimIdentity, FinishedJwt, JwtIdentity, JwtMapping, JwtOutcome, JwtRows,
             Provisioning, Team, TeamSettings, UserInfo, agent, caller, claims, org,
@@ -107,7 +107,7 @@ pub(crate) async fn resolve_identity<H: AuthHost>(
 /// What a caller claims about itself before any read: the user id an RBAC role rebinds to its
 /// object id, and the team an RBAC team token names.
 fn claimed_ids<R: Rows>(
-    caller: &Caller<R>,
+    caller: &ClaimedCaller<R>,
     info: &UserInfo,
     claims: &Claims,
     settings: &JwtSettings,
@@ -191,7 +191,7 @@ async fn authorize<H: AuthHost>(
 async fn admin<H: AuthHost>(
     host: &H,
     claims: &Claims,
-    caller: Caller<H::Rows>,
+    caller: ClaimedCaller<H::Rows>,
     info: UserInfo,
     request: &JwtRequest<'_>,
     settings: &JwtSettings,
@@ -249,7 +249,7 @@ async fn admin<H: AuthHost>(
 async fn principal<H: AuthHost>(
     host: &H,
     claims: &Claims,
-    caller: Caller<H::Rows>,
+    caller: ClaimedCaller<H::Rows>,
     info: UserInfo,
     request: &JwtRequest<'_>,
     settings: &JwtSettings,
