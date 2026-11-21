@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias
 
 import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
@@ -58,6 +58,10 @@ class Overflow:
     cursor: str | None
 
 
+class Frames(Protocol):
+    async def receive(self) -> StreamFrame | Overflow: ...
+
+
 class StreamRoute:
     def __init__(self) -> None:
         streams: Final = anyio.create_memory_object_stream[StreamFrame | Overflow](_FRAME_BUFFER)
@@ -66,6 +70,7 @@ class StreamRoute:
         self.failure: MCPError | None = None
         self._dropped_cursor: str | None = None
         self._dropping = False
+        self._trailing: Overflow | None = None  # rebind-ok: set once when finish cannot enqueue the notice
 
     def deliver(self, frame: StreamFrame) -> None:
         if self._dropping and self._flush_overflow():
@@ -89,9 +94,40 @@ class StreamRoute:
 
     def finish(self, failure: MCPError | None) -> None:
         self.failure = failure
-        if self._dropping:
-            self._flush_overflow()
+        if self._dropping and not self._flush_overflow():
+            self._trailing = Overflow(cursor=self._dropped_cursor)
         self.send.close()
+
+    def reader(self) -> "RouteReader":
+        return RouteReader(self)
+
+    async def next_frame(self) -> StreamFrame | Overflow:
+        """The next frame; after the last one, an overflow notice the full buffer could not take."""
+        try:
+            return await self.receive.receive()
+        except anyio.EndOfStream:
+            trailing: Final = self._trailing
+            if trailing is None:
+                raise
+            self._trailing = None
+            return trailing
+
+
+@dataclass(frozen=True, slots=True)
+class RouteReader:
+    route: StreamRoute
+
+    async def receive(self) -> StreamFrame | Overflow:
+        return await self.route.next_frame()
+
+    def __aiter__(self) -> "RouteReader":
+        return self
+
+    async def __anext__(self) -> StreamFrame | Overflow:
+        try:
+            return await self.route.next_frame()
+        except anyio.EndOfStream:
+            raise StopAsyncIteration from None
 
 
 def _subscription_of(params: Mapping[str, object] | None) -> RequestId | None:
@@ -216,7 +252,7 @@ async def _drive(
     session: EventsClientSession,
     params: JsonObject,
     headers: Mapping[str, str],
-    consume: Callable[[MemoryObjectReceiveStream[StreamFrame | Overflow]], Awaitable[None]],
+    consume: Callable[[Frames], Awaitable[None]],
 ) -> Mapping[str, object]:
     request_id: Final = f"events-stream-{next(_stream_ids)}"
     async with session.stream_route(request_id) as route:
@@ -231,7 +267,7 @@ async def _drive(
 
         async with anyio.create_task_group() as group:
             group.start_soon(request)
-            await consume(route.receive)
+            await consume(route.reader())
             group.cancel_scope.cancel()
         if route.failure is not None:
             raise route.failure
@@ -242,6 +278,6 @@ async def stream(
     client: MCPClient,
     params: JsonObject,
     headers: Mapping[str, str],
-    consume: Callable[[MemoryObjectReceiveStream[StreamFrame | Overflow]], Awaitable[None]],
+    consume: Callable[[Frames], Awaitable[None]],
 ) -> None:
     await _run(client, lambda session: _drive(session, params, headers, consume))

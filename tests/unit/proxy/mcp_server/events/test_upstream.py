@@ -119,3 +119,16 @@ def test_an_overflow_still_pending_at_the_end_is_flushed_when_the_route_finishes
     route.receive.receive_nowait()
     route.finish(None)
     assert _drain(route)[-1] == Overflow(cursor="256")
+
+
+@pytest.mark.asyncio
+async def test_an_overflow_that_cannot_fit_at_the_end_is_still_read_after_the_last_frame() -> None:
+    route: Final = StreamRoute()
+    for index in range(257):
+        route.deliver(_frame(str(index)))
+    route.finish(None)
+    reader: Final = route.reader()
+    received: Final = [await reader.receive() for _ in range(257)]
+    assert received[-2:] == [_frame("255"), Overflow(cursor="256")]
+    with pytest.raises(anyio.EndOfStream):
+        await reader.receive()

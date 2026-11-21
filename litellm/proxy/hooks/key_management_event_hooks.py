@@ -321,8 +321,7 @@ class KeyManagementEventHooks:
             from litellm.proxy.mcp_server.events.config import events_settings
         except ImportError:
             return
-        if events_settings().enabled:
-            await terminate_key_subscriptions(token_hashes)
+        await terminate_key_subscriptions(token_hashes, notify=events_settings().enabled)
 
     @staticmethod
     async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):

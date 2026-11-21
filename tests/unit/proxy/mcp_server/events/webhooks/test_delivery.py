@@ -31,6 +31,9 @@ def _resolver(*addresses: str) -> Callable[[str, int], object]:
         ("https:///no-host", False),
         ("https://hook.example/x#frag", False),
         ("ftp://hook.example", False),
+        ("https://hook.example:notaport/x", False),
+        ("https://hook.example:99999/x", False),
+        ("https://hook.example:8443/x", True),
     ),
 )
 def test_only_https_urls_with_a_host_are_callbacks(url: str, https: bool) -> None:
@@ -200,3 +203,10 @@ async def test_a_failure_after_connecting_never_retries_another_address(error: h
         transport=httpx.MockTransport(handler),
     )
     assert attempts == ["93.184.216.34"]
+
+
+
+@pytest.mark.parametrize("url", ("https://hook.example:notaport/x", "https://hook.example:99999/x"))
+@pytest.mark.asyncio
+async def test_a_malformed_port_is_refused_without_resolving(url: str) -> None:
+    assert await pin(url, _resolver("93.184.216.34")) == Error("connection_refused")  # pyright: ignore[reportArgumentType]  # test resolver

@@ -233,10 +233,10 @@ class _WorkerHandle:
         self.task: asyncio.Task[None] | None = None
 
     def start(self, settings: Callable[[], EventsSettings] = events_settings) -> None:
-        if self.task is not None and not self.task.done():
+        if (self.task is not None and not self.task.done()) or not settings().enabled:
             return
         store: Final = default_store()
-        if store is None or not settings().enabled:
+        if store is None:
             return
         self.task = asyncio.get_running_loop().create_task(DeliveryWorker(store, settings).run_forever())
 

@@ -4,20 +4,17 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Final, TypeAlias
 
-from anyio.streams.memory import MemoryObjectReceiveStream
-
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import EventGrant, event_grant
 from litellm.proxy.mcp_server.events.guardrails import ScreenOutcome, screen_event
 from litellm.proxy.mcp_server.events.limits import EventBudget, StreamSlots
 from litellm.proxy.mcp_server.events.observability import EventActivity, record
-from litellm.proxy.mcp_server.events.upstream import Overflow, StreamFrame
+from litellm.proxy.mcp_server.events.upstream import Frames
 from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget
 from litellm.types.mcp_server.events import EventOccurrence, EventType, JsonObject
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-Frames: TypeAlias = MemoryObjectReceiveStream[StreamFrame | Overflow]
 UpstreamCall: TypeAlias = Callable[
     [SubscriptionTarget, str, JsonObject, Mapping[str, str]], Awaitable[Mapping[str, object]]
 ]

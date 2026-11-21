@@ -46,18 +46,27 @@ async def _resolve(hostname: str, port: int) -> tuple[str, ...]:
     return tuple(_sockaddr_host(entry[4]) for entry in entries)
 
 
+def _port(parsed: ParseResult) -> int | None:
+    """The URL's port; ValueError for a port that is not a number in 0..65535."""
+    return parsed.port
+
+
 def is_https_callback(url: str) -> bool:
-    parsed: Final = urlparse(url)
+    try:
+        parsed: Final = urlparse(url)
+        _port(parsed)
+    except ValueError:
+        return False
     return parsed.scheme == "https" and bool(parsed.hostname) and not parsed.fragment
 
 
 async def pin(
     url: str, resolve: Resolver = _resolve, allowlisted: Callable[[str, int], bool] = _is_host_allowlisted
 ) -> Result[PinnedUrl, CallbackFailure]:
-    parsed: Final = urlparse(url)
-    hostname: Final = parsed.hostname
-    if parsed.scheme != "https" or not hostname:
+    if not is_https_callback(url):
         return Error("connection_refused")
+    parsed: Final = urlparse(url)
+    hostname: Final = parsed.hostname or ""
     port: Final = parsed.port or 443
     try:
         addresses: Final = await resolve(hostname, port)

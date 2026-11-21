@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.mcp_server.events.access import principal_of
-from litellm.proxy.mcp_server.events.admin import AdminServices, admin_services, router
+from litellm.proxy.mcp_server.events.admin import AdminServices, admin_services, router, terminate_key_subscriptions
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, parse_secret, verify
 from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow, SubscriptionStatus
@@ -178,3 +178,16 @@ async def test_event_types_come_from_servers_the_caller_may_reach(
     assert response.status_code == status
     if count is not None:
         assert len(response.json()) == count
+
+
+@pytest.mark.parametrize(("notify", "envelopes"), ((True, ["terminated"]), (False, [])))
+@pytest.mark.asyncio
+async def test_a_revoked_key_ends_its_subscriptions_and_notifies_only_while_events_are_on(
+    notify: bool, envelopes: list[str]
+) -> None:
+    store: Final = _store()
+    callback: Final = Callback()
+    services: Final = AdminServices(store=store, runtime=runtime((server(),)), post=callback.post, lookup=_lookup)
+    await terminate_key_subscriptions((ALICE.token, None), notify=notify, services=services)
+    assert (store.rows["sub_a"].status, store.rows["sub_b"].status) == ("terminated", "active")
+    assert [json.loads(body)["type"] for _, body, _ in callback.sent] == envelopes
