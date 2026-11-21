@@ -21,7 +21,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -217,8 +217,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
-            guardrailed_tool_calls: Final = returned_tool_calls if isinstance(returned_tool_calls, list) else []
+            guardrailed_tool_calls: Final = _returned_request_tool_calls(
+                guardrailed_inputs.get("tool_calls"), guardrail=guardrail_to_apply
+            )
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
                 data["tools"] = (
@@ -263,7 +264,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         scanned=tool_calls_with_server_calls,
                         client_count=len(tool_calls_to_check),
                         server_call_count=len(server_tool_call_tasks) + len(raw_server_tool_use_tasks),
-                        guardrail_name=guardrail_to_apply.guardrail_name,
+                        guardrail=guardrail_to_apply,
                     )
                     await self._apply_guardrail_responses_to_input_tool_calls(
                         messages=messages,
@@ -274,7 +275,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     self._apply_guardrail_responses_to_input_server_tool_calls(
                         messages=structured_messages or [],
                         guardrailed_tool_calls=guardrailed_tool_calls[len(tool_calls_to_check) :],
-                        task_mappings=tuple(mapping for mapping, _ in server_tool_call_tasks),
+                        server_tool_call_tasks=server_tool_call_tasks,
+                        guardrail=guardrail_to_apply,
                     )
                     _write_raw_server_tool_use_inputs(
                         messages=structured_messages or [],
@@ -282,7 +284,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             len(tool_calls_to_check) + len(server_tool_call_tasks) :
                         ],
                         task_mappings=tuple(mapping for mapping, _ in raw_server_tool_use_tasks),
-                        guardrail_name=guardrail_to_apply.guardrail_name,
+                        guardrail=guardrail_to_apply,
                     )
 
         elif (
@@ -432,7 +434,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     async def _apply_guardrail_responses_to_input_tool_calls(
         self,
         messages: Sequence[Mapping[str, object]],
-        tool_calls: Sequence[Mapping[str, object]],
+        tool_calls: Sequence[object],
         task_mappings: list[tuple[int, int]],
     ) -> None:
         """
@@ -456,9 +458,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _apply_guardrail_responses_to_input_server_tool_calls(
         messages: Sequence[object],
         guardrailed_tool_calls: Sequence[object],
-        task_mappings: Sequence[tuple[int, int]],
+        server_tool_call_tasks: Sequence[tuple[tuple[int, int], ChatCompletionAssistantToolCall]],
+        guardrail: "CustomGuardrail",
     ) -> None:
+        task_mappings: Final = tuple(mapping for mapping, _ in server_tool_call_tasks)
         guardrailed_by_task: Final = MappingProxyType(dict(zip(task_mappings, guardrailed_tool_calls)))
+        if any(
+            _drops_scanned_arguments(guardrailed, scanned)
+            for (_, scanned), guardrailed in zip(server_tool_call_tasks, guardrailed_tool_calls)
+        ):
+            raise unappliable_request_rewrite(guardrail.guardrail_name)
         for msg_idx in sorted(frozenset(msg_idx for msg_idx, _ in task_mappings)):
             write_request_server_tool_calls(
                 messages[msg_idx],
@@ -561,8 +570,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
             guardrailed_tool_calls: Final[list[dict[str, object]]] = (
-                cast(list[dict[str, object]], returned_tool_calls)
-                if isinstance(returned_tool_calls, list)
+                cast(list[dict[str, object]], list(returned_tool_calls))
+                if isinstance(returned_tool_calls, (list, tuple))
                 and _fits_scanned_tool_calls(
                     returned_tool_calls, scanned=tool_calls_with_server_calls, client_count=len(tool_calls_to_check)
                 )
@@ -1592,17 +1601,21 @@ def _write_raw_server_tool_use_inputs(
     messages: Sequence[object],
     guardrailed_tool_calls: Sequence[object],
     task_mappings: Sequence[tuple[int, int]],
-    guardrail_name: str | None,
+    guardrail: "CustomGuardrail",
 ) -> None:
+    raw_inputs: Final = tuple(
+        (task, _guardrailed_tool_call_arguments(guardrailed))
+        for task, guardrailed in zip(task_mappings, guardrailed_tool_calls)
+    )
     arguments_by_task: Final = MappingProxyType(
         {
             task: arguments
-            for task, guardrailed in zip(task_mappings, guardrailed_tool_calls)
-            if (arguments := _guardrailed_tool_call_arguments(guardrailed)) is not None
+            for task, arguments in raw_inputs
+            if arguments is not None and is_raw_server_tool_use_input(arguments)
         }
     )
-    if not all(map(is_raw_server_tool_use_input, arguments_by_task.values())):
-        raise unappliable_request_rewrite(guardrail_name)
+    if len(arguments_by_task) != len(raw_inputs):
+        raise unappliable_request_rewrite(guardrail.guardrail_name)
     for msg_idx in sorted(frozenset(msg_idx for msg_idx, _ in task_mappings)):
         write_raw_server_tool_use_inputs(
             messages[msg_idx],
@@ -1621,11 +1634,22 @@ def _message_block_arguments(arguments_by_task: Mapping[tuple[int, int], str], m
 
 
 def _guardrailed_tool_call_arguments(guardrailed: object) -> str | None:
+    function: Final = _guardrailed_function(guardrailed)
+    return None if function is None else function.get("arguments")
+
+
+def _drops_scanned_arguments(guardrailed: object, scanned: ChatCompletionAssistantToolCall) -> bool:
+    return _guardrailed_tool_call_arguments(guardrailed) is None and scanned["function"].get("arguments") is not None
+
+
+def _guardrailed_function(guardrailed: object) -> ChatCompletionToolCallFunctionChunk | None:
+    function: Final = stream_item_field(guardrailed, "function")
     try:
-        function: Final = _TOOL_CALL_FUNCTION_ADAPTER.validate_python(stream_item_field(guardrailed, "function"))
+        return _TOOL_CALL_FUNCTION_ADAPTER.validate_python(
+            function.model_dump(exclude_none=True) if isinstance(function, BaseModel) else function
+        )
     except ValidationError:
         return None
-    return function.get("arguments")
 
 
 def _server_tool_call_tasks(
@@ -1683,12 +1707,22 @@ def _require_appliable_input_tool_calls(
     scanned: Sequence[object],
     client_count: int,
     server_call_count: int,
-    guardrail_name: str | None,
+    guardrail: "CustomGuardrail",
 ) -> None:
     if server_call_count and not _fits_scanned_tool_calls(
         guardrailed_tool_calls, scanned=scanned, client_count=client_count
     ):
-        raise unappliable_request_rewrite(guardrail_name)
+        raise unappliable_request_rewrite(guardrail.guardrail_name)
+
+
+def _returned_request_tool_calls(
+    returned: Sequence[object] | None, *, guardrail: "CustomGuardrail"
+) -> tuple[object, ...]:
+    if isinstance(returned, (list, tuple)):
+        return tuple(returned)
+    if returned:
+        raise unappliable_request_rewrite(guardrail.guardrail_name)
+    return ()
 
 
 def _fits_scanned_tool_calls(returned: Sequence[object], *, scanned: Sequence[object], client_count: int) -> bool:
@@ -1716,9 +1750,8 @@ _TOOL_CALL_FUNCTION_ADAPTER: Final = TypeAdapter(ChatCompletionToolCallFunctionC
 def _rewritten_server_tool_call(
     server_tool_call: ChatCompletionAssistantToolCall, guardrailed: object
 ) -> ChatCompletionAssistantToolCall:
-    try:
-        function: Final = _TOOL_CALL_FUNCTION_ADAPTER.validate_python(stream_item_field(guardrailed, "function"))
-    except ValidationError:
+    function: Final = _guardrailed_function(guardrailed)
+    if function is None:
         return server_tool_call
     return ChatCompletionAssistantToolCall(
         id=server_tool_call["id"],
