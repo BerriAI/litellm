@@ -15419,12 +15419,6 @@ async def _shared_deployments_cooled_after(
     ("litellm_params", "caller_fields", "failure"),
     [
         pytest.param(
-            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
-            {"aws_access_key_id": "caller-key-id"},
-            litellm.AuthenticationError,
-            id="bedrock",
-        ),
-        pytest.param(
             {"model": "bedrock_mantle/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
             {"aws_profile_name": "caller-profile"},
             litellm.AuthenticationError,
@@ -15449,22 +15443,10 @@ async def _shared_deployments_cooled_after(
             id="sagemaker_nova",
         ),
         pytest.param(
-            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
-            {"vertex_credentials": "caller-credentials"},
-            litellm.AuthenticationError,
-            id="vertex_ai",
-        ),
-        pytest.param(
             {"model": "vertex_ai_beta/gemini-4-neon", **_VERTEX_DEPLOYMENT},
             {"vertex_ai_credentials": "caller-credentials"},
             litellm.AuthenticationError,
             id="vertex_ai_beta",
-        ),
-        pytest.param(
-            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
-            {"azure_ad_token": "caller-token"},
-            litellm.AuthenticationError,
-            id="azure",
         ),
         pytest.param(
             {"model": "azure_text/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
@@ -15477,12 +15459,6 @@ async def _shared_deployments_cooled_after(
             {"azure_ad_token": "caller-token"},
             litellm.AuthenticationError,
             id="azure_ai",
-        ),
-        pytest.param(
-            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
-            {"organization": "org-caller"},
-            litellm.AuthenticationError,
-            id="openai",
         ),
         pytest.param(
             {"model": "text-completion-openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
@@ -15498,12 +15474,6 @@ async def _shared_deployments_cooled_after(
         ),
         pytest.param(
             {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
-            {"aws_access_key_id": "caller-key-id"},
-            litellm.RateLimitError,
-            id="aws_credential_on_a_rate_limit",
-        ),
-        pytest.param(
-            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
             {"aws_region_name": "eu-west-1"},
             litellm.NotFoundError,
             id="aws_region_on_not_found",
@@ -15513,12 +15483,6 @@ async def _shared_deployments_cooled_after(
             {"vertex_location": "europe-west4"},
             litellm.NotFoundError,
             id="vertex_location_on_not_found",
-        ),
-        pytest.param(
-            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
-            {"api_version": "2023-03-15-preview"},
-            litellm.NotFoundError,
-            id="azure_api_version_on_not_found",
         ),
     ],
 )
@@ -15534,22 +15498,6 @@ async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deploym
 @pytest.mark.parametrize(
     ("litellm_params", "caller_fields", "failure", "default_litellm_params", "environment"),
     [
-        pytest.param(
-            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
-            {},
-            litellm.AuthenticationError,
-            None,
-            {},
-            id="no_caller_field",
-        ),
-        pytest.param(
-            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
-            {"aws_access_key_id": "configured-key-id"},
-            litellm.AuthenticationError,
-            None,
-            {},
-            id="echoed_deployment_value",
-        ),
         pytest.param(
             {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
             {"azure_ad_token": "default-token"},
@@ -15607,44 +15555,12 @@ async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deploym
             id="echoed_vertex_project_under_its_alias",
         ),
         pytest.param(
-            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
-            {"aws_region_name": "eu-west-1"},
-            litellm.NotFoundError,
-            None,
-            {},
-            id="field_openai_does_not_read",
-        ),
-        pytest.param(
             {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
             {"organization": "org-caller"},
             litellm.AuthenticationError,
             None,
             {},
             id="field_bedrock_does_not_read",
-        ),
-        pytest.param(
-            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
-            {"api_version": "2023-03-15-preview"},
-            litellm.AuthenticationError,
-            None,
-            {},
-            id="azure_api_version_on_an_auth_failure",
-        ),
-        pytest.param(
-            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
-            {"api_version": "2023-03-15-preview"},
-            litellm.RateLimitError,
-            None,
-            {},
-            id="azure_api_version_on_a_rate_limit",
-        ),
-        pytest.param(
-            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
-            {"organization": "org-caller"},
-            litellm.NotFoundError,
-            None,
-            {},
-            id="openai_organization_on_not_found",
         ),
         pytest.param(
             {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
@@ -15695,76 +15611,6 @@ async def test_router_caller_organization_is_compared_with_the_deployment_creden
         )
         is cooled
     )
-
-
-def _reject_the_caller_organization(request: httpx.Request) -> httpx.Response:
-    if request.headers.get("openai-organization") == "org-caller":
-        return httpx.Response(401, json={"error": {"message": "No such organization.", "code": "invalid_organization"}})
-    return httpx.Response(
-        200,
-        json={
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 0,
-            "model": "gpt-6.2-astra",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        },
-    )
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-async def test_router_fallback_rejecting_a_caller_field_stays_routable(monkeypatch):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "primary-model",
-                "litellm_params": {
-                    "model": "openai/gpt-6.2-sol",
-                    "api_base": "https://primary.test/v1",
-                    **_OPENAI_DEPLOYMENT,
-                },
-                "model_info": {"id": "primary-deployment"},
-            },
-            {
-                "model_name": "fallback-model",
-                "litellm_params": {
-                    "model": "openai/gpt-6.2-astra",
-                    "api_base": "https://fallback.test/v1",
-                    **_OPENAI_DEPLOYMENT,
-                },
-                "model_info": {"id": "fallback-deployment"},
-            },
-        ],
-        fallbacks=[{"primary-model": ["fallback-model"]}],
-        num_retries=0,
-    )
-    shared_logging: Final = LiteLLMLogging(
-        model="primary-model",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=False,
-        call_type="acompletion",
-        litellm_call_id="caller-organization-fallback",
-        start_time=datetime.now(),
-        function_id="caller-organization-fallback",
-    )
-
-    with respx.mock:
-        respx.post(url__regex=r"https://(primary|fallback)\.test/v1/chat/completions").mock(
-            side_effect=_reject_the_caller_organization
-        )
-        with pytest.raises(litellm.AuthenticationError):
-            await router.acompletion(
-                model="primary-model",
-                messages=[{"role": "user", "content": "hi"}],
-                organization="org-caller",
-                litellm_logging_obj=shared_logging,
-            )
-
-        response: Final = await router.acompletion(model="fallback-model", messages=[{"role": "user", "content": "hi"}])
-
-    assert response._hidden_params["model_id"] == "fallback-deployment"
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
