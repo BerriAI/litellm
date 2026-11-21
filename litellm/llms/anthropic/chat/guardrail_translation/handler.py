@@ -30,6 +30,7 @@ from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
+    is_anthropic_web_search_tool,
     is_provider_native_tool_dict,
     truncate_tool_name,
 )
@@ -398,6 +399,60 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
     if original is None:
         return tool
     return {**tool, "function": {**function, "name": original}}
+
+
+def _converted_tool(
+    anthropic_config: AnthropicConfig, tool: ChatCompletionToolParam, original_names: Mapping[str, str]
+) -> AllAnthropicToolsValues | None:
+    return anthropic_config.map_tool_helper(_with_original_name(tool, original_names))[0]
+
+
+def _converted_tools(
+    tools: Sequence[ChatCompletionToolParam], original_names: Mapping[str, str]
+) -> tuple[AllAnthropicToolsValues, ...]:
+    anthropic_config: Final = AnthropicConfig()
+    converted: Final = (_converted_tool(anthropic_config, tool, original_names) for tool in tools)
+    return tuple(tool for tool in converted if tool is not None)
+
+
+def _is_hidden_from_guardrail(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and (is_anthropic_web_search_tool(fields) or is_provider_native_tool_dict(fields))
+
+
+def _is_openai_format_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and fields.get("type") == "function" and "function" in fields
+
+
+def _tools_after_guardrail(
+    request_tools: Sequence[object],
+    shown_fingerprints: Sequence[str],
+    returned_tools: Sequence[ChatCompletionToolParam],
+    original_names: Mapping[str, str],
+) -> list[object]:  # mutable-ok: becomes the request body's tools
+    shown_positions: Final = tuple(
+        position for position, tool in enumerate(request_tools) if not _is_hidden_from_guardrail(tool)
+    )
+    shown: Final = (
+        tuple(zip(shown_positions, shown_fingerprints)) if len(shown_positions) == len(shown_fingerprints) else ()
+    )
+    returned: Final = tuple((stream_item_fingerprint(tool), tool) for tool in returned_tools)
+    returned_fingerprints: Final = frozenset(fingerprint for fingerprint, _ in returned)
+    as_sent: Final = tuple(
+        (position, fingerprint)
+        for position, fingerprint in shown
+        if fingerprint in returned_fingerprints and not _is_openai_format_tool(request_tools[position])
+    )
+    as_sent_positions: Final = frozenset(position for position, _ in as_sent)
+    as_sent_fingerprints: Final = frozenset(fingerprint for _, fingerprint in as_sent)
+    removed_or_rewritten: Final = frozenset(shown_positions) - as_sent_positions
+    return [
+        *(tool for position, tool in enumerate(request_tools) if position not in removed_or_rewritten),
+        *_converted_tools(
+            tuple(tool for fingerprint, tool in returned if fingerprint not in as_sent_fingerprints), original_names
+        ),
+    ]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
@@ -981,6 +1036,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["tool_calls"] = tool_calls_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            request_tools_as_sent: Final = tuple(data.get("tools") or ())
+            shown_tool_fingerprints: Final = (
+                () if scan_only_tool_results else tuple(map(stream_item_fingerprint, tools_to_check))
+            )
             original_structured_messages: Final = structured_messages
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
@@ -1000,27 +1059,19 @@ class AnthropicMessagesHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                # Convert tools back from OpenAI format to Anthropic format
-                anthropic_config: Final = AnthropicConfig()
-                anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
-                for tool in guardrailed_tools:
-                    converted_tool, mcp_server = anthropic_config.map_tool_helper(
-                        _with_original_name(tool, original_tool_names.declared)
-                    )
-                    if converted_tool is not None:
-                        anthropic_tools.append(converted_tool)
-                    # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
                         request_tools=data.get("tools"),
-                        returned_tools=anthropic_tools,
+                        returned_tools=_converted_tools(guardrailed_tools, original_tool_names.declared),
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else [
-                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
-                        *anthropic_tools,
-                    ]
+                    else _tools_after_guardrail(
+                        request_tools=request_tools_as_sent,
+                        shown_fingerprints=shown_tool_fingerprints,
+                        returned_tools=guardrailed_tools,
+                        original_names=original_tool_names.declared,
+                    )
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
