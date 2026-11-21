@@ -12,12 +12,14 @@ import sys
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Final
+from typing import Annotated, Final, Literal
 
 import anyio
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -1111,7 +1113,11 @@ class _FailureRecorder(CustomLogger):
         self.failures: tuple[object, ...] = ()
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
     ) -> None:
         self.failures = (*self.failures, kwargs.get("exception"))
 
@@ -1253,3 +1259,174 @@ def test_closing_a_sync_stream_while_another_task_reads_ends_that_read_without_r
     assert provider_stream.closed
     assert not provider_stream.read_after_close
     assert failure_recorder.failures == ()
+
+
+_RESPONSE_COMPLETED: Final = (
+    b'data: {"type": "response.completed", "response": {"id": "resp_1", "status": "completed", "output": []}}\n\n'
+)
+_PARALLEL_CALLS: Final = (
+    ("fc_a", "call_98145f1b9bdb40fc82c5b2415ed291a5", "read_file", '{"path": "notes/a.md"}'),
+    ("fc_b", "call_0c8a1d2e3f4b5a6978695a4b3c2d1e0f", "run_command", '{"cmd": ["ls", "-la"]}'),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallStreamShape:
+    argument_deltas: tuple[str, ...] = ()
+    deltas_carry_item_id: bool = True
+    sends_arguments_done: bool = True
+    output_item_done_carries_arguments: bool = True
+
+
+def _halves(arguments: str) -> tuple[str, ...]:
+    return (arguments[: len(arguments) // 2], arguments[len(arguments) // 2 :])
+
+
+class _ToolCallProviderStream(httpx.AsyncByteStream):
+    def __init__(self, shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]) -> None:
+        self._shape: Final = shape
+        self._split_arguments: Final = split_arguments
+
+    def _call_events(
+        self, output_index: int, item_id: str, call_id: str, name: str, arguments: str
+    ) -> Iterator[Mapping[str, object]]:
+        item: Final = {"type": "function_call", "id": item_id, "call_id": call_id, "name": name}
+        yield {
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {**item, "arguments": "", "status": "in_progress"},
+        }
+        for piece in self._split_arguments(arguments):
+            yield {
+                "type": "response.function_call_arguments.delta",
+                "output_index": output_index,
+                "delta": piece,
+                **({"item_id": item_id} if self._shape.deltas_carry_item_id else {}),
+            }
+        if self._shape.sends_arguments_done:
+            yield {
+                "type": "response.function_call_arguments.done",
+                "output_index": output_index,
+                "item_id": item_id,
+                "arguments": arguments,
+            }
+        yield {
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": {
+                **item,
+                "arguments": arguments if self._shape.output_item_done_carries_arguments else "",
+                "status": "completed",
+            },
+        }
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _RESPONSE_CREATED
+        for output_index, call in enumerate(_PARALLEL_CALLS):
+            for event in self._call_events(output_index, *call):
+                yield f"data: {json.dumps(event)}\n\n".encode()
+        yield _RESPONSE_COMPLETED
+
+
+def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple[str, str, str | None], ...]:
+    async def _run() -> list[Mapping[str, object]]:
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+        )
+        return [chunk async for chunk in AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")]
+
+    events: Final = tuple(
+        _BLOCK_EVENT.validate_python(chunk) for chunk in asyncio.run(_run()) if chunk["type"] in _BLOCK_EVENT_TYPES
+    )
+    return tuple(
+        (event.content_block.id, event.content_block.name, _input_before_block_stop(events, event.index))
+        for event in events
+        if isinstance(event, _BlockStart)
+    )
+
+
+class _ToolUseBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str
+    name: str
+
+
+class _BlockStart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_start"]
+    index: int
+    content_block: _ToolUseBlock
+
+
+class _InputJsonDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    partial_json: str
+
+
+class _BlockDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_delta"]
+    index: int
+    delta: _InputJsonDelta
+
+
+class _BlockStop(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_stop"]
+    index: int
+
+
+_BlockEvent = Annotated[_BlockStart | _BlockDelta | _BlockStop, Field(discriminator="type")]
+_BLOCK_EVENT: Final[TypeAdapter[_BlockEvent]] = TypeAdapter(_BlockEvent)
+_BLOCK_EVENT_TYPES: Final = frozenset({"content_block_start", "content_block_delta", "content_block_stop"})
+
+
+def _input_before_block_stop(events: tuple[_BlockEvent, ...], index: int) -> str | None:
+    stop: Final = next(
+        (pos for pos, event in enumerate(events) if isinstance(event, _BlockStop) and event.index == index), None
+    )
+    if stop is None:
+        return None
+    return "".join(
+        event.delta.partial_json for event in events[:stop] if isinstance(event, _BlockDelta) and event.index == index
+    )
+
+
+def _no_deltas(arguments: str) -> tuple[str, ...]:
+    return ()
+
+
+def _one_empty_delta(arguments: str) -> tuple[str, ...]:
+    return ("",)
+
+
+@pytest.mark.parametrize(
+    ("shape", "split_arguments"),
+    [
+        (_ToolCallStreamShape(), _no_deltas),
+        (_ToolCallStreamShape(sends_arguments_done=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _one_empty_delta),
+        (_ToolCallStreamShape(), _halves),
+        (_ToolCallStreamShape(sends_arguments_done=False), _halves),
+        (_ToolCallStreamShape(deltas_carry_item_id=False), _halves),
+    ],
+    ids=[
+        "done_events_only",
+        "output_item_done_only",
+        "arguments_done_only",
+        "empty_delta_then_arguments_done",
+        "deltas_then_done_events",
+        "deltas_then_output_item_done",
+        "deltas_without_item_id",
+    ],
+)
+def test_each_parallel_tool_use_streams_its_arguments_exactly_once(
+    shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]
+):
+    tool_uses: Final = _streamed_tool_uses(_ToolCallProviderStream(shape, split_arguments))
+
+    assert tool_uses == tuple((call_id, name, arguments) for _, call_id, name, arguments in _PARALLEL_CALLS)
