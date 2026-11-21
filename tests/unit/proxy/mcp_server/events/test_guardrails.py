@@ -129,3 +129,35 @@ async def test_a_policy_attached_to_the_key_assigns_its_guardrail_to_events() ->
         attachments.clear()
         policies.clear()
     assert outcome == Screened({"title": "the [REDACTED] plan", "count": 3})
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (
+        UserAPIKeyAuth(api_key="sk-a", metadata={"disable_global_guardrails": True}),
+        UserAPIKeyAuth(api_key="sk-a", team_metadata={"opted_out_global_guardrails": ["mask"]}),
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_caller_that_opted_out_of_a_global_guardrail_is_not_screened_by_it(caller: UserAPIKeyAuth) -> None:
+    masker: Final = _Masker(guardrail_name="mask", event_hook=GuardrailEventHooks.mcp_event, default_on=True)
+    outcome: Final = await screen_event(
+        occurrence(data={"title": "the secret plan"}),
+        server_name="ci",
+        gateway_name="ci-build.failed",
+        subscription_id=None,
+        caller=caller,
+        callbacks=lambda: (masker,),
+    )
+    assert outcome == Screened({"title": "the secret plan"})
+
+
+def test_event_screening_carries_the_caller_tags_and_admin_metadata() -> None:
+    from litellm.proxy.mcp_server.events.guardrails import caller_metadata
+
+    caller: Final = UserAPIKeyAuth(
+        api_key="sk-a", metadata={"tags": ["key-tag"]}, team_metadata={"tags": ["team-tag", "key-tag"]}
+    )
+    metadata: Final = caller_metadata(caller)
+    assert metadata["tags"] == ["key-tag", "team-tag"]
+    assert metadata["user_api_key_metadata"] == {"tags": ["key-tag"]}

@@ -40,6 +40,18 @@ def _screens_events(callback: CustomGuardrail, request_data: Mapping[str, object
     )
 
 
+def caller_metadata(caller: UserAPIKeyAuth) -> _RequestData:
+    """The admin metadata and inherited tags a request from this caller carries, so opt-outs and tag modes apply."""
+    from litellm.proxy.common_utils.callback_utils import strip_callback_config
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    return {
+        "user_api_key_metadata": strip_callback_config(caller.metadata),
+        "user_api_key_team_metadata": strip_callback_config(caller.team_metadata),
+        "tags": list(LiteLLMProxyRequestSetup.get_inherited_tags(caller)),
+    }
+
+
 async def _assigned_guardrails(request_data: _RequestData, caller: UserAPIKeyAuth) -> None:
     """The key, team and policy guardrails a request from this caller would carry, as the tool path assigns them."""
     from litellm.proxy.litellm_pre_call_utils import (
@@ -65,7 +77,7 @@ async def screen_event(
     from litellm.proxy.mcp_server.utils import mcp_tool_result_structured_content
 
     request_data: Final[_RequestData] = {
-        "metadata": {},
+        "metadata": caller_metadata(caller) if caller is not None else {},
         "mcp_event": {
             "server": server_name,
             "event_name": gateway_name,
