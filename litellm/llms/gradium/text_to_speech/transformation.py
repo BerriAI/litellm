@@ -237,28 +237,54 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> "HttpxBinaryResponseContent":
-        from litellm.types.llms.openai import HttpxBinaryResponseContent
+        rejection: Final = self._rejection(raw_response)
+        if rejection is not None:
+            raw_response.close()
+            raise rejection
+        return self._audio_content(raw_response)
 
+    async def async_transform_text_to_speech_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> "HttpxBinaryResponseContent":
+        rejection: Final = self._rejection(raw_response)
+        if rejection is not None:
+            await raw_response.aclose()
+            raise rejection
+        return self._audio_content(raw_response)
+
+    def _rejection(self, raw_response: httpx.Response) -> GradiumException | None:
         if raw_response.status_code >= 400:
-            raise GradiumException(
+            return GradiumException(
                 message=raw_response.text,
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        media_types: Final = self._media_types(raw_response)
+        if self._is_labeled_audio(media_types) or media_types <= self.UNLABELED_AUDIO_MEDIA_TYPES:
+            return None
+        return GradiumException(
+            message=f"Gradium answered {raw_response.status_code} with "
+            f"{', '.join(sorted(media_types))} instead of audio",
+            status_code=502,
+            headers=raw_response.headers,
+        )
+
+    @staticmethod
+    def _media_types(raw_response: httpx.Response) -> frozenset[str]:
+        return frozenset(value.split(";")[0].strip().lower() for value in raw_response.headers.get_list("content-type"))
+
+    @staticmethod
+    def _is_labeled_audio(media_types: frozenset[str]) -> bool:
+        return any(value.startswith("audio/") for value in media_types)
+
+    def _audio_content(self, raw_response: httpx.Response) -> "HttpxBinaryResponseContent":
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         sent: Final = _GradiumSpeechRequest.model_validate_json(raw_response.request.content)
-        media_types: Final = frozenset(
-            value.split(";")[0].strip().lower() for value in raw_response.headers.get_list("content-type")
-        )
-        is_labeled_audio: Final = any(value.startswith("audio/") for value in media_types)
-        if not is_labeled_audio and not media_types <= self.UNLABELED_AUDIO_MEDIA_TYPES:
-            raise GradiumException(
-                message=f"Gradium answered {raw_response.status_code} with "
-                f"{', '.join(sorted(media_types))} instead of audio",
-                status_code=502,
-                headers=raw_response.headers,
-            )
-        if not is_labeled_audio:
+        if not self._is_labeled_audio(self._media_types(raw_response)):
             media_type: Final = self.RAW_AUDIO_MEDIA_TYPES.get(sent.output_format, "audio/pcm")
             raw_response.headers["content-type"] = media_type  # rebind-ok: httpx exposes headers only as mutable
 

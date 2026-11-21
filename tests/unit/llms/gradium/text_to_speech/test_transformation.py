@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from types import MappingProxyType
 from typing import Final
 
@@ -535,6 +535,64 @@ async def test_aspeech_rejects_a_success_response_that_is_not_audio(gradium_env:
 
         assert raised.value.status_code == 502
         assert content_type.split(";")[0] in str(raised.value)
+
+
+class _ClosableJsonStream(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b'{"text": "Bonjour"}'
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'{"text": "Bonjour"}'
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def test_speech_releases_a_streamed_response_it_rejects_as_not_audio(gradium_env: None):
+    upstream: Final = _ClosableJsonStream()
+    with respx.mock:
+        respx.post(_URL).mock(
+            return_value=httpx.Response(200, stream=upstream, headers={"content-type": "application/json"})
+        )
+
+        with pytest.raises(GradiumException, match="instead of audio"):
+            litellm.speech(
+                model="gradium/default",
+                input="Bonjour",
+                voice="alloy",
+                api_base=_API_BASE,
+                api_key=_API_KEY,
+                stream=True,
+            )
+
+    assert upstream.closed
+
+
+@pytest.mark.asyncio
+async def test_aspeech_releases_a_streamed_response_it_rejects_as_not_audio(gradium_env: None):
+    upstream: Final = _ClosableJsonStream()
+    with respx.mock:
+        respx.post(_URL).mock(
+            return_value=httpx.Response(200, stream=upstream, headers={"content-type": "application/json"})
+        )
+
+        with pytest.raises(litellm.BadGatewayError):
+            await litellm.aspeech(
+                model="gradium/default",
+                input="Bonjour",
+                voice="alloy",
+                api_base=_API_BASE,
+                api_key=_API_KEY,
+                stream=True,
+            )
+
+    assert upstream.closed
 
 
 def test_speech_honors_an_explicit_api_base_and_api_key(gradium_env: None):
