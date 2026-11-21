@@ -92,7 +92,7 @@ export default function useCustomerHierarchyUsage() {
     if (patch) void setParams({ ...patch, usagePage: null }, { history: "push" });
   };
   const selectOrganization = () => void setParams(ORGANIZATION_PATCH, { history: "push" });
-  const selectTeam = () => void setParams(TEAM_PATCH, { history: "push" });
+  const selectTeam = () => void setParams({ ...TEAM_PATCH, team: data?.team?.id ?? params.team }, { history: "push" });
   const setApp = (app_id: string | null) =>
     void setParams({ app_id, search: null, usagePage: null }, { history: "push" });
 

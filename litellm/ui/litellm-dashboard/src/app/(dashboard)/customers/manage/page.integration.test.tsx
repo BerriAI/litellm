@@ -797,12 +797,36 @@ describe("customer hierarchy management", () => {
     expect(screen.getByRole("heading", { name: "Other customer" })).toBeInTheDocument();
   });
 
-  it("should resolve the member parent for a direct member deep link", async () => {
-    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&member=member-a" });
+  it("shows the resolved member hierarchy and lets each breadcrumb open its parent", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomerHierarchyManager />, {
+      searchParams: "?org=org-1&member=member-a&from=2026-11-01&to=2026-11-03",
+    });
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "Customer hierarchy" })).toHaveTextContent("Product");
+    const path = () => within(screen.getByRole("navigation", { name: "Customer hierarchy" }));
+    expect(
+      path()
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual(["All customers", "Example customer", "Product", "Member One"]);
+    expect(path().getByRole("link", { name: "Member One", exact: true })).toHaveAttribute("aria-current", "page");
+    expect(path().getByRole("link", { name: "Example customer", exact: true })).toHaveAttribute(
+      "href",
+      `${uiHref("customers/manage")}?org=org-1&from=2026-11-01&to=2026-11-03`,
+    );
     expect(requestedUrls().some((url) => url.pathname === "/management/v1/customer_teams/team-a")).toBe(true);
     expect(requestedUrls().some((url) => url.pathname === "/management/v1/customer_members")).toBe(false);
+    await user.click(path().getByRole("link", { name: "Product", exact: true }));
+    expect(await screen.findByRole("heading", { name: "Product" })).toBeInTheDocument();
+    expect(path().getByRole("link", { name: "Product", exact: true })).toHaveAttribute("aria-current", "page");
+    await user.click(path().getByRole("link", { name: "Example customer", exact: true }));
+    expect(await screen.findByRole("heading", { name: "Example customer" })).toBeInTheDocument();
+    expect(
+      path()
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual(["All customers", "Example customer"]);
+    expect(path().getByRole("link", { name: "Example customer", exact: true })).toHaveAttribute("aria-current", "page");
   });
 
   it("should reject a team outside the selected organization before exposing settings", async () => {

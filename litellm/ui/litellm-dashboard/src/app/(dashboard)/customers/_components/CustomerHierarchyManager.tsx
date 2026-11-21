@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, MoreHorizontal, Pencil, Plus } from "lucide-react";
+import { MoreHorizontal, Pencil, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -18,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
 import { CustomerDetailHeader, CustomerDetailLayout } from "./CustomerDetailLayout";
+import CustomerHierarchyBreadcrumbs from "./CustomerHierarchyBreadcrumbs";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerEntityBudgetDialog from "./CustomerEntityBudgetDialog";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
@@ -46,8 +47,7 @@ interface ScopeProps {
 }
 
 function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" | "selected">) {
-  const { t } = useTranslation();
-  const { customerHierarchyHref, customersHref } = useCustomerHierarchyLinks();
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
@@ -72,31 +72,17 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
     <CustomerDetailHeader
       title={label}
       breadcrumbs={
-        <>
-          <a href={customersHref} className="hover:text-foreground">
-            {t("customerPortal.analytics.allCustomers")}
-          </a>
-          {(team || selected.member) && (
-            <>
-              <ChevronRight aria-hidden="true" className="size-3" />
-              <button type="button" onClick={hierarchy.openOrganization} className="hover:text-foreground">
-                {selected.organization.alias || selected.organization.customer_org_id}
-              </button>
-            </>
-          )}
-          {selected.member && team && (
-            <>
-              <ChevronRight aria-hidden="true" className="size-3" />
-              <button
-                type="button"
-                onClick={() => hierarchy.openTeam(team.customer_team_id)}
-                className="hover:text-foreground"
-              >
-                {team.alias || team.customer_team_id}
-              </button>
-            </>
-          )}
-        </>
+        <CustomerHierarchyBreadcrumbs
+          scope={budgetScope}
+          page="manage"
+          organizationLabel={selected.organization.alias}
+          teamLabel={team?.alias}
+          memberLabel={selected.member?.alias}
+          onOrganizationClick={hierarchy.openOrganization}
+          onTeamClick={() => {
+            if (team) hierarchy.openTeam(team.customer_team_id);
+          }}
+        />
       }
       actions={
         <div className="w-full sm:w-72">
