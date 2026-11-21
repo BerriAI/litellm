@@ -3452,6 +3452,22 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
 
         assert tools == [self._READ, self._DEFERRED, {**self._READ, "type": "custom"}]
 
+    async def test_deferred_tools_load_up_front_once_the_guardrail_removed_every_other_tool(self):
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: returned[-1:]),
+            json.loads(json.dumps([self._READ, self._WRITE, self._DEFERRED])),
+        )
+
+        assert tools == [{key: value for key, value in self._DEFERRED.items() if key != "defer_loading"}]
+
+    async def test_deferred_tools_stay_deferred_while_the_guardrail_keeps_a_tool_that_is_not(self):
+        tools: Final = await self._tools_after(
+            ToolDroppingGuardrail(tool_name="Write"),
+            json.loads(json.dumps([self._READ, self._WRITE, self._DEFERRED])),
+        )
+
+        assert tools == [self._READ, self._DEFERRED]
+
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
     """get_streaming_scan_key mirrors what process_output_streaming_response would scan"""
