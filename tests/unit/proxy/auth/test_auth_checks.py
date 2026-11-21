@@ -50,7 +50,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
+    _model_access_groups_serving_model,
     _team_soft_budget_check,
+    can_object_call_model,
     can_team_access_model,
     check_opaque_inference_controls,
     common_checks,
@@ -62,6 +64,8 @@ from litellm.proxy.auth.auth_checks import (
     virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
+from litellm.router_api import ChangeSet
+from litellm.types.router import RouterGeneralSettings
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
 
@@ -2860,3 +2864,131 @@ async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
         assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
     else:
         assert await run() is True
+
+
+def _namesake_deployment(
+    model_name: str, litellm_model: str, *access_groups: str, team_info: Mapping[str, str] | None = None
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": litellm_model, "api_key": "fake"},
+        "model_info": {**({"access_groups": list(access_groups)} if access_groups else {}), **(team_info or {})},
+    }
+
+
+_NAMESAKE_DEPLOYMENTS: Final = (
+    _namesake_deployment("granted-public", "openai/granted-raw", "group-a"),
+    _namesake_deployment("shared-a", "openai/shared-raw", "group-a"),
+    _namesake_deployment("shared-b", "openai/shared-raw", "group-b"),
+    _namesake_deployment("split", "openai/split-a", "group-a"),
+    _namesake_deployment("split", "openai/split-b", "group-b"),
+    _namesake_deployment("collision-public", "openai/routed-elsewhere", "group-a"),
+    _namesake_deployment("openai/routed-elsewhere", "openai/elsewhere"),
+    _namesake_deployment(
+        "model_name_team-1_own",
+        "openai/team-raw",
+        team_info={"team_id": "team-1", "team_public_model_name": "team-public"},
+    ),
+)
+
+
+def _namesake_router(*extra: Mapping[str, object], pass_through: bool = False) -> litellm.Router:
+    return litellm.Router(
+        model_list=[dict(deployment) for deployment in (*_NAMESAKE_DEPLOYMENTS, *extra)],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=pass_through),
+    )
+
+
+def _can_call(
+    router: litellm.Router,
+    models: list[str],
+    requested: str,
+    team_id: str | None = None,
+    key_model_aliases: Mapping[str, str] | None = None,
+) -> bool:
+    try:
+        return can_object_call_model(
+            model=requested,
+            llm_router=router,
+            models=models,
+            team_id=team_id,
+            key_model_aliases=key_model_aliases,
+            object_type="key",
+        )
+    except ProxyException as denied:
+        if denied.type != "key_model_access_denied":
+            raise
+        return False
+
+
+@pytest.mark.parametrize(
+    "models,requested,team_id,allowed",
+    [
+        (["group-a"], "openai/granted-raw", None, True),
+        (["granted-public"], "openai/granted-raw", None, True),
+        (["all-team-models"], "openai/granted-raw", "team-1", True),
+        (["team-public"], "openai/team-raw", "team-1", True),
+        (["team-public"], "openai/team-raw", "team-2", False),
+        (["group-a"], "openai/shared-raw", None, False),
+        (["shared-a"], "openai/shared-raw", None, False),
+        (["group-a"], "openai/split-a", None, True),
+        (["group-a"], "openai/split-b", None, False),
+        (["group-a"], "openai/routed-elsewhere", None, False),
+        (["group-a"], "openai/unknown", None, False),
+    ],
+)
+def test_a_restricted_caller_reaches_a_litellm_model_name_only_when_every_deployment_behind_it_is_granted(
+    models: list[str], requested: str, team_id: str | None, allowed: bool
+) -> None:
+    assert _can_call(_namesake_router(), models, requested, team_id=team_id) is allowed
+
+
+_TEAM_PUBLIC_NAMESAKE: Final = _namesake_deployment(
+    "model_name_team-1_public",
+    "openai/team-public-raw",
+    team_info={"team_id": "team-1", "team_public_model_name": "openai/granted-raw"},
+)
+
+
+@pytest.mark.parametrize(
+    "routing,allowed",
+    [("specific_deployment", True), ("wildcard", False), ("default_deployment", False), ("pass_through", False)]
+    + [("team_public_name", False), ("key_alias", False)],
+)
+def test_a_litellm_model_name_grants_nothing_when_routing_would_not_pick_its_deployments(
+    routing: str, allowed: bool
+) -> None:
+    router: Final = (
+        _namesake_router({"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "fake"}})
+        if routing == "wildcard"
+        else _namesake_router(_TEAM_PUBLIC_NAMESAKE)
+        if routing == "team_public_name"
+        else _namesake_router(pass_through=routing == "pass_through")
+    )
+    if routing == "default_deployment":
+        router.apply(
+            ChangeSet(
+                assign={
+                    "default_deployment": {"model_name": "fallback", "litellm_params": {"model": "openai/fallback"}}
+                }
+            )
+        )
+    key_model_aliases: Final = {"openai/granted-raw": "openai/routed-elsewhere"} if routing == "key_alias" else None
+
+    assert _can_call(router, ["group-a"], "openai/granted-raw", "team-1", key_model_aliases) is allowed
+
+
+@pytest.mark.parametrize(
+    "requested,served_by",
+    [
+        ("openai/split-a", {"group-a"}),
+        ("openai/shared-raw", {"group-a", "group-b"}),
+        (("openai/split-a", "openai/split-b"), {"group-a", "group-b"}),
+        ("split", {"group-a", "group-b"}),
+        ("openai/routed-elsewhere", set()),
+    ],
+)
+def test_a_litellm_model_name_is_served_by_the_access_groups_of_its_own_deployments(
+    requested: str | tuple[str, ...], served_by: set[str]
+) -> None:
+    assert _model_access_groups_serving_model(requested, _namesake_router(), team_id=None) == served_by

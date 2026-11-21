@@ -200,11 +200,13 @@ def _group_key(scenario: Scenario, name: str, grant: Grant) -> str:
             return scenario.key(team_id=project_team, project_id=project_id, models=[])
 
 
-def _budgeted_group(scenario: Scenario, wire: Wire, grant: Grant = "key") -> _Group:
+def _budgeted_group(
+    scenario: Scenario, wire: Wire, grant: Grant = "key", litellm_model: str = f"openai/{_PROVIDER_MODEL}"
+) -> _Group:
     """A database model in a fresh access group with one grant and a 0.0001 group budget."""
     name: Final = f"integration-group-{uuid.uuid4().hex}"
     model: Final = scenario.model(
-        model=f"openai/{_PROVIDER_MODEL}",
+        model=litellm_model,
         api_base=f"{wire.url}/v1",
         input_cost_per_token=_INPUT_RATE,
         output_cost_per_token=_OUTPUT_RATE,
@@ -429,3 +431,43 @@ def test_reservation_refuses_a_concurrent_call_while_an_in_flight_call_holds_the
             wire,
             f"Budget has been exceeded! Model access group={group.name} Current cost: {_MAX_BUDGET}, Max budget: {_MAX_BUDGET}",
         )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("first_call_by", ("model_name", "litellm_model"))
+def test_access_group_budget_charges_and_refuses_a_request_by_the_deployment_litellm_model(
+    gateway: Gateway, first_call_by: Literal["model_name", "litellm_model"]
+) -> None:
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+
+    def chat(model: str, key: str) -> httpx.Response:
+        return gateway.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": model}]}, key=key
+        )
+
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        group: Final = _budgeted_group(scenario, wire, litellm_model=litellm_model)
+        first_model: Final = group.model if first_call_by == "model_name" else litellm_model
+        served: Final = chat(first_model, group.key)
+        assert served.status_code == 200, served.text
+        assert [json.loads(entry.body)["messages"] for entry in _provider_calls(wire)] == [
+            [{"role": "user", "content": first_model}]
+        ], served.text
+        charged: Final = eventually(
+            lambda: _GroupBudget.model_validate_json(
+                gateway.request("GET", f"/access_group/{group.name}/budget").content
+            ),
+            lambda value: value.spend > 0,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert charged.spend == pytest.approx(_CALL_COST), f"{first_model} was not charged to {group.name}: {charged}"
+        refused: Final = chat(litellm_model, group.key)
+        assert refused.status_code == 422, refused.text
+        error: Final = _Error.model_validate_json(refused.content).error
+        assert (error.type, error.message.partition(" Current cost: ")[0]) == (
+            "budget_exceeded",
+            f"Budget has been exceeded! Model access group={group.name}",
+        ), refused.text
+        assert _provider_calls(wire) == (), f"A refused request reached the provider: {refused.text}"
+        assert _budget_rows(group.name)[0]["spend"] == pytest.approx(_CALL_COST)
