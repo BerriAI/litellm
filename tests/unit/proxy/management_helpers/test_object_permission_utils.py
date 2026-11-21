@@ -167,6 +167,14 @@ def test_extract_requested_mcp_server_ids_from_tool_permissions():
     assert _extract_requested_mcp_server_ids(obj_perm) == {"server-a", "server-b"}
 
 
+def test_extract_requested_mcp_server_ids_from_event_permissions() -> None:
+    obj_perm: Final[ObjectPermissionDict] = {
+        "mcp_servers": ["server-1"],
+        "mcp_event_permissions": {"server-events": ["build.*"]},
+    }
+    assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1", "server-events"}
+
+
 def test_extract_requested_mcp_server_ids_combined():
     obj_perm = {
         "mcp_servers": ["server-1"],

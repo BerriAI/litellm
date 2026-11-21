@@ -261,13 +261,17 @@ async def set_object_permission(
         prisma_client=prisma_client,
     )
 
-    # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
-    if "mcp_tool_permissions" in clean_data:
-        clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
-    if "mcp_event_permissions" in clean_data:
-        clean_data["mcp_event_permissions"] = safe_dumps(clean_data["mcp_event_permissions"])
+    # Serialize the JSON permission columns to strings for GraphQL compatibility
+    serialized: Final = {
+        **clean_data,
+        **{
+            column: safe_dumps(clean_data[column])
+            for column in ("mcp_tool_permissions", "mcp_event_permissions")
+            if column in clean_data
+        },
+    }
 
-    created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=clean_data)
+    created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=serialized)
 
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
@@ -687,7 +691,7 @@ def _extract_requested_mcp_server_ids(
 
     Includes:
     - mcp_servers list
-    - Keys from mcp_tool_permissions
+    - Keys from mcp_tool_permissions and mcp_event_permissions
     """
     if not object_permission or not isinstance(object_permission, dict):
         return set()
@@ -698,9 +702,10 @@ def _extract_requested_mcp_server_ids(
         server_ids.update(mcp_servers)
         server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
 
-    mcp_tool_permissions: Final = object_permission.get("mcp_tool_permissions")
-    if isinstance(mcp_tool_permissions, dict):
-        server_ids.update(mcp_tool_permissions.keys())
+    for column in ("mcp_tool_permissions", "mcp_event_permissions"):
+        per_server = object_permission.get(column)  # rebind-ok: one permission column per iteration
+        if isinstance(per_server, dict):
+            server_ids.update(per_server.keys())
 
     return server_ids
 
