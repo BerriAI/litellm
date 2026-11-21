@@ -9,6 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
+import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
@@ -113,6 +114,51 @@ def validate_rate_limit_type(value: object) -> str | None:
     if isinstance(value, str) and value in _RATE_LIMIT_TYPE_VALUES:
         return value
     return None
+
+
+def _upstream_body(response: object) -> bytes:
+    if not isinstance(response, httpx.Response):
+        return b""
+    try:
+        return response.content
+    except httpx.ResponseNotRead:
+        return b""
+
+
+def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.Request:
+    if not isinstance(upstream, httpx.Response):
+        return httpx.Request(method="POST", url=fallback_url)
+    try:
+        upstream_request: Final = upstream.request
+    except RuntimeError:
+        return httpx.Request(method="POST", url=fallback_url)
+    return httpx.Request(
+        method=upstream_request.method,
+        url=upstream_request.url.copy_with(userinfo=b"", query=None, fragment=None),
+    )
+
+
+def _upstream_elapsed(upstream: object) -> datetime.timedelta | None:
+    if not isinstance(upstream, httpx.Response):
+        return None
+    try:
+        return upstream.elapsed
+    except RuntimeError:
+        return None
+
+
+def error_response_without_credentials(status_code: int, upstream: object, fallback_url: str) -> httpx.Response:
+    response: Final = httpx.Response(
+        status_code=status_code,
+        stream=httpx.ByteStream(_upstream_body(upstream)),
+        request=_request_without_credentials(upstream, fallback_url),
+    )
+    _ = response.read()
+    response.headers = httpx.Headers(upstream.headers if isinstance(upstream, httpx.Response) else None)
+    elapsed: Final = _upstream_elapsed(upstream)
+    if elapsed is not None:
+        response.elapsed = elapsed
+    return response
 
 
 _MINIMAL_ERROR_RESPONSE: httpx.Response | None = None
