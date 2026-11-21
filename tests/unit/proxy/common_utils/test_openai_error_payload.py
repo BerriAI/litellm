@@ -635,3 +635,20 @@ def test_relayed_provider_specific_fields_keep_the_code_of_an_error_body_without
     )
 
     assert relayed_provider_specific_fields(rejected) == {"code": "invalid-argument"}
+
+
+def test_relayed_provider_specific_fields_redact_a_secret_from_carried_fields_and_body_keys() -> None:
+    secret: Final = "sk-9876543210abcdef9876543210"
+    rejected: Final = litellm.ContentPolicyViolationError(
+        message="filtered",
+        model="gpt-5.4-nano",
+        llm_provider="azure",
+        provider_specific_fields={"innererror": {"detail": f"blocked for key {secret}"}},
+        body={"message": "filtered", "code": "content_filter", f"key {secret}": "leaked"},
+    )
+
+    relayed: Final = relayed_provider_specific_fields(rejected)
+
+    assert relayed is not None
+    assert relayed["code"] == "content_filter"
+    assert secret not in json.dumps(relayed)
