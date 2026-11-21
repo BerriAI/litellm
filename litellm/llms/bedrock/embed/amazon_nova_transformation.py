@@ -133,8 +133,10 @@ def _mp4_duration_seconds(content: bytes) -> float | None:
     if duration_end > mvhd[1]:
         return None
     timescale: Final = int.from_bytes(content[timescale_at : timescale_at + 4], "big")
-    duration: Final = int.from_bytes(content[timescale_at + 4 : duration_end], "big")
-    return duration / timescale if timescale > 0 and duration > 0 else None
+    duration_field: Final = content[timescale_at + 4 : duration_end]
+    duration: Final = int.from_bytes(duration_field, "big")
+    is_known: Final = duration > 0 and duration_field.count(0xFF) < len(duration_field)
+    return duration / timescale if timescale > 0 and is_known else None
 
 
 def _audio_seconds(request_data: Mapping[str, object]) -> float | None:

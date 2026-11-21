@@ -2385,6 +2385,13 @@ def test_bedrock_nova_embedding_bills_inline_video_by_its_length(
         {"video": {"format": "webm", "source": {"bytes": base64.b64encode(b"\x1a\x45\xdf\xa3" * 8).decode()}}},
         {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=0, duration=6000)}}},
         {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=0)}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=0xFFFFFFFF)}}},
+        {
+            "video": {
+                "format": "mp4",
+                "source": {"bytes": _mp4_base64(timescale=1000, duration=0xFFFFFFFFFFFFFFFF, version=1)},
+            }
+        },
         {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=6000)[:40]}}},
         {"video": {"format": "mp4", "source": {"bytes": "not base64"}}},
         {"video": {"format": "mp4", "source": {"s3Location": {"uri": "s3://bucket/clip.mp4"}}}},
@@ -2397,6 +2404,8 @@ def test_bedrock_nova_embedding_bills_inline_video_by_its_length(
         "webm",
         "mp4-zero-timescale",
         "mp4-zero-duration",
+        "mp4-unknown-duration",
+        "mp4-unknown-64-bit-duration",
         "mp4-truncated",
         "mp4-invalid-base64",
         "s3-video",
