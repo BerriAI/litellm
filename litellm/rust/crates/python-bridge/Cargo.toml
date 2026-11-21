@@ -25,6 +25,7 @@ litellm-secret-value.workspace = true
 litellm-db.workspace = true
 litellm-db-resolve.workspace = true
 litellm-repositories.workspace = true
+litellm-spend-log-writer.workspace = true
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true

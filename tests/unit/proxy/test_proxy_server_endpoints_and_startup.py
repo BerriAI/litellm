@@ -1677,6 +1677,8 @@ class MockPrisma:
         self.proxy_logging_obj = proxy_logging_obj
         self.http_client = http_client
         self.writer_db = MagicMock()
+        self.spend_log_transactions = []
+        self._spend_log_transactions_lock = asyncio.Lock()
 
     async def connect(self):
         pass
@@ -1978,6 +1980,8 @@ async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_delet
 class _PrismaClientWhoseDatabaseRejectsQueries:
     def __init__(self) -> None:
         self.disconnect_calls = 0
+        self.spend_log_transactions: list[dict[str, object]] = []
+        self._spend_log_transactions_lock = asyncio.Lock()
 
     async def disconnect(self) -> None:
         self.disconnect_calls += 1
