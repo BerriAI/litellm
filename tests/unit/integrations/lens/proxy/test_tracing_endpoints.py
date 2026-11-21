@@ -1148,6 +1148,39 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
 
 
 @pytest.mark.asyncio
+async def test_the_trace_lens_receives_holds_the_message_without_claude_code_reminders(
+    monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+
+    async with manage_tracing(
+        True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), client_factory=_in_process_lens
+    ):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "<system-reminder>\nContents of AGENTS.md\n</system-reminder>\nwhat is the capital of France",
+                }
+            ],
+            mock_response="Paris",
+        )
+        await asyncio.sleep(0.2)
+
+    traces: Final = tuple(
+        ExportTraceServiceRequest.FromString(body) for path, _, body in lens_uploads if path == "/v1/traces" and body
+    )
+    spans: Final = _spans(chain.from_iterable(trace.resource_spans for trace in traces))
+    attributes: Final = {attribute.key: attribute.value.string_value for attribute in spans[0].attributes}
+    assert "what is the capital of France" in attributes["gen_ai.input.messages"]
+    assert "AGENTS.md" not in attributes["gen_ai.input.messages"]
+
+
+@pytest.mark.asyncio
 async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call_as_a_step(
     monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
 ) -> None:

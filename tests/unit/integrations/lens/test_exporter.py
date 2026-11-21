@@ -118,6 +118,46 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
 
 
 @pytest.mark.asyncio
+async def test_the_spend_row_lens_receives_has_the_message_without_claude_code_reminders() -> None:
+    received: Final = asyncio.Future[httpx.Request]()
+
+    async def accept(request: httpx.Request) -> httpx.Response:
+        received.set_result(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens.test", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        await exporter.async_log_success_event(
+            {
+                "standard_logging_object": {
+                    "id": "reminder-test",
+                    "status": "success",
+                    "metadata": {"user_agent": "claude-cli/2.1.329 (external, sdk-cli)"},
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "<system-reminder>\nAGENTS.md\n</system-reminder>"},
+                                {"type": "text", "text": "Check a refund"},
+                            ],
+                        }
+                    ],
+                },
+            },
+            None,
+            None,
+            None,
+        )
+        request: Final = await asyncio.wait_for(received, timeout=1)
+        await exporter.aclose()
+    rows: Final = json.loads(request.content)
+    assert json.loads(rows[0]["messages"]) == [
+        {"role": "user", "content": [{"type": "text", "text": "Check a refund"}]}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_inflight_records_count_toward_the_queue_limit() -> None:
     started: Final = asyncio.Event()
     release: Final = asyncio.Event()
