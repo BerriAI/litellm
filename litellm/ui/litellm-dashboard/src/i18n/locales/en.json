@@ -14789,7 +14789,6 @@
         "success": "Success"
       },
       "header": {
-        "backTo": "Back to {{label}}",
         "requestId": "Request ID",
         "provider": "Provider",
         "copied": "Copied!",
