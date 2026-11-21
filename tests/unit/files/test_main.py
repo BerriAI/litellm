@@ -127,7 +127,13 @@ async def test_afile_retrieve_rejects_a_provider_file_without_its_size():
 
 VLLM_ROUTER_API_BASE: Final = "http://vllm-router.test/v1"
 VLLM_ROUTER_FILE: Final = MappingProxyType(
-    {"id": "file-b73f4c", "bytes": 156, "created_at": 1793238707, "filename": "batch_requests.jsonl", "purpose": "batch"}
+    {
+        "id": "file-b73f4c",
+        "bytes": 156,
+        "created_at": 1793238707,
+        "filename": "batch_requests.jsonl",
+        "purpose": "batch",
+    }
 )
 
 
@@ -243,3 +249,49 @@ async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, mo
     assert delete_route.call_count == 1
     assert deleted.id == "file-abc123"
     assert deleted.deleted is True
+
+
+@pytest.mark.parametrize(
+    "operation, call",
+    [
+        (
+            "create_file",
+            lambda: litellm.create_file(
+                file=("test.jsonl", b"{}", "application/jsonl"),
+                purpose="fine-tune",
+                custom_llm_provider="cohere",
+            ),
+        ),
+        (
+            "file_retrieve",
+            lambda: litellm.file_retrieve(
+                file_id="file-1",
+                custom_llm_provider="cohere",  # pyright: ignore[reportArgumentType]  # runtime check
+            ),
+        ),
+        (
+            "file_delete",
+            lambda: litellm.file_delete(file_id="file-1", custom_llm_provider="cohere"),
+        ),
+        (
+            "file_list",
+            lambda: litellm.file_list(
+                custom_llm_provider="cohere",  # pyright: ignore[reportArgumentType]  # runtime check
+            ),
+        ),
+        (
+            "file_content",
+            lambda: litellm.file_content(file_id="file-1", custom_llm_provider="cohere"),
+        ),
+    ],
+)
+def test_files_unsupported_provider_error_message(operation: str, call: Callable[[], object]) -> None:
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        call()
+
+    error_msg: Final = str(exc_info.value)
+    assert f"LiteLLM doesn't support cohere for '{operation}'" in error_msg
+    assert (
+        "Only 'openai', 'azure', 'gemini', 'vertex_ai', 'bedrock', 'manus', 'anthropic', 'mistral', and 'xai' are"
+        " supported." in error_msg
+    )

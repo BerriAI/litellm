@@ -383,11 +383,18 @@ def test_cancel__vertex_ai_dispatch(seams):
 
 
 def test_cancel__unsupported_provider_raises_badrequest(seams):
-    with pytest.raises(litellm.exceptions.BadRequestError):
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
         bm.cancel_batch(batch_id="batch-1", custom_llm_provider="cohere")
 
     for m in _all_seam_methods(seams, "cancel_batch"):
         m.assert_not_called()
+
+    error_msg: Final = str(exc_info.value)
+    assert (
+        "LiteLLM doesn't support cohere for 'cancel_batch'. "
+        "Only 'openai', 'azure', 'vertex_ai', 'bedrock', and 'xai' are supported."
+        in error_msg
+    )
 
 
 def test_cancel__async_flag_propagates_is_async(seams):
