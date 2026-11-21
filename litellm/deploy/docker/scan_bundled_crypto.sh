@@ -68,8 +68,6 @@ is_waived() {
 
 is_waived_package() {
   case "$1" in
-    cryptography/hazmat/bindings/_rust.abi3.so) ;;
-    grpc/_cython/cygrpc.cpython-313-ARCH-linux-gnu.so) ;;
     hf_xet/hf_xet.abi3.so) ;;
     _awscrt.abi3.so) ;;
     pyroscope/_native__lib.cpython-39-ARCH-linux-gnu.so) ;;
@@ -78,9 +76,6 @@ is_waived_package() {
     granian/_granian.cpython-313-ARCH-linux-gnu.so) ;;
     _polars_runtime_32/_polars_runtime.abi3.so) ;;
     ddtrace/internal/native/_native.cpython-313-ARCH-linux-gnu.so) ;;
-    # psycopg-binary's own OpenSSL and Kerberos, used by the boot migration lock until the image swaps in the system libpq
-    psycopg_binary.libs/libcrypto.so.3|psycopg_binary.libs/libcrypto.so.1.1.1k|psycopg_binary.libs/libssl.so.3) ;;
-    psycopg_binary.libs/libk5crypto.so.3.1|psycopg_binary.libs/libcrypt.so.1|psycopg_binary.libs/libcrypt.so.1.1.0) ;;
     *) return 1 ;;
   esac
 }

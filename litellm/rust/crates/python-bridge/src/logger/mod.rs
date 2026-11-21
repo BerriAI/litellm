@@ -2,6 +2,7 @@ mod machine;
 
 pub(crate) use machine::LoggedMachine;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use litellm_host_python::{Pythonized, release_gil};
@@ -17,7 +18,14 @@ type NativeDiagnosticOutput = (String, Option<String>, Option<String>, Vec<Strin
 
 #[pyclass]
 pub(crate) struct NativeTokenRedactor {
-    inner: TokenRedactor,
+    inner: Arc<TokenRedactor>,
+}
+
+impl NativeTokenRedactor {
+    /// The compiled redactor, for Rust code that redacts with the same instance.
+    pub(crate) fn shared(&self) -> Arc<TokenRedactor> {
+        Arc::clone(&self.inner)
+    }
 }
 
 #[pymethods]
@@ -25,7 +33,7 @@ impl NativeTokenRedactor {
     #[new]
     fn new(minimum_custom_key_length: usize, word_ranges: Vec<(u32, u32)>) -> Self {
         Self {
-            inner: TokenRedactor::new(minimum_custom_key_length, word_ranges),
+            inner: Arc::new(TokenRedactor::new(minimum_custom_key_length, word_ranges)),
         }
     }
 

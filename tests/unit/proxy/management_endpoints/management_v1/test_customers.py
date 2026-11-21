@@ -9,11 +9,11 @@ from fastapi.testclient import TestClient
 from prisma.errors import DataError, RawQueryError, TransactionExpiredError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1 import router
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy, get_user_api_key_cache
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy
 from litellm.types.proxy.management_endpoints.customer_hierarchy import BudgetGroups, CustomerMember
@@ -976,7 +976,7 @@ def test_budget_edits_at_every_level_drop_the_cached_member_hierarchy() -> None:
         ).status_code
         == 201
     )
-    cache_key: Final = customer_member_cache_key("m")
+    cache_key: Final = AuthObject.customer_member("m")
     edits: Final = (
         ("/management/v1/customer_members/m", {"budget_override": {"max_budget": 1}}),
         ("/management/v1/customer_teams/team", {"budget": {"max_budget": 2}}),
@@ -1098,6 +1098,7 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         ("cheap", {"max_budget": 80, "budget_limits": [{"budget_duration": "1mo", "max_budget": 7}]}),
         ("same", {"max_budget": 7}),
         ("annual", {"budget_limits": [{"budget_duration": "12mo", "max_budget": 100}]}),
+        ("custom", {"budget_limits": [{"budget_duration": "7d", "max_budget": 9}]}),
         ("zero", {"max_budget": 0}),
     )
     id_field: Final = "customer_team_id" if collection == "customer_teams" else "customer_member_id"
@@ -1111,9 +1112,9 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         assert created.status_code == 201, created.text
     scope: Final = {"parent_org_id": "sort-org"} if collection == "customer_teams" else {"parent_team_id": "parent"}
     budget_order: Final = (
-        ("zero", "cheap", "same", "expensive", "annual", "empty")
+        ("zero", "cheap", "same", "custom", "expensive", "annual", "empty")
         if sort == "budget_asc"
-        else ("annual", "expensive", "cheap", "same", "zero", "empty")
+        else ("annual", "expensive", "custom", "cheap", "same", "zero", "empty")
     )
     expected: Final = (*budget_order, "parent") if collection == "customer_teams" else budget_order
     for page in range(1, (len(expected) + 1) // 2 + 1):
@@ -1676,14 +1677,14 @@ def test_customer_upserts_invalidate_customer_member_and_customer_org_alias_cach
         ).status_code
         == 201
     )
-    member_key: Final = customer_member_cache_key("m")
-    for key in (member_key, customer_org_alias_cache_key("old"), customer_org_alias_cache_key("new")):
+    member_key: Final = AuthObject.customer_member("m")
+    for key in (member_key, AuthObject.customer_org_alias("old"), AuthObject.customer_org_alias("new")):
         asyncio.run(cache.async_set_cache(key=key, value="stale customer hierarchy"))
     updated: Final = http.post(
         "/management/v1/customer_organizations/upsert", json={"customer_org_id": "org", "alias": "new"}
     )
     assert updated.status_code == 200, updated.text
-    for key in (member_key, customer_org_alias_cache_key("old"), customer_org_alias_cache_key("new")):
+    for key in (member_key, AuthObject.customer_org_alias("old"), AuthObject.customer_org_alias("new")):
         assert cache.get_cache(key) is None
     asyncio.run(cache.async_set_cache(key=member_key, value="stale customer hierarchy"))
     member: Final = http.post(
@@ -2084,7 +2085,7 @@ def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache(
     )
     assert advanced.status_code == 200, advanced.text
     assert advanced.json()["budget_groups_revision"] == windows.json()["budget_groups_revision"]
-    cache.set_cache(customer_member_cache_key("m"), "old-budget")
+    cache.set_cache(AuthObject.customer_member("m"), "old-budget")
     saved: Final = http.patch(
         "/management/v1/customer_organizations/org/default_budgets",
         json={
@@ -2113,7 +2114,7 @@ def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache(
             ],
         }
     ]
-    assert cache.get_cache(customer_member_cache_key("m")) is None
+    assert cache.get_cache(AuthObject.customer_member("m")) is None
     assert (
         http.get("/management/v1/customer_members/m").json()["effective_budget"]["budget_limits"][0]["max_budget"] == 15
     )
@@ -2252,11 +2253,11 @@ def test_member_team_replacement_retains_identity_budgets_and_spend() -> None:
         database.litellm_customermembertable.update(where={"customer_member_id": "moving"}, data={"spend": 7.5})
     )
     original: Final = http.get("/management/v1/customer_members/moving").json()
-    cache.set_cache(customer_member_cache_key("moving"), "old-team")
+    cache.set_cache(AuthObject.customer_member("moving"), "old-team")
     moved: Final = http.patch("/management/v1/customer_members/moving", json={"parent_team_ids": ["next"]})
     assert moved.status_code == 200, moved.text
     assert moved.json() == {**original, "parent_team_ids": ["next"]}
-    assert cache.get_cache(customer_member_cache_key("moving")) is None
+    assert cache.get_cache(AuthObject.customer_member("moving")) is None
     assert http.get("/management/v1/customer_members", params={"parent_team_id": "team"}).json()["data"] == []
     assert [
         m["customer_member_id"]
@@ -2531,9 +2532,9 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str, patc
     )
     assert member.status_code == 201, member.text
     keys: Final = (
-        customer_member_cache_key("m"),
-        customer_org_alias_cache_key("org"),
-        customer_org_alias_cache_key("other"),
+        AuthObject.customer_member("m"),
+        AuthObject.customer_org_alias("org"),
+        AuthObject.customer_org_alias("other"),
     )
     for key in keys:
         cache.set_cache(key, "stale")

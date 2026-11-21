@@ -494,6 +494,7 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "aagent": (".harness", "aagent"),
         "agent_eval": (".harness.evaluation", "agent_eval"),
         "aagent_eval": (".harness.evaluation", "aagent_eval"),
+        "aagent_eval_attempt": (".harness.evaluation", "aagent_eval_attempt"),
         "CheckResult": (".harness.evaluation", "CheckResult"),
         "CommandCheck": (".harness.evaluation", "CommandCheck"),
         "PredicateCheck": (".harness.evaluation", "PredicateCheck"),

@@ -1,5 +1,7 @@
+import asyncio
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from functools import partial
 from typing import Final
 from uuid import uuid4
@@ -9,7 +11,7 @@ from pydantic import TypeAdapter
 
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id, app_scope_identity
-from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope, ErrorCode, Failure
+from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope, CustomerHierarchy, ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.apps import (
     App,
     AppCreate,
@@ -35,9 +37,26 @@ from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     Record,
     Table,
 )
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+
+
+class UnavailableAppTable:
+    async def find_unique(
+        self, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Record | None:
+        raise ConnectionError("database unavailable")
+
+
+class UnavailableAppDatabase:
+    def __getattr__(self, name: str) -> UnavailableAppTable:
+        return UnavailableAppTable()
 
 
 class AppTable(Table):
+    def __init__(self, id_field: str, database: Database) -> None:
+        super().__init__(id_field, database)
+        self.pause_read: tuple[asyncio.Event, asyncio.Event] | None = None
+
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
         return await super().create({"app_id": str(uuid4()), **data}, include)
 
@@ -48,7 +67,13 @@ class AppTable(Table):
     ) -> Record | None:
         nested: Final = where.get("resource_type_resource_id")
         criteria: Final = TypeAdapter(Mapping[str, object]).validate_python(nested) if nested is not None else where
-        return next((row for row in self.rows.values() if self.matches(row, criteria)), None)
+        row: Final = next((row for row in self.rows.values() if self.matches(row, criteria)), None)
+        paused: Final = self.pause_read
+        self.pause_read = None
+        if paused is not None:
+            paused[0].set()
+            await paused[1].wait()
+        return row
 
     async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> Record | None:
         row: Final = await self.find_unique(where)
@@ -120,11 +145,25 @@ class AppConfigTable(Table):
         return await super().find_unique(where, include)
 
 
+class AppCustomerTable(Table):
+    async def include(self, row: Record, include: Mapping[str, object] | None) -> Record:
+        if include is None or "apps" not in include:
+            return await super().include(row, include)
+        table: Final = getattr(
+            self.database,
+            "litellm_appcustomerorgtable" if self.id_field == "customer_org_id" else "litellm_appcustomermembertable",
+        )
+        associations: Final = await table.find_many(where={self.id_field: row.model_dump()[self.id_field]})
+        return row.model_copy(update={"apps": tuple(association.model_dump() for association in associations)})
+
+
 class AppDatabase(Database):
     def __init__(self) -> None:
         super().__init__()
         self.committed = False
         self.litellm_config = AppConfigTable(self)
+        self.litellm_customerorganizationtable = AppCustomerTable("customer_org_id", self)
+        self.litellm_customermembertable = AppCustomerTable("customer_member_id", self)
         self.litellm_apptable: Final = AppTable("app_id", self)
         self.litellm_appcustomerorgtable: Final = CompositeTable("app_id_customer_org_id", self)
         self.litellm_appcustomermembertable: Final = CompositeTable("app_id_customer_member_id", self)
@@ -187,6 +226,10 @@ class CommitAwareCache(UserApiKeyCache):
     async def async_delete_cache(self, key: str) -> None:
         self.invalidated_after_commit = self.database.committed
         await super().async_delete_cache(key)
+
+    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
+        self.invalidated_after_commit = self.database.committed
+        await super().async_delete_cache_keys(keys)
 
 
 async def seed_resources(database: AppDatabase) -> None:
@@ -307,6 +350,209 @@ async def test_definition_cache_does_not_cache_database_errors() -> None:
     database.litellm_config.read_error = None
     assert await store.definition() == AppDefinition()
     assert database.litellm_config.read_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cached_app_policy_survives_database_outage_and_expires_overrides(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, writer, original = app_store
+    app: Final = await writer.patch(
+        original.app_id,
+        AppPatch(budget=Budget(max_budget=100), default_customer_member_budget=Budget(max_budget=10)),
+        "admin",
+    )
+    assert isinstance(app, App)
+    org: Final = await writer.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget=Budget(max_budget=50)), "admin"
+    )
+    assert isinstance(org, AppOrganization)
+    expiry: Final = NOW + timedelta(seconds=5)
+    await writer.put_member(
+        app.app_id,
+        "member",
+        AppMemberPut(budget_override=Budget(max_budget=20), budget_override_expires_at=expiry),
+        "admin",
+    )
+    await database.litellm_budgettable.update(
+        where={"budget_id": app.budget_id},
+        data={"temp_budget_increase": 25, "temp_budget_expiry": expiry},
+    )
+    cache, shared = shared_cache(default_in_memory_ttl=60)
+    reader: Final = AppStore(database, NOW, cache)
+    warm: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(warm, App) and warm.budget == Budget(max_budget=125, allowed_models=())
+    warm_org: Final = await reader.organization(warm, "org")
+    warm_member: Final = await reader.member(warm, "member", warm_org)
+    assert warm_member.effective_budget == Budget(max_budget=20, allowed_models=())
+
+    cold_cache, _ = shared_cache(FakeAuthCache(redis=shared.redis, generations=shared.generations))
+    offline: Final = AppStore(UnavailableAppDatabase(), expiry, cold_cache)
+    current: Final = await offline.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(current, App) and current.budget == Budget(max_budget=100, allowed_models=())
+    current_org: Final = await offline.organization(current, "org")
+    current_member: Final = await offline.member(current, "member", current_org)
+    assert current_org.effective_budget == Budget(max_budget=50, allowed_models=())
+    assert current_member.effective_budget == Budget(max_budget=10, allowed_models=())
+    assert current_member.budget_source == AppMemberBudgetSource.APP_DEFAULT
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await offline.member(current, "unknown", current_org)
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await offline.by_resource(AppResourceType.TEAM, "search")
+
+
+@pytest.mark.asyncio
+async def test_committed_app_and_association_edits_replace_cached_inherited_policy(
+    app_store: tuple[AppDatabase, AppStore, App],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.management_v1.apps import get_app_store
+
+    database, _, app = app_store
+    cache: Final = CommitAwareCache(database)
+    monkeypatch.setattr(proxy_server, "prisma_client", AppPrismaClient(database))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    reader: Final = AppStore(database, NOW, cache)
+    warm: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(warm, App)
+    organization: Final = await reader.organization(warm, "org")
+    assert (await reader.member(warm, "member", organization)).effective_budget is None
+    dependency: Final = get_app_store()
+    writer: Final = await anext(dependency)
+    await writer.patch(app.app_id, AppPatch(default_customer_member_budget=Budget(max_budget=10)), "admin")
+    await writer.put_organization(
+        app.app_id, "org", AppOrganizationPut(customer_member_budget=Budget(max_budget=8)), "admin"
+    )
+    await writer.put_member(app.app_id, "member", AppMemberPut(budget=Budget(max_budget=5)), "admin")
+    assert (await reader.member(warm, "member", organization)).effective_budget is None
+    with pytest.raises(StopAsyncIteration):
+        await anext(dependency)
+    assert cache.invalidated_after_commit is True
+    updated: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(updated, App)
+    updated_org: Final = await reader.organization(updated, "org")
+    assert updated.default_customer_member_budget == Budget(max_budget=10, allowed_models=())
+    assert updated_org.effective_customer_member_budget == Budget(max_budget=8, allowed_models=())
+    assert (await reader.member(updated, "member", updated_org)).effective_budget == Budget(
+        max_budget=5, allowed_models=()
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_budget_edit_refreshes_cached_app_policy_without_changing_associations(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchyStore
+
+    database, writer, app = app_store
+    budget_id: Final = await profile(writer, "member plan", 10, BudgetGroupScope.APP_MEMBER)
+    await writer.patch(app.app_id, AppPatch(default_customer_member_budget_id=budget_id), "admin")
+    cache: Final = CommitAwareCache(database)
+    reader: Final = AppStore(database, NOW, cache)
+    before: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(before, App) and before.default_customer_member_budget is not None
+    assert before.default_customer_member_budget.max_budget == 10
+
+    async def update(store: CustomerHierarchyStore) -> str:
+        return await store.update_budget(budget_id, Budget(max_budget=0), "admin")
+
+    hierarchy: Final = CustomerHierarchy(database, premium_user=True, cache=cache)
+    assert await hierarchy.transaction(update) == budget_id
+    assert cache.invalidated_after_commit is True
+    after: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(after, App) and after.default_customer_member_budget is not None
+    assert after.default_customer_member_budget.max_budget == 0
+
+
+@pytest.mark.asyncio
+async def test_uncommitted_app_store_reads_do_not_publish_to_auth_cache(
+    app_store: tuple[AppDatabase, AppStore, App],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.management_v1.apps import get_app_store
+
+    database, _, _ = app_store
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "prisma_client", AppPrismaClient(database))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    dependency: Final = get_app_store()
+    store: Final = await anext(dependency)
+    assert isinstance(await store.by_resource(AppResourceType.TEAM, "chat"), App)
+    with pytest.raises(RuntimeError, match="rollback"):
+        await dependency.athrow(RuntimeError("rollback"))
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await AppStore(UnavailableAppDatabase(), NOW, cache).by_resource(AppResourceType.TEAM, "chat")
+
+
+@pytest.mark.asyncio
+async def test_inflight_old_app_read_cannot_repopulate_shared_cache_after_commit(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, _, app = app_store
+    cache, shared = shared_cache()
+    other, _ = shared_cache(FakeAuthCache(redis=shared.redis, generations=shared.generations))
+    loaded: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    database.litellm_apptable.pause_read = (loaded, release)
+    reader: Final = AppStore(database, NOW, cache)
+    pending: Final = asyncio.create_task(reader.by_resource(AppResourceType.TEAM, "chat"))
+    await loaded.wait()
+    updater: Final = AppStore(database, NOW, other, cache_reads=False)
+    await updater.patch(app.app_id, AppPatch(auto_create_customers=False), "admin")
+    await updater.invalidate_cache()
+    release.set()
+    before: Final = await pending
+    assert isinstance(before, App) and before.auto_create_customers
+    after: Final = await reader.by_resource(AppResourceType.TEAM, "chat")
+    assert isinstance(after, App) and not after.auto_create_customers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("member", "organization"))
+async def test_customer_deletion_evicts_cached_app_associations(
+    app_store: tuple[AppDatabase, AppStore, App], scope: str
+) -> None:
+    database, _, app = app_store
+    await database.litellm_customerorganizationtable.update(
+        where={"customer_org_id": "org"}, data={"created_by": "admin", "updated_by": "admin"}
+    )
+    await database.litellm_customermembertable.update(
+        where={"customer_member_id": "member"}, data={"parent_team_ids": ()}
+    )
+    cache: Final = UserApiKeyCache()
+    reader: Final = AppStore(database, NOW, cache)
+    org: Final = await reader.organization(app, "org")
+    await reader.member(app, "member", org)
+    hierarchy: Final = CustomerHierarchy(database, premium_user=True, cache=cache)
+    result: Final = (
+        await hierarchy.delete_member("member")
+        if scope == "member"
+        else await hierarchy.delete_organization("org", cascade=True)
+    )
+    assert result is None
+    offline: Final = AppStore(UnavailableAppDatabase(), NOW, cache)
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await offline.member(app, "member", org)
+    if scope == "organization":
+        with pytest.raises(ConnectionError, match="database unavailable"):
+            await offline.organization(app, "org")
+
+
+@pytest.mark.asyncio
+async def test_app_cache_hits_do_not_extend_configured_ttl(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, _, app = app_store
+    cache: Final = UserApiKeyCache(default_in_memory_ttl=0.3)
+    assert await AppStore(database, NOW, cache).by_resource(AppResourceType.TEAM, "chat") == app
+    offline: Final = AppStore(UnavailableAppDatabase(), NOW, cache)
+    await asyncio.sleep(0.2)
+    assert await offline.by_resource(AppResourceType.TEAM, "chat") == app
+    await asyncio.sleep(0.15)
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await offline.by_resource(AppResourceType.TEAM, "chat")
 
 
 @pytest.mark.asyncio

@@ -1,60 +1,27 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
-import { useQueryClient } from "@tanstack/react-query";
 import { parseAsStringLiteral, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
-import { $api } from "@/lib/http/api";
 import { ErrorState } from "@/components/shared/ErrorState";
-import type { BudgetGroups } from "../_components/customerBudgetGroupsPlan";
-import CustomerBudgetGroups from "../_components/CustomerBudgetGroups";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { uiHref } from "@/utils/uiHref";
 
-const budgetGroupTab = parseAsStringLiteral(["organization", "app"])
+import CustomerBudgetCatalog, { budgetGroupCatalogs } from "../_components/CustomerBudgetCatalog";
+
+const catalogs = budgetGroupCatalogs.filter(({ scope }) => scope !== "app-member");
+const budgetGroupTab = parseAsStringLiteral(catalogs.map(({ scope }) => scope))
   .withDefault("organization")
   .withOptions({ history: "push" });
-
-const catalogs = [
-  {
-    scope: "organization",
-    label: "customerPortal.budgetGroups.overallTab",
-    endpoint: "/management/v1/customer_organization_budget_groups",
-    invalidate: ["customer-hierarchy", "customer-organizations"],
-  },
-  {
-    scope: "app",
-    label: "customerPortal.budgetGroups.appTab",
-    endpoint: "/management/v1/app_customer_organization_budget_groups",
-    invalidate: ["apps", "app-organization", "app-member"],
-  },
-] as const;
-
-function Catalog({ catalog }: { catalog: (typeof catalogs)[number] }) {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const { scope, endpoint, invalidate } = catalog;
-  const groups = $api.useQuery("get", endpoint, {});
-  const saved = (data: BudgetGroups) => {
-    queryClient.setQueryData($api.queryOptions("get", endpoint, {}).queryKey, data);
-    for (const key of invalidate) void queryClient.invalidateQueries({ queryKey: [key] });
-  };
-  return (
-    <>
-      {groups.data && <CustomerBudgetGroups global scope={scope} organization={groups.data} onSaved={saved} />}
-      {groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
-      {groups.isPending && <p>{t("customerPortal.common.loading")}</p>}
-    </>
-  );
-}
 
 export default function CustomerSettings() {
   const { t } = useTranslation();
   const [tab, setTab] = useQueryState("tab", budgetGroupTab);
   const changeTab = (value: unknown) => {
-    if (value === "organization" || value === "app") void setTab(value);
+    const selected = catalogs.find(({ scope }) => scope === value);
+    if (selected) void setTab(selected.scope);
   };
   const { accessToken, userRole } = useAuthorized();
   const canManage = Boolean(accessToken && isProxyAdminRole(userRole));
@@ -84,7 +51,7 @@ export default function CustomerSettings() {
         </div>
         {catalogs.map((catalog) => (
           <TabsContent key={catalog.scope} value={catalog.scope} keepMounted>
-            <Catalog catalog={catalog} />
+            <CustomerBudgetCatalog catalog={catalog} />
           </TabsContent>
         ))}
       </Tabs>
