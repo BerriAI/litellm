@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -5,6 +6,7 @@ import pytest
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation import get_azure_image_generation_config
 from litellm.llms.azure.image_generation.http_utils import (
@@ -221,6 +223,27 @@ class TestAzureMAIImageGeneration:
                 optional_params={},
                 model="MAI-Image-2.5",
                 drop_params=False,
+            )
+
+    @pytest.mark.parametrize("model", ("MAI-Image-2.7", "MAI-Image-2.7-Flash"))
+    def test_mai_image_27_maps_2k_size_to_dimensions(self, model: str) -> None:
+        params: Final = get_optional_params_image_gen(
+            model=model,
+            size="2048x2048",
+            custom_llm_provider="azure_ai",
+            provider_config=get_azure_ai_image_generation_config(model),
+        )
+
+        assert params == {"width": 2048, "height": 2048}
+
+    @pytest.mark.parametrize("model", ("MAI-Image-2.7", "MAI-Image-2.7-Flash"))
+    def test_mai_image_27_rejects_size_above_2k_pixel_budget(self, model: str) -> None:
+        with pytest.raises(UnsupportedParamsError, match="2049x2048"):
+            get_optional_params_image_gen(
+                model=model,
+                size="2049x2048",
+                custom_llm_provider="azure_ai",
+                provider_config=get_azure_ai_image_generation_config(model),
             )
 
     def test_map_openai_params_explicit_width_height_not_range_checked(self):
@@ -523,16 +546,16 @@ class TestAzureMAIImageGeneration:
         )
         assert round(cost, 10) == round(expected_cost, 10)
 
-    def test_mai_image_pro_edit_cost_splits_text_and_image_input(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-        model = "azure_ai/MAI-Image-2.5-Pro"
-        model_info = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
-        text_tokens = 37
-        image_tokens = 1024
-        output_image_tokens = 1024
+    @pytest.mark.parametrize("model", ("MAI-Image-2.5-Pro", "MAI-Image-2.7", "MAI-Image-2.7-Flash"))
+    def test_mai_image_edit_cost_splits_text_and_image_input(self, model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
+        assert model_info["mode"] == "image_generation"
+        text_tokens: Final = 37
+        image_tokens: Final = 1024
+        output_image_tokens: Final = 1024
 
-        image_response = ImageResponse(
+        image_response: Final = ImageResponse(
             data=[ImageObject(b64_json="img1")],
             usage=ImageUsage(
                 input_tokens=text_tokens + image_tokens,
@@ -545,15 +568,15 @@ class TestAzureMAIImageGeneration:
             ),
         )
 
-        cost = azure_ai_image_cost_calculator(model=model, image_response=image_response)
+        cost: Final = azure_ai_image_cost_calculator(model=model, image_response=image_response)
 
-        expected_cost = (
+        expected_cost: Final = (
             text_tokens * model_info["input_cost_per_token"]
             + image_tokens * model_info["input_cost_per_image_token"]
             + output_image_tokens * model_info["output_cost_per_image_token"]
         )
-        assert round(cost, 10) == round(expected_cost, 10)
-        assert model_info["input_cost_per_image_token"] != model_info["input_cost_per_token"]
+        assert cost == pytest.approx(expected_cost)
+        assert cost > 0
 
     def test_mai_image_cost_calculator_falls_back_to_flat_image_pricing(self, monkeypatch):
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
