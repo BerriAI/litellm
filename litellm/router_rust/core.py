@@ -4401,6 +4401,20 @@ def _with_live_params(core: "RustCore", deployment: Mapping[str, object]) -> Map
     }
 
 
+def _validate_deployment_guardrails(deployment: Mapping[str, object]) -> None:
+    params: Final = as_str_mapping(deployment.get("litellm_params"))
+    guardrails: Final = params.get("guardrails") if params is not None else None
+    if not guardrails:
+        return
+
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    if REQUEST_AUTH.get() is not None:
+        from litellm.proxy.guardrails.guardrail_helpers import reject_unregistered_deployment_guardrails
+
+        reject_unregistered_deployment_guardrails(guardrails)
+
+
 def _custom_pick(picked: object) -> Mapping[str, object]:
     """A custom strategy's answer as the deployment document the Rust core serves."""
     document: Final = as_str_mapping(picked)
@@ -5462,6 +5476,8 @@ class _Driver:
     async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:
         step = await self._resolve_pods(step)  # rebind-ok: the picked deployment, resolved to a pod
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: the picked one
+        # A guardrail configuration error is terminal and never a provider attempt failure.
+        _validate_deployment_guardrails(deployment)
         call: AttemptCall | None = None  # rebind-ok: built inside the try
         # Whether a failure raised now runs the failure callbacks: none raised before the litellm
         # call or after it answered does, nor any but the first on a shared logging object.
@@ -5564,6 +5580,8 @@ class _Driver:
     def attempt_sync(self, step: Mapping[str, object]) -> Mapping[str, object]:
         step = self._resolve_pods_sync(step)  # rebind-ok: see attempt
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: see attempt
+        # A guardrail configuration error is terminal and never a provider attempt failure.
+        _validate_deployment_guardrails(deployment)
         call: AttemptCall | None = None  # rebind-ok: see attempt
         logs_failure: bool = False  # rebind-ok: see attempt
         in_call: bool = False  # rebind-ok: see attempt
