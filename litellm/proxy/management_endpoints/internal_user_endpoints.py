@@ -254,6 +254,27 @@ def _strip_password_from_response(response) -> None:
             response["data"].__dict__.pop("password", None)
 
 
+def _user_update_response(response: Mapping[str, object]) -> Mapping[str, object]:
+    nested: Final = response.get("data")
+    if isinstance(nested, BaseModel) and getattr(nested, "rollover_max_budget", None) is None:
+        return {
+            **response,
+            "data": nested.model_dump(
+                mode="json", by_alias=True, exclude={"password", "rollover_max_budget", "rollover_credit"}
+            ),
+        }
+    row: Final = as_str_mapping(nested)
+    if row is not None and row.get("rollover_max_budget") is None:
+        return {**response, "data": _without_rollover_fields(row)}
+    if nested is None and response.get("rollover_max_budget") is None:
+        return _without_rollover_fields(response)
+    return response
+
+
+def _without_rollover_fields(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in row.items() if key not in {"rollover_max_budget", "rollover_credit"}}
+
+
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
@@ -1923,7 +1944,7 @@ async def _update_single_user_helper(
             detail={"error": "Failed to update user"},
         )
     _strip_password_from_response(response)
-    return dict(response)
+    return _user_update_response(dict(response))
 
 
 def can_user_call_user_update(

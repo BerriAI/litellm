@@ -71,6 +71,25 @@ def _member_budget(gateway: Gateway, team_id: str, user_id: str) -> dict[str, Js
     return next(row for row in rows if row["user_id"] == user_id)
 
 
+def test_user_edits_only_return_rollover_fields_when_enabled(rollover_proxy: Gateway) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        user_id: Final = scenario.user(max_budget=10, budget_duration="30d")
+        for patch in ({"user_alias": "Legacy user"}, {"max_budget": 20}, {"budget_duration": "7d"}):
+            updated = object_value(proxy.post("/user/update", {"user_id": user_id, **patch})["data"])
+            assert {key: updated[key] for key in patch} == patch
+            assert {"rollover_max_budget", "rollover_credit"}.isdisjoint(updated), updated
+
+        enabled: Final = object_value(
+            proxy.post("/user/update", {"user_id": user_id, "rollover_max_budget": 30})["data"]
+        )
+        assert enabled["rollover_max_budget"] == 30
+        disabled: Final = object_value(
+            proxy.post("/user/update", {"user_id": user_id, "rollover_max_budget": None})["data"]
+        )
+        assert {"rollover_max_budget", "rollover_credit"}.isdisjoint(disabled), disabled
+
+
 @pytest.mark.parametrize("personal", (False, True), ids=("shared-budget", "personal-budget"))
 @pytest.mark.parametrize("enable_rollover", (False, True), ids=("uncapped", "concurrently-capped"))
 def test_budget_update_respects_a_competing_write(
