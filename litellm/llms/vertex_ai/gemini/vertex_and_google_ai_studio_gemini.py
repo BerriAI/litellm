@@ -272,32 +272,36 @@ def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
     return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
 
 
-_MALFORMED_FINISH_REASONS: Final = frozenset({"MALFORMED_FUNCTION_CALL", "MALFORMED_RESPONSE"})
+_MALFORMED_FINISH_REASONS: Final[frozenset[GeminiFinishReason]] = frozenset(
+    {"MALFORMED_FUNCTION_CALL", "MALFORMED_RESPONSE"}
+)
 _OUTPUT_FIELDS: Final = ("content", "tool_calls", "function_call", "images", "audio")
 
 
-def _malformed_without_output(choice: object) -> str | None:
-    if not isinstance(choice, litellm.Choices):
-        return None
-    reason: Final = (getattr(choice, "provider_specific_fields", None) or {}).get("native_finish_reason")
-    if reason not in _MALFORMED_FINISH_REASONS:
-        return None
-    return None if any(getattr(choice.message, field, None) for field in _OUTPUT_FIELDS) else reason
+def _native_finish_reason(choice: object) -> object:
+    return (getattr(choice, "provider_specific_fields", None) or {}).get("native_finish_reason")
+
+
+def _is_malformed_without_output(choice: object) -> bool:
+    return (
+        isinstance(choice, litellm.Choices)
+        and _native_finish_reason(choice) in _MALFORMED_FINISH_REASONS
+        and not any(getattr(choice.message, field, None) for field in _OUTPUT_FIELDS)
+    )
 
 
 def _fail_malformed_without_output(
     response: ModelResponse, logging_obj: LoggingClass, headers: httpx.Headers
 ) -> ModelResponse:
-    reasons: Final = tuple(_malformed_without_output(choice) for choice in response.choices)
-    if not reasons or None in reasons:
+    if not response.choices or not all(_is_malformed_without_output(choice) for choice in response.choices):
         return response
+    failed_attempt: Final = logging_obj.served_round(response)
+    logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
     usage: Final = getattr(response, "usage", None)
-    billed: Final = usage if isinstance(usage, Usage) else Usage()
-    logging_obj.record_partial_usage_for_failure(billed, logging_obj.response_cost_calculator(result=response) or 0.0)
     raise VertexAIError(
         status_code=500,
-        message=f"Gemini finished with {reasons[0]} and returned no output "
-        f"(completion_tokens={billed.completion_tokens})",
+        message=f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output "
+        f"(completion_tokens={usage.completion_tokens if isinstance(usage, Usage) else 0})",
         headers=headers,
     )
 
@@ -3376,16 +3380,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-        return _fail_malformed_without_output(
-            self._transform_google_generate_content_to_openai_model_response(
-                completion_response=parse_body(raw_response),
-                model_response=model_response,
-                model=model,
-                logging_obj=logging_obj,
-                raw_response=raw_response,
-            ),
-            logging_obj,
-            raw_response.headers,
+        return self._transform_google_generate_content_to_openai_model_response(
+            completion_response=parse_body(raw_response),
+            model_response=model_response,
+            model=model,
+            logging_obj=logging_obj,
+            raw_response=raw_response,
         )
 
     def _transform_google_generate_content_to_openai_model_response(

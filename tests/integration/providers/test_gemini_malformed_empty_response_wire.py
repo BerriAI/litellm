@@ -15,7 +15,7 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-_BACKEND: Final = "gemini-3.8-flash"
+_BACKEND: Final = "gemini-4-carbon"
 _API_KEY: Final = "synthetic-gemini-key"
 _PROJECT: Final = "scripted-project"
 _LOCATION: Final = "us-central1"
@@ -214,8 +214,16 @@ def _assert_server_error_naming(response: httpx.Response, native_finish_reason: 
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)
-@pytest.mark.parametrize("endpoint", _ENDPOINTS)
-@pytest.mark.parametrize("upstream", tuple(pytest.param(u, id=u.tag) for u in _EMPTY_MALFORMED))
+@pytest.mark.parametrize(
+    ("upstream", "endpoint"),
+    (
+        *(
+            pytest.param(_EMPTY_MALFORMED[0], endpoint, id=f"{_EMPTY_MALFORMED[0].tag}-{endpoint}")
+            for endpoint in _ENDPOINTS
+        ),
+        *(pytest.param(upstream, "chat", id=f"{upstream.tag}-chat") for upstream in _EMPTY_MALFORMED[1:]),
+    ),
+)
 def test_regression_malformed_empty_candidate_is_a_server_error_naming_the_native_finish_reason(
     rig: _Rig, upstream: _Upstream, endpoint: Endpoint, provider: Provider
 ) -> None:

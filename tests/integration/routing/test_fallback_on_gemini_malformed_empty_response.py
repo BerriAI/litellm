@@ -14,7 +14,7 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
-_BACKEND: Final = "gemini-3.8-flash"
+_BACKEND: Final = "gemini-4-carbon"
 _API_KEY: Final = "synthetic-gemini-key"
 _PROJECT: Final = "scripted-project"
 _LOCATION: Final = "us-central1"
