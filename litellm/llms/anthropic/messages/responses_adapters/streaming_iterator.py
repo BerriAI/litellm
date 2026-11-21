@@ -14,6 +14,7 @@ from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import APIError, MidStreamFallbackError
 from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
@@ -677,6 +678,7 @@ class AnthropicResponsesSSEByteStream:
     def __init__(self, wrapper: AnthropicResponsesStreamWrapper) -> None:
         self._wrapper: Final = wrapper
         self._frames: Final = wrapper._sse_frames()  # pyright: ignore[reportPrivateUsage]  # the wrapper's own byte stream
+        self._hidden_params = dict(get_hidden_params(wrapper.responses_stream) or {})
 
     def __aiter__(self) -> "AnthropicResponsesSSEByteStream":
         return self

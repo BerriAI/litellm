@@ -33,7 +33,7 @@ from litellm.litellm_core_utils.core_helpers import (
     finish_evidence_of,
     joined,
 )
-from litellm.litellm_core_utils.hidden_params import set_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -681,6 +681,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # _CombinedChunkSplitter.
         combined_chunk_splitter: Final = _CombinedChunkSplitter(completion_stream)
         super().__init__(combined_chunk_splitter)
+        set_hidden_params(self, dict(get_hidden_params(completion_stream) or {}))
         self._combined_chunk_splitter: Final = combined_chunk_splitter
         self.model = model
         self.completion_request: Final = completion_request
@@ -1675,7 +1676,7 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
     def __init__(self, anthropic_wrapper: AnthropicStreamWrapper) -> None:
         self._anthropic_wrapper = anthropic_wrapper
         self._byte_stream: Final[AsyncIterator[bytes]] = anthropic_wrapper.async_anthropic_sse_wrapper()
-        self._hidden_params: dict[str, object] = {}
+        self._hidden_params: dict[str, object] = dict(get_hidden_params(anthropic_wrapper) or {})
 
     @property
     def stream_failure(self) -> Exception | None:

@@ -18,12 +18,17 @@ from typing import Final
 import anyio
 import httpx
 import pytest
+from starlette.responses import Response
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_retry_headers_to_response,
+    ensure_response_additional_headers,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
@@ -35,6 +40,8 @@ from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator impor
     AnthropicResponsesStreamWrapper,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, SyncResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
 
@@ -1137,6 +1144,35 @@ _SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM: Final = pytest.mark.parametrize(
     ],
     ids=["async_sse_wrapper", "sync_sse_wrapper"],
 )
+
+
+@_SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM
+@pytest.mark.parametrize("provider_request_id", ["azure-stream-request-123", None])
+def test_sse_stream_preserves_provider_headers_when_retry_headers_are_added(
+    sse_byte_stream: Callable[[AnthropicResponsesStreamWrapper], AnthropicResponsesSSEByteStream],
+    provider_request_id: str | None,
+) -> None:
+    upstream: Final = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(
+            200,
+            headers={"apim-request-id": provider_request_id} if provider_request_id is not None else {},
+            content=b"",
+        ),
+        model="m",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+    )
+    stream: Final = sse_byte_stream(AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m"))
+    add_retry_headers_to_response(stream, attempted_retries=1)
+    response: Final = Response(
+        headers=ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=UserAPIKeyAuth(),
+            **ensure_response_additional_headers(stream),
+        )
+    )
+
+    assert response.headers.get("llm_provider-apim-request-id") == provider_request_id
+    assert response.headers["x-litellm-attempted-retries"] == "1"
 
 
 async def _close_after_cancelling_a_quiet_read(

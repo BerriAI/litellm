@@ -20,12 +20,18 @@ from openai.types.responses import (
 )
 from openai.types.responses.response_reasoning_item import Summary
 from pydantic import TypeAdapter
+from starlette.responses import Response
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_retry_headers_to_response,
+    ensure_response_additional_headers,
+)
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -40,6 +46,8 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -1512,6 +1520,38 @@ def _make_reasoning_item(
 
 
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
+
+
+@pytest.mark.parametrize("provider_request_id", ["azure-request-123", None])
+def test_translated_response_preserves_provider_headers_when_retry_headers_are_added(
+    provider_request_id: str | None,
+) -> None:
+    upstream: Final = ResponsesAPIResponse(
+        id="resp_headers",
+        created_at=0,
+        model="m",
+        output=[],
+        status="completed",
+        usage=ResponseAPIUsage(input_tokens=2, output_tokens=1, total_tokens=3),
+    )
+    set_hidden_params(
+        upstream,
+        {"additional_headers": {"llm_provider-apim-request-id": provider_request_id}}
+        if provider_request_id is not None
+        else {},
+    )
+
+    result: Final = _ADAPTER.translate_response(upstream)
+    add_retry_headers_to_response(result, attempted_retries=1)
+    response: Final = Response(
+        headers=ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=UserAPIKeyAuth(),
+            **ensure_response_additional_headers(result),
+        )
+    )
+
+    assert response.headers.get("llm_provider-apim-request-id") == provider_request_id
+    assert response.headers["x-litellm-attempted-retries"] == "1"
 
 
 class TestTranslateResponse:
