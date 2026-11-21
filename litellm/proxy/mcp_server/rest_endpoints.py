@@ -12,13 +12,13 @@ from uuid import uuid4
 import anyio
 import httpx
 import httpx2
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import Headers
 from typing_extensions import Never, ReadOnly
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT, UNSAFE_PROXY_RESPONSE_HEADERS
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult, InputRequiredResult
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.proxy.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -1326,27 +1327,69 @@ if MCP_AVAILABLE:
     @catalog_operation(global_manager)
     async def call_tool_rest_api(
         request: Request,
+        response: Response,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         REST API to call a specific MCP tool with the provided arguments
         """
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+
+        async def callback_headers(result: object) -> Mapping[str, str]:
+            headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
+                data=processor.data,  # pyright: ignore[reportUnknownMemberType]  # the processor holds a bare dict
+                user_api_key_dict=user_api_key_dict,
+                response=result,
+                request_headers=dict(request.headers),
+            )
+            return {
+                name: value
+                for name, value in headers.items()
+                if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS
+                and isinstance(value, str)  # pyright: ignore[reportUnnecessaryIsInstance]  # callbacks return any value
+                and all(ord(char) < 256 for char in value)
+            }
+
+        try:
+            reject_disallowed_mcp_client(request.headers, user_api_key_dict)
+            result: Final = await _call_tool_rest(request, user_api_key_dict, processor)
+        except HTTPException as e:
+            failure_headers: Final = await callback_headers(None)
+            if not failure_headers:
+                raise
+            existing_headers: Final = Headers(e.headers or {})
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers={
+                    **{name: value for name, value in failure_headers.items() if name not in existing_headers},
+                    **(e.headers or {}),
+                },
+            ) from e
+        response.headers.update(await callback_headers(result))
+        return result
+
+    async def _call_tool_rest(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_base_llm_response_processor: "ProxyBaseLLMRequestProcessing",
+    ) -> object:
         from fastapi import HTTPException
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
         from litellm.proxy.proxy_server import (
             general_settings,
             proxy_config,
             proxy_logging_obj,
         )
 
-        reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         try:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
             data = await request.json()
+            proxy_base_llm_response_processor.data = data  # rebind-ok: the endpoint reads it for response headers
 
             tool_name: Final[str | None] = data.get("name")
             tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
@@ -1382,7 +1425,6 @@ if MCP_AVAILABLE:
                 "model_group": f"MCP: {tool_name}",
             }
             data["metadata"] = model_metadata
-            proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
             _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
             try:
                 (
