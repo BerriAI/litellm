@@ -24,7 +24,7 @@ from litellm_proxy_extras.migration_data_checks import (
     migration_data_check_timeout_seconds,
     report,
 )
-from litellm_proxy_extras.migration_lock import held_migration_lock
+from litellm_proxy_extras.migration_lock import PSYCOPG_UNAVAILABLE_HINT, held_migration_lock
 
 if TYPE_CHECKING:
     import psycopg
@@ -188,8 +188,17 @@ def ensure_request_log_indexes(
     the migration coordinator lock, held per statement so a resolver booting on another
     replica gets in between partitions rather than waiting for the whole table. Any
     failure is logged and left for the next index build; the result says whether
-    every index ended up valid. Never raises."""
-    import psycopg
+    every index ended up valid. True without building when psycopg cannot be imported,
+    since it is an optional dependency and no rerun on this node can change that. Never raises."""
+    try:
+        import psycopg
+    except ImportError as exc:
+        logger.warning(
+            "psycopg could not be imported (%s), skipping the request-log index build. %s",
+            exc,
+            PSYCOPG_UNAVAILABLE_HINT,
+        )
+        return True
 
     try:
         with connect(database_url) as connection:

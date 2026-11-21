@@ -3235,3 +3235,34 @@ def test_none_disables_only_optional_default_thinking(model: str, expected: dict
     assert params.get("thinking") == expected
     assert "output_config" not in params
     assert "reasoning_effort" not in params
+
+
+def test_completion_sends_extra_body_tools_and_max_tokens_to_databricks_unchanged(respx_mock: respx.MockRouter) -> None:
+    upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "databricks-meta-llama-3-3-70b-instruct",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
+    tools: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+
+    litellm.completion(
+        model="databricks/databricks-meta-llama-3-3-70b-instruct",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        api_base="https://example.databricks.test/serving-endpoints",
+        api_key="fake-databricks-api-key",
+        max_tokens=5,
+        num_retries=0,
+        extra_body={"tools": tools, "max_tokens": 60},
+    )
+
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["tools"] == tools
+    assert request_body["max_tokens"] == 60

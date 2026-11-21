@@ -46,6 +46,7 @@ from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (
     UI_TEAM_ID,
     BlockTeamRequest,
@@ -137,7 +138,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    get_budget_window_reset_fields,
+    keeps_budget_reset,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
@@ -230,6 +235,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
 from litellm.proxy.management_helpers.utils import (
     MemberWriteTx,
     add_new_member,
+    budget_windows_json,
     management_endpoint_wrapper,
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
@@ -242,6 +248,7 @@ from litellm.proxy.utils import (
 )
 from litellm.redis.stores.spend_counters import team_counter, team_window_counter
 from litellm.repositories.access_group_repository import AccessGroupRepository
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
@@ -481,6 +488,11 @@ class _TeamBudgetGuardWhere(_TeamIdWhere):
 
 
 class _TeamCreateTx(AccessGroupSyncTx, Protocol):
+    @property
+    def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
+
+
+class _TeamUpdateTx(BudgetLimitsTransaction, Protocol):
     @property
     def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
 
@@ -1540,22 +1552,39 @@ async def _write_team_update(
     team_id: str,
     team_update_data: Mapping[str, object],
     max_budget_guard: _MaxBudgetGuard | None,
+    original_windows: Sequence[BudgetLimitEntry] | None,
+) -> "prisma_models.LiteLLM_TeamTable | None":
+    if ("budget_limits" in team_update_data or "budget_duration" in team_update_data) and prisma_client is not None:
+        async with prisma_client.tx() as tx_ctx:
+            tx: Final = cast("_TeamUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+            rebased: Final = await rebase_budget_limits_update(
+                tx, "LiteLLM_TeamTable", team_id, original_windows, team_update_data
+            )
+            return await _write_team_update_on_table(tx.litellm_teamtable, team_id, rebased, max_budget_guard)
+    return await _write_team_update_on_table(_team_db(prisma_client), team_id, team_update_data, max_budget_guard)
+
+
+async def _write_team_update_on_table(
+    table: "TableActions[prisma_models.LiteLLM_TeamTable]",
+    team_id: str,
+    team_update_data: Mapping[str, object],
+    max_budget_guard: _MaxBudgetGuard | None,
 ) -> "prisma_models.LiteLLM_TeamTable | None":
     by_id: Final[_TeamIdWhere] = {"team_id": team_id}
     if max_budget_guard is None:
-        return await _team_db(prisma_client).update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
+        return await table.update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
     as_checked: Final[_TeamBudgetGuardWhere] = {
         "team_id": team_id,
         "max_budget": max_budget_guard.max_budget,
         "organization_id": max_budget_guard.organization_id,
     }
-    written: Final = await _team_db(prisma_client).update_many(where=as_checked, data=team_update_data)
+    written: Final = await table.update_many(where=as_checked, data=team_update_data)
     if written == 0:
         conflict: Final[_ErrorDetail] = {
             "error": "The team's organization or max_budget changed during this update. Reload the team and try again."
         }
         raise HTTPException(status_code=409, detail=conflict)
-    return await _team_db(prisma_client).find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
+    return await table.find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
 
 
 def _existing_model_cap(raw_budget_config: object) -> BudgetConfig | None:
@@ -2115,8 +2144,7 @@ async def new_team(
             initialized_windows: Final = []
             for window in complete_team_data.budget_limits:
                 w = window if isinstance(window, dict) else window.model_dump()
-                w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-                initialized_windows.append(w)
+                initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
             complete_team_data.budget_limits = initialized_windows
 
         ## Add Team Member Budget Table
@@ -3021,7 +3049,9 @@ async def update_team(
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_update_data: Final[Mapping[str, object]] = updated_kv
-        team_row: Final = await _write_team_update(prisma_client, data.team_id, team_update_data, max_budget_guard)
+        team_row: Final = await _write_team_update(
+            prisma_client, data.team_id, team_update_data, max_budget_guard, existing_team.budget_limits
+        )
 
         if team_row is None or team_row.team_id is None:
             raise HTTPException(
@@ -3135,7 +3165,7 @@ async def patch_team(
 
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_team: LiteLLM_TeamTable) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
-    if data.budget_duration is not None and not keeps_due_budget_reset(
+    if data.budget_duration is not None and not keeps_budget_reset(
         data.budget_duration, existing_team.budget_duration, existing_team.budget_reset_at
     ):
         updated_kv["budget_reset_at"] = get_budget_reset_time(budget_duration=data.budget_duration)
@@ -3143,12 +3173,7 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_tea
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
-        initialized_windows: Final = []
-        for window in data.budget_limits:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
-        updated_kv["budget_limits"] = json.dumps(initialized_windows)
+        updated_kv["budget_limits"] = budget_windows_json(data.budget_limits, existing_team.budget_limits)
 
 
 async def handle_update_object_permission(

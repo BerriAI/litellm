@@ -82,7 +82,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import handle_exception_on_proxy, hash_token_if_needed, query_raw_within_statement_timeout
 from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import OrganizationMembershipRepository, SpendLogsRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
+from litellm.repositories.table_repositories import OrganizationMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
