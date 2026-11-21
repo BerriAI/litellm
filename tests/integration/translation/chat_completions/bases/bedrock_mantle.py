@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Final
 from unittest.mock import ANY
 
@@ -929,5 +930,16 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
+    },
+)
+
+GPT_6_1_SOL_US_PROFILE_TEST_CASE: Final = replace(
+    GPT_6_1_SOL_TEST_CASE,
+    scenario="us_profile",
+    litellm_request={**GPT_6_1_SOL_TEST_CASE.litellm_request, "model": "bedrock_mantle/us.openai.gpt-6.1-sol"},
+    expected_provider_request={**GPT_6_1_SOL_TEST_CASE.expected_provider_request, "model": "us.openai.gpt-6.1-sol"},
+    expected_litellm_response={
+        **GPT_6_1_SOL_TEST_CASE.expected_litellm_response,
+        "model": "bedrock_mantle/us.openai.gpt-6.1-sol",
     },
 )

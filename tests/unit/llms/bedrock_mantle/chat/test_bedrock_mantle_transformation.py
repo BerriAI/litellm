@@ -13,6 +13,8 @@ import importlib
 import json
 from unittest.mock import MagicMock, patch
 
+from typing import Final
+
 import httpx
 import pytest
 
@@ -200,3 +202,57 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
+
+AWS_UNKNOWN_OPERATION: Final = {
+    "Output": {"__type": "com.amazon.coral.service#UnknownOperationException"},
+    "Version": "1.0",
+}
+CHAT_ONLY_MANTLE_MODEL: Final = "bedrock_mantle/openai.not-in-the-cost-map"
+
+
+def _aws_reply(body: dict, url: str) -> httpx.Response:
+    return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_200_aws_error_body_is_raised_instead_of_an_empty_answer(stream):
+    client = HTTPHandler()
+    url = "https://bedrock-runtime.us-east-1.amazonaws.com/chat/completions"
+
+    with patch.object(client, "post", return_value=_aws_reply(AWS_UNKNOWN_OPERATION, url)):
+        with pytest.raises(litellm.NotFoundError, match="UnknownOperationException"):
+            response = litellm.completion(
+                model=CHAT_ONLY_MANTLE_MODEL,
+                messages=[{"role": "user", "content": "Hi"}],
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+                api_key="synthetic-bedrock-mantle-key",
+                stream=stream,
+                client=client,
+            )
+            for _ in response if stream else ():
+                pass
+
+
+def test_a_normal_200_answer_still_reads_as_the_answer():
+    client = HTTPHandler()
+    url = "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions"
+    answer = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "openai.not-in-the-cost-map",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "pong"}}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+    }
+
+    with patch.object(client, "post", return_value=_aws_reply(answer, url)):
+        response = litellm.completion(
+            model=CHAT_ONLY_MANTLE_MODEL,
+            messages=[{"role": "user", "content": "Hi"}],
+            api_key="synthetic-bedrock-mantle-key",
+            client=client,
+        )
+
+    assert response.choices[0].message.content == "pong"
+    assert response.usage.completion_tokens == 1

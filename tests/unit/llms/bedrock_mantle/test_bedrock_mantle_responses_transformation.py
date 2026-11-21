@@ -19,6 +19,8 @@ from botocore.exceptions import (
 )
 
 import litellm
+from litellm.llms.bedrock.common_utils import get_bedrock_cross_region_inference_regions
+from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment, mantle_supports_responses
 from litellm.llms.bedrock_mantle.responses.transformation import (
     BedrockMantleResponsesAPIConfig,
 )
@@ -1444,6 +1446,64 @@ class TestBedrockMantlePerModelResponsesURL:
     def test_gemma_4_uses_openai_responses_path(self, local_cost_map, model):
         url = self._url_for(model)
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+
+class TestMantleGeoInferenceProfile:
+    """A geo inference-profile id (us.openai.gpt-6.1-sol) is the same model as its bare id, so it must route the same."""
+
+    @pytest.mark.parametrize("geo", get_bedrock_cross_region_inference_regions())
+    @pytest.mark.parametrize("region_path", ["", "us-west-2/"])
+    def test_every_geo_prefix_routes_like_the_bare_id(self, geo, region_path):
+        model_cost = {"bedrock_mantle/openai.gpt-x": {"mode": "responses", "use_openai_responses_path": True}}
+        model = f"{region_path}{geo}.openai.gpt-x"
+        assert mantle_supports_responses(model, model_cost) is True
+        assert mantle_base_segment(model, model_cost) == "openai/v1"
+
+    def test_every_catalogued_model_gets_the_same_responses_url_under_a_us_profile(self, local_cost_map):
+        bare_ids = [
+            key.removeprefix("bedrock_mantle/")
+            for key, row in litellm.model_cost.items()
+            if key.startswith("bedrock_mantle/") and row.get("litellm_provider") == "bedrock_mantle"
+        ]
+        assert bare_ids
+        params = {"aws_region_name": "us-east-1"}
+        for bare_id in bare_ids:
+            bare_config = ProviderConfigManager.get_provider_responses_api_config(
+                provider=LlmProviders.BEDROCK_MANTLE, model=bare_id
+            )
+            profiled_config = ProviderConfigManager.get_provider_responses_api_config(
+                provider=LlmProviders.BEDROCK_MANTLE, model=f"us.{bare_id}"
+            )
+            assert (bare_config is None) == (profiled_config is None), bare_id
+            if bare_config is None or profiled_config is None:
+                continue
+            assert profiled_config.get_complete_url(api_base=None, litellm_params=params) == (
+                bare_config.get_complete_url(api_base=None, litellm_params=params)
+            ), bare_id
+
+    @pytest.mark.parametrize(
+        "request_params",
+        [
+            {},
+            {
+                "tools": [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}],
+                "reasoning_effort": "high",
+            },
+            {"reasoning_effort": {"effort": "low", "summary": "auto"}},
+        ],
+    )
+    def test_chat_completions_take_the_same_route_under_a_us_profile(self, local_cost_map, request_params):
+        from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
+
+        bare_ids = [
+            key.removeprefix("bedrock_mantle/")
+            for key, row in litellm.model_cost.items()
+            if key.startswith("bedrock_mantle/") and row.get("litellm_provider") == "bedrock_mantle"
+        ]
+        for bare_id in bare_ids:
+            assert chat_completion_ends_in_responses_api(
+                f"us.{bare_id}", "bedrock_mantle", **request_params
+            ) == chat_completion_ends_in_responses_api(bare_id, "bedrock_mantle", **request_params), bare_id
 
 
 class TestBedrockMantleEndpointHonoring:
