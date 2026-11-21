@@ -260,9 +260,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             else {},
         )
         if not data_list:
-            raise empty_image_response_error(
-                response_json, model, "vertex_ai", raw_response, model_response, logging_obj
-            )
+            raise empty_image_response_error(response_json, model, "vertex_ai", raw_response, model_response)
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:

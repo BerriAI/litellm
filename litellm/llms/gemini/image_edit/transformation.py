@@ -179,7 +179,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         if "usageMetadata" in payload:
             model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
         if not data_list:
-            raise empty_image_response_error(payload, model, "gemini", raw_response, model_response, logging_obj)
+            raise empty_image_response_error(payload, model, "gemini", raw_response, model_response)
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:

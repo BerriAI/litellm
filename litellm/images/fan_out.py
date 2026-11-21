@@ -1,8 +1,9 @@
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from functools import reduce
-from typing import Final, Protocol, TypeVar
+from functools import partial, reduce
+from typing import Final, Protocol, TypeVar, runtime_checkable
 
+import httpx
 from pydantic import TypeAdapter
 
 from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
@@ -17,6 +18,12 @@ _USAGE: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, obje
 class _Price(Protocol):
     @property
     def cost(self) -> float | None: ...
+
+
+@runtime_checkable
+class _BilledFailure(Protocol):
+    @property
+    def billed_answer(self) -> ImageResponse: ...
 
 
 class _SpendLog(Protocol):
@@ -90,11 +97,33 @@ def run_concurrently(request_count: int, send: Callable[[], _T]) -> tuple[_T | B
         return tuple(future.result() for future in futures)
 
 
+def outcomes_of(
+    transform: Callable[[httpx.Response], _T], responses: Sequence[httpx.Response]
+) -> tuple[_T | BaseException, ...]:
+    return tuple(_outcome(partial(transform, response)) for response in responses)
+
+
+def partition_outcomes(outcomes: Sequence[_T | BaseException]) -> tuple[tuple[_T, ...], tuple[Exception, ...]]:
+    interrupt: Final = next(
+        (outcome for outcome in outcomes if isinstance(outcome, BaseException) and not isinstance(outcome, Exception)),
+        None,
+    )
+    if interrupt is not None:
+        raise interrupt
+    return (
+        tuple(outcome for outcome in outcomes if not isinstance(outcome, BaseException)),
+        tuple(outcome for outcome in outcomes if isinstance(outcome, Exception)),
+    )
+
+
 def split_outcomes(outcomes: Sequence[_T | BaseException]) -> tuple[tuple[_T, ...], Exception | None]:
-    failure: Final = next((outcome for outcome in outcomes if isinstance(outcome, BaseException)), None)
-    if failure is not None and not isinstance(failure, Exception):
-        raise failure
-    return tuple(outcome for outcome in outcomes if not isinstance(outcome, BaseException)), failure
+    succeeded, failures = partition_outcomes(outcomes)
+    return succeeded, next(iter(failures), None)
+
+
+def billed_answers(answers: Sequence[ImageResponse], failures: Sequence[Exception]) -> tuple[ImageResponse, ...]:
+    """A failed answer the provider still charges for is billed beside the images that were served."""
+    return (*answers, *(failure.billed_answer for failure in failures if isinstance(failure, _BilledFailure)))
 
 
 def _summed_cost(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> float | None:

@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final, Protocol
+from typing import Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -10,17 +10,18 @@ from litellm.exceptions import (
     error_response_without_credentials,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.utils import ImageResponse, Usage
+from litellm.types.utils import ImageResponse
 
-_REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER"})
+_REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
 
 
-class FailedImageBilling(Protocol):
-    def response_cost_calculator(self, result: ImageResponse) -> float | None: ...
-
-    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None: ...
+class UnservedImageError(UnprocessableEntityError):
+    def __init__(
+        self, message: str, model: str, llm_provider: str, response: httpx.Response, billed_answer: ImageResponse
+    ) -> None:
+        super().__init__(message=message, model=model, llm_provider=llm_provider, response=response)
+        self.billed_answer: Final = billed_answer
 
 
 class _Candidate(BaseModel):
@@ -60,17 +61,6 @@ def _is_refusal(candidate: _Candidate) -> bool:
     )
 
 
-def _bill_answer(billing: FailedImageBilling, answer: ImageResponse) -> None:
-    if answer.usage is None:
-        return
-    cost: Final = billing.response_cost_calculator(result=answer) or 0.0
-    if cost <= 0:
-        return
-    billing.record_partial_usage_for_failure(
-        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(answer.usage.model_dump()), cost
-    )
-
-
 def _with_detail(summary: str, detail: str | None) -> str:
     return f"{summary}: {detail}" if detail else summary
 
@@ -79,14 +69,21 @@ def _answered_as(status_code: int, raw_response: httpx.Response) -> httpx.Respon
     return error_response_without_credentials(status_code, raw_response, _ERROR_DOCS_URL)
 
 
+def _answered_without_model_output(raw_response: httpx.Response, result: _GenerateContentResult) -> httpx.Response:
+    return httpx.Response(
+        status_code=422,
+        content=result.model_dump_json(by_alias=True, exclude_none=True),
+        request=_answered_as(422, raw_response).request,
+    )
+
+
 def empty_image_response_error(
     response: Mapping[str, object],
     model: str,
     llm_provider: str,
     raw_response: httpx.Response,
     answer: ImageResponse,
-    billing: FailedImageBilling,
-) -> ContentPolicyViolationError | UnprocessableEntityError:
+) -> ContentPolicyViolationError | UnservedImageError:
     result: Final = _parsed(response)
     feedback: Final = result.prompt_feedback
     if feedback is not None and feedback.block_reason:
@@ -118,10 +115,10 @@ def empty_image_response_error(
             },
         )
     finish_reasons: Final = ",".join(candidate.finish_reason or "none" for candidate in candidates) or "none"
-    _bill_answer(billing, answer)
-    return UnprocessableEntityError(
+    return UnservedImageError(
         message=f"Gemini returned no image, finishReason={finish_reasons}",
         model=model,
         llm_provider=llm_provider,
-        response=_answered_as(422, raw_response),
+        response=_answered_without_model_output(raw_response, result),
+        billed_answer=answer,
     )

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping
 from io import BytesIO
 from typing import Final
@@ -8,7 +9,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ImageResponse
 
 _NOT_CHARGED: Final = (
@@ -27,12 +28,19 @@ class _FailureCost(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.cost: float | None = None
+        self.logged: Final = asyncio.Event()
 
     def log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         response_cost: Final = kwargs.get("response_cost")
         self.cost = float(response_cost) if isinstance(response_cost, (int, float)) else None
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.log_failure_event(kwargs, response_obj, start_time, end_time)
+        self.logged.set()
 
 
 def _request_image(route: str, model: str, reply: Mapping[str, object]) -> ImageResponse:
@@ -97,7 +105,7 @@ def test_blocked_prompt_is_a_400_carrying_the_block_reason(route: str, model: st
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
-@pytest.mark.parametrize("finish_reason", ("NO_IMAGE", "IMAGE_OTHER", "STOP"))
+@pytest.mark.parametrize("finish_reason", ("NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE", "STOP"))
 def test_answer_without_an_image_is_a_422_that_does_not_echo_the_model_output(
     route: str, model: str, provider: str, finish_reason: str
 ):
@@ -124,6 +132,7 @@ def test_answer_without_an_image_is_a_422_that_does_not_echo_the_model_output(
     assert f"finishReason={finish_reason}" in str(unanswered.value)
     assert "red dot" not in str(unanswered.value)
     assert "planning the dot" not in str(unanswered.value)
+    assert "dot" not in unanswered.value.response.text
 
 
 def _failure_cost(
@@ -157,7 +166,11 @@ def test_answer_without_an_image_bills_its_tokens_while_a_refusal_bills_nothing(
     unanswered_cost: Final = _failure_cost(monkeypatch, route, model, unanswered, litellm.UnprocessableEntityError)
     refused_cost: Final = _failure_cost(monkeypatch, route, model, refused, litellm.ContentPolicyViolationError)
 
-    assert unanswered_cost is not None and unanswered_cost > 0
+    prices: Final = litellm.get_model_info(model)
+    text_price: Final = sum(litellm.cost_per_token(model=model, prompt_tokens=9, completion_tokens=7))
+    image_price: Final = text_price + 7 * (prices["output_cost_per_image_token"] - prices["output_cost_per_token"])
+
+    assert unanswered_cost is not None and text_price <= unanswered_cost < image_price
     assert refused_cost == 0
 
 
@@ -230,3 +243,97 @@ def _upstream_calls_through_a_retrying_router(reply: httpx.Response) -> int:
 def test_router_does_not_retry_an_answer_without_an_image(reply: Mapping[str, object]):
     assert _upstream_calls_through_a_retrying_router(httpx.Response(200, json=reply)) == 1
     assert _upstream_calls_through_a_retrying_router(httpx.Response(503, json={"error": {"code": 503}})) == 3
+
+
+
+
+_USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+_SERVED: Final = {
+    "candidates": [{"finishReason": "STOP", "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
+    "usageMetadata": _USAGE,
+}
+_REFUSED: Final = {"candidates": [{"finishReason": "IMAGE_RECITATION", "content": {"role": "model"}}], "usageMetadata": _USAGE}
+_UNANSWERED: Final = {
+    "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}],
+    "usageMetadata": _USAGE,
+}
+_UNAVAILABLE: Final = (503, {"error": {}})
+_TWO_IMAGE_CALLS: Final = (
+    *_ROUTES,
+    pytest.param("async-edit", "gemini/gemini-3.1-flash-image", "gemini", id="gemini-async-edit"),
+    pytest.param("async-edit", "vertex_ai/gemini-3.1-flash-image", "vertex_ai", id="vertex-async-edit"),
+)
+
+
+def _replying(*replies: tuple[int, Mapping[str, object]]) -> httpx.MockTransport:
+    pending: Final = iter(replies)
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        status_code, body = next(pending)
+        return httpx.Response(status_code, json=body)
+
+    return httpx.MockTransport(reply)
+
+
+async def _edit_two_images_asynchronously(model: str, transport: httpx.MockTransport, failure_log: _FailureCost) -> None:
+    try:
+        await litellm.aimage_edit(
+            model=model,
+            image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+            prompt="two small red dots",
+            n=2,
+            api_key="test-key",
+            api_base="https://google.invalid/v1",
+            client=AsyncHTTPHandler(transport=transport),
+        )
+    finally:
+        await asyncio.wait_for(failure_log.logged.wait(), timeout=10)
+
+
+def _request_two_images(route: str, model: str, transport: httpx.MockTransport, failure_log: _FailureCost) -> None:
+    match route:
+        case "generation":
+            litellm.image_generation(
+                model=model,
+                prompt="two small red dots",
+                n=2,
+                api_key="test-key",
+                api_base="https://google.invalid/v1",
+                client=HTTPHandler(client=httpx.Client(transport=transport)),
+            )
+        case "edit":
+            litellm.image_edit(
+                model=model,
+                image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+                prompt="two small red dots",
+                n=2,
+                api_key="test-key",
+                api_base="https://google.invalid/v1",
+                client=HTTPHandler(client=httpx.Client(transport=transport)),
+            )
+        case "async-edit":
+            asyncio.run(_edit_two_images_asynchronously(model, transport, failure_log))
+
+
+def _cost_of_two_images(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, *replies: tuple[int, Mapping[str, object]]
+) -> float | None:
+    failure_log: Final = _FailureCost()
+    monkeypatch.setattr(litellm, "failure_callback", [failure_log])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [failure_log])
+    with pytest.raises(openai.APIStatusError):
+        _request_two_images(route, model, _replying(*replies), failure_log)
+    return failure_log.cost
+
+
+@pytest.mark.parametrize(("route", "model", "provider"), _TWO_IMAGE_CALLS)
+@pytest.mark.parametrize("failed_answer", (_REFUSED, _UNANSWERED), ids=("refused", "unanswered"))
+def test_image_served_beside_a_failed_answer_is_billed_with_it(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, provider: str, failed_answer: Mapping[str, object]
+):
+    served_alone: Final = _cost_of_two_images(monkeypatch, route, model, (200, _SERVED), _UNAVAILABLE)
+    failed_alone: Final = _cost_of_two_images(monkeypatch, route, model, (200, failed_answer), _UNAVAILABLE)
+    together: Final = _cost_of_two_images(monkeypatch, route, model, (200, _SERVED), (200, failed_answer))
+
+    assert served_alone is not None and served_alone > 0
+    assert together == pytest.approx(served_alone + (failed_alone or 0))

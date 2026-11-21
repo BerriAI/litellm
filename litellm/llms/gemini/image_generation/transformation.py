@@ -242,9 +242,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             if web_search_requests and model_response.usage is not None:
                 setattr(model_response.usage, "web_search_requests", web_search_requests)
             if not model_response.data:
-                raise empty_image_response_error(
-                    response_object, model, "gemini", raw_response, model_response, logging_obj
-                )
+                raise empty_image_response_error(response_object, model, "gemini", raw_response, model_response)
         else:
             # Original Imagen format - predictions with generated images
             predictions: Final = _JSON_OBJECTS.validate_python(
