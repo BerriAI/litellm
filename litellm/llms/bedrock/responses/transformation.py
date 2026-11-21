@@ -160,14 +160,14 @@ def inline_remote_image_urls(
     return items  # pyright: ignore[reportReturnType]  # items keep the caller's input union
 
 
-def without_what_bedrock_runtime_rejects(params: Mapping[str, object]) -> dict[str, object]:
+def without_what_bedrock_runtime_rejects(params: Mapping[str, object]) -> Mapping[str, object]:
     unsupported: Final = tuple(sorted(BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS & params.keys()))
     if unsupported:
         verbose_logger.warning(
             "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
             unsupported,
         )
-    supported: Final[dict[str, object]] = {key: value for key, value in params.items() if key not in unsupported}
+    supported: Final = {key: value for key, value in params.items() if key not in unsupported}
     tools: Final = supported.get("tools")
     if not isinstance(tools, list):
         return supported

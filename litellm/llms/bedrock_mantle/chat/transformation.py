@@ -54,7 +54,7 @@ def _json_or_none(response: httpx.Response) -> object:
 
 class BedrockMantleChatStreamingHandler(OpenAIChatCompletionStreamingHandler):
     @staticmethod
-    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:
+    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:  # mutable-ok: base class signature
         error_type: Final = aws_error_envelope_type(chunk)
         if error_type is not None:
             return aws_error_envelope_message(error_type), _AWS_ERROR_ENVELOPE_STATUS
@@ -253,10 +253,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict,  # mutable-ok: signature fixed by the override contract
+        messages: list[AllMessageValues],  # mutable-ok: signature fixed by the override contract
+        optional_params: dict,  # mutable-ok: signature fixed by the override contract
+        litellm_params: dict,  # mutable-ok: signature fixed by the override contract
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

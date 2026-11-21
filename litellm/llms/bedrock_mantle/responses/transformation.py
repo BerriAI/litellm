@@ -273,7 +273,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             model=model,
             input=normalized_input,
             response_api_optional_request_params=(
-                without_what_bedrock_runtime_rejects(request_params)
+                dict(without_what_bedrock_runtime_rejects(request_params))
                 if is_bedrock_runtime_host(_configured_api_base(litellm_params.api_base))
                 else request_params
             ),
