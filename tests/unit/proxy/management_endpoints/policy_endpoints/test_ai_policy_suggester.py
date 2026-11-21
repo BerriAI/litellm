@@ -11,7 +11,7 @@ import pytest
 import respx
 
 import litellm
-
+from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.proxy._types import ProxyException
 from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import (
     SUGGEST_TOOL,
@@ -258,7 +258,7 @@ class TestAiPolicySuggester:
             )
 
         call_kwargs = mock_acompletion.call_args.kwargs
-        assert call_kwargs["model"] == "gpt-4o-mini"
+        assert call_kwargs["model"] == DEFAULT_COMPETITOR_DISCOVERY_MODEL
         assert call_kwargs["temperature"] == 0.2
         assert call_kwargs["drop_params"] is True
         assert len(call_kwargs["tools"]) == 1
