@@ -41,7 +41,11 @@ from litellm.constants import (
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.litellm_core_utils.core_helpers import as_object_list
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import (
+    duration_in_seconds,
+    duration_in_seconds_from,
+    normalize_budget_window_start,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
 from litellm.models.project import LiteLLM_ProjectTable
@@ -92,7 +96,11 @@ from litellm.proxy.common_utils.customer_usage import (
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    get_budget_window_reset_fields,
+    keeps_budget_reset,
+)
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
@@ -518,7 +526,7 @@ def _generate_budget_windows(
         MappingProxyType(
             {
                 **window.model_dump(),
-                "reset_at": get_budget_reset_time(budget_duration=window.budget_duration).isoformat(),
+                **get_budget_window_reset_fields(window.budget_duration),
             }
         )
         for window in budget_limits
@@ -3114,7 +3122,7 @@ async def _write_key_update(
     existing_key_row: LiteLLM_VerificationToken,
     include: Mapping[str, object] | None = None,
 ) -> "prisma_models.LiteLLM_VerificationToken | None":
-    if "budget_limits" not in data:
+    if "budget_limits" not in data and "budget_duration" not in data:
         return await VerificationTokenRepository(prisma_client).table.update(
             where={"token": hashed_token}, data=data, include=include
         )
@@ -3132,7 +3140,7 @@ async def _update_key_row(
     update_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
 ) -> _KeyUpdateResult | None:
-    if "budget_limits" in update_values:
+    if "budget_limits" in update_values or "budget_duration" in update_values:
         hashed_token: Final = hash_token_if_needed(key)
         updated: Final = await _write_key_update(
             prisma_client,
@@ -3227,7 +3235,7 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
             non_default_values["budget_duration"] = budget_duration
-            if not keeps_due_budget_reset(
+            if not keeps_budget_reset(
                 budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
             ):
                 non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
@@ -5500,8 +5508,7 @@ async def generate_key_helper_fn(
         initialized_windows: Final = []
         for window in budget_limits:
             w = dict(window) if not isinstance(window, dict) else {**window}
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
+            initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
         budget_limits_json = json.dumps(initialized_windows)
 
     aliases_json: Final = json.dumps(aliases)
@@ -7002,44 +7009,30 @@ def _window_with_reset_at(
 ) -> Mapping[str, object]:
     """A resubmitted window keeps its running period, so editing one window never restarts the others."""
     duration: Final = str(window["budget_duration"])
-    now: Final = datetime.now(timezone.utc)
-    open_reset_at: Final = next(
-        (w.reset_at for w in stored_windows if w.budget_duration == duration and _is_open_reset_at(w.reset_at, now)),
+    stored: Final = next(
+        (w for w in stored_windows if w.budget_duration == duration and w.reset_at is not None),
         None,
     )
-    reset_at: Final = open_reset_at if open_reset_at is not None else get_budget_reset_time(budget_duration=duration)
-    return {**window, "reset_at": reset_at.isoformat()}
+    fields: Final = {key: value for key, value in window.items() if key not in ("window_start", "reset_at")}
+    if stored is None or stored.reset_at is None:
+        return {**fields, **get_budget_window_reset_fields(duration)}
+    return {
+        **fields,
+        "reset_at": stored.reset_at.isoformat(),
+        **({"window_start": stored.window_start.isoformat()} if stored.window_start is not None else {}),
+    }
 
 
-def _is_open_reset_at(reset_at: datetime | None, now: datetime) -> bool:
-    if reset_at is None:
-        return False
-    return (reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)) > now
-
-
-def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
-    """Restart one budget window from now, by advancing its `reset_at`.
-
-    `window_start` is derived elsewhere as `reset_at - budget_duration`
-    (`get_budget_window_start`), so `reset_at` must be set to `now +
-    budget_duration` -- a window floating from THIS moment -- to make
-    `window_start` land at `now` and exclude the historical spend that
-    triggered the block. Reusing `get_budget_reset_time`/
-    `compute_budget_reset_at`'s calendar-standardized boundary
-    (e.g. "next midnight") would not do that: for a "1d" window `next
-    midnight - 1d` is simply the START of the calendar day already in
-    progress, which still covers that spend. That reuse is only safe for the
-    scheduled job, which runs right as `reset_at` naturally elapses, so the
-    elapsed boundary it computes is already close to "now". A manual reset
-    can happen at any point mid-window, so it needs the floating form
-    instead. A window with no `budget_duration` is returned unchanged.
-    """
-    duration = window.get("budget_duration")
+def _advance_one_key_budget_window(window: Mapping[str, object], now: datetime) -> Mapping[str, object]:
+    """Persist the manual reset's start so calendar arithmetic cannot restore cleared spend."""
+    duration: Final = window.get("budget_duration")
     if not isinstance(duration, str) or not duration:
         return window
-    new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+    start: Final = normalize_budget_window_start(now.astimezone(timezone.utc))
+    new_reset_at: Final = start + timedelta(seconds=duration_in_seconds_from(start, duration))
     return {
         **window,
+        "window_start": start.isoformat(),
         "reset_at": new_reset_at.isoformat(),
     }
 
@@ -7070,7 +7063,8 @@ async def _reset_key_budget_windows(
         windows: Final = await lock_budget_limits(tx, "LiteLLM_VerificationToken", hashed_api_key)
         if not windows:
             return
-        reset_windows: Final = tuple(_advance_one_key_budget_window(w) for w in windows)
+        now: Final = datetime.now(timezone.utc)
+        reset_windows: Final = tuple(_advance_one_key_budget_window(w, now) for w in windows)
         await tx.litellm_verificationtoken.update(
             where={"token": hashed_api_key},
             data={"budget_limits": json.dumps(reset_windows, default=str)},

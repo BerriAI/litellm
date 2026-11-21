@@ -727,7 +727,7 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
         model="us-gov.anthropic.claude-fable-5-1",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(model_info={"supports_native_structured_output": False}),
         headers={},
     )
 
@@ -793,7 +793,7 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
         model="us-gov.anthropic.claude-fable-5-1",
         messages=caller_messages,
         anthropic_messages_optional_request_params=optional_params,
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(model_info={"supports_native_structured_output": False}),
         headers={},
     )
 
@@ -2666,7 +2666,11 @@ def test_bedrock_messages_inlines_schema_for_a_profile_without_native_output(set
     assert json.loads(last_content[-1]["text"]) == schema
 
 
-def _bedrock_messages_request_with_schema(model: str, schema: Mapping[str, object]) -> Mapping[str, object]:
+def _bedrock_messages_request_with_schema(
+    model: str,
+    schema: Mapping[str, object],
+    model_info: dict[str, object] | None = None,
+) -> Mapping[str, object]:
     from litellm.types.router import GenericLiteLLMParams
 
     return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
@@ -2676,7 +2680,7 @@ def _bedrock_messages_request_with_schema(model: str, schema: Mapping[str, objec
             "max_tokens": 100,
             "output_config": {"format": {"type": "json_schema", "schema": schema}},
         },
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(model_info=model_info),
         headers={},
     )
 
@@ -2752,7 +2756,11 @@ MESSAGES_OPEN_OBJECT_SCHEMA: Final = {
 def test_bedrock_messages_schema_is_inlined_when_native_output_is_disabled(schema):
     model: Final = "us-gov.anthropic.claude-fable-5-1"
 
-    result: Final = _bedrock_messages_request_with_schema(model, schema)
+    result: Final = _bedrock_messages_request_with_schema(
+        model,
+        schema,
+        model_info={"supports_native_structured_output": False},
+    )
 
     assert "output_config" not in result
     assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema

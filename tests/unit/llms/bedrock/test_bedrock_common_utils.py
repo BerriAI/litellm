@@ -2605,13 +2605,32 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
     assert is_bedrock_native_output_rejection(status_code, error_text) is expected
 
 
-def test_bedrock_native_output_resolver_uses_deployment_then_map_precedence(local_model_cost_map: None) -> None:
-    model: Final = "us.anthropic.claude-opus-4-8"
-    assert _bedrock_native_output_flag(model, "bedrock", {"supports_native_structured_output": False}) is False
-    assert _bedrock_native_output_flag(model, "bedrock", {"supports_bedrock_native_structured_output": False}) is False
-    assert _bedrock_native_output_flag(model, "bedrock", None) is True
-    assert _bedrock_native_output_flag("us.anthropic.claude-sonnet-4-6", "bedrock", None) is True
-    assert _bedrock_native_output_flag("us.anthropic.claude-4-5", "bedrock", None) is None
+@pytest.mark.parametrize(
+    ("model", "model_info", "expected"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, True),
+        ("global.anthropic.claude-sonnet-5", None, True),
+        ("us-gov.anthropic.claude-opus-4-8", None, True),
+        ("us.anthropic.claude-opus-4-8", {"supports_native_structured_output": False}, False),
+        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
+        ("us.anthropic.claude-4-5", {"supports_bedrock_native_structured_output": True}, None),
+    ],
+    ids=[
+        "default_model",
+        "default_global_model",
+        "default_govcloud_model",
+        "deployment_opt_out",
+        "deprecated_opt_out",
+        "deprecated_opt_in_ignored",
+    ],
+)
+def test_bedrock_native_output_uses_map_defaults_and_only_deployment_opt_outs(
+    local_model_cost_map: None,
+    model: str,
+    model_info: dict[str, object] | None,
+    expected: bool | None,
+) -> None:
+    assert _bedrock_native_output_flag(model, "bedrock", model_info) is expected
 
 
 def test_deprecated_native_output_model_info_warns_once(local_model_cost_map: None) -> None:

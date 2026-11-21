@@ -822,13 +822,10 @@ def _answer_with_json_mode_thinking_response(request: httpx.Request) -> httpx.Re
     return httpx.Response(200, json=JSON_MODE_THINKING_CONVERSE_RESPONSE, request=request)
 
 
-def _bedrock_claude_without_native_structured_output() -> str:
-    return "bedrock/us-gov-east-1/anthropic.claude-opus-4-8"
-
-
 def _json_mode_thinking_kwargs() -> dict[str, object]:
     return {
-        "model": _bedrock_claude_without_native_structured_output(),
+        "model": "bedrock/us-gov-east-1/anthropic.claude-opus-4-8",
+        "model_info": {"supports_native_structured_output": False},
         "messages": [{"role": "user", "content": "How many people live in Tokyo, in millions?"}],
         "response_format": {
             "type": "json_schema",

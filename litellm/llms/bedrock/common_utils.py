@@ -343,7 +343,8 @@ def _bedrock_native_output_flag(
     deprecated_flag: Final = deployment_info.get("supports_bedrock_native_structured_output")
     if isinstance(deprecated_flag, bool):
         _warn_deprecated_bedrock_native_output_model_info()
-        return deprecated_flag
+        if deprecated_flag is False:
+            return False
 
     provider_model: Final = model if model.startswith(f"{custom_llm_provider}/") else f"{custom_llm_provider}/{model}"
     routed_model: Final = strip_bedrock_routing_prefix(model)
