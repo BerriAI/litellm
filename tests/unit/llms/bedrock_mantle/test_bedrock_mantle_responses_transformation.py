@@ -8,6 +8,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
 import copy
+from collections.abc import Mapping
 import logging
 from typing import Final
 
@@ -19,6 +20,8 @@ from botocore.exceptions import (
 )
 
 import litellm
+from litellm.llms.bedrock.common_utils import get_bedrock_cross_region_inference_regions
+from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment, mantle_supports_responses
 from litellm.llms.bedrock_mantle.responses.transformation import (
     BedrockMantleResponsesAPIConfig,
 )
@@ -1444,6 +1447,116 @@ class TestBedrockMantlePerModelResponsesURL:
     def test_gemma_4_uses_openai_responses_path(self, local_cost_map, model):
         url = self._url_for(model)
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+
+class TestMantleGeoInferenceProfile:
+    """A geo inference-profile id (us.openai.gpt-6.1-sol) is the same model as its bare id, so it must route the same."""
+
+    @pytest.mark.parametrize("geo", get_bedrock_cross_region_inference_regions())
+    @pytest.mark.parametrize("region_path", ["", "us-west-2/"])
+    def test_every_geo_prefix_routes_like_the_bare_id(self, geo: str, region_path: str) -> None:
+        model_cost = {"bedrock_mantle/openai.gpt-x": {"mode": "responses", "use_openai_responses_path": True}}
+        model = f"{region_path}{geo}.openai.gpt-x"
+        assert mantle_supports_responses(model, model_cost) is True
+        assert mantle_base_segment(model, model_cost) == "openai/v1"
+
+    def test_an_exactly_registered_geo_id_wins_over_the_bare_row(self) -> None:
+        model_cost = {
+            "bedrock_mantle/openai.gpt-x": {"mode": "chat"},
+            "bedrock_mantle/us.openai.gpt-x": {"mode": "responses", "use_openai_responses_path": True},
+        }
+        assert mantle_supports_responses("us.openai.gpt-x", model_cost) is True
+        assert mantle_base_segment("us.openai.gpt-x", model_cost) == "openai/v1"
+        assert mantle_supports_responses("eu.openai.gpt-x", model_cost) is False
+
+    def test_every_catalogued_model_gets_the_same_responses_url_under_a_us_profile(self, local_cost_map: None) -> None:
+        bare_ids = [
+            key.removeprefix("bedrock_mantle/")
+            for key, row in litellm.model_cost.items()
+            if key.startswith("bedrock_mantle/") and row.get("litellm_provider") == "bedrock_mantle"
+        ]
+        assert bare_ids
+        params = {"aws_region_name": "us-east-1"}
+        for bare_id in bare_ids:
+            bare_config = ProviderConfigManager.get_provider_responses_api_config(
+                provider=LlmProviders.BEDROCK_MANTLE, model=bare_id
+            )
+            profiled_config = ProviderConfigManager.get_provider_responses_api_config(
+                provider=LlmProviders.BEDROCK_MANTLE, model=f"us.{bare_id}"
+            )
+            assert (bare_config is None) == (profiled_config is None), bare_id
+            if bare_config is None or profiled_config is None:
+                continue
+            assert profiled_config.get_complete_url(api_base=None, litellm_params=params) == (
+                bare_config.get_complete_url(api_base=None, litellm_params=params)
+            ), bare_id
+
+    @pytest.mark.parametrize(
+        "request_params",
+        [
+            {},
+            {
+                "tools": [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}],
+                "reasoning_effort": "high",
+            },
+            {"reasoning_effort": {"effort": "low", "summary": "auto"}},
+        ],
+    )
+    def test_chat_completions_take_the_same_route_under_a_us_profile(
+        self, local_cost_map: None, request_params: Mapping[str, object]
+    ) -> None:
+        from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
+
+        bare_ids = [
+            key.removeprefix("bedrock_mantle/")
+            for key, row in litellm.model_cost.items()
+            if key.startswith("bedrock_mantle/") and row.get("litellm_provider") == "bedrock_mantle"
+        ]
+        for bare_id in bare_ids:
+            assert chat_completion_ends_in_responses_api(
+                f"us.{bare_id}", "bedrock_mantle", **request_params
+            ) == chat_completion_ends_in_responses_api(bare_id, "bedrock_mantle", **request_params), bare_id
+
+
+class TestMantleOnABedrockRuntimeApiBase:
+    """bedrock-runtime's Responses endpoint rejects web_search and background, which the Mantle host accepts."""
+
+    TOOLS: Final = [
+        {"type": "web_search"},
+        {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+    ]
+
+    def _sent(self, api_base: str | None) -> dict[str, object]:
+        return BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+            model="us.openai.gpt-6.1-sol",
+            input="hi",
+            response_api_optional_request_params={"tools": self.TOOLS, "background": True},
+            litellm_params=GenericLiteLLMParams(api_base=api_base),
+            headers={},
+        )
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime-fips.us-east-1.amazonaws.com",
+            "https://vpce-0abc-1234.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+        ],
+    )
+    def test_bedrock_runtime_gets_only_what_it_accepts(self, api_base: str) -> None:
+        sent: Final = self._sent(api_base)
+        assert [tool["type"] for tool in sent["tools"]] == ["function"]
+        assert "background" not in sent
+
+    def test_a_bedrock_runtime_base_from_the_environment_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", "https://bedrock-runtime.us-east-1.amazonaws.com")
+        assert [tool["type"] for tool in self._sent(None)["tools"]] == ["function"]
+
+    @pytest.mark.parametrize("api_base", [None, "https://bedrock-mantle.us-east-1.api.aws"])
+    def test_the_mantle_host_keeps_web_search_and_background(self, api_base: str | None) -> None:
+        sent: Final = self._sent(api_base)
+        assert [tool["type"] for tool in sent["tools"]] == ["web_search", "function"]
+        assert sent["background"] is True
 
 
 class TestBedrockMantleEndpointHonoring:

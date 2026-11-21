@@ -18,7 +18,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Conf
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_row
+from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_row, model_cost_rows
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
@@ -88,11 +88,18 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
 
 def _mantle_responses_series_name(model: str) -> str | None:
     """The bare OpenAI series name of a Bedrock Mantle model that also serves the Responses API, or ``None``."""
-    from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses, split_mantle_region_prefix
+    from litellm.llms.bedrock_mantle.common_utils import mantle_catalog_id, mantle_supports_responses
 
-    if not mantle_supports_responses(model, litellm.model_cost):
+    if not mantle_supports_responses(model, model_cost_rows()):
         return None
-    return split_mantle_region_prefix(model)[1].removeprefix("openai.")
+    return mantle_catalog_id(model).removeprefix("openai.")
+
+
+def _routing_lookup_model(model: str, custom_llm_provider: str) -> str:
+    """A Mantle geo profile id routes by its Mantle row, not the Converse row listed under the same id."""
+    from litellm.llms.bedrock_mantle.common_utils import mantle_routing_id
+
+    return mantle_routing_id(model, model_cost_rows()) if custom_llm_provider == "bedrock_mantle" else model
 
 
 def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -170,7 +177,9 @@ def responses_api_bridge_check(
     try:
         model_info = cast(
             dict[str, object],
-            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
+            get_model_info_helper(
+                model=_routing_lookup_model(model, custom_llm_provider), custom_llm_provider=custom_llm_provider
+            ),
         )
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)

@@ -34,9 +34,12 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.responses.transformation import without_what_bedrock_runtime_rejects
 from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
+    is_bedrock_runtime_host,
+    mantle_catalog_id,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -65,6 +68,10 @@ _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
+
+
+def _configured_api_base(api_base: str | None) -> str | None:
+    return api_base or get_secret_str("BEDROCK_MANTLE_API_BASE")
 
 
 def _prompt_cache_breakpoint_as_sent_or_none(marker: object) -> object:
@@ -104,7 +111,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         litellm_params: dict,
     ) -> str:
         region: Final = self._resolve_region({**litellm_params, "api_base": api_base})
-        base = api_base or get_secret_str("BEDROCK_MANTLE_API_BASE") or f"https://bedrock-mantle.{region}.api.aws"
+        base = _configured_api_base(api_base) or f"https://bedrock-mantle.{region}.api.aws"
         base = base.rstrip("/")
         for suffix in _BASE_SUFFIXES_TO_STRIP:
             if base.endswith(suffix):
@@ -257,15 +264,16 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
                 list(rewritten_types),
             )
-        request_params: Final = (
-            self._params_with_hoisted_tools(params, hoisted)
-            if hoisted.hoisted
-            else response_api_optional_request_params
-        )
+        hoisted_params: Final = self._params_with_hoisted_tools(params, hoisted) if hoisted.hoisted else None
+        request_params: Final = hoisted_params if hoisted_params is not None else response_api_optional_request_params
         return super().transform_responses_api_request(
             model=model,
             input=normalized_input,
-            response_api_optional_request_params=request_params,
+            response_api_optional_request_params=(
+                dict(without_what_bedrock_runtime_rejects(hoisted_params if hoisted_params is not None else params))
+                if is_bedrock_runtime_host(_configured_api_base(litellm_params.api_base))
+                else request_params
+            ),
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -281,7 +289,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     @staticmethod
     def _model_map_lookup_name(model: str) -> str:
-        return model.split("/")[-1].removeprefix("openai.")
+        return mantle_catalog_id(model.split("/")[-1]).removeprefix("openai.")
 
     def map_openai_params(
         self,

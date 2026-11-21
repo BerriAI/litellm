@@ -16,14 +16,17 @@ import re
 from collections.abc import Mapping
 from functools import partial
 from typing import Final, Literal
+from urllib.parse import urlparse
 
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
-from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
+from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig, get_bedrock_cross_region_inference_regions
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 BEDROCK_REGIONS: Final = frozenset(AmazonBedrockGlobalConfig().get_all_regions())
+BEDROCK_GEO_PROFILES: Final = frozenset(get_bedrock_cross_region_inference_regions())
 
 MANTLE_AUTH_FAILED: Final = (
     "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
@@ -45,6 +48,45 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
     if sep and head in BEDROCK_REGIONS:
         return head, tail
     return None, model
+
+
+def mantle_catalog_id(model: str) -> str:
+    """``us-east-1/us.openai.gpt-6.1-sol`` -> ``openai.gpt-6.1-sol``, for cost-map lookups only."""
+    model_id: Final = split_mantle_region_prefix(model)[1]
+    geo, sep, profiled_id = model_id.partition(".")
+    return profiled_id if sep and geo in BEDROCK_GEO_PROFILES else model_id
+
+
+def mantle_routing_id(model: str, model_cost: Mapping[str, object]) -> str:
+    """The id whose ``bedrock_mantle/`` row decides routing: an exactly registered geo id first, else the bare id."""
+    model_id: Final = split_mantle_region_prefix(model)[1]
+    return model_id if f"bedrock_mantle/{model_id}" in model_cost else mantle_catalog_id(model_id)
+
+
+def _mantle_row(model: str | None, model_cost: Mapping[str, object]) -> Mapping[str, object]:
+    row: Final = model_cost.get(f"bedrock_mantle/{mantle_routing_id(model, model_cost)}") if model else None
+    return as_str_mapping(row) or {}
+
+
+def is_bedrock_runtime_host(api_base: str | None) -> bool:
+    """bedrock-runtime, a VPC endpoint for it included, accepts fewer Responses tools and params than Mantle."""
+    host: Final = urlparse(api_base).hostname if api_base else None
+    return host is not None and any(label.startswith("bedrock-runtime") for label in host.split("."))
+
+
+def aws_error_envelope_type(body: object) -> str | None:
+    """bedrock-runtime answers a path it does not serve with a 200 ``{"Output": {"__type": ...}}`` body."""
+    envelope: Final = as_str_mapping(body)
+    output: Final = as_str_mapping(envelope.get("Output")) if envelope is not None else None
+    error_type: Final = output.get("__type") if output is not None else None
+    return error_type if isinstance(error_type, str) else None
+
+
+def aws_error_envelope_message(error_type: str) -> str:
+    return (
+        f"Bedrock answered HTTP 200 with {error_type} and no completion, so the request URL names an operation "
+        "it does not serve. Check the deployment's api_base and model id."
+    )
 
 
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
@@ -139,7 +181,7 @@ def mantle_health_check_mode(model: str) -> Literal["anthropic_messages"] | None
     return "anthropic_messages" if is_mantle_claude_model(model) else None
 
 
-def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
+def mantle_supports_responses(model: str | None, model_cost: Mapping[str, object]) -> bool:
     """Whether a Bedrock Mantle model can serve the native Responses API.
 
     Purely data-driven from the model's price-map capability signal -- either
@@ -151,13 +193,12 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
-    if "/v1/responses" in (entry.get("supported_endpoints") or []):
-        return True
-    return entry.get("mode") == "responses"
+    entry: Final = _mantle_row(model, model_cost)
+    endpoints: Final = as_object_list(entry.get("supported_endpoints")) or ()
+    return "/v1/responses" in endpoints or entry.get("mode") == "responses"
 
 
-def mantle_base_segment(model: str | None, model_cost: dict) -> str:
+def mantle_base_segment(model: str | None, model_cost: Mapping[str, object]) -> str:
     """Return the base path segment for a Bedrock Mantle model's OpenAI surface.
 
     Data-driven from the model's price-map use_openai_responses_path flag
@@ -168,5 +209,4 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     the base for the model's whole OpenAI-compatible surface, so both the chat and
     responses configs derive from it -- there is no separate model-name rule.
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
-    return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"
+    return "openai/v1" if _mantle_row(model, model_cost).get("use_openai_responses_path") is True else "v1"
