@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -26,7 +27,11 @@ from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS, PDF_DATA_URL_PREFIX
 from litellm.google_genai.adapters.transformation import genai_media_part, google_genai_request_config
 from litellm.litellm_core_utils.audio_utils.utils import audio_duration_tokens
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
-from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, str_keyed
+from litellm.litellm_core_utils.deployment_pricing import (
+    deployment_backend_models,
+    deployment_pricing_models,
+    str_keyed,
+)
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_media_for_tpm
 from litellm.litellm_core_utils.token_counter import (
     deployment_openai_model,
@@ -84,9 +89,11 @@ async def count_input_tokens(
     request_body: dict,
     raw_body: bytes | None,
     models: Sequence[str],
+    served_models: Sequence[str] = (),
 ) -> Mapping[str, int]:
     """Input-token count per model, sharing one native count across models that
-    select the same tokenizer."""
+    select the same tokenizer. Inline Gemini audio counts at the highest audio rate of
+    `served_models`, the models routing can send it to, else of the counted model."""
     tokenizers: Final[tuple[tuple[str, RustTokenizer | None], ...]] = tuple(
         (model, rust_tokenizer(model)) for model in models
     )
@@ -98,6 +105,7 @@ async def count_input_tokens(
             raw_body=counted_raw_body,
             tokenizer=tokenizer,
             models=tuple(model for model, selected in tokenizers if selected == tokenizer),
+            served_models=served_models,
         )
         for tokenizer in groups
     ]
@@ -111,14 +119,16 @@ async def _count_group(
     raw_body: bytes | None,
     tokenizer: RustTokenizer | None,
     models: tuple[str, ...],
+    served_models: Sequence[str],
 ) -> Mapping[str, int]:
     async def python() -> Mapping[str, int]:
         if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
-            return _count_input_tokens_for_models(request_body=request_body, models=models)
+            return _count_input_tokens_for_models(request_body=request_body, models=models, served_models=served_models)
         return await asyncio.to_thread(
             _count_input_tokens_for_models,
             request_body=request_body,
             models=models,
+            served_models=served_models,
         )
 
     if tokenizer is None or raw_body is None:
@@ -153,12 +163,18 @@ async def _native_counts(
 def _count_input_tokens_for_models(
     request_body: dict,
     models: Sequence[str],
+    served_models: Sequence[str] = (),
 ) -> Mapping[str, int]:
     return MappingProxyType(
         {
             model: tokens
             for model in models
-            if (tokens := count_input_tokens_for_model(request_body=request_body, model=model)) is not None
+            if (
+                tokens := count_input_tokens_for_model(
+                    request_body=request_body, model=model, served_models=served_models
+                )
+            )
+            is not None
         }
     )
 
@@ -176,6 +192,12 @@ def models_counted_for(model: str, llm_router: Router | None, team_id: str | Non
     written."""
     deployments: Final = _routed_deployments(model, llm_router, team_id) if llm_router else ()
     return tuple(dict.fromkeys(_counted_name(model, deployment) for deployment in deployments)) or (model,)
+
+
+def models_served_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
+    """The backend models routing can send a request for `model` from `team_id` to, else `model` itself."""
+    deployments: Final = _routed_deployments(model, llm_router, team_id) if llm_router else ()
+    return tuple(dict.fromkeys(filter(None, deployment_backend_models(deployments)))) or (model,)
 
 
 def _routed_deployments(model: str, llm_router: Router, team_id: str | None) -> Sequence[object]:
@@ -240,7 +262,7 @@ def _served_by_openai(deployment: object) -> bool:
     return served_provider == "openai"
 
 
-def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
+def count_input_tokens_for_model(request_body: dict, model: str, served_models: Sequence[str] = ()) -> int | None:
     try:
         if "messages" in request_body:
             try:
@@ -266,7 +288,10 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
             )
             return query_tokens + document_tokens
         if "contents" in request_body:
-            return _count_gemini_tokens(request_body=REQUEST_BODY_FIELDS.validate_python(request_body), model=model)
+            return _count_gemini_tokens(
+                request_body=REQUEST_BODY_FIELDS.validate_python(request_body),
+                counter=_GeminiCounter(model=model, audio_models=tuple(served_models) or (model,)),
+            )
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
@@ -298,6 +323,7 @@ _GEMINI_INLINE_DATA_FIELDS: Final = ("inlineData", "inline_data")
 _GEMINI_FILE_DATA_FIELDS: Final = ("fileData", "file_data")
 _GEMINI_FUNCTION_RESPONSE_FIELDS: Final = ("functionResponse", "function_response")
 _GEMINI_UNBILLED_PART_FIELDS: Final = frozenset({"thoughtSignature", "thought_signature"})
+_GEMINI_SEPARATELY_COUNTED_PART_FIELDS: Final = _GEMINI_UNBILLED_PART_FIELDS | frozenset(_GEMINI_INLINE_DATA_FIELDS)
 _GEMINI_RESPONSE_SCHEMA_FIELDS: Final = (
     "responseSchema",
     "response_schema",
@@ -306,16 +332,47 @@ _GEMINI_RESPONSE_SCHEMA_FIELDS: Final = (
 )
 
 
-def _count_gemini_tokens(request_body: Mapping[str, object], model: str) -> int | None:
-    system_parts: Final = (_gemini_parts(request_body.get(field)) for field in _GEMINI_SYSTEM_INSTRUCTION_FIELDS)
-    parts: Final = chain(_gemini_parts(request_body.get("contents")), *system_parts)
+@dataclass(frozen=True, slots=True)
+class _GeminiCounter:
+    model: str
+    audio_models: tuple[str, ...]
+
+
+def _count_gemini_tokens(request_body: Mapping[str, object], counter: _GeminiCounter) -> int | None:
     return _sum_if_all_sized(
         (
-            _gemini_function_declaration_tokens(request_body.get("tools"), model),
-            _gemini_response_schema_tokens(request_body, model),
-            *(_gemini_part_tokens(part, model) for part in parts),
+            _gemini_function_declaration_tokens(request_body.get("tools"), counter.model),
+            _gemini_response_schema_tokens(request_body, counter.model),
+            *(_gemini_part_tokens(part, counter) for part in _gemini_body_parts(request_body)),
         )
     )
+
+
+def _gemini_body_parts(request_body: Mapping[str, object]) -> Iterator[object]:
+    system_parts: Final = (_gemini_parts(request_body.get(field)) for field in _GEMINI_SYSTEM_INSTRUCTION_FIELDS)
+    return chain(_gemini_parts(request_body.get("contents")), *system_parts)
+
+
+def gemini_body_has_inline_audio(request_body: Mapping[str, object]) -> bool:
+    """Whether a Gemini `generateContent` body carries inline audio anywhere, nested function responses included,
+    read from each part's MIME type without decoding the audio."""
+    return "contents" in request_body and any(map(_holds_inline_audio, _gemini_body_parts(request_body)))
+
+
+def _holds_inline_audio(part: object) -> bool:
+    fields: Final = as_str_mapping(part)
+    if fields is None:
+        return False
+    inline: Final = _first_mapping(fields, _GEMINI_INLINE_DATA_FIELDS)
+    mime: Final = inline.get("mimeType") or inline.get("mime_type")
+    nested_parts: Final = _gemini_items(_first_mapping(fields, _GEMINI_FUNCTION_RESPONSE_FIELDS).get("parts"))
+    return (isinstance(mime, str) and mime.lower().startswith("audio/")) or any(map(_holds_inline_audio, nested_parts))
+
+
+def _first_mapping(part: Mapping[str, object], fields: Sequence[str]) -> Mapping[str, object]:
+    field: Final = next((field for field in fields if field in part), None)
+    value: Final = as_str_mapping(part.get(field)) if field is not None else None
+    return MappingProxyType({}) if value is None else value
 
 
 def _gemini_response_schema_tokens(request_body: Mapping[str, object], model: str) -> int:
@@ -355,21 +412,29 @@ def _gemini_function_declaration_tokens(tools: object, model: str) -> int | None
     return _count_text_tokens(model=model, text=tools)
 
 
-def _gemini_part_tokens(part: object, model: str) -> int | None:
+def _gemini_part_tokens(part: object, counter: _GeminiCounter) -> int | None:
     fields: Final = as_str_mapping(part)
     if fields is None:
-        return _count_text_tokens(model=model, text=part)
+        return _count_text_tokens(model=counter.model, text=part)
     if any(field in fields for field in _GEMINI_FILE_DATA_FIELDS):
         return None
-    if any(field in fields for field in _GEMINI_INLINE_DATA_FIELDS):
-        return _gemini_inline_audio_tokens(fields, model)
+    has_inline_data: Final = any(field in fields for field in _GEMINI_INLINE_DATA_FIELDS)
     text: Final = fields.get("text")
-    if isinstance(text, str):
-        return _count_text_tokens(model=model, text=text)
-    return _gemini_structured_part_tokens(fields, model)
+    billed: Final = {
+        key: value
+        for key, value in fields.items()
+        if key not in _GEMINI_SEPARATELY_COUNTED_PART_FIELDS and not (key == "text" and isinstance(text, str))
+    }
+    return _sum_if_all_sized(
+        (
+            _gemini_inline_audio_tokens(fields, counter.audio_models) if has_inline_data else 0,
+            _count_text_tokens(model=counter.model, text=text) if isinstance(text, str) else 0,
+            _gemini_structured_part_tokens(billed, counter) if billed else 0,
+        )
+    )
 
 
-def _gemini_inline_audio_tokens(part: Mapping[str, object], model: str) -> int | None:
+def _gemini_inline_audio_tokens(part: Mapping[str, object], audio_models: Sequence[str]) -> int | None:
     block: Final = genai_media_part(part)
     if block is None:
         return None
@@ -377,7 +442,7 @@ def _gemini_inline_audio_tokens(part: Mapping[str, object], model: str) -> int |
     audio: Final = tuple(map(_input_audio_data, media))
     if not audio:
         return None
-    return _sum_if_all_sized(tuple(audio_duration_tokens(data, (model,), model) if data else None for data in audio))
+    return _sum_if_all_sized(tuple(audio_duration_tokens(data, audio_models, None) if data else None for data in audio))
 
 
 def _input_audio_data(block: Mapping[str, object]) -> str | None:
@@ -386,16 +451,15 @@ def _input_audio_data(block: Mapping[str, object]) -> str | None:
     return data if isinstance(data, str) else None
 
 
-def _gemini_structured_part_tokens(part: Mapping[str, object], model: str) -> int | None:
+def _gemini_structured_part_tokens(part: Mapping[str, object], counter: _GeminiCounter) -> int | None:
     response_field: Final = next((field for field in _GEMINI_FUNCTION_RESPONSE_FIELDS if field in part), None)
     response: Final = as_str_mapping(part.get(response_field)) if response_field is not None else None
-    billed: Final = {key: value for key, value in part.items() if key not in _GEMINI_UNBILLED_PART_FIELDS}
     if response_field is None or response is None:
-        return _count_text_tokens(model=model, text=billed)
+        return _count_text_tokens(model=counter.model, text=dict(part))
     response_without_parts: Final = {key: value for key, value in response.items() if key != "parts"}
     return _sum_if_all_sized(
         (
-            _count_text_tokens(model=model, text={**billed, response_field: response_without_parts}),
-            *(_gemini_part_tokens(nested, model) for nested in _gemini_items(response.get("parts"))),
+            _count_text_tokens(model=counter.model, text={**part, response_field: response_without_parts}),
+            *(_gemini_part_tokens(nested, counter) for nested in _gemini_items(response.get("parts"))),
         )
     )

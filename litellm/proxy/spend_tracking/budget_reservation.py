@@ -68,8 +68,10 @@ from litellm.proxy.spend_tracking.input_tokens import (
     REQUEST_BODY_FIELDS,
     count_input_tokens,
     count_input_tokens_for_model,
+    gemini_body_has_inline_audio,
     inline_pdf_file_count,
     models_counted_for,
+    models_served_for,
     openai_chat_pdf_file_tokens,
 )
 from litellm.proxy.spend_tracking.native_budgets import (
@@ -1310,12 +1312,13 @@ def _input_cost_for_cost_info(
     )
     if estimated_input_tokens is None:
         return None
+    holds_audio: Final = gemini_body_has_inline_audio(REQUEST_BODY_FIELDS.validate_python(request_body))
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
-            return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
+            return estimated_input_tokens * _tier_input_rate(tier, holds_audio=holds_audio)
+    input_cost_per_token: Final = _input_rate(model_info, holds_audio=holds_audio)
     if input_cost_per_token is None:
         return None
     return estimated_input_tokens * input_cost_per_token
@@ -1389,6 +1392,7 @@ def _max_cost_for_cost_info(
         return None
 
     body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
+    holds_audio: Final = gemini_body_has_inline_audio(body)
     cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
@@ -1401,13 +1405,13 @@ def _max_cost_for_cost_info(
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
             return (
-                estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
+                estimated_input_tokens * _tier_input_rate(tier, holds_audio=holds_audio)
                 + cached_tokens * tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
                 + output_tokens * output_multiplier * output_rate
             )
 
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    cached_cost_per_token: Final = _cached_cost_per_token(model_info)
+    input_cost_per_token: Final = _input_rate(model_info, holds_audio=holds_audio)
+    cached_cost_per_token: Final = _highest_deployment_rate(model_info, "cache_read_input_token_cost")
     output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
     output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
     if cached_tokens > 0 and cached_cost_per_token is None:
@@ -1595,10 +1599,16 @@ async def count_request_input_tokens(
     counted_models: Final = MappingProxyType(
         {model: models_counted_for(model, llm_router, team_id) for model in models}
     )
+    served_models: Final = (
+        tuple(dict.fromkeys(chain.from_iterable(models_served_for(model, llm_router, team_id) for model in models)))
+        if "contents" in request_body
+        else ()
+    )
     counts: Final = await count_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
+        served_models=served_models,
     )
     chat_pdf_files: Final = (
         inline_pdf_file_count(request_body.get("messages"))
@@ -1694,7 +1704,7 @@ def _cached_content_tokens(
         *(gemini_config.get(field) for field in _CACHED_CONTENT_FIELDS),
     )
     max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
-    if max_input_tokens is None or not any(names):
+    if max_input_tokens is None or "contents" not in request_body or not any(names):
         return 0
     return max(0, max_input_tokens - counted_input_tokens)
 
@@ -1702,14 +1712,24 @@ def _cached_content_tokens(
 _DEPLOYMENT_PRICES: Final = TypeAdapter(tuple[DeploymentPricing, ...])
 
 
-def _cached_cost_per_token(model_info: Mapping[str, object]) -> float | None:
+def _input_rate(model_info: Mapping[str, object], *, holds_audio: bool) -> float | None:
+    text_rate: Final = _to_float(model_info.get("input_cost_per_token"))
+    audio_rate: Final = _highest_deployment_rate(model_info, "input_cost_per_audio_token") if holds_audio else None
+    return text_rate if text_rate is None or audio_rate is None else max(text_rate, audio_rate)
+
+
+def _tier_input_rate(tier: Mapping[str, object], *, holds_audio: bool) -> float:
+    text_rate: Final = tier_rate(tier, "input_cost_per_token")
+    return max(text_rate, tier_rate(tier, "input_cost_per_audio_token")) if holds_audio else text_rate
+
+
+def _highest_deployment_rate(model_info: Mapping[str, object], cost_key: str) -> float | None:
     input_rate: Final = _to_float(model_info.get("input_cost_per_token"))
-    cache_read_rate: Final = _to_float(model_info.get("cache_read_input_token_cost"))
+    group_rate: Final = _to_float(model_info.get(cost_key))
     deployments: Final = _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
     rates: Final = tuple(
-        pricing.costs.get("cache_read_input_token_cost", pricing.costs.get("input_cost_per_token", input_rate))
-        for pricing in deployments
-    ) or (input_rate if cache_read_rate is None else cache_read_rate,)
+        pricing.costs.get(cost_key, pricing.costs.get("input_cost_per_token", input_rate)) for pricing in deployments
+    ) or (input_rate if group_rate is None else group_rate,)
     known_rates: Final = tuple(rate for rate in rates if rate is not None)
     return max(known_rates) if len(known_rates) == len(rates) else None
 

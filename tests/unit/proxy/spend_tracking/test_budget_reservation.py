@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import math
+import wave
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
@@ -34,6 +37,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
     _get_budget_counters,
     _get_team_member_budget_counter,
+    _input_cost_for_cost_info,
     _max_cost_for_cost_info,
     count_request_input_tokens,
     customer_window_counters,
@@ -1070,6 +1074,156 @@ async def test_a_gemini_body_is_counted_for_the_reservation_from_its_raw_body(ro
 
     assert counts == {GEMINI_MODEL: _gemini_question_tokens()}
     assert counts[GEMINI_MODEL] > 0
+
+
+_WAV_AUDIO: Final = {"mimeType": "audio/wav", "data": "UklGRg=="}
+
+
+@pytest.mark.parametrize(
+    "audio_part",
+    [
+        pytest.param({"inlineData": _WAV_AUDIO}, id="inline-data"),
+        pytest.param({"inline_data": {"mime_type": "audio/ogg", "data": "T2dnUw=="}}, id="snake-case"),
+        pytest.param(
+            {"functionResponse": {"name": "record", "response": {}, "parts": [{"inlineData": _WAV_AUDIO}]}},
+            id="in-a-function-response",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model_info", "text_rate"),
+    [
+        pytest.param(
+            {"input_cost_per_token": 1e-06, "input_cost_per_audio_token": 3e-06, "output_cost_per_token": 4e-06},
+            1e-06,
+            id="flat",
+        ),
+        pytest.param(
+            {
+                "tiered_pricing": [
+                    {
+                        "range": [0, 10_000],
+                        "input_cost_per_token": 1e-06,
+                        "input_cost_per_audio_token": 3e-06,
+                        "output_cost_per_token": 4e-06,
+                    }
+                ]
+            },
+            1e-06,
+            id="tiered",
+        ),
+        pytest.param(
+            {"input_cost_per_token": 3e-06, "input_cost_per_audio_token": 1e-06, "output_cost_per_token": 4e-06},
+            3e-06,
+            id="audio-cheaper-than-text",
+        ),
+    ],
+)
+def test_a_gemini_body_with_inline_audio_holds_its_input_at_the_higher_of_the_text_and_audio_rates(
+    audio_part: dict[str, object], model_info: dict[str, object], text_rate: float
+) -> None:
+    def held(parts: list[object]) -> tuple[float | None, float | None]:
+        body: Final = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": 100}}
+        pricing: Final = {"request_body": body, "route": GEMINI_ROUTES[0], "model": "custom-gemini"}
+        return (
+            _max_cost_for_cost_info(
+                **pricing, model_info=model_info, requested_output_tokens=100, output_multiplier=1, input_tokens=200
+            ),
+            _input_cost_for_cost_info(**pricing, model_info=model_info, input_tokens=200),
+        )
+
+    assert held([{"text": "Transcribe this."}, audio_part]) == (
+        pytest.approx(200 * 3e-06 + 100 * 4e-06),
+        pytest.approx(200 * 3e-06),
+    )
+    assert held(["Transcribe this."]) == (
+        pytest.approx(200 * text_rate + 100 * 4e-06),
+        pytest.approx(200 * text_rate),
+    )
+
+
+def test_a_gemini_audio_hold_uses_the_cost_maps_audio_rate() -> None:
+    model: Final = "gemini-2.5-flash"
+    info: Final = litellm.get_model_info(model)
+    audio_rate: Final = info.get("input_cost_per_audio_token")
+    text_rate: Final = info.get("input_cost_per_token")
+    assert isinstance(audio_rate, float) and isinstance(text_rate, float) and audio_rate > text_rate
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Transcribe this."}, {"inlineData": _WAV_AUDIO}]}],
+        "generationConfig": {"maxOutputTokens": 64},
+    }
+    route: Final = f"/v1beta/models/{model}:generateContent"
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=None, input_token_counts={model: 200}
+    )
+    floor: Final = estimate_request_input_cost(
+        request_body=body, route=route, llm_router=None, input_token_counts={model: 200}
+    )
+
+    output_rate: Final = max(
+        rate
+        for rate in (info.get("output_cost_per_token"), info.get("output_cost_per_reasoning_token"))
+        if isinstance(rate, float)
+    )
+    assert reserved == pytest.approx(200 * audio_rate + 64 * output_rate)
+    assert floor == pytest.approx(200 * audio_rate)
+
+
+def _wav_base64(seconds: int) -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as recording:
+        recording.setnchannels(1)
+        recording.setsampwidth(2)
+        recording.setframerate(16_000)
+        recording.writeframes(b"\x00\x00" * 16_000 * seconds)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+@pytest.mark.asyncio
+async def test_inline_audio_sent_to_an_alias_counts_at_the_rate_of_the_gemini_model_it_serves() -> None:
+    served: Final = "gemini/gemini-2.5-flash"
+    router: Final = Router(model_list=[{"model_name": "voice-notes", "litellm_params": {"model": served, "api_key": "k"}}])
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": "Transcribe this."}, {"inlineData": {"mimeType": "audio/wav", "data": _wav_base64(4)}}],
+            }
+        ]
+    }
+
+    counts: Final = await count_request_input_tokens(
+        request_body=body,
+        route="/v1beta/models/voice-notes:generateContent",
+        llm_router=router,
+        team_id=None,
+        raw_body=json.dumps(body).encode(),
+    )
+
+    assert counts == {"voice-notes": count_input_tokens_for_model(request_body=body, model=served)}
+
+
+@pytest.mark.parametrize(
+    ("route", "body"),
+    [
+        ("/v1/chat/completions", {"model": GEMINI_MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64}),
+        ("/v1/responses", {"model": GEMINI_MODEL, "input": "hi", "max_output_tokens": 64}),
+    ],
+    ids=["chat", "responses"],
+)
+@pytest.mark.parametrize("field", ["cached_content", "cachedContent"])
+def test_a_cached_content_name_on_a_chat_or_responses_body_leaves_the_hold_unchanged(
+    route: str, body: dict[str, object], field: str
+) -> None:
+    plain: Final = estimate_request_max_cost(request_body=body, route=route, llm_router=None)
+
+    named: Final = estimate_request_max_cost(
+        request_body=body | {field: "cachedContents/ctx-1"}, route=route, llm_router=None
+    )
+
+    assert plain is not None
+    assert named == pytest.approx(plain)
 
 
 def _priced_responses_router() -> Router:

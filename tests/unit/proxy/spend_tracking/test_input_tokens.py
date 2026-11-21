@@ -420,6 +420,30 @@ def test_inline_gemini_audio_counts_by_its_duration() -> None:
     assert four_seconds - text_only == 2 * (two_seconds - text_only)
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param(
+            {"text": "Check the weather first. " * 20, "functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
+            id="text-beside-a-function-call",
+        ),
+        pytest.param(
+            {"text": "", "functionResponse": {"name": "get_weather", "response": {"forecast": "sunny " * 200}}},
+            id="empty-text-beside-a-function-response",
+        ),
+        pytest.param(
+            {"text": "Transcribe this. " * 20, "inlineData": {"mimeType": "audio/wav", "data": _wav_base64(2)}},
+            id="text-beside-inline-audio",
+        ),
+    ],
+)
+def test_a_gemini_part_carrying_several_fields_counts_each_like_its_own_part(fields: dict[str, object]) -> None:
+    merged: Final = _gemini_tokens(_user(fields))
+
+    assert merged is not None
+    assert merged == _gemini_tokens(_user(*({key: value} for key, value in fields.items())))
+
+
 def test_media_nested_in_a_gemini_function_response_counts_like_a_top_level_part() -> None:
     audio: Final = {"inlineData": {"mimeType": "audio/wav", "data": _wav_base64(2)}}
     response: Final = {"name": "record", "response": {"status": "ok"}}
