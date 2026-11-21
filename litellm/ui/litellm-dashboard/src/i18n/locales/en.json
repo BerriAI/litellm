@@ -9297,6 +9297,7 @@
     },
     "inheritedBudgetHint": {
       "scopes": {
+        "key": "Key",
         "team": "Team",
         "teamMember": "Team member",
         "organization": "Organization",
@@ -9304,6 +9305,18 @@
       },
       "memberAlias": "{{member}} in {{team}}",
       "intro": "This key has no budget of its own, but its spend still counts toward:"
+    },
+    "appliedBudgets": {
+      "title": "Budgets that apply",
+      "explainer": "Each limit is checked on its own, and requests stop as soon as any one of them is reached.",
+      "empty": "No budget limits this key. Spend is tracked but never blocked.",
+      "thisKey": "This key",
+      "closestToLimit": "Closest to limit",
+      "spendOfLimit": "${{spend}} of ${{limit}}",
+      "limitOnly": "${{limit}} limit",
+      "percentUsed": "{{percent}}% used",
+      "resetsEvery": "Resets every {{duration}}",
+      "noReset": "Does not reset"
     },
     "multiSelect": {
       "placeholder": "Select options",
