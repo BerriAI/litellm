@@ -63,7 +63,6 @@ def summary_from_reply(text: str | None) -> str | None:
 
 
 def _no_summary_error(model: str | None, llm_provider: str | None) -> litellm.APIError:
-    # A 5xx tells the client to retry the compaction, where an empty reply would fail its turn
     return litellm.APIError(
         status_code=502,
         message=f"{model} returned no summary text for the compaction_trigger request",
