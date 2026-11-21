@@ -92,3 +92,20 @@ async def test_create_with_api_version_reaches_the_provider_and_only_azure_gets_
     assert isinstance(job, LiteLLMFineTuningJob)
     assert job.id == PROVIDER_JOB["id"]
     assert sent.calls.last.request.url.params.get("api-version") == sent_api_version
+
+
+@pytest.mark.parametrize(
+    ("func", "args", "expected_method", "expected_str"),
+    [
+        (litellm.create_fine_tuning_job, {"model": "m", "training_file": "f"}, "create_fine_tuning_job", "create_fine_tuning_job"),
+        (litellm.cancel_fine_tuning_job, {"fine_tuning_job_id": "ft-123"}, "cancel_fine_tuning_job", "cancel_fine_tuning_job"),
+        (litellm.list_fine_tuning_jobs, {}, "list_fine_tuning_jobs", "list_fine_tuning_jobs"),
+        (litellm.retrieve_fine_tuning_job, {"fine_tuning_job_id": "ft-123"}, "retrieve_fine_tuning_job", "retrieve_fine_tuning_job"),
+    ],
+)
+def test_fine_tuning_unsupported_provider_error(func, args, expected_method, expected_str) -> None:
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        func(**args, custom_llm_provider="unsupported_provider")
+
+    assert expected_str in str(exc_info.value)
+    assert exc_info.value.response.request.method == expected_method
