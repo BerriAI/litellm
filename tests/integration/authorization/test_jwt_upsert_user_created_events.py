@@ -35,7 +35,7 @@ def _drain_alerts(sink: Wire) -> tuple[str, ...]:
 
 def _created_audit_rows(user_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
-        'SELECT object_id, action, table_name FROM "LiteLLM_AuditLog" WHERE object_id = %s AND action = %s',
+        'SELECT object_id, action, table_name, changed_by FROM "LiteLLM_AuditLog" WHERE object_id = %s AND action = %s',
         (user_id, "created"),
     )
 
@@ -102,7 +102,9 @@ def test_jwt_upserted_user_fires_the_user_created_alert_and_audit_log_once(gatew
             audit_rows: Final = eventually(
                 lambda: _created_audit_rows(subject), lambda rows: len(rows) == 1, return_last_on_timeout=True
             )
-            assert audit_rows == [{"object_id": subject, "action": "created", "table_name": "LiteLLM_UserTable"}]
+            assert audit_rows == [
+                {"object_id": subject, "action": "created", "table_name": "LiteLLM_UserTable", "changed_by": subject}
+            ]
 
             complete()
             assert _drain_alerts(alerts) == (), "a returning JWT user is not announced as created again"

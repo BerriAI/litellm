@@ -507,7 +507,7 @@ _ROLES_NEW_USER_ACCEPTS: Final = frozenset(
 
 async def announce_user_created_at_sign_in(user: LiteLLM_UserTable) -> None:
     """Sends the alert, audit log and created hook `/user/new` gives its users for a user created at sign-in."""
-    creator: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    creator: Final = UserAPIKeyAuth(user_id=user.user_id)
     identity: Final = {
         "user_id": user.user_id,
         "user_email": user.user_email,
