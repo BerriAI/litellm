@@ -5,6 +5,7 @@ import pytest
 from mcp.shared.exceptions import MCPError
 
 from litellm.proxy.mcp_server.events.upstream import (
+    EventsClientSession,
     Overflow,
     StreamFrame,
     StreamRoute,
@@ -132,3 +133,47 @@ async def test_an_overflow_that_cannot_fit_at_the_end_is_still_read_after_the_la
     assert received[-2:] == [_frame("255"), Overflow(cursor="256")]
     with pytest.raises(anyio.EndOfStream):
         await reader.receive()
+
+
+@pytest.mark.asyncio
+async def test_an_events_call_does_not_change_the_session_later_tool_calls_use() -> None:
+    from mcp.client.session import ClientSession
+
+    seen: Final[list[type]] = []  # mutable-ok: records the session type of each call
+
+    async with events_client(EventsUpstream()) as client:
+        await call(client, "events/list", {}, {}, 5.0)
+
+        async def probe(session: ClientSession) -> dict[str, object]:
+            seen.append(type(session))
+            return {}
+
+        await client.run_with_session(probe, quiet_on_error=True)
+    assert seen and seen[0] is not EventsClientSession
+
+
+@pytest.mark.asyncio
+async def test_a_terminated_notice_survives_a_full_buffer_and_arrives_after_the_overflow() -> None:
+    route: Final = StreamRoute()
+    for index in range(257):
+        route.deliver(_frame(str(index)))
+    terminated: Final = StreamFrame(
+        "notifications/events/terminated", {"error": {"code": -32024, "message": "Forbidden"}}
+    )
+    route.deliver(terminated)
+    route.finish(None)
+    reader: Final = route.reader()
+    received: Final = [await reader.receive() for _ in range(258)]
+    assert received[-2:] == [Overflow(cursor="256"), terminated]
+    with pytest.raises(anyio.EndOfStream):
+        await reader.receive()
+
+
+@pytest.mark.asyncio
+async def test_draining_a_full_buffer_releases_the_overflow_without_new_upstream_frames() -> None:
+    route: Final = StreamRoute()
+    for index in range(257):
+        route.deliver(_frame(str(index)))
+    reader: Final = route.reader()
+    received: Final = [await reader.receive() for _ in range(257)]
+    assert received[-1] == Overflow(cursor="256")

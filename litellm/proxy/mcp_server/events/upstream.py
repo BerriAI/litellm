@@ -1,4 +1,5 @@
 import itertools
+from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -53,6 +54,9 @@ class StreamFrame:
     params: JsonObject
 
 
+_DROPPABLE: Final = frozenset({"notifications/events/event", "notifications/events/heartbeat"})
+
+
 @dataclass(frozen=True, slots=True)
 class Overflow:
     cursor: str | None
@@ -63,6 +67,10 @@ class Frames(Protocol):
 
 
 class StreamRoute:
+    """A bounded buffer between the upstream stream and the relay. Under backpressure, event and heartbeat
+    frames are dropped and reported as one overflow notice; error and terminated frames are held and always
+    delivered, in order, after it."""
+
     def __init__(self) -> None:
         streams: Final = anyio.create_memory_object_stream[StreamFrame | Overflow](_FRAME_BUFFER)
         self.send: MemoryObjectSendStream[StreamFrame | Overflow] = streams[0]
@@ -70,47 +78,62 @@ class StreamRoute:
         self.failure: MCPError | None = None
         self._dropped_cursor: str | None = None
         self._dropping = False
-        self._trailing: Overflow | None = None
+        self._held: deque[StreamFrame] = deque()  # mutable-ok: control frames waiting for buffer space
 
     def deliver(self, frame: StreamFrame) -> None:
-        if self._dropping and self._flush_overflow():
-            self._dropping = False
+        if not self._flush():
+            self._defer(frame)
+            return
         try:
             self.send.send_nowait(frame)
         except anyio.WouldBlock:
+            self._defer(frame)
+        except anyio.ClosedResourceError:
+            return
+
+    def _defer(self, frame: StreamFrame) -> None:
+        if frame.method in _DROPPABLE:
             self._dropping = True
             cursor: Final = frame.params.get("cursor")
             if isinstance(cursor, str):
                 self._dropped_cursor = cursor
-        except anyio.ClosedResourceError:
-            return
+        else:
+            self._held.append(frame)
 
-    def _flush_overflow(self) -> bool:
+    def _flush(self) -> bool:
+        """Send the overflow notice, then held control frames, while there is room; True once none remain."""
         try:
-            self.send.send_nowait(Overflow(cursor=self._dropped_cursor))
-        except anyio.WouldBlock:
+            if self._dropping:
+                self.send.send_nowait(Overflow(cursor=self._dropped_cursor))
+                self._dropping = False
+            while self._held:
+                self.send.send_nowait(self._held[0])
+                self._held.popleft()
+        except (anyio.WouldBlock, anyio.ClosedResourceError):
             return False
         return True
 
     def finish(self, failure: MCPError | None) -> None:
         self.failure = failure
-        if self._dropping and not self._flush_overflow():
-            self._trailing = Overflow(cursor=self._dropped_cursor)
+        self._flush()
         self.send.close()
 
     def reader(self) -> "RouteReader":
         return RouteReader(self)
 
     async def next_frame(self) -> StreamFrame | Overflow:
-        """The next frame; after the last one, an overflow notice the full buffer could not take."""
+        """The next frame. Reading makes room, so a pending notice is released without waiting for the upstream;
+        after the last buffered frame come any notices the full buffer could not take."""
+        self._flush()
         try:
             return await self.receive.receive()
         except anyio.EndOfStream:
-            trailing: Final = self._trailing
-            if trailing is None:
-                raise
-            self._trailing = None
-            return trailing
+            if self._dropping:
+                self._dropping = False
+                return Overflow(cursor=self._dropped_cursor)
+            if self._held:
+                return self._held.popleft()
+            raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,8 +240,7 @@ async def _run(
             raise MCPError(code=-32603, message="Events session unavailable")
         return await operation(session)
 
-    client.route_session_type(EventsClientSession)
-    return await client.run_with_session(typed, quiet_on_error=True)
+    return await client.run_with_session(typed, quiet_on_error=True, session_type=EventsClientSession)
 
 
 async def call(

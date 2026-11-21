@@ -545,7 +545,6 @@ class MCPClient:
         self._logging_callback: Callable | None = logging_callback
         self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         self._session_callbacks_override: _SessionCallbackMap | None = None
-        self._session_type_override: type[ClientSession] | None = None
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -572,9 +571,6 @@ class MCPClient:
 
     def route_session_callbacks(self, callbacks: _SessionCallbackMap) -> None:
         self._session_callbacks_override = callbacks
-
-    def route_session_type(self, session_type: type[ClientSession]) -> None:
-        self._session_type_override = session_type
 
     async def discovery_auth_fingerprint(self) -> str:
         return self._hash_discovery_auth(await self.prepare_request_auth(), self._aws_identity())
@@ -763,6 +759,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        session_type: type[ClientSession] | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -792,10 +789,10 @@ class MCPClient:
                     )
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
-                    session_type: Final = self._session_type_override or (
+                    chosen_session_type: Final = session_type or (
                         _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
                     )
-                    session_ctx: Final = session_type(
+                    session_ctx: Final = chosen_session_type(
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self.timeout,
@@ -870,6 +867,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        session_type: type[ClientSession] | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -889,8 +887,9 @@ class MCPClient:
                     on_stream_error=on_stream_error,
                     on_cleanup=on_cleanup,
                     on_notification=on_notification,
+                    session_type=session_type,
                 )
-                if on_stream_error is not None or on_cleanup is not None or on_notification is not None
+                if any(hook is not None for hook in (on_stream_error, on_cleanup, on_notification, session_type))
                 else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
             )
             result: Final = await execution
