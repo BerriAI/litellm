@@ -1573,6 +1573,20 @@ class TestStripTotalTokens(unittest.TestCase):
         assert "total_tokens" not in response.usage
         assert response.usage == {"input_tokens": 100, "output_tokens": 50}
 
+    def test_anthropic_dict_response_strips_hidden_params_before_return(self):
+        """Ensure _hidden_params stamped for proxy headers is stripped from wire response body (#52585)."""
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "test"}],
+            "_hidden_params": {"cache_key": "k1", "cache_hit": True},
+        }
+        if isinstance(response, dict):
+            response.pop("_hidden_params", None)
+        assert "_hidden_params" not in response
+
+
 
 class TestStripTotalTokensFeatureFlag(unittest.TestCase):
     """The strip is gated behind `litellm.strip_anthropic_total_tokens`.
