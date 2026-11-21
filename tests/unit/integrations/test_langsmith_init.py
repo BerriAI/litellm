@@ -24,11 +24,7 @@ def reset_redact_flag():
 
 
 class TestLangsmithLoggerInit:
-    """Test cases for LangSmith logger initialization, particularly sampling rate handling.
-
-    These tests verify that the sampling_rate attribute is set during initialization.
-    Note: The current implementation has some edge cases in the sampling rate logic.
-    """
+    """Sampling rate comes from the constructor when set, otherwise a float env var, otherwise 1.0."""
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "1"}, clear=False)
     def test_langsmith_sampling_rate_parameter_respected_with_valid_env(self):
@@ -44,18 +40,27 @@ class TestLangsmithLoggerInit:
             logger.sampling_rate == sampling_rate
         ), f"Expected sampling_rate to be {sampling_rate}, got {logger.sampling_rate}"
 
+    @patch.dict(os.environ, {}, clear=True)
+    def test_constructor_sampling_rate_without_env_var(self):
+        """A constructor rate applies even when LANGSMITH_SAMPLING_RATE is unset."""
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+            langsmith_sampling_rate=0.25,
+        )
+
+        assert logger.sampling_rate == 0.25
+
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "1"}, clear=False)
-    def test_langsmith_sampling_rate_zero_parameter_falls_back_to_env(self):
-        """Test that 0.0 parameter falls back to env var due to falsy value."""
+    def test_langsmith_sampling_rate_zero_parameter_is_kept(self):
+        """A constructor rate of 0.0 disables sampling instead of falling through to the env var."""
         logger = LangsmithLogger(
             langsmith_api_key="test-key",
             langsmith_project="test-project",
             langsmith_sampling_rate=0.0,
         )
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected sampling_rate to fall back to 1.0 from env, got {logger.sampling_rate}"
+        assert logger.sampling_rate == 0.0
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "1"}, clear=False)
     def test_langsmith_sampling_rate_from_integer_env_var(self):
@@ -69,15 +74,22 @@ class TestLangsmithLoggerInit:
         ), f"Expected sampling_rate to be 1.0 from env var, got {logger.sampling_rate}"
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "0.8"}, clear=False)
-    def test_langsmith_sampling_rate_decimal_env_var_ignored(self):
-        """Test that decimal environment variables are ignored due to isdigit() check."""
+    def test_langsmith_sampling_rate_decimal_env_var(self):
+        """Fractional environment values are sampling rates."""
         logger = LangsmithLogger(
             langsmith_api_key="test-key", langsmith_project="test-project"
         )
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected sampling_rate to default to 1.0 (decimal env ignored), got {logger.sampling_rate}"
+        assert logger.sampling_rate == 0.8
+
+    @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "0.0"}, clear=False)
+    def test_langsmith_sampling_rate_zero_env_var_disables_sampling(self):
+        """A fractional zero from the environment samples nothing."""
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key", langsmith_project="test-project"
+        )
+
+        assert logger.sampling_rate == 0.0
 
     @patch.dict(os.environ, {}, clear=True)
     def test_langsmith_sampling_rate_default_value(self):
@@ -93,13 +105,15 @@ class TestLangsmithLoggerInit:
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "invalid"}, clear=False)
     def test_langsmith_sampling_rate_invalid_env_var_defaults(self):
         """Test that invalid environment variable falls back to default value."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        with patch("litellm.integrations.langsmith.verbose_logger") as mock_logger:
+            logger = LangsmithLogger(
+                langsmith_api_key="test-key", langsmith_project="test-project"
+            )
 
         assert (
             logger.sampling_rate == 1.0
         ), f"Expected sampling_rate to default to 1.0 with invalid env var, got {logger.sampling_rate}"
+        mock_logger.warning.assert_called_once()
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": ""}, clear=False)
     def test_langsmith_sampling_rate_empty_env_var_defaults(self):

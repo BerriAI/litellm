@@ -46,6 +46,17 @@ def is_serializable(value):
     return not isinstance(value, non_serializable_types)
 
 
+def _parse_sampling_rate(value: str | None) -> float | None:
+    """Return a sampling rate, or None when the value is missing or not a float."""
+    if value is None or not value.strip():
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        verbose_logger.warning("Ignoring invalid LANGSMITH_SAMPLING_RATE=%r", value)
+        return None
+
+
 class LangsmithLogger(CustomBatchLogger):
     preserve_events_added_during_flush = True
 
@@ -72,10 +83,12 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_base_url=langsmith_base_url,
             langsmith_tenant_id=langsmith_tenant_id,
         )
+        env_rate: float | None = _parse_sampling_rate(os.getenv("LANGSMITH_SAMPLING_RATE"))
         self.sampling_rate: float = (
-            langsmith_sampling_rate or float(os.getenv("LANGSMITH_SAMPLING_RATE"))
-            if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-            and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
+            float(langsmith_sampling_rate)
+            if langsmith_sampling_rate is not None
+            else env_rate
+            if env_rate is not None
             else 1.0
         )
         self.langsmith_default_run_name = os.getenv("LANGSMITH_DEFAULT_RUN_NAME", "LLMRun")
