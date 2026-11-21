@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -12,7 +13,20 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Ok
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
 from ..fakes import occurrence, runtime, screen_blocking, server
-from .test_worker import NOW, ROW
+
+NOW: Final = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)
+ROW: Final = SubscriptionRow(
+    id="sub_1",
+    principal="key:1",
+    key_hash="abc",
+    server_id="srv-ci",
+    event_name="build.failed",
+    arguments={"repo": "acme/web"},
+    client_url="https://client.example/hook",
+    client_secret="whsec_" + "A" * 44,
+    upstream_secret="whsec_" + "A" * 44,
+    status="active",
+)
 
 CALLER: Final = UserAPIKeyAuth(api_key="sk-caller", user_id="user-1")
 NOW_SECONDS: Final = 1_800_000_000

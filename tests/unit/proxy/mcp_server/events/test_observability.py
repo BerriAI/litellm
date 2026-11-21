@@ -9,7 +9,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.events.observability import EventActivity, record, write_log_row
 
-from .fakes import CALLER
+from .fixtures import CALLER
 
 
 def _activity(caller: UserAPIKeyAuth | None = CALLER, **fields: object) -> EventActivity:  # noqa: ANN003

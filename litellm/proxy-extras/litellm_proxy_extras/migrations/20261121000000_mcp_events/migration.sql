@@ -2,8 +2,6 @@ SET LOCAL lock_timeout = '10s';
 
 ALTER TABLE "LiteLLM_ObjectPermissionTable" ADD COLUMN IF NOT EXISTS "mcp_event_permissions" JSONB;
 
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "events" JSONB;
-
 CREATE TABLE IF NOT EXISTS "LiteLLM_MCPEventSubscription" (
     "id" TEXT NOT NULL,
     "principal" TEXT NOT NULL,

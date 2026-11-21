@@ -136,13 +136,13 @@ async def test_set_object_permission_persists_skills():
 
 
 @pytest.mark.asyncio
-async def test_set_object_permission_persists_mcp_event_permissions_as_json():
-    mock_prisma_client = MagicMock()
-    mock_created_permission = MagicMock()
+async def test_set_object_permission_persists_mcp_event_permissions_as_json() -> None:
+    mock_prisma_client: Final = MagicMock()
+    mock_created_permission: Final = MagicMock()
     mock_created_permission.object_permission_id = "perm_id"
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(return_value=mock_created_permission)
 
-    data_json = {
+    data_json: Final = {
         "object_permission": LiteLLM_ObjectPermissionBase(
             mcp_event_permissions={"3e64-server": ["incident.created"]}
         ).model_dump(),
@@ -150,7 +150,7 @@ async def test_set_object_permission_persists_mcp_event_permissions_as_json():
 
     await set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
 
-    created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    created_data: Final = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
     assert json.loads(created_data["mcp_event_permissions"]) == {"3e64-server": ["incident.created"]}
 
 
