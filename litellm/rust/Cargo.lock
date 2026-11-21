@@ -4782,6 +4782,7 @@ dependencies = [
  "base64 0.22.1",
  "criterion",
  "hex",
+ "litellm-host",
  "num-bigint 0.4.8",
  "num-traits",
  "rstest",
