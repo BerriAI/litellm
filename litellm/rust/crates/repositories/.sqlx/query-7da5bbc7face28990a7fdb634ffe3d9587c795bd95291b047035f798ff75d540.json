@@ -1,0 +1,161 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT access_group_id,\n       access_group_name,\n       description,\n       COALESCE(access_model_names, '{}') AS \"access_model_names!\",\n       COALESCE(access_mcp_server_ids, '{}') AS \"access_mcp_server_ids!\",\n       mcp_tool_permissions AS \"mcp_tool_permissions: RawJson\",\n       COALESCE(access_agent_ids, '{}') AS \"access_agent_ids!\",\n       COALESCE(access_skill_names, '{}') AS \"access_skill_names!\",\n       COALESCE(access_vector_store_ids, '{}') AS \"access_vector_store_ids!\",\n       COALESCE(assigned_team_ids, '{}') AS \"assigned_team_ids!\",\n       COALESCE(assigned_key_ids, '{}') AS \"assigned_key_ids!\",\n       created_at,\n       created_by,\n       updated_at,\n       updated_by\nFROM \"LiteLLM_AccessGroupTable\"\nWHERE access_group_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access_group_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "access_group_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "access_group_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "access_group_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "access_model_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "access_mcp_server_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "mcp_tool_permissions: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "mcp_tool_permissions"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "access_agent_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "access_skill_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "access_vector_store_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "assigned_team_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "assigned_key_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "updated_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null,
+      null,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "7da5bbc7face28990a7fdb634ffe3d9587c795bd95291b047035f798ff75d540"
+}

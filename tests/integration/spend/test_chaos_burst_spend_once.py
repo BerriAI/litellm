@@ -25,7 +25,7 @@ def test_burst_with_partial_upstream_failures_logs_each_success_once(gateway: Ga
         scenario.cleanups.callback(remove_script)
         configured: Final = upstream.post(f"/__scripts/{provider_model}", json={"statuses": statuses})
         assert configured.status_code == 200, configured.text
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
 
         def attempt(index: int) -> httpx.Response:
             return gateway.request(

@@ -30,6 +30,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _CLAUDE: Final = cc.OPUS
 _BEDROCK_CLAUDE: Final = "anthropic.claude-sonnet-5-5"
 _MISTRAL: Final = "mistral-large-latest"

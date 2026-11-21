@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -23,8 +23,6 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    team_membership_auth_cache_key,
-    team_membership_reservation_cache_key,
 )
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -33,14 +31,17 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.team_endpoints import (
     _emit_team_members_metric,  # pyright: ignore[reportPrivateUsage]  # same gauge /team/member_add moves
     _schedule_team_membership_audit_log,  # pyright: ignore[reportPrivateUsage]  # same audit row /team/member_add writes
+    member_cache_keys,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     DETACH_TEAM_FROM_USERS_SQL,
     TEAM_ADVISORY_LOCK_SQL,
     USER_ROWS_LOCK_SQL,
 )
+from litellm.proxy.management_helpers.utils import reject_budget_windows
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
+from litellm.repositories.team_repository import TeamRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -145,7 +146,7 @@ def _changes_nothing(plan: RosterPlan) -> bool:
 
 
 async def _unchanged_roster(prisma_client: PrismaClient, team_id: str) -> RosterSync | TeamGone:
-    team_row: Final = await prisma_client.writer_db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    team_row: Final = await TeamRepository(prisma_client, use_writer=True).table.find_unique(where={"team_id": team_id})
     if team_row is None:
         return TeamGone(team_id=team_id)
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
@@ -196,6 +197,8 @@ async def _member_budget_ids(
     if default_budget_id is None:
         return MappingProxyType({})
     default_budget: Final = await _budget_tx_db(tx).find_unique(where={"budget_id": default_budget_id})
+    if default_budget is not None:
+        reject_budget_windows(default_budget.model_dump())
     return MappingProxyType(dict.fromkeys(user_ids, default_budget_id if default_budget is not None else None))
 
 
@@ -277,7 +280,7 @@ async def _settle_caches(
     evicted: Final = (
         *deleted_tokens,
         *removal.jwt_mapping_cache_keys,
-        *_member_cache_keys(team.team_id, changed_user_ids),
+        *member_cache_keys(team.team_id, changed_user_ids),
     )
     evict_local(cache_keys=evicted, user_api_key_cache=user_api_key_cache)
     await evict_shared(cache_keys=evicted, cache=user_api_key_cache)
@@ -290,13 +293,6 @@ async def _settle_caches(
         proxy_logging_obj=proxy_logging_obj,
     )
     await broadcast_evictions(cache_keys=evicted)
-
-
-def _member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
-    for user_id in user_ids:
-        yield user_id
-        yield team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
-        yield team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
 
 async def sync_team_roster(

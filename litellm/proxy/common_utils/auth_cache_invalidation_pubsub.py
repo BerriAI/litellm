@@ -1,11 +1,15 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Protocol
+
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
     ConfigSyncPubSub,
     _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -14,6 +18,13 @@ from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # leg
     pubsub_capable_client,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+
+
+class SpendCounterCopies(Protocol):
+    """This worker's memory copies of the spend counters, which a broadcast SET or delete reaches too."""
+
+    def apply_broadcast(self, cache_key: str, new_value: float | None, ttl: float | None) -> None: ...
+
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -30,6 +41,7 @@ _pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong
 _in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
@@ -46,7 +58,9 @@ class _CacheInvalidationMessage:
 
 
 def _cache_invalidation_message_json(cache_key: str, new_value: float | None = None, ttl: float | None = None) -> str:
-    message: Final = asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
+    message: Final[Mapping[str, object]] = MappingProxyType(
+        asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
+    )
     return json.dumps({field: value for field, value in message.items() if value is not None})
 
 
@@ -62,10 +76,10 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
     if not isinstance(data, str):
         return None
     try:
-        parsed: Final = json.loads(data)
+        parsed: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(data)))
     except json.JSONDecodeError:
         return None
-    if not isinstance(parsed, dict):
+    if parsed is None:
         return None
     cache_key: Final = parsed.get("cache_key")
     if not isinstance(cache_key, str):
@@ -176,7 +190,7 @@ def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache"
 
 
 def _drop_from_memory(cache_key: str, user_api_key_cache: "UserApiKeyCache") -> None:
-    user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
+    user_api_key_cache.delete_local(cache_key)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -202,7 +216,6 @@ async def evict_shared(cache_keys: Sequence[str], cache: "DualCache") -> None:
         )
 
 
-@with_service_target(AUTH_OBJECTS_TARGET)
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.
@@ -212,9 +225,18 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
     stale object enforced until its TTL expires (LIT-3803). Best-effort: the DB write has already
     committed, so a cache backend error must not fail the endpoint.
     """
+    await _evict_and_broadcast(cache_keys, user_api_key_cache)
+
+
+async def evict_state_and_broadcast(cache_keys: Sequence[str], cache: "DualCache") -> None:
+    await _evict_and_broadcast(cache_keys, cache)
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def _evict_and_broadcast(cache_keys: Sequence[str], cache: "UserApiKeyCache | DualCache") -> None:
     for cache_key in cache_keys:
         try:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
+            await cache.async_delete_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
             verbose_proxy_logger.warning(
                 "Failed to evict cached entry %s; a stale object may be served until its TTL expires: %s",
@@ -225,17 +247,28 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_task", "_user_api_key_cache")
+    __slots__ = (
+        "_additional_in_memory_caches",
+        "_evicted_caches",
+        "_redis_cache",
+        "_spend_counters",
+        "_task",
+        "_user_api_key_cache",
+    )
 
     def __init__(
         self,
         redis_cache: "RedisCache",
         user_api_key_cache: "UserApiKeyCache",
         additional_in_memory_caches: Sequence["InMemoryCache"] = (),
+        spend_counters: SpendCounterCopies | None = None,
+        evicted_caches: Sequence["InMemoryCache"] = (),
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
+        self._evicted_caches: Final = tuple(evicted_caches)
+        self._spend_counters: Final = spend_counters
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -290,13 +323,15 @@ class AuthCacheInvalidationSubscriber:
         parsed: Final = _message_from_data(data)
         if parsed is None:
             return
+        if self._spend_counters is not None:
+            self._spend_counters.apply_broadcast(parsed.cache_key, parsed.new_value, parsed.ttl)
         if parsed.new_value is not None:
             for additional_cache in self._additional_in_memory_caches:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
             return
         _drop_from_memory(parsed.cache_key, self._user_api_key_cache)
-        for additional_cache in self._additional_in_memory_caches:
-            additional_cache.delete_cache(parsed.cache_key)
+        for cache in (*self._additional_in_memory_caches, *self._evicted_caches):
+            cache.delete_cache(parsed.cache_key)
 
     @staticmethod
     async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
