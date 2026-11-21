@@ -20,9 +20,9 @@ from anthropic.types import MessageCountTokensToolParam, MessageParam
 from integration._support.bedrock_runtime_peer import answer, marker_of, target_of
 from integration._support.bedrock_runtime_peer import respond as runtime_generation
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
+from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ASSISTANT,
     FOLLOW_UP,
@@ -743,6 +743,27 @@ def test_model_the_runtime_counts_never_reaches_mantle(counting_proxy: OwnedProx
                 _runtime_count_body("Count this message", include_system_and_tools=True),
             ),
         )
+        assert mantle.drain() == ()
+
+
+def test_deployment_with_an_empty_api_base_counts_on_its_runtime_endpoint(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model_info=None,
+            api_key=None,
+            **_litellm_params(_SONNET, ""),
+            aws_bedrock_runtime_endpoint=runtime.url,
+        )
+        response: Final = _count(gateway, _bare(model))
+        assert _payload(response) == {"input_tokens": _RUNTIME_COUNT, **_count_model_source(_SONNET)}, response.text
+        assert _runtime_count_targets(runtime) == (f"/model/{_SONNET}/count-tokens",)
         assert mantle.drain() == ()
 
 
