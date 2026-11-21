@@ -80,12 +80,14 @@ class CodexHarness:
         compact_after_tokens: int | None = None,
         enable: tuple[str, ...] = (),
         disable: tuple[str, ...] = (),
+        fast: bool = False,
     ) -> CodexRun:
         return self._run(
             ("exec",),
             (
                 *_compaction_flags(compact_after_tokens),
                 *_feature_flags(enable=enable, disable=disable),
+                *_fast_mode_flags(fast),
                 "--model",
                 model,
                 "--",
@@ -147,6 +149,10 @@ def _feature_flags(*, enable: tuple[str, ...], disable: tuple[str, ...]) -> tupl
         *chain.from_iterable(("--enable", feature) for feature in enable),
         *chain.from_iterable(("--disable", feature) for feature in disable),
     )
+
+
+def _fast_mode_flags(fast: bool) -> tuple[str, ...]:
+    return ("--config", 'service_tier="priority"') if fast else ()
 
 
 def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
