@@ -77,6 +77,7 @@ async def screen_event(
     from litellm.proxy.mcp_server.utils import mcp_tool_result_structured_content
 
     request_data: Final[_RequestData] = {
+        "model": f"MCP: {gateway_name}",
         "metadata": caller_metadata(caller) if caller is not None else {},
         "mcp_event": {
             "server": server_name,

@@ -95,6 +95,8 @@ async def server_catalog(
     settings: EventsSettings,
     runtime: EventsRuntime,
 ) -> tuple[EventType, ...]:
+    if await runtime.rate_limited(server.server, context.user_api_key_auth):
+        return ()
     target: Final = await runtime.prepare_target(context, server.server, allowed)
     grant: Final = await runtime.grant(server.server.server_id, context.user_api_key_auth)
     listed: Final = tuple(

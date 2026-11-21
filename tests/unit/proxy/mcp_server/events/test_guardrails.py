@@ -161,3 +161,22 @@ def test_event_screening_carries_the_caller_tags_and_admin_metadata() -> None:
     metadata: Final = caller_metadata(caller)
     assert metadata["tags"] == ["key-tag", "team-tag"]
     assert metadata["user_api_key_metadata"] == {"tags": ["key-tag"]}
+
+
+@pytest.mark.asyncio
+async def test_assignment_sees_the_event_as_its_model_so_model_scoped_policies_match() -> None:
+    seen: Final[list[object]] = []  # mutable-ok: the request data assignment saw
+
+    async def record(data: dict[str, object], _caller: UserAPIKeyAuth) -> None:
+        seen.append(data.get("model"))
+
+    await screen_event(
+        occurrence(),
+        server_name="ci",
+        gateway_name="ci-build.failed",
+        subscription_id="sub_1",
+        caller=UserAPIKeyAuth(api_key="sk-a"),
+        callbacks=lambda: (),
+        assign=record,
+    )
+    assert seen == ["MCP: ci-build.failed"]

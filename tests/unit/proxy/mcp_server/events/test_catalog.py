@@ -150,3 +150,17 @@ async def test_a_granted_event_prepares_with_its_upstream_descriptor() -> None:
     prepared: Final = await prepare_event(context(), "ci-build.failed", runtime((server(),)))
     assert isinstance(prepared, Ok)
     assert (prepared.ok.resolved.upstream_name, prepared.ok.descriptor) == ("build.failed", BUILD_FAILED)
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_server_is_not_asked_for_its_catalog() -> None:
+    asked: Final[list[str]] = []  # mutable-ok: records upstream listings
+
+    async def listing(target: SubscriptionTarget) -> tuple[EventType, ...]:
+        asked.append(target.server.server_id)
+        return (BUILD_FAILED,)
+
+    limited: Final = replace(
+        runtime((server(),), rate_limited=True), list_upstream=listing, descriptor_cache=DescriptorCache()
+    )
+    assert (await list_events(context(), SETTINGS, limited), asked) == ((), [])
