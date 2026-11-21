@@ -2,6 +2,7 @@ import base64
 import re
 from collections.abc import AsyncIterator, Iterator, Mapping
 from fractions import Fraction
+from functools import reduce
 from typing import Final
 
 import httpx
@@ -118,6 +119,17 @@ def _opus_seconds(head: bytes, tail: bytes) -> Fraction | None:
     return Fraction(played, _OPUS_GRANULES_PER_SECOND)
 
 
+def _adts_frame_bytes(header: bytes) -> int | None:
+    length: Final = (header[3] & 3) << 11 | header[4] << 3 | header[5] >> 5
+    valid: Final = (
+        header[0] == 0xFF
+        and header[1] & 0xF6 == 0xF0
+        and length >= _ADTS_HEADER_BYTES
+        and header[2] >> 2 & 0xF < len(_ADTS_SAMPLE_RATES)
+    )
+    return length if valid else None
+
+
 class _AdtsFrames:
     """Walks AAC ADTS frame headers as the audio arrives, since only they say how much audio the stream holds."""
 
@@ -132,33 +144,36 @@ class _AdtsFrames:
         if self._broken:
             return
         data: Final = self._carry + audio
-        at = self._skip
+        at = self._skip  # rebind-ok: each frame says where the next one starts
         while at + _ADTS_HEADER_BYTES <= len(data):
             header = data[at : at + _ADTS_HEADER_BYTES]
-            length = (header[3] & 3) << 11 | header[4] << 3 | header[5] >> 5
-            rate_index = header[2] >> 2 & 0xF
-            if header[0] != 0xFF or header[1] & 0xF6 != 0xF0 or length < _ADTS_HEADER_BYTES or rate_index > 12:
+            length = _adts_frame_bytes(header)
+            if length is None:
                 self._broken = True
                 return
-            self._sample_rate = _ADTS_SAMPLE_RATES[rate_index]
+            self._sample_rate = _ADTS_SAMPLE_RATES[header[2] >> 2 & 0xF]
             self._blocks += (header[6] & 3) + 1
             at += length
         self._carry = data[at:]
         self._skip = max(at - len(data), 0)
 
     def seconds(self) -> Fraction | None:
-        if self._broken or self._carry or self._skip or self._blocks == 0:
+        whole_frames: Final = not (self._broken or self._carry or self._skip)
+        if not whole_frames or self._blocks == 0:
             return None
         return Fraction(self._blocks * _AAC_SAMPLES_PER_BLOCK - _AAC_ENCODER_DELAY_SAMPLES, self._sample_rate)
 
 
+def _flac_crc16_step(crc: int, byte: int) -> int:
+    return reduce(
+        lambda shifted, _: (shifted << 1 ^ 0x8005 if shifted & 0x8000 else shifted << 1) & 0xFFFF,
+        range(8),
+        crc ^ byte << 8,
+    )
+
+
 def _flac_crc16(data: bytes) -> int:
-    crc = 0
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = (crc << 1 ^ 0x8005 if crc & 0x8000 else crc << 1) & 0xFFFF
-    return crc
+    return reduce(_flac_crc16_step, data, 0)
 
 
 def _flac_block_size(code: int, extra: bytes) -> int | None:
@@ -182,23 +197,21 @@ def _flac_frame_end_samples(frame: bytes, block_size: int) -> int | None:
     size_code: Final = frame[2] >> 4
     size_at: Final = 4 + number_bytes
     last_block: Final = _flac_block_size(size_code, frame[size_at : size_at + 2])
-    if (
-        leading_ones in (1, 8)
-        or last_block is None
-        or last_block > block_size
-        or _flac_crc16(frame[:-2]) != int.from_bytes(frame[-2:], "big")
-    ):
+    if last_block is None or last_block > block_size or leading_ones in (1, 8):
         return None
-    number = frame[4] & 0xFF >> leading_ones
-    for byte in frame[5:size_at]:
-        number = number << 6 | byte & 0x3F
+    if _flac_crc16(frame[:-2]) != int.from_bytes(frame[-2:], "big"):
+        return None
+    number: Final = reduce(
+        lambda high, byte: high << 6 | byte & 0x3F, frame[5:size_at], frame[4] & 0xFF >> leading_ones
+    )
     return number * block_size + last_block
 
 
 def _flac_seconds(head: bytes, tail: bytes) -> Fraction | None:
     block_size: Final = int.from_bytes(head[10:12], "big")
     sample_rate: Final = int.from_bytes(head[18:21], "big") >> 4
-    if head[:4] != b"fLaC" or head[4] & 0x7F or head[8:10] != head[10:12] or block_size == 0 or sample_rate == 0:
+    fixed_blocks: Final = head[:4] == b"fLaC" and head[4] & 0x7F == 0 and head[8:10] == head[10:12]
+    if not fixed_blocks or block_size == 0 or sample_rate == 0:
         return None
     samples: Final = next(
         (
