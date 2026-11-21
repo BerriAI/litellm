@@ -5288,6 +5288,41 @@ class TestVertexEmbeddingEncodingFormat:
         assert optional_params.get("outputDimensionality") == 256
 
 
+class TestTritonAndDatabricksEmbeddingEncodingFormat:
+    """triton and databricks embeddings must accept encoding_format="float" —
+    it's the OpenAI SDK default and float lists are what these APIs return.
+    Other values keep the unsupported-param behavior. Issue #52636."""
+
+    @pytest.mark.parametrize("provider", ["triton", "databricks"])
+    def test_encoding_format_float_is_accepted_and_dropped(self, provider):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="my-embedding-model",
+            encoding_format="float",
+            custom_llm_provider=provider,
+        )
+        assert "encoding_format" not in optional_params
+
+    @pytest.mark.parametrize("provider", ["triton", "databricks"])
+    def test_encoding_format_base64_still_rejected_without_drop_params(self, provider):
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            litellm.utils.get_optional_params_embeddings(
+                model="my-embedding-model",
+                encoding_format="base64",
+                custom_llm_provider=provider,
+            )
+        assert "encoding_format" in str(excinfo.value)
+
+    @pytest.mark.parametrize("provider", ["triton", "databricks"])
+    def test_encoding_format_base64_dropped_with_drop_params(self, provider):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="my-embedding-model",
+            encoding_format="base64",
+            custom_llm_provider=provider,
+            drop_params=True,
+        )
+        assert "encoding_format" not in optional_params
+
+
 class TestBedrockCohereEmbeddingDispatch:
     """All bedrock cohere.embed models must route to BedrockCohereEmbeddingConfig,
     not just multilingual-v3/v4: english-v3 was falling into the unmapped
