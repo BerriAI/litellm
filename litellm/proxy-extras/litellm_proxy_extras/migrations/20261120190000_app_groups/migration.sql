@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 -- AlterTable
 ALTER TABLE "LiteLLM_AppTable" ADD COLUMN     "app_group_id" TEXT;
 
