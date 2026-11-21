@@ -131,8 +131,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
-    app_cache_key,
-    app_key_resource_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     get_management_object_ttl,
@@ -155,6 +153,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     end_user_counter,
@@ -3461,7 +3460,7 @@ async def delete_cache_team_object(
     keys: Final = (
         f"team_id:{team_id}",
         *((f"team_alias:{team_alias}",) if team_alias else ()),
-        app_cache_key("team", team_id),
+        AuthObject.customer_app("team", team_id).key,
     )
 
     for key in keys:
@@ -3541,7 +3540,7 @@ async def delete_cache_key_object(
         )
 
     await publish_auth_cache_invalidation(cache_key=key)
-    await evict_and_broadcast((app_key_resource_cache_key(hashed_token),), user_api_key_cache)
+    await evict_and_broadcast((AuthObject.customer_app_key_resource(hashed_token).key,), user_api_key_cache)
     await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.KEY, entity_id=hashed_token)
 
 
@@ -3577,7 +3576,7 @@ async def delete_cache_key_objects(
     an auth refill source, so its batch delete runs beside that chain and a hung Redis costs one
     bounded wait there instead of another in line.
     """
-    keys: Final = (*hashed_tokens, *(app_key_resource_cache_key(token) for token in hashed_tokens))
+    keys: Final = (*hashed_tokens, *(AuthObject.customer_app_key_resource(token).key for token in hashed_tokens))
     evict_local(cache_keys=keys, user_api_key_cache=user_api_key_cache)
     usage_eviction: Final = (
         ()
@@ -7885,7 +7884,7 @@ async def delete_cached_project_object(
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
-        cache_keys=(project_cache_key(project_id), app_cache_key("project", project_id)),
+        cache_keys=(project_cache_key(project_id), AuthObject.customer_app("project", project_id).key),
         user_api_key_cache=user_api_key_cache,
     )
 

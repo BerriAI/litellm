@@ -169,7 +169,7 @@ class OpenAIError(BaseLLMException):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: dict | httpx.Headers | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -188,7 +188,7 @@ class OpenAIError(BaseLLMException):
             headers=self.headers,
             request=self.request,
             response=self.response,
-            body=body,
+            body=None if body is None else dict(body),
         )
 
 
@@ -198,6 +198,10 @@ def upstream_error_response(error: Exception) -> httpx.Response | None:
     return error_response_without_credentials(
         error.response.status_code, error.response, "https://docs.litellm.ai/docs"
     )
+
+
+def upstream_error_body(error: Exception) -> Mapping[str, object] | None:
+    return as_str_mapping(error.body) if isinstance(error, openai.APIError) else None
 
 
 _DECODED_JSON: Final = TypeAdapter(object)

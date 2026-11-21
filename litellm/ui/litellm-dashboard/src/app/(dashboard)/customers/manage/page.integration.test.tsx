@@ -160,7 +160,7 @@ describe("customer hierarchy management", () => {
       renderWithProviders(<CustomerHierarchyManager />, options);
       await screen.findByRole("link", { name: kind === "teams" ? "Operations" : "Member Two" }, { timeout: 10_000 });
       const table = screen.getByRole("table", { name: kind === "teams" ? "Customer teams" : "Customer members" });
-      const sort = within(table).getByRole("button", { name: "Spend limit (USD)" });
+      const sort = within(table).getByRole("button", { name: "Max Budget (USD)" });
       act(() => {
         fireEvent.click(sort);
       });
@@ -173,7 +173,7 @@ describe("customer hierarchy management", () => {
       await waitFor(() => expect(listRequests().at(-1)?.searchParams.get("sort")).toBe("budget_asc"));
       expect(listRequests().at(-1)?.searchParams.get("page")).toBe("1");
       act(() => {
-        fireEvent.click(within(screen.getByRole("table")).getByRole("button", { name: "Spend limit (USD)" }));
+        fireEvent.click(within(screen.getByRole("table")).getByRole("button", { name: "Max Budget (USD)" }));
       });
       await waitFor(() => expect(listRequests().at(-1)?.searchParams.get("sort")).toBe("budget_desc"));
     },
@@ -370,7 +370,7 @@ describe("customer hierarchy management", () => {
     await screen.findByRole("row", { name: "Standard" });
     const monthlyInput = () =>
       within(screen.getByRole("row", { name: "Standard" })).getByRole("spinbutton", {
-        name: "Additional spend limit (USD)",
+        name: "Additional Max Budget (USD)",
       });
     act(() => {
       fireEvent.change(monthlyInput(), { target: { value: "15" } });

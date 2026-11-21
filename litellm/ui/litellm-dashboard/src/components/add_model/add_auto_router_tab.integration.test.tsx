@@ -316,6 +316,7 @@ describe("AddAutoRouterTab", () => {
       /quality-custom/,
     );
     expect(screen.queryByRole("button", { name: "Use suggested models" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Your model choices are kept.")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
@@ -397,8 +398,130 @@ describe("AddAutoRouterTab", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "LLM", exact: true }));
     expect(screen.getByRole("combobox", { name: "Judge model" })).toBeInTheDocument();
-    expectTierModel("Simple", "claude-haiku-5-5");
-    expectTierModel("Reasoning", "claude-opus-5-5");
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
+    fireEvent.click(screen.getByRole("radio", { name: "Decisions Model", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    expect(screen.getByRole("button", { name: "Balanced", exact: true })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("saves the chosen classifier and judge while keeping simple model preferences available", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5", "judge-model"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    renderWithProviders(<Harness />);
+    await screen.findByRole("combobox", { name: "Everyday model" });
+    fireEvent.click(screen.getByRole("radio", { name: "LLM", exact: true }));
+    await selectAutoRouterOption("Judge model", "judge-model");
+    fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classifier_type: "llm",
+      classifier_llm_config: { model: "judge-model" },
+      tiers: {
+        SIMPLE: ["claude-haiku-5-5"],
+        MEDIUM: ["claude-haiku-5-5"],
+        COMPLEX: ["claude-opus-5-5"],
+        REASONING: ["claude-opus-5-5"],
+      },
+    });
+  });
+
+  it.each(["Capability", "Fuse v2"])("restores simple setup after leaving %s", async (approach) => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    renderWithProviders(<Harness />);
+    await screen.findByRole("combobox", { name: "Everyday model" });
+    await selectAutoRouterApproach(approach);
+    expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent(approach);
+    expect(screen.queryByRole("combobox", { name: "Everyday model" })).not.toBeInTheDocument();
+    await selectAutoRouterOption("Routing approach", "Complexity");
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6-luna");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6-astra");
+    expect(screen.queryByRole("button", { name: "Use suggested models" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Best quality", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6.1-sol");
+    fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6-luna");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6.1-sol");
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    expectTierModel("Simple", "gpt-6-luna");
+    expectTierModel("Reasoning", "gpt-6.1-sol");
+  });
+
+  it.each(["Capability", "Fuse v2"])(
+    "preserves edited %s solver choices when returning to Heuristics",
+    async (approach) => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(
+        ["claude-haiku-5-5", "claude-opus-5-5", "edited-efficient", "edited-capable"].map((model_group) => ({
+          model_group,
+          mode: "chat",
+        })),
+      );
+      renderWithProviders(<Harness />);
+      await screen.findByRole("combobox", { name: "Everyday model" });
+      await selectAutoRouterApproach(approach);
+      for (const [role, original, replacement] of [
+        ["Efficient", "claude-haiku-5-5", "edited-efficient"],
+        ["Capable", "claude-opus-5-5", "edited-capable"],
+      ]) {
+        await user.click(
+          screen.getByRole("combobox", {
+            name: approach === "Capability" ? `Select ${role.toLowerCase()} solver models` : `${role} solver`,
+          }),
+        );
+        if (approach === "Capability")
+          await user.click(await screen.findByRole("option", { name: original, exact: true }));
+        await user.click(await screen.findByRole("option", { name: replacement, exact: true }));
+        if (approach === "Capability") await user.keyboard("{Escape}");
+      }
+      fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+      fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+        classifier_type: "heuristic",
+        tiers: { SIMPLE: ["edited-efficient"], REASONING: ["edited-capable"] },
+      });
+    },
+  );
+
+  it("keeps multiple Capability solvers when returning to Complexity", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5", "additional-solver"].map((model_group) => ({
+        model_group,
+        mode: "chat",
+      })),
+    );
+    renderWithProviders(<Harness />);
+    await screen.findByRole("combobox", { name: "Everyday model" });
+    await selectAutoRouterApproach("Capability");
+    await user.click(screen.getByRole("combobox", { name: "Select efficient solver models" }));
+    await user.click(await screen.findByRole("option", { name: "additional-solver", exact: true }));
+    await user.keyboard("{Escape}");
+    await selectAutoRouterOption("Judge model", "claude-haiku-5-5");
+    await selectAutoRouterOption("Routing approach", "Complexity");
+    expect(screen.getByText("Define your tiers")).toBeVisible();
+    for (const tier of ["medium", "complex"]) {
+      await user.click(screen.getByRole("combobox", { name: `Select model(s) for ${tier} queries` }));
+      await user.click(await screen.findByRole("option", { name: "claude-opus-5-5", exact: true }));
+      await user.keyboard("{Escape}");
+    }
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classifier_type: "llm",
+      tiers: { SIMPLE: ["claude-haiku-5-5", "additional-solver"], REASONING: ["claude-opus-5-5"] },
+    });
   });
 
   it("carries Responses model choices from simple setup into Advanced tiers", async () => {
@@ -422,9 +545,9 @@ describe("AddAutoRouterTab", () => {
     expectTierModel("Reasoning", "gpt-6-astra");
   });
 
-  it("keeps manual solver choices on goal changes and carries them into Advanced", async () => {
+  it("keeps manual solver choices through strategy and goal changes and carries them into Advanced", async () => {
     mockFetchAvailableModels.mockResolvedValue(
-      ["claude-haiku-5-5", "custom-fast", "claude-opus-5-5"].map((model_group) => ({
+      ["gpt-6-luna", "custom-fast", "gpt-6.1-sol", "gpt-6-astra"].map((model_group) => ({
         model_group,
         mode: "chat",
       })),
@@ -433,12 +556,14 @@ describe("AddAutoRouterTab", () => {
     const everyday = await screen.findByRole("combobox", { name: "Everyday model" });
     await userEvent.click(everyday);
     await userEvent.click(await screen.findByRole("option", { name: /custom-fast/ }));
+    await selectAutoRouterApproach("Capability");
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
     fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
     expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("custom-fast");
-    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6-astra");
     fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     expectTierModel("Simple", "custom-fast");
-    expectTierModel("Reasoning", "claude-opus-5-5");
+    expectTierModel("Reasoning", "gpt-6-astra");
   });
 
   it("keeps standard setup usable when the Heuristic v2 allowance is exhausted", async () => {

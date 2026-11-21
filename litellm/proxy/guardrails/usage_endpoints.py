@@ -20,6 +20,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
     DailyGuardrailUsageUnitsRepository,
@@ -27,7 +28,6 @@ from litellm.repositories.table_repositories import (
     GuardrailsRepository,
     PolicyRepository,
     SpendLogGuardrailIndexRepository,
-    SpendLogsRepository,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
