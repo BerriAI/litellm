@@ -216,7 +216,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
+            returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
+            guardrailed_tool_calls: Final = returned_tool_calls if isinstance(returned_tool_calls, list) else []
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
                 data["tools"] = (
@@ -256,6 +257,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 # Step 4: Apply guardrailed tool calls back to messages
                 if guardrailed_tool_calls:
+                    _require_appliable_input_tool_calls(
+                        guardrailed_tool_calls,
+                        scanned=tool_calls_with_server_calls,
+                        client_count=len(tool_calls_to_check),
+                        server_call_count=len(server_tool_call_tasks) + len(raw_server_tool_use_tasks),
+                        guardrail_name=guardrail_to_apply.guardrail_name,
+                    )
                     await self._apply_guardrail_responses_to_input_tool_calls(
                         messages=messages,
                         tool_calls=guardrailed_tool_calls,
@@ -553,7 +561,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_tool_calls: Final[list[dict[str, object]]] = (
                 cast(list[dict[str, object]], returned_tool_calls)
                 if isinstance(returned_tool_calls, list)
-                and len(returned_tool_calls) == len(tool_calls_with_server_calls)
+                and _fits_scanned_tool_calls(
+                    returned_tool_calls, scanned=tool_calls_with_server_calls, client_count=len(tool_calls_to_check)
+                )
                 else tool_calls_with_server_calls
             )
 
@@ -1660,6 +1670,31 @@ def _legacy_function_calls(
     """The deprecated `function_call` of each message, shaped as a tool call. Scanned only, never written back."""
     calls: Final = (_function_call_of(message) for message in messages)
     return tuple({"type": "function", "function": call} for call in calls if call)
+
+
+def _require_appliable_input_tool_calls(
+    guardrailed_tool_calls: Sequence[object],
+    *,
+    scanned: Sequence[object],
+    client_count: int,
+    server_call_count: int,
+    guardrail_name: str | None,
+) -> None:
+    if server_call_count and not _fits_scanned_tool_calls(
+        guardrailed_tool_calls, scanned=scanned, client_count=client_count
+    ):
+        raise unappliable_request_rewrite(guardrail_name)
+
+
+def _fits_scanned_tool_calls(returned: Sequence[object], *, scanned: Sequence[object], client_count: int) -> bool:
+    return len(returned) == len(scanned) or (
+        len(returned) == client_count and _tool_call_ids(scanned[client_count:]).isdisjoint(_tool_call_ids(returned))
+    )
+
+
+def _tool_call_ids(tool_calls: Iterable[object]) -> frozenset[str]:
+    ids: Final = (stream_item_field(tool_call, "id") for tool_call in tool_calls)
+    return frozenset(tool_call_id for tool_call_id in ids if isinstance(tool_call_id, str))
 
 
 def _server_tool_call_input(server_tool_call: ChatCompletionAssistantToolCall) -> dict[str, object]:
