@@ -26,7 +26,7 @@ from litellm._uuid import uuid
 from litellm.constants import MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
-from litellm.proxy.auth.auth_utils import BatchLimitRequest, enforce_batch_limits_are_admin_only
+from litellm.proxy.auth.auth_utils import MetadataUpdateRequest, enforce_admin_only_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.batch_enqueued_tokens import model_batch_enqueued_token_limits_are_valid
@@ -122,11 +122,11 @@ def _jsonified(prisma_client: PrismaClient, payload: dict[str, object]) -> dict[
 
 
 def _check_project_batch_limits(
-    data: BatchLimitRequest,
+    data: MetadataUpdateRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    enforce_batch_limits_are_admin_only(
+    enforce_admin_only_metadata(
         data=data,
         existing_metadata=existing_metadata,
         user_api_key_dict=user_api_key_dict,
@@ -142,7 +142,7 @@ def _check_project_batch_limits(
 
 
 def _stored_metadata_with(
-    request: BatchLimitRequest, stored_metadata: Mapping[str, object]
+    request: MetadataUpdateRequest, stored_metadata: Mapping[str, object]
 ) -> dict[str, object] | None:
     return None if request.metadata is None else {**stored_metadata, **request.metadata}
 

@@ -6726,7 +6726,7 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
     role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
 ) -> None:
     from litellm.proxy._types import UpdateTeamRequest
-    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+    from litellm.proxy.auth.auth_utils import enforce_admin_only_metadata
 
     existing: Final = None if stored is None else {"allowed_s3_buckets": stored, "project": "x"}
     request: Final = UpdateTeamRequest(
@@ -6735,14 +6735,10 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
     caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
 
     if not refused:
-        enforce_batch_limits_are_admin_only(
-            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
-        )
+        enforce_admin_only_metadata(data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team")
         return
     with pytest.raises(HTTPException) as rejection:
-        enforce_batch_limits_are_admin_only(
-            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
-        )
+        enforce_admin_only_metadata(data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team")
     assert rejection.value.status_code == 403
     assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
 
@@ -6762,7 +6758,7 @@ def test_only_a_proxy_admin_changes_a_keys_model_limit_max_borrow_multiple(
     role: LitellmUserRoles, stored: int | None, sent: int | None, refused: bool
 ) -> None:
     from litellm.proxy._types import UpdateKeyRequest
-    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+    from litellm.proxy.auth.auth_utils import enforce_admin_only_metadata
 
     def metadata(multiple: int | None) -> dict[str, object]:
         return {"project": "x"} if multiple is None else {"model_limit_max_borrow_multiple": multiple, "project": "x"}
@@ -6771,16 +6767,51 @@ def test_only_a_proxy_admin_changes_a_keys_model_limit_max_borrow_multiple(
     caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
 
     if not refused:
-        enforce_batch_limits_are_admin_only(
+        enforce_admin_only_metadata(
             data=request, existing_metadata=metadata(stored), user_api_key_dict=caller, entity="key"
         )
         return
     with pytest.raises(HTTPException) as rejection:
-        enforce_batch_limits_are_admin_only(
+        enforce_admin_only_metadata(
             data=request, existing_metadata=metadata(stored), user_api_key_dict=caller, entity="key"
         )
     assert rejection.value.status_code == 403
     assert "Only proxy admins can set model_limit_max_borrow_multiple on a key." in str(rejection.value.detail)
+
+
+@pytest.mark.parametrize("entity", ["team", "key"])
+@pytest.mark.parametrize(
+    "role,stored,sent,refused",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, ["X-Tenant-ID"], [], False),
+        (LitellmUserRoles.PROXY_ADMIN, None, ["X-Tenant-ID"], False),
+        (LitellmUserRoles.INTERNAL_USER, ["X-Tenant-ID"], [], True),
+        (LitellmUserRoles.INTERNAL_USER, ["X-Tenant-ID"], None, True),
+        (LitellmUserRoles.INTERNAL_USER, ["X-Tenant-ID"], ["X-Tenant-ID"], False),
+        (LitellmUserRoles.INTERNAL_USER, None, ["X-Tenant-ID"], True),
+    ],
+)
+def test_only_proxy_admins_change_required_customer_headers(
+    entity: str, role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest, UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_admin_only_metadata
+
+    metadata: Final = {"required_customer_headers": sent}
+    request: Final = (
+        UpdateTeamRequest(team_id="team", metadata=metadata)
+        if entity == "team"
+        else UpdateKeyRequest(key="sk-key", metadata=metadata)
+    )
+    caller: Final = UserAPIKeyAuth(user_role=role)
+    existing: Final = {"required_customer_headers": stored}
+    if not refused:
+        enforce_admin_only_metadata(data=request, existing_metadata=existing, user_api_key_dict=caller, entity=entity)
+        return
+    with pytest.raises(HTTPException) as error:
+        enforce_admin_only_metadata(data=request, existing_metadata=existing, user_api_key_dict=caller, entity=entity)
+    assert error.value.status_code == 403
+    assert "Only proxy admins can set required_customer_headers" in str(error.value.detail)
 
 
 def _request_with_content_length(content_length: int) -> Request:

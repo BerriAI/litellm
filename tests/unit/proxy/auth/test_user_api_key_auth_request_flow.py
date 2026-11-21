@@ -2067,9 +2067,7 @@ async def test_customer_header_requirements_follow_authenticated_team_and_key(
     monkeypatch.setattr(server, "general_settings", {"enable_jwt_auth": True, "disable_budget_reservation": True})
     jwt_proxy(LiteLLM_JWTAuth(virtual_key_claim_field="sub"))
     bearer: Final = key if credential == "key" else _signed_jwt({"sub": "header-policy-client"})
-    request: Final = Request(
-        {"type": "http", "method": "POST", "path": path, "headers": headers, "query_string": b""}
-    )
+    request: Final = Request({"type": "http", "method": "POST", "path": path, "headers": headers, "query_string": b""})
     request._body = b'{"model":"test-model","metadata":{"required_customer_headers":[]}}'
 
     if missing is None:
@@ -2122,6 +2120,65 @@ async def test_customer_header_requirement_follows_jwt_team_claim(
     with pytest.raises(ProxyException) as error:
         await user_api_key_auth(request=request, api_key=f"Bearer {bearer}")
     assert (error.value.code, error.value.param) == ("403", "X-Tenant-ID")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["introspection", "proxy"])
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("with_header", [False, True])
+async def test_oauth_team_requires_stored_customer_headers(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+    mode: str,
+    path: str,
+    with_header: bool,
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    rust_auth_stores.team.rows["oauth-header-team"] = {
+        "team_id": "oauth-header-team",
+        "metadata": {"required_customer_headers": ["X-Tenant-ID"]},
+    }
+    monkeypatch.setattr(server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "premium_user", True)
+    monkeypatch.setattr(server, "master_key", "header-policy-master")
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {
+            "enable_oauth2_auth": mode == "introspection",
+            "enable_oauth2_proxy_auth": mode == "proxy",
+            "oauth2_config_mappings": {"team_id": "X-Auth-Team"},
+            "trusted_proxy_ranges": ["127.0.0.1/32"],
+            "disable_budget_reservation": True,
+        },
+    )
+    monkeypatch.setenv("OAUTH_TOKEN_INFO_ENDPOINT", "https://identity.test/token-info")
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "query_string": b"",
+            "client": ("127.0.0.1", 12345),
+            "headers": [(b"x-auth-team", b"oauth-header-team")]
+            + ([(b"x-tenant-id", b"tenant")] if with_header else []),
+        }
+    )
+    request._body = b'{"model":"test-model"}'
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"team_id": "oauth-header-team"}))
+    ) as identity_client:
+        monkeypatch.setattr("litellm.proxy.auth.oauth2_check.get_async_httpx_client", lambda **_: identity_client)
+        if with_header:
+            auth: Final = await user_api_key_auth(request=request, api_key="Bearer opaque-oauth-token")
+            assert auth.team_id == "oauth-header-team"
+            return
+        with pytest.raises(ProxyException) as error:
+            await user_api_key_auth(request=request, api_key="Bearer opaque-oauth-token")
+        assert (error.value.code, error.value.param) == ("403", "X-Tenant-ID")
 
 
 @pytest.mark.asyncio
