@@ -2891,7 +2891,49 @@ class TestToolTransformation:
         assert len(result_tools) == 0  # Web search is not added to tools
         assert web_search_options is not None
         assert web_search_options.get("search_context_size") == "medium"
-        assert web_search_options.get("user_location") == {"country": "US"}
+        assert web_search_options.get("user_location") == {
+            "type": "approximate",
+            "approximate": {"country": "US"},
+        }
+
+    @pytest.mark.parametrize(
+        ("user_location", "expected"),
+        [
+            pytest.param(
+                {"type": "approximate", "country": "FR", "city": "Paris", "region": None, "timezone": "Europe/Paris"},
+                {"type": "approximate", "approximate": {"country": "FR", "city": "Paris", "timezone": "Europe/Paris"}},
+                id="flat_responses_shape_is_nested",
+            ),
+            pytest.param(
+                {"type": "approximate", "approximate": {"country": "DE"}},
+                {"type": "approximate", "approximate": {"country": "DE"}},
+                id="already_nested_is_kept",
+            ),
+            pytest.param({"type": "approximate"}, None, id="no_location_fields"),
+            pytest.param(None, None, id="missing"),
+        ],
+    )
+    def test_web_search_user_location_is_reshaped_for_chat(self, user_location, expected):
+        """A Responses web search location (flat fields) becomes the nested Chat Completions shape"""
+        _, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[{"type": "web_search", "user_location": user_location}]
+        )
+
+        assert web_search_options is not None
+        assert web_search_options.get("user_location") == expected
+
+    def test_web_search_country_reaches_anthropic_web_search_tool(self):
+        """End to end through the bridge: the country sent on /responses lands on Anthropic's web_search tool"""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        _, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[{"type": "web_search_preview", "user_location": {"type": "approximate", "country": "FR"}}]
+        )
+        assert web_search_options is not None
+
+        anthropic_tool = AnthropicConfig().map_web_search_tool(web_search_options)
+
+        assert anthropic_tool["user_location"] == {"type": "approximate", "country": "FR"}
 
     def test_transform_function_tools_with_anthropic_specific_fields(self):
         """Test that Anthropic-specific fields are preserved in function tools"""
