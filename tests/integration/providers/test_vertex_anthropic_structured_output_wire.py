@@ -1877,6 +1877,29 @@ def test_vertex_chat_malformed_response_format_schema_keeps_the_tool_input(
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 
+@pytest.mark.parametrize("marker_hex", ["e66127078448420083852775e765081e", "e6612707841e0000000000000000051e"])
+def test_vertex_chat_malformed_schema_stream_keeps_numeric_fragments_verbatim(
+    gateway: Gateway, marker_hex: str
+) -> None:
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(
+                model,
+                f"wrapped {marker_hex}",
+                stream=True,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "risk", "schema": {"type": "object", "properties": None}},
+                },
+            ),
+        )
+        assert _stream_text(response) == _tool_text("wrapped", marker_hex), response.text
+        _one_delivery(wire, marker_hex)
+
+
 @pytest.mark.parametrize("status", [400, 403, 404])
 def test_vertex_chat_peer_error_reaches_the_caller_and_the_deployment_keeps_serving(
     gateway: Gateway, status: int
