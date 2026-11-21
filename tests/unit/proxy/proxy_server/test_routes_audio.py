@@ -253,7 +253,11 @@ def test_audio_speech_happy_path(client, auth_as, patched_speech, path):
 )
 @pytest.mark.usefixtures("patched_speech")
 def test_audio_speech_reports_a_free_clip_as_zero_cost(
-    client, auth_as, monkeypatch: pytest.MonkeyPatch, response_cost: float | None, expected_header: str | None
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    response_cost: float | None,
+    expected_header: str | None,
 ) -> None:
     async def _priced_speech(*args: object, **kwargs: object) -> HttpxBinaryResponseContent:
         clip: Final = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"\x00\x01\x02"))
@@ -266,7 +270,7 @@ def test_audio_speech_reports_a_free_clip_as_zero_cost(
     monkeypatch.setattr(proxy_server, "route_request", _route_request)
 
     with auth_as():
-        response = client.post("/v1/audio/speech", json={"model": "tts-1", "input": "Hi", "voice": "alloy"})
+        response: Final = client.post("/v1/audio/speech", json={"model": "tts-1", "input": "Hi", "voice": "alloy"})
 
     assert response.status_code == 200, response.text
     assert response.headers.get("x-litellm-response-cost") == expected_header
