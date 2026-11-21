@@ -1656,6 +1656,17 @@ _CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
         "apply_patch_call",
     }
 )
+
+
+def _is_replayed_call_item(item: Mapping[str, object]) -> bool:
+    item_type: Final = item.get("type")
+    if (isinstance(item_type, str) and item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES) or isinstance(
+        item.get("call_id"), str
+    ):
+        return True
+    return item_type == "mcp_call" and isinstance(item.get("approval_request_id"), str)
+
+
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
@@ -2865,9 +2876,7 @@ class ManagedResponsesWebSocketHandler:
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
-            elif (isinstance(item_type, str) and item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES) or isinstance(
-                item.get("call_id"), str
-            ):
+            elif _is_replayed_call_item(item):
                 messages.append(item)
         return messages
 
