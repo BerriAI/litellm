@@ -30,7 +30,7 @@ class CyberArkSecretManager(BaseSecretManager):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
         # CyberArk Conjur-specific config
-        self.conjur_addr = os.getenv("CYBERARK_API_BASE", "http://127.0.0.1:8080")
+        self.conjur_addr = os.getenv("CYBERARK_API_BASE", "http://127.0.0.1:8080").rstrip("/")
         self.conjur_account = os.getenv("CYBERARK_ACCOUNT", "default")
         self.conjur_username = os.getenv("CYBERARK_USERNAME", "admin")
         self.conjur_api_key = os.getenv("CYBERARK_API_KEY", "")
@@ -83,7 +83,10 @@ class CyberArkSecretManager(BaseSecretManager):
             return cached_token
 
         verbose_logger.debug("Authenticating with CyberArk Conjur...")
-        auth_url: Final = f"{self.conjur_addr}/authn/{self.conjur_account}/{self.conjur_username}/authenticate"
+        addr: Final = self.conjur_addr.rstrip("/")
+        account: Final = quote(self.conjur_account, safe="")
+        username: Final = quote(self.conjur_username, safe="")
+        auth_url: Final = f"{addr}/authn/{account}/{username}/authenticate"
 
         try:
             if self.tls_cert_path and self.tls_key_path:
@@ -133,7 +136,9 @@ class CyberArkSecretManager(BaseSecretManager):
         # In production, we'd check if the variable exists first
         # For now, we'll attempt to create it and ignore if it already exists
         raise_if_unsafe_secret_name(secret_name)
-        policy_url: Final = f"{self.conjur_addr}/policies/{self.conjur_account}/policy/root"
+        addr: Final = self.conjur_addr.rstrip("/")
+        account: Final = quote(self.conjur_account, safe="")
+        policy_url: Final = f"{addr}/policies/{account}/policy/root"
         # Use a real YAML serializer to build the scalar safely.
         quoted_name: Final = yaml.safe_dump(secret_name, default_style='"').strip()
         policy_yaml: Final = f"- !variable {quoted_name}\n"
@@ -177,9 +182,12 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             str: Full URL for the secret
         """
+        raise_if_unsafe_secret_name(secret_name)
+        addr: Final = self.conjur_addr.rstrip("/")
+        account: Final = quote(self.conjur_account, safe="")
         # URL-encode the secret name to handle slashes and special characters
         encoded_name: Final = quote(secret_name, safe="")
-        return f"{self.conjur_addr}/secrets/{self.conjur_account}/variable/{encoded_name}"
+        return f"{addr}/secrets/{account}/variable/{encoded_name}"
 
     async def async_read_secret(
         self,
