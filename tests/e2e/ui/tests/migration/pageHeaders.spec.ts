@@ -4,34 +4,12 @@ import { MIGRATED_E2E_PAGES } from "../../fixtures/migratedPages";
 import { dismissFeedbackPopup, expectUiRoute } from "../../helpers/navigation";
 
 const ROOT = (process.env.SERVER_ROOT_PATH ?? "").replace(/\/+$/, "");
-const PENDING_HEADER_MIGRATIONS = new Set([
-  "users",
-  "organizations",
-  "guardrails",
-  "prompts",
-  "policies",
-  "caching",
-  "router-settings",
-  "logging-and-alerts",
-  "admin-panel",
-  "ui-theme",
-  "models-and-endpoints",
-  "vector-stores",
-  "tag-management",
-  "model-hub-table",
-  "skills",
-  "agents",
-  "search-tools",
-  "mcp-servers",
-  "memory",
-  "tool-policies",
-  "transform-request",
-]);
+const API_PLAYGROUND_ROUTE = "transform-request";
 
 const routes = [
   ...Object.values(MIGRATED_E2E_PAGES)
     .map(({ segment }) => segment)
-    .filter((segment) => !PENDING_HEADER_MIGRATIONS.has(segment)),
+    .filter((segment) => segment !== API_PLAYGROUND_ROUTE),
   "home",
   "alerts",
   "customers",

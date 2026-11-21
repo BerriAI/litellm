@@ -2275,6 +2275,9 @@
         "unavailable": "Not recorded",
         "loading": "Loading download history…",
         "loadFailed": "Could not load download history. Try refreshing.",
+        "downloadCsv": "Download CSV",
+        "exporting": "Exporting...",
+        "exportFailed": "Could not export download history. Try again.",
         "empty": "No authenticated download history yet.",
         "refresh": "Refresh",
         "refreshing": "Refreshing download history…",
@@ -14840,7 +14843,6 @@
         "success": "Success"
       },
       "header": {
-        "backTo": "Back to {{label}}",
         "requestId": "Request ID",
         "provider": "Provider",
         "copied": "Copied!",

@@ -14775,7 +14775,6 @@
         "success": "成功"
       },
       "header": {
-        "backTo": "返回 {{label}}",
         "requestId": "请求 ID",
         "provider": "提供商",
         "copied": "已复制！",

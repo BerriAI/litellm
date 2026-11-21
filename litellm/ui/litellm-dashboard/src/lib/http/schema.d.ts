@@ -16944,6 +16944,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/skills/{name}/downloads/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Skill Downloads
+         * @description Export all recorded authenticated downloads. Anonymous downloads remain totals-only.
+         */
+        get: operations["export_skill_downloads_skill_hub_skills__name__downloads_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skill-hub/skills/{name}/publish": {
         parameters: {
             query?: never;
@@ -81106,6 +81126,37 @@ export interface operations {
                 };
                 content: {
                     "text/markdown": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_skill_downloads_skill_hub_skills__name__downloads_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated download history as CSV */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
