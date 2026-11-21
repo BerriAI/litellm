@@ -70,14 +70,11 @@ async def terminate(
     *,
     notify: bool = True,
 ) -> None:
-    if row.status == "terminated":
+    if row.status == "terminated" or not await store.end_if_current(row.id, row.upstream_subscription_id):
         return
-    await store.terminate(row.id)
     await store.drop_deliveries(row.id)
-    if not notify:
-        return
     secret: Final = parse_secret(row.client_secret)
-    if secret is not None and row.status != "pending":
+    if notify and secret is not None and row.status != "pending":
         body: Final = terminated_body(failure)
         await post(
             row.client_url, body, signed_headers(secret, new_webhook_id("terminated"), int(time.time()), body, row.id)

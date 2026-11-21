@@ -122,6 +122,10 @@ class EventStore(Protocol):
 
     async def expired(self, now: datetime) -> tuple[SubscriptionRow, ...]: ...
 
+    async def end_if_expired(self, subscription_id: str, now: datetime) -> bool:
+        """Terminate the row only while it is still past its deadline, so a renewal that just landed survives."""
+        ...
+
     async def enqueue(self, delivery: QueuedDelivery) -> bool: ...
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]: ...
@@ -324,6 +328,13 @@ class PrismaEventStore:
             where={"status": {"in": list(LIVE_STATUSES)}, "refresh_before": {"lte": now}}, take=100
         )
         return tuple(_row_from_record(record) for record in records)
+
+    async def end_if_expired(self, subscription_id: str, now: datetime) -> bool:
+        ended: Final = await self._subscriptions.update_many(
+            where={"id": subscription_id, "status": {"in": list(LIVE_STATUSES)}, "refresh_before": {"lte": now}},
+            data={"status": "terminated"},
+        )
+        return ended > 0
 
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         from prisma.errors import UniqueViolationError

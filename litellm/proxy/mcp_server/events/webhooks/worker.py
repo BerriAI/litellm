@@ -48,6 +48,7 @@ SUSPEND_AFTER_FAILURES: Final = 20
 CLAIM_BATCH: Final = 16
 CONCURRENCY: Final = 8
 LEASE_SECONDS: Final = 300
+PROCESS_DEADLINE_SECONDS: Final = 60.0
 DELIVERED_RETENTION: Final = timedelta(minutes=10)
 _IDLE_SECONDS: Final = 1.0
 _HOUSEKEEPING_SECONDS: Final = 30.0
@@ -114,18 +115,27 @@ class DeliveryWorker:
 
         async def bounded(delivery: QueuedDelivery) -> None:
             async with limiter:
-                await self.process(delivery)
+                await self._process_isolated(delivery)
 
         async with anyio.create_task_group() as group:
             for delivery in claimed:
                 group.start_soon(bounded, delivery)
         return len(claimed)
 
+    async def _process_isolated(self, delivery: QueuedDelivery) -> None:
+        """One delivery, bounded well inside its lease so no other replica can claim it mid-send; a failure is
+        retried after the lease lapses instead of cancelling the rest of the batch."""
+        try:
+            with anyio.move_on_after(PROCESS_DEADLINE_SECONDS):
+                await self.process(delivery)
+        except Exception as error:  # noqa: BLE001  # one failing delivery must not cancel the batch
+            verbose_logger.warning("MCP event delivery %s failed: %s", delivery.delivery_id, error)
+
     async def expire(self) -> None:
         now: Final = self._clock()
         for row in await self._store.expired(now):
-            await self._store.terminate(row.id)
-            await self._store.drop_deliveries(row.id)
+            if await self._store.end_if_expired(row.id, now):
+                await self._store.drop_deliveries(row.id)
         await self._store.purge_delivered(now - DELIVERED_RETENTION)
         for status in LIVE_STATUSES:
             EventMetrics.set_subscriptions(status, await self._store.count_status(status))

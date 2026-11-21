@@ -20,7 +20,7 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Resu
 from litellm.types.mcp_server.events import CallbackFailure
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
-from ..fakes import SETTINGS, occurrence, runtime, screen_blocking, server
+from ..fakes import SETTINGS, FakeUpstream, occurrence, runtime, screen_blocking, server
 from .memory_store import MemoryStore
 
 KEY: Final = bytes(range(32))
@@ -395,3 +395,57 @@ async def test_a_terminated_notice_that_exhausts_its_retries_still_ends_the_subs
     store: Final = _store(body=terminated, attempt=len(RETRY_DELAYS_SECONDS))
     await _worker(store, _Client("timeout")).run_once()
     assert (store.rows["sub_1"].status, store.queue) == ("terminated", {})
+
+
+@pytest.mark.asyncio
+async def test_the_expiry_sweep_spares_a_subscription_renewed_after_it_was_read() -> None:
+    expiring: Final = ROW.model_copy(update={"refresh_before": NOW - timedelta(minutes=1)})
+    store: Final = MemoryStore(rows={"sub_1": expiring})
+    stale: Final = await store.expired(NOW)
+    store.rows["sub_1"] = expiring.model_copy(update={"refresh_before": NOW + timedelta(hours=1)})
+    assert (len(stale), await store.end_if_expired("sub_1", NOW), store.rows["sub_1"].status) == (1, False, "active")
+
+
+@pytest.mark.parametrize("notify", (True, False))
+@pytest.mark.asyncio
+async def test_terminating_twice_notifies_once_and_always_ends_the_upstream_subscription(notify: bool) -> None:
+    from litellm.proxy.mcp_server.events.errors import forbidden
+    from litellm.proxy.mcp_server.events.webhooks.termination import terminate
+
+    store: Final = MemoryStore(rows={"sub_1": ROW})
+    upstream: Final = FakeUpstream(responses={"events/unsubscribe": {}})
+    client: Final = _Client()
+    events_runtime: Final = runtime((server(),), upstream=upstream)
+    for _ in range(2):
+        await terminate(
+            ROW, forbidden("Key revoked"), store, SETTINGS, events_runtime, client, lambda _id: server(), notify=notify
+        )
+    assert (len(client.posts), [method for method, *_ in upstream.calls], store.rows["sub_1"].status) == (
+        1 if notify else 0,
+        ["events/unsubscribe"],
+        "terminated",
+    )
+
+
+@pytest.mark.asyncio
+async def test_one_failing_delivery_does_not_cancel_the_rest_of_the_batch() -> None:
+    from litellm.proxy.mcp_server.events.webhooks.worker import (
+        CLAIM_BATCH,
+        CONCURRENCY,
+        LEASE_SECONDS,
+        PROCESS_DEADLINE_SECONDS,
+    )
+
+    class _OneBroken(MemoryStore):
+        async def get(self, subscription_id: str) -> SubscriptionRow | None:
+            if subscription_id == "sub_broken":
+                raise ConnectionError("row lookup failed")
+            return await super().get(subscription_id)
+
+    event: Final = occurrence("evt_1", "41").model_dump(by_alias=True, mode="json")
+    broken: Final = _delivery(event).model_copy(update={"delivery_id": "d2", "subscription_id": "sub_broken"})
+    store: Final = _OneBroken(rows={"sub_1": ROW}, queue={"d1": _delivery(event), "d2": broken})
+    client: Final = _Client()
+    assert await _worker(store, client).run_once() == 2
+    assert len(client.posts) == 1
+    assert -(-CLAIM_BATCH // CONCURRENCY) * PROCESS_DEADLINE_SECONDS < LEASE_SECONDS

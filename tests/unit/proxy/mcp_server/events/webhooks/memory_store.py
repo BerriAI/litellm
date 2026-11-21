@@ -135,6 +135,15 @@ class MemoryStore:
             if row.status in LIVE_STATUSES and row.refresh_before is not None and row.refresh_before <= now
         )
 
+    async def end_if_expired(self, subscription_id: str, now: datetime) -> bool:
+        current: Final = self.rows.get(subscription_id)
+        if current is None or current.status not in LIVE_STATUSES or current.refresh_before is None:
+            return False
+        if current.refresh_before > now:
+            return False
+        self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
+        return True
+
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         if self.fail_enqueue:
             raise ConnectionError("database unavailable")
@@ -187,3 +196,4 @@ class MemoryStore:
     async def drop_deliveries(self, subscription_id: str) -> None:
         for key in [key for key, item in self.queue.items() if item.subscription_id == subscription_id]:
             self.queue.pop(key)
+            self.leases.pop(key, None)

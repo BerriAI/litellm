@@ -34,10 +34,27 @@ CallerLoader: TypeAlias = Callable[[SubscriptionRow], Awaitable[Reauthorization]
 UserReloader: TypeAlias = Callable[[str], Awaitable[UserAPIKeyAuth]]
 
 
-def _key_revoked(key: UserAPIKeyAuth) -> bool:
+def _key_revoked(key: UserAPIKeyAuth, now: datetime) -> bool:
+    """Blocked, or past an expiry that the key row may carry as a datetime or an ISO string."""
+    if key.blocked:
+        return True
     expires: Final = key.expires
-    expired: Final = isinstance(expires, datetime) and expires.astimezone(timezone.utc) <= datetime.now(timezone.utc)
-    return bool(key.blocked) or expired
+    if expires is None:
+        return False
+    try:
+        parsed: Final = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+    except ValueError:
+        return True
+    aware: Final = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return aware <= now
+
+
+async def _owner_deactivated(key: UserAPIKeyAuth) -> bool:
+    from litellm.proxy.mcp_server.bridge_token_flow import (
+        _key_owner_scim_deactivated,  # pyright: ignore[reportPrivateUsage]  # the same owner gate token refresh applies
+    )
+
+    return await _key_owner_scim_deactivated(key)
 
 
 async def _reload_live_user(user_id: str) -> UserAPIKeyAuth:
@@ -55,7 +72,11 @@ async def admitted_user(user_id: str, reload: UserReloader = _reload_live_user) 
         return Unavailable(str(error))
 
 
-async def stored_caller(row: SubscriptionRow) -> Reauthorization:
+async def stored_caller(
+    row: SubscriptionRow,
+    owner_deactivated: Callable[[UserAPIKeyAuth], Awaitable[bool]] = _owner_deactivated,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> Reauthorization:
     from litellm.proxy.auth.auth_checks import get_key_object
     from litellm.proxy.proxy_server import master_key, prisma_client, proxy_logging_obj, user_api_key_cache
     from litellm.proxy.utils import hash_token
@@ -78,9 +99,11 @@ async def stored_caller(row: SubscriptionRow) -> Reauthorization:
         return Unavailable(error.message)
     except Exception as error:  # noqa: BLE001  # a transient lookup failure delays delivery instead of ending the subscription
         return Unavailable(str(error))
-    if _key_revoked(key):
+    if _key_revoked(key, clock()):
         return Revoked("key")
     try:
+        if await owner_deactivated(key):
+            return Revoked("owner")
         return await with_team(key, _team_facts)
     except Exception as error:  # noqa: BLE001  # a transient lookup failure delays delivery instead of ending the subscription
         return Unavailable(str(error))

@@ -35,6 +35,8 @@ ROW: Final = SubscriptionRow(
 )
 CALLER: Final = UserAPIKeyAuth(api_key="abc")
 
+NOW: Final = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)
+
 
 def _load(outcome: Reauthorization):  # noqa: ANN202  # test helper
     async def load(_row: SubscriptionRow) -> Reauthorization:
@@ -85,12 +87,15 @@ async def test_a_failing_permission_lookup_is_unavailable_not_revoked() -> None:
     (
         (UserAPIKeyAuth(api_key="a"), False),
         (UserAPIKeyAuth(api_key="a", blocked=True), True),
-        (UserAPIKeyAuth(api_key="a", expires=datetime.now(timezone.utc) - timedelta(minutes=1)), True),
-        (UserAPIKeyAuth(api_key="a", expires=datetime.now(timezone.utc) + timedelta(days=1)), False),
+        (UserAPIKeyAuth(api_key="a", expires=NOW - timedelta(minutes=1)), True),
+        (UserAPIKeyAuth(api_key="a", expires=NOW + timedelta(days=1)), False),
+        (UserAPIKeyAuth(api_key="a", expires=(NOW - timedelta(minutes=1)).isoformat()), True),
+        (UserAPIKeyAuth(api_key="a", expires=(NOW + timedelta(days=1)).replace(tzinfo=None).isoformat()), False),
+        (UserAPIKeyAuth(api_key="a", expires="not a date"), True),
     ),
 )
 def test_blocked_or_expired_keys_are_revoked(key: UserAPIKeyAuth, revoked: bool) -> None:
-    assert _key_revoked(key) is revoked
+    assert _key_revoked(key, NOW) is revoked
 
 
 _LIVE_USER: Final = UserAPIKeyAuth(user_id="u-1")
