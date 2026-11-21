@@ -72269,7 +72269,7 @@
     "fireworks_ai/accounts/fireworks/models/inkling": {
         "cache_read_input_token_cost": 1.7e-07,
         "cache_read_input_token_cost_priority": 1.7e-07,
-        "deprecation_date": "2026-11-07",
+        "deprecation_date": "2026-11-20",
         "deprecation_source": "https://docs.fireworks.ai/api-reference/list-models.md",
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_priority": 1e-06,
