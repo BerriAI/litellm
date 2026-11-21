@@ -1516,7 +1516,11 @@ BILLED_GOOGLE_MODEL_ROUTES: Final = tuple(
 )
 
 
-@pytest.mark.parametrize("model_in_url", ["", "gemini-text"], ids=["model-only-in-body", "model-in-url"])
+@pytest.mark.parametrize(
+    "model_in_url",
+    ["", "gemini-text", "gemini-text:v1"],
+    ids=["model-only-in-body", "model-in-url", "model-with-a-colon-in-url"],
+)
 @pytest.mark.parametrize("template", BILLED_GOOGLE_MODEL_ROUTES)
 @pytest.mark.asyncio
 async def test_zero_budget_key_is_refused_on_google_model_routes(
@@ -1532,7 +1536,7 @@ async def test_zero_budget_key_is_refused_on_google_model_routes(
         api_key=api_key,
         token=hash_token(api_key),
         user_role=LitellmUserRoles.INTERNAL_USER,
-        models=["gemini-text"],
+        models=["gemini-text", "gemini-text:v1"],
         allowed_routes=["/v1beta/*", "/models/*"],
         max_budget=0.0,
         spend=0.0,

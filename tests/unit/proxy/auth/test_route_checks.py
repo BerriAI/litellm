@@ -4394,7 +4394,10 @@ def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
         ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/:generateContent", True),
         ("/models/{model_name:path}:streamGenerateContent", "/models/:streamGenerateContent", True),
         ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/:countTokens", False),
-        # the value must not swallow that suffix and match a different verb
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/a:b:generateContent", True),
+        ("/v1beta/models/{model_name:path}:countTokens", "/v1beta/models/a:generateContent:countTokens", True),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/a:generateContent:countTokens", False),
+        # the route still has to end in the template's own verb
         (
             "/v1beta/models/{model_name:path}:generateContent",
             "/v1beta/models/gemini-2.5-flash:countTokens",
@@ -4416,9 +4419,9 @@ def test_path_placeholder_matches_what_the_router_accepts(pattern, route, matche
 
     A team id may carry a slash, a colon, or both, and the router mounted these
     paths with the same :path converter, so an id the router routes must not be
-    an id the gate fails to recognize. The one narrowing that stays is a template
-    whose own suffix begins with a colon: there the value stops before it, or
-    ":generateContent" would also match a ":countTokens" request.
+    an id the gate fails to recognize. A template whose own suffix begins with a
+    colon still has to end in that suffix, so ":generateContent" never matches a
+    ":countTokens" request.
     """
     assert RouteChecks._route_matches_pattern(route=route, pattern=pattern) is matches
 
@@ -4429,7 +4432,7 @@ GOOGLE_MODEL_PATH_TEMPLATES: Final = tuple(
 
 
 @pytest.mark.parametrize("template", GOOGLE_MODEL_PATH_TEMPLATES)
-@pytest.mark.parametrize("model_name", ["", "gemini-text", "publishers/google/gemini-2.5-flash"])
+@pytest.mark.parametrize("model_name", ["", "gemini-text", "publishers/google/gemini-2.5-flash", "a:b"])
 def test_google_model_route_gate_agrees_with_the_router(template, model_name):
     route: Final = template.replace("{model_name:path}", model_name)
     router_regex, _, _ = compile_path(template)

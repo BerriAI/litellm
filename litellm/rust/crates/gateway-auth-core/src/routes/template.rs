@@ -4,7 +4,7 @@ use litellm_starlette::{Convertor, Param, RouteTemplate};
 
 /// A route template matched as `RouteChecks._route_matches_pattern` matches it: every parameter
 /// takes one or more characters up to a `/`, whatever its convertor, and a `{name:path}` one or
-/// more of any character, or zero or more of any but `:` when the template has a `:` after it.
+/// more of any character, or zero or more when the template has a `:` after it.
 /// Literal text is compared exactly.
 #[derive(Debug)]
 pub(super) struct Template(RouteTemplate);
@@ -20,7 +20,7 @@ impl Template {
                 Param {
                     convertor: Convertor::Path,
                     colon_after: true,
-                } => (0, rest.find(':').unwrap_or(rest.len())),
+                } => (0, rest.len()),
                 Param {
                     convertor: Convertor::Path,
                     colon_after: false,
@@ -99,13 +99,18 @@ mod tests {
         "/v1/mcp/server/a:b",
         true
     )]
-    #[case::path_stops_before_the_templates_colon(
+    #[case::path_takes_colons_before_the_templates_colon(
         "/models/{model_name:path}:generateContent",
         "/models/a:b:generateContent",
-        false
+        true
     )]
-    #[case::path_never_swallows_another_verb(
+    #[case::path_takes_another_verb_before_its_own(
         "/models/{model_name:path}:countTokens",
+        "/models/a:generateContent:countTokens",
+        true
+    )]
+    #[case::path_still_ends_in_the_templates_verb(
+        "/models/{model_name:path}:generateContent",
         "/models/a:generateContent:countTokens",
         false
     )]
