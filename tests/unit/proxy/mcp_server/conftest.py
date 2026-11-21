@@ -185,6 +185,7 @@ def credentials_prisma(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "per-user-credential-test-salt")
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpusercredentials=_UserCredentialsTable()))
+    database: Final = SimpleNamespace(litellm_mcpusercredentials=_UserCredentialsTable())
+    prisma: Final = SimpleNamespace(db=database, writer_db=database)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     return prisma

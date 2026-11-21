@@ -9568,6 +9568,40 @@ export interface paths {
         patch: operations["lens_request_lens_patch"];
         trace?: never;
     };
+    "/lens/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Login */
+        get: operations["lens_login_lens_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/login/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Login */
+        get: operations["lens_login_lens_login__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/service": {
         parameters: {
             query?: never;
@@ -9672,6 +9706,26 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login Resume
+         * @description Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in
+         */
+        get: operations["login_resume_login_resume_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -30497,18 +30551,11 @@ export interface components {
             max_budget: number;
             /** Reset At */
             reset_at?: string | null;
-        };
-        /**
-         * BudgetLimitEntry
-         * @description A single budget window with its own limit and independent reset schedule.
-         */
-        BudgetLimitEntry: {
-            /** Budget Duration */
-            budget_duration: string;
-            /** Max Budget */
-            max_budget: number;
-            /** Reset At */
-            reset_at?: string | null;
+            /**
+             * Window Start
+             * @description Server-managed start of the current spend window.
+             */
+            window_start?: string | null;
         };
         /**
          * BudgetListItem
@@ -30709,7 +30756,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -32077,6 +32124,11 @@ export interface components {
             /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
+             * Max Output Tokens
+             * @description Optional output token limit for LLM classifier calls. Leave unset to keep the classifier deployment or provider default. When set, overrides the deployment limit. Leave room for reasoning tokens when reasoning_effort is set.
+             */
+            max_output_tokens?: number | null;
+            /**
              * Model
              * @description Model name (from the router's model_list) to call for classification
              */
@@ -33155,6 +33207,12 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Reject Unregistered Guardrails
+             * @description Return 400 for a request whose merged guardrails (request, key, team, project, policy and model level) name a guardrail that is not registered on the proxy, instead of serving it without that guardrail.
+             * @default false
+             */
+            reject_unregistered_guardrails: boolean;
             /**
              * Request Tag Mappings
              * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
@@ -35957,7 +36015,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -36121,7 +36179,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -37607,7 +37665,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39296,7 +39354,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39432,7 +39490,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39526,7 +39584,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -42855,7 +42913,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -43002,7 +43060,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -43148,7 +43206,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -44445,7 +44503,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -46163,7 +46221,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -51281,7 +51339,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -51443,7 +51501,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
@@ -53424,7 +53482,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -53960,7 +54018,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -54098,7 +54156,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -54204,7 +54262,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -55036,7 +55094,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Limits Usage */
             budget_limits_usage?: {
                 [key: string]: {
@@ -64010,7 +64068,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
@@ -64054,6 +64112,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -70108,6 +70178,46 @@ export interface operations {
             };
         };
     };
+    lens_login_lens_login_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_login_lens_login__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     service_connection_lens_service_get: {
         parameters: {
             query?: never;
@@ -70384,6 +70494,26 @@ export interface operations {
         };
     };
     login_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    login_resume_login_resume_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -75043,7 +75173,18 @@ export interface operations {
     };
     get_response_input_items_openai_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -78929,7 +79070,18 @@ export interface operations {
     };
     get_response_input_items_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -87655,7 +87807,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
@@ -87699,6 +87851,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -91076,7 +91240,18 @@ export interface operations {
     };
     get_response_input_items_v1_responses__response_id__input_items_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An item ID to list items after, used in pagination */
+                after?: string;
+                /** @description An item ID to list items before, used in pagination */
+                before?: string;
+                /** @description Additional fields to include in the response, forwarded to the provider */
+                include?: string[];
+                /** @description How many items to return, with the range enforced by the provider */
+                limit?: number;
+                /** @description The order to return the input items in */
+                order?: "asc" | "desc";
+            };
             header?: never;
             path: {
                 response_id: string;

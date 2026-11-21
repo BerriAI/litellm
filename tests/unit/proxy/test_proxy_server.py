@@ -267,6 +267,118 @@ async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_comm
     assert committed == ["failure row spend"]
 
 
+@pytest.mark.asyncio
+async def test_shutdown_flushes_rust_callbacks_after_the_logging_drain_next_to_the_last_spend_flush() -> None:
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    rust_queue: Final[list[str]] = []
+    journal: Final[list[str]] = []
+
+    async def flush_spend() -> None:
+        journal.append("spend")
+
+    async def flush_rust() -> None:
+        journal.append(f"rust {','.join(rust_queue)}")
+        rust_queue.clear()
+
+    async def rust_row() -> None:
+        await asyncio.sleep(0.01)
+        rust_queue.append("row")
+
+    spawn_logging_task(asyncio.get_running_loop(), rust_row(), task_name="rust row")
+
+    await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(  # pyright: ignore[reportPrivateUsage]  # the shutdown sequence under test
+        flush_spend=flush_spend, flush_rust=flush_rust
+    )
+
+    assert journal[0] == "spend"
+    assert sorted(journal[1:]) == ["rust row", "spend"]
+
+
+@pytest.mark.asyncio
+async def test_a_hung_rust_flush_is_cut_at_the_shutdown_deadline_and_the_last_spend_flush_still_runs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    worker: Final = LoggingWorker()
+    spend_flushes: Final[list[str]] = []
+    rust_cancelled: Final = asyncio.Event()
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+
+    async def flush_spend() -> None:
+        spend_flushes.append("spend")
+
+    async def hung_flush_rust() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            rust_cancelled.set()
+
+    async def drain_tasks(timeout: float) -> None:
+        return None
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await asyncio.wait_for(
+                litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(  # pyright: ignore[reportPrivateUsage]  # the shutdown sequence under test
+                    flush_spend,
+                    flush_rust=hung_flush_rust,
+                    worker=worker,
+                    clock=lambda: 129.9,
+                    drain_tasks=drain_tasks,
+                ),
+                timeout=10,
+            )
+        assert spend_flushes == ["spend", "spend"]
+        assert rust_cancelled.is_set()
+        assert "Rust callback shutdown flush did not finish" in caplog.text
+    finally:
+        GracefulShutdownManager.reset()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flushes_each_rust_callback_in_the_callback_lists_and_the_dynamic_loggers_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_logger_v2.rust import RustLogger
+
+    class _Handle:
+        def __init__(self) -> None:
+            self.flushes = 0
+
+        def manifest(self) -> str:
+            return "{}"
+
+        def request_state(self) -> object:
+            return None
+
+        async def handle(self, *_: object) -> object:
+            return None
+
+        async def flush(self) -> None:
+            self.flushes += 1
+
+    handle: Final = _Handle()
+    dynamic: Final = _Handle()
+    input_only: Final = _Handle()
+    rust_callback: Final = RustLogger(handle)
+    monkeypatch.setattr(litellm, "callbacks", [rust_callback, "langfuse"])
+    monkeypatch.setattr(litellm, "input_callback", [RustLogger(input_only), rust_callback])
+    monkeypatch.setattr(litellm, "_async_success_callback", [rust_callback])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [rust_callback])
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.litellm_logging._in_memory_loggers", [RustLogger(dynamic), rust_callback]
+    )
+
+    await litellm.proxy.proxy_server.flush_rust_callbacks_on_shutdown()
+
+    assert (handle.flushes, dynamic.flushes, input_only.flushes) == (1, 1, 1)
+
+
 token = MASTER_KEY
 
 

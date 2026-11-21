@@ -14,7 +14,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import HTTPException, WebSocket, status
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, status
 from fastapi import Request as FastAPIRequest
 from pydantic import PydanticDeprecatedSince20
 from starlette.datastructures import URL
@@ -72,18 +72,18 @@ def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "denial,code",
+    "denial,code,header",
     (
-        ("scope", "403"),
-        ("mismatch", "403"),
-        ("unknown", "403"),
-        ("model", "403"),
-        ("model_budget", "403"),
-        ("budget", "422"),
+        ("scope", "403", "X-User-ID"),
+        ("mismatch", "403", "X-Tenant-ID"),
+        ("unknown", "403", "X-User-ID"),
+        ("model", "403", None),
+        ("model_budget", "403", None),
+        ("budget", "422", None),
     ),
 )
 async def test_customer_identity_is_retained_only_after_ownership_authorization(
-    monkeypatch: pytest.MonkeyPatch, denial: str, code: str
+    monkeypatch: pytest.MonkeyPatch, denial: str, code: str, header: str | None
 ) -> None:
     server: Final = litellm.proxy.proxy_server
     cache: Final = UserApiKeyCache()
@@ -112,7 +112,11 @@ async def test_customer_identity_is_retained_only_after_ownership_authorization(
     monkeypatch.setattr(server, "prisma_client", database)
     monkeypatch.setattr(server, "user_api_key_cache", cache)
     monkeypatch.setattr(server, "llm_router", None)
-    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {"customer_member_id_header": "X-User-ID", "customer_org_alias_header": "X-Tenant-ID"},
+    )
     identity: Final = UserAPIKeyAuth(
         token="verified-customer-key",
         metadata={
@@ -120,8 +124,8 @@ async def test_customer_identity_is_retained_only_after_ownership_authorization(
         },
         customer_hierarchy=hierarchy,
     )
-    headers: Final = ((b"x-litellm-customer-member-id", b"customer-member-b"),) + (
-        ((b"x-litellm-customer-org-alias", b"customer-a" if denial == "mismatch" else b"unknown-customer"),)
+    headers: Final = ((b"x-user-id", b"customer-member-b"),) + (
+        ((b"x-tenant-id", b"customer-a" if denial == "mismatch" else b"unknown-customer"),)
         if denial in ("mismatch", "unknown")
         else ()
     )
@@ -135,7 +139,55 @@ async def test_customer_identity_is_retained_only_after_ownership_authorization(
             api_key="verified-customer-key",
         )
     assert denied.value.code == code
+    assert header is None or denied.value.param == header
     assert identity.customer_hierarchy == (hierarchy if denial == "budget" else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setting", "configured_header", "expected_header"),
+    (
+        ("customer_member_id_header", "X-User-ID", "X-User-ID"),
+        ("customer_org_alias_header", "X-Tenant-ID", "X-Tenant-ID"),
+        ("customer_member_id_header", None, "x-litellm-customer-member-id"),
+        ("customer_org_alias_header", None, "x-litellm-customer-org-alias"),
+    ),
+)
+async def test_registration_denial_names_the_header_that_identifies_the_unknown_customer(
+    monkeypatch: pytest.MonkeyPatch, setting: str, configured_header: str | None, expected_header: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    database: Final = MagicMock()
+    database.db.litellm_config.find_unique = AsyncMock(
+        return_value=MagicMock(model_dump=lambda: {"param_value": {"auto_create_customers_without_app": False}})
+    )
+    database.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
+    database.db.litellm_customermembertable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {setting: configured_header} if configured_header else {})
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": ((expected_header.lower().encode(), b"unknown-customer"),),
+        }
+    )
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            UserAPIKeyAuth(token="verified-customer-key"),
+            request,
+            {"model": "qa-model", "input": "Hello"},
+            "/v1/responses",
+            "verified-customer-key",
+        )
+    assert (denied.value.code, denied.value.param, denied.value.message) == (
+        "403",
+        expected_header,
+        f"Unknown customer in {expected_header}. Requests that belong to no app may not create customers.",
+    )
 
 
 @pytest.mark.asyncio
@@ -392,6 +444,45 @@ def _serve_jwks(monkeypatch: pytest.MonkeyPatch, litellm_jwtauth: LiteLLM_JWTAut
     monkeypatch.setattr(server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(server, "premium_user", True)
     monkeypatch.setattr(server, "prisma_client", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_source", ("claim", "header", "alias"))
+async def test_unknown_jwt_team_returns_generic_auth_error(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores, team_source: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    unknown_team: Final = "unknown-credential-team"
+    _serve_jwks(
+        monkeypatch,
+        LiteLLM_JWTAuth(
+            team_id_jwt_field="cid" if team_source != "alias" else None,
+            team_alias_jwt_field="team_alias" if team_source == "alias" else None,
+        ),
+    )
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    token: Final = _signed_jwt({"team_alias" if team_source == "alias" else "cid": unknown_team})
+    app: Final = FastAPI()
+    app.add_exception_handler(ProxyException, server.openai_exception_handler)
+
+    @app.post("/v1/chat/completions")
+    async def endpoint(auth: UserAPIKeyAuth = Depends(user_api_key_auth)) -> dict[str, object]:
+        return {"team_id": auth.team_id}
+
+    headers: Final = {
+        "Authorization": f"Bearer {token}",
+        **({"x-litellm-team-id": unknown_team} if team_source == "header" else {}),
+    }
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        response: Final = await client.post("/v1/chat/completions", json={"model": "qa-model"}, headers=headers)
+
+    assert response.status_code == 401, response.text
+    assert response.json()["error"]["type"] == "auth_error", response.text
+    assert response.json()["error"]["message"] == "Authentication Error, invalid credentials", response.text
+    assert "doesn't exist" not in response.text
+    assert unknown_team not in response.text
 
 
 @pytest.mark.asyncio
