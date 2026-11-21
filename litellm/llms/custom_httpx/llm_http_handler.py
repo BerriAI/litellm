@@ -45,6 +45,12 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.fan_out import (
+    merge_billed_image_responses,
+    record_partial_image_spend,
+    run_concurrently,
+    split_outcomes,
+)
 from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
@@ -69,6 +75,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     holds_a_call_the_choice_excludes,
     run_chat_completion_agentic_hooks,
+    runs_its_own_chat_completion_loop,
     with_caller_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
@@ -169,6 +176,7 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
     AgenticLoopToolChoiceError,
+    bridged_from_chat_completion,
     converted_stream_requested,
     is_interception_internal_key,
 )
@@ -231,22 +239,38 @@ from litellm.utils import (
 
 def _merge_headers_case_insensitive(
     headers: Mapping[str, object], extra_headers: Mapping[str, object] | None
-) -> dict[str, str]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
-    overridden: Final = frozenset(name.lower() for name in extra_headers or {})
+) -> dict[str, object]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
+    overrides: Final = MappingProxyType({name.lower(): (name, value) for name, value in (extra_headers or {}).items()})
     return {
-        **{name: str(value) for name, value in headers.items() if name.lower() not in overridden},
-        **{name: str(value) for name, value in (extra_headers or {}).items()},
+        **{name: value for name, value in headers.items() if name.lower() not in overrides},
+        **dict(overrides.values()),
     }
 
 
 def _client_request_headers(
     response_api_optional_request_params: Mapping[str, object],
     extra_headers: Mapping[str, object] | None,
-) -> dict[str, str]:  # mutable-ok: provider validate_environment methods require a dict
+) -> dict[str, object]:  # mutable-ok: provider validate_environment methods require a dict
     from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
     optional_headers: Final = as_str_mapping(response_api_optional_request_params.get("extra_headers"))
-    return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
+    return _merge_headers_case_insensitive(
+        {name: str(value) for name, value in (optional_headers or {}).items()},
+        {name: str(value) for name, value in (extra_headers or {}).items()},
+    )
+
+
+def _stored_response_request_headers(
+    responses_api_provider_config: BaseResponsesAPIConfig,
+    extra_headers: Mapping[str, object] | None,
+    model: str,
+    litellm_params: GenericLiteLLMParams,
+) -> dict[str, object]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
+    provider_headers: Final[Mapping[str, object]] = responses_api_provider_config.validate_environment(
+        headers=dict(extra_headers or {}), model=model, litellm_params=litellm_params
+    )
+    validated_by_provider: Final = responses_api_provider_config.custom_llm_provider == litellm.LlmProviders.CHATGPT
+    return _merge_headers_case_insensitive(provider_headers, None if validated_by_provider else extra_headers)
 
 
 def _requested_stream(response_api_optional_request_params: Mapping[str, object]) -> object:
@@ -338,9 +362,9 @@ _ResponseT = TypeVar("_ResponseT")
 
 
 class _DeleteRequestKwargs(TypedDict, total=False):
-    url: str
-    headers: dict[str, str]
-    timeout: float | httpx.Timeout | None
+    url: ReadOnly[str]
+    headers: ReadOnly[dict[str, object]]
+    timeout: ReadOnly[float | httpx.Timeout | None]
     json: dict[str, object]
 
 
@@ -610,7 +634,7 @@ def _aws_signing_overrides(
     return MappingProxyType(
         {
             key: litellm_params[key]
-            for key in AWS_CREDENTIAL_KWARGS_KEYS
+            for key in (*AWS_CREDENTIAL_KWARGS_KEYS, "metadata", "litellm_metadata")
             if optional_params.get(key) is None and litellm_params.get(key) is not None
         }
     )
@@ -3077,8 +3101,8 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = {  # rebind-ok: validation replaces the method's incoming headers
-            **responses_api_provider_config.validate_environment(
+        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
+            responses_api_provider_config.validate_environment(
                 headers=(
                     _client_request_headers(response_api_optional_request_params, extra_headers)
                     if custom_llm_provider == "chatgpt"
@@ -3086,9 +3110,11 @@ class BaseLLMHTTPHandler:
                 ),
                 model=model,
                 litellm_params=litellm_params,
-            ),
-            **((extra_headers or {}) if custom_llm_provider != "chatgpt" else {}),
-        }
+            )
+        )
+        headers = _merge_headers_case_insensitive(  # rebind-ok: validation replaces the method's incoming headers
+            provider_headers, extra_headers if custom_llm_provider != "chatgpt" else None
+        )
 
         # Check if streaming is requested
         stream = _requested_stream(response_api_optional_request_params)
@@ -3285,8 +3311,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        validated_headers: Final = {
-            **await asyncio.to_thread(
+        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
+            await asyncio.to_thread(
                 responses_api_provider_config.validate_environment,
                 headers=(
                     _client_request_headers(response_api_optional_request_params, extra_headers)
@@ -3295,9 +3321,11 @@ class BaseLLMHTTPHandler:
                 ),
                 model=model,
                 litellm_params=litellm_params,
-            ),
-            **((extra_headers or {}) if custom_llm_provider != "chatgpt" else {}),
-        }
+            )
+        )
+        validated_headers: Final = _merge_headers_case_insensitive(
+            provider_headers, extra_headers if custom_llm_provider != "chatgpt" else None
+        )
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
@@ -3438,6 +3466,7 @@ class BaseLLMHTTPHandler:
         )
 
         agentic_kwargs: Final = dict(litellm_params)
+        chat_completion_loop_follows: Final = bridged_from_chat_completion(agentic_kwargs)
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -3449,10 +3478,15 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
             kwargs=agentic_kwargs,
             api_surface="responses",
+            skip_chat_completion_loops=chat_completion_loop_follows,
         )
 
         result: Final = final_response if final_response is not None else initial_response
-        if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
+        if (
+            not chat_completion_loop_follows
+            and converted_stream_requested(agentic_kwargs)
+            and not agentic_kwargs.get("_agentic_loop_depth")
+        ):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -3494,14 +3528,8 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers: Final = await asyncio.to_thread(
-            responses_api_provider_config.validate_environment,
-            headers=extra_headers or {},
-            model="None",
-            litellm_params=litellm_params,
+            _stored_response_request_headers, responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -3586,12 +3614,9 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = _stored_response_request_headers(
+            responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -3689,12 +3714,9 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = _stored_response_request_headers(
+            responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -3784,14 +3806,8 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers: Final = await asyncio.to_thread(
-            responses_api_provider_config.validate_environment,
-            headers=extra_headers or {},
-            model="None",
-            litellm_params=litellm_params,
+            _stored_response_request_headers, responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -3892,12 +3908,9 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = _stored_response_request_headers(
+            responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -3927,7 +3940,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
             response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
@@ -3968,14 +3981,8 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers: Final = await asyncio.to_thread(
-            responses_api_provider_config.validate_environment,
-            headers=extra_headers or {},
-            model="None",
-            litellm_params=litellm_params,
+            _stored_response_request_headers, responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -4005,7 +4012,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
             response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
@@ -4962,12 +4969,9 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        headers: Final = _stored_response_request_headers(
+            responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -5038,14 +5042,8 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers: Final = await asyncio.to_thread(
-            responses_api_provider_config.validate_environment,
-            headers=extra_headers or {},
-            model="None",
-            litellm_params=litellm_params,
+            _stored_response_request_headers, responses_api_provider_config, extra_headers, "None", litellm_params
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -5123,12 +5121,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = responses_api_provider_config.validate_environment(
-            headers=extra_headers or {}, model=model, litellm_params=litellm_params
-        )
-
-        if extra_headers:
-            headers.update(extra_headers)
+        headers = _stored_response_request_headers(responses_api_provider_config, extra_headers, model, litellm_params)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -5215,15 +5208,9 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        validated_headers: Final = {
-            **await asyncio.to_thread(
-                responses_api_provider_config.validate_environment,
-                headers=extra_headers or {},
-                model=model,
-                litellm_params=litellm_params,
-            ),
-            **(extra_headers or {}),
-        }
+        validated_headers: Final = await asyncio.to_thread(
+            _stored_response_request_headers, responses_api_provider_config, extra_headers, model, litellm_params
+        )
 
         api_base: Final = await run_off_loop_if_aws(
             responses_api_provider_config,
@@ -6397,6 +6384,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         kwargs: dict,
         api_surface: str = "anthropic_messages",
+        skip_chat_completion_loops: bool = False,
     ) -> Any | None:
         """
         Call agentic completion hooks for all custom loggers (Anthropic Messages API).
@@ -6422,7 +6410,9 @@ class BaseLLMHTTPHandler:
         }
 
         for callback in callbacks:
-            if not isinstance(callback, CustomLogger):
+            if not isinstance(callback, CustomLogger) or (
+                skip_chat_completion_loops and runs_its_own_chat_completion_loop(callback)
+            ):
                 continue
 
             should_run: bool = False
@@ -6949,15 +6939,7 @@ class BaseLLMHTTPHandler:
                         session_configuration_request=None,
                     )
                     if synthetic_session is not None:
-                        synthetic_session_str: Final = json.dumps(synthetic_session)
-                        # Record before sending so the synthetic session.created is
-                        # captured in the session log alongside provider-driven
-                        # events; without this it would be silently absent from
-                        # success_handler / async_success_handler payloads.
-                        realtime_streaming.store_message(synthetic_session_str)
-                        await websocket.send_text(synthetic_session_str)
-                        realtime_streaming.session_created_sent_to_client = True
-                        verbose_logger.debug("Sent synthetic session.created to client to unblock connection")
+                        await realtime_streaming.send_synthetic_session_created(synthetic_session)
 
                 await realtime_streaming.bidirectional_forward()
 
@@ -7538,38 +7520,44 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider uses multipart/form-data or JSON
+        def send() -> httpx.Response:
             if image_edit_provider_config.use_multipart_form_data():
-                # Use form-data (OpenAI style)
-                response = sync_httpx_client.post(
+                return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files=files,
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (Gemini style)
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_edit_provider_config,
+            return sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        responses, failure = split_outcomes(
+            run_concurrently(
+                image_edit_provider_config.get_request_count(
+                    model,
+                    image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                ),
+                send,
+            )
         )
-        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        served: Final = [
+            image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
+        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
     async def async_image_edit_handler(
@@ -7640,38 +7628,42 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider uses multipart/form-data or JSON
+        async def send() -> httpx.Response:
             if image_edit_provider_config.use_multipart_form_data():
-                # Use form-data (OpenAI style)
-                response = await async_httpx_client.post(
+                return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files=files,
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (Gemini style)
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_edit_provider_config,
+            return await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        request_count: Final = image_edit_provider_config.get_request_count(
+            model,
+            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        responses, failure = split_outcomes(
+            await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+        )
+        served: Final = [
+            image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
+        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
     def image_generation_handler(
@@ -7759,43 +7751,49 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = sync_httpx_client.post(
+                return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_generation_provider_config,
+            return sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        model_response: Final[ImageResponse] = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        responses, failure = split_outcomes(
+            run_concurrently(
+                image_generation_provider_config.get_request_count(
+                    model,
+                    image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                ),
+                send,
+            )
         )
-        set_provider_response_headers_in_hidden_params(model_response, response.headers)
+        served: Final = [
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
+        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
 
@@ -7867,45 +7865,47 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        async def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = await async_httpx_client.post(
+                return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=image_generation_provider_config,
+            return await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
             )
 
-        model_response: Final[
-            ImageResponse
-        ] = await image_generation_provider_config.async_transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-            litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-            encoding=None,
+        request_count: Final = image_generation_provider_config.get_request_count(
+            model,
+            image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        set_provider_response_headers_in_hidden_params(model_response, response.headers)
+        responses, failure = split_outcomes(
+            await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+        )
+        served: Final = [
+            await image_generation_provider_config.async_transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+                encoding=None,
+            )
+            for response in responses
+        ]
+        if failure is not None:
+            record_partial_image_spend(logging_obj, served)
+            raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
+        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
+        set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
 
@@ -12744,6 +12744,7 @@ class BaseLLMHTTPHandler:
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
+        stream: bool = False,
     ) -> Union[
         "HttpxBinaryResponseContent",
         Coroutine[object, object, "HttpxBinaryResponseContent"],
@@ -12765,6 +12766,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 timeout=timeout,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
+                stream=stream,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -12812,6 +12814,8 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        should_stream: Final = stream and text_to_speech_provider_config.supports_streaming
+
         try:
             # Determine request body type and send appropriately
             if "dict_body" in request_data:
@@ -12820,6 +12824,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             elif "ssml_body" in request_data:
                 response = sync_httpx_client.post(
@@ -12827,6 +12832,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             else:
                 raise ValueError(
@@ -12860,6 +12866,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
+        stream: bool = False,
     ) -> "HttpxBinaryResponseContent":
         """
         Async version of the text-to-speech handler.
@@ -12913,6 +12920,8 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        should_stream: Final = stream and text_to_speech_provider_config.supports_streaming
+
         try:
             # Determine request body type and send appropriately
             if "dict_body" in request_data:
@@ -12921,6 +12930,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             elif "ssml_body" in request_data:
                 response = await async_httpx_client.post(
@@ -12928,6 +12938,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             else:
                 raise ValueError(

@@ -490,6 +490,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 403
         self.message = f"litellm.PermissionDeniedError: {message}"
@@ -499,7 +500,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(
-            self.message, response=response, body=None
+            self.message, response=response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -611,6 +612,24 @@ class CallerCredentialRateLimitError(RateLimitError):
     """429 raised when a per-user credential exchange is rate limited by the
     provider (e.g. GitHub's token endpoint). Scoped to one caller's
     credential, so routers must not cool down the shared deployment."""
+
+
+class RequestOverDeploymentTpmError(RateLimitError):
+    """429 raised when one request alone is estimated over the tpm limit of every deployment
+    it could route to, unavailable ones included, so a retry can never clear it. Loggers and
+    Prometheus keep naming it ``RateLimitError``, as they named this refusal before."""
+
+    logged_error_class: Final = "RateLimitError"
+    prometheus_exception_class_name: Final = "RateLimitError"
+
+
+class SyncRequestOverDeploymentTpmError(RequestOverDeploymentTpmError, ValueError):
+    """The sync ``Router``'s form, still a ``ValueError`` as the sync refusal was before."""
+
+
+def logged_class_name(error: BaseException) -> str:
+    logged: Final[object] = getattr(error, "logged_error_class", None)
+    return logged if isinstance(logged, str) else type(error).__name__
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
@@ -791,9 +810,9 @@ class ContentPolicyViolationError(BadRequestError):
 class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: object,
+        model: object,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,

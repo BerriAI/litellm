@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
@@ -1066,7 +1067,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """Add system message to messages list if present in request."""
         if "system" not in anthropic_message_request:
             return
-        system_content: Final = anthropic_message_request["system"]
+        system_content: Final = system_without_claude_code_billing_header(anthropic_message_request["system"])
         if not system_content:
             return
         # Handle system as string or array of content blocks
@@ -1079,8 +1080,8 @@ class LiteLLMAnthropicMessagesAdapter:
             # Convert Anthropic system content blocks to OpenAI format
             openai_system_content: Final[list[dict[str, object]]] = []
             model_name: Final = anthropic_message_request.get("model", "")
-            for block in system_content:
-                if isinstance(block, dict) and block.get("type") == "text":
+            for block in (as_str_mapping(raw_block) for raw_block in system_content):
+                if block is not None and block.get("type") == "text":
                     text_block: dict[str, object] = {
                         "type": "text",
                         "text": block.get("text", ""),
@@ -1539,7 +1540,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             AnthropicResponseContentBlockThinking(
                                 type="thinking",
                                 thinking=(str(thinking_value) if thinking_value is not None else ""),
-                                signature=(str(signature_value) if signature_value is not None else None),
+                                signature=(str(signature_value) if signature_value is not None else ""),
                             ).model_dump()
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
@@ -1556,7 +1557,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     AnthropicResponseContentBlockThinking(
                         type="thinking",
                         thinking=str(choice.message.reasoning_content),
-                        signature=None,
+                        signature="",
                     ).model_dump()
                 )
 

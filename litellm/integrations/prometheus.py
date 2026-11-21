@@ -65,8 +65,8 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router_api import deployment_metadata
@@ -179,6 +179,18 @@ class _CustomerBudgetRow(Protocol):
 
     @property
     def litellm_budget_table(self) -> _JoinedBudgetRow | None: ...
+
+
+def _dynamic_limiter_holder_labels(
+    kind: Literal["team", "key", "customer_org"], holder_id: str, holder_alias: str | None
+) -> Mapping[str, str | None]:
+    match kind:
+        case "team":
+            return {"team": holder_id, "team_alias": holder_alias}
+        case "key":
+            return {"hashed_api_key": holder_id, "api_key_alias": holder_alias}
+        case "customer_org":
+            return {"customer_org_id": holder_id, "customer_org_alias": holder_alias}
 
 
 def _customer_budget_metrics_enabled() -> bool:
@@ -425,8 +437,8 @@ def _own_charge() -> OwnCharge:
     batches: Final = active_request_redis_batches()
     if batches is None or not spend_counter_store.has_redis:
         return "unknown"
-    settlements: Final = batches.post_call_settlements
-    return "counted" if settlements and all(settlement.settled for settlement in settlements) else "pending"
+    native: Final = batches.existing_native()
+    return "counted" if native is not None and native.tracked_writes_settled else "pending"
 
 
 def _committed_spend_before_request(
@@ -4201,14 +4213,17 @@ class PrometheusLogger(CustomLogger):
     def set_dynamic_limiter_share(
         self,
         model_group: str,
-        team: str,
-        team_alias: str | None,
+        holder_kind: Literal["team", "key", "customer_org"],
+        holder_id: str,
+        holder_alias: str | None,
         priority: str,
         share_tokens: int,
         borrowed_tokens: int,
     ) -> None:
         enum_values: Final = UserAPIKeyLabelValues(
-            model_group=model_group, team=team, team_alias=team_alias, priority=priority
+            model_group=model_group,
+            priority=priority,
+            **_dynamic_limiter_holder_labels(holder_kind, holder_id, holder_alias),
         )
         self._set_labeled_gauge(
             self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", enum_values, share_tokens
@@ -4239,8 +4254,9 @@ class PrometheusLogger(CustomLogger):
     def increment_dynamic_limiter_throttled(
         self,
         model_group: str,
-        team: str,
-        team_alias: str | None,
+        holder_kind: Literal["team", "key", "customer_org"],
+        holder_id: str,
+        holder_alias: str | None,
         priority: str,
         rate_limit_type: str,
         reason: str,
@@ -4250,11 +4266,10 @@ class PrometheusLogger(CustomLogger):
             "litellm_dynamic_limiter_throttled_total",
             UserAPIKeyLabelValues(
                 model_group=model_group,
-                team=team,
-                team_alias=team_alias,
                 priority=priority,
                 rate_limit_type=rate_limit_type,
                 reason=reason,
+                **_dynamic_limiter_holder_labels(holder_kind, holder_id, holder_alias),
             ),
         )
 

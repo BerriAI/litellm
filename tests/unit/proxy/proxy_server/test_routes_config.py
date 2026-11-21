@@ -1573,6 +1573,58 @@ def test_get_config_callbacks_accepts_scalar_and_null_yaml_callbacks(client, aut
     ]
 
 
+@pytest.mark.parametrize(
+    "config_owned_list, expected_sources",
+    [
+        ("success_callback", ("config", None, None)),
+        ("failure_callback", (None, "config", None)),
+        ("callbacks", (None, None, "config")),
+    ],
+)
+def test_get_config_callbacks_marks_rows_from_lists_the_config_file_sets(
+    client, auth_as, mock_prisma, monkeypatch, config_owned_list, expected_sources
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {
+                "success_callback": ["langfuse"],
+                "failure_callback": ["langfuse"],
+                "callbacks": ["generic_api"],
+            },
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    fake_proxy_config.litellm_settings.owned_by_config = frozenset({config_owned_list}).__contains__
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+
+    assert [(cb["name"], cb["type"], cb.get("source")) for cb in response.json()["callbacks"]] == [
+        ("langfuse", "success", expected_sources[0]),
+        ("langfuse", "failure", expected_sources[1]),
+        ("generic_api", "success_and_failure", expected_sources[2]),
+    ]
+
+
 def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_as, mock_prisma, monkeypatch):
     """A configured callback shows once as editable, whether the runtime holds its string or an initialized instance
     (arize initializes an ArizeLogger, logfire a bare OpenTelemetry that only its class identifies)."""

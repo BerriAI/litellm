@@ -39,6 +39,7 @@ const STATIC_KEYS: &[&str] = &[
     "health_check_staleness_threshold",
     "background_health_check_model_groups",
     "enable_weighted_failover",
+    "enable_cross_model_group_collision_check",
     "fallback_on_unsupported_params",
     "provider_default_deployment_ids",
 ];
@@ -276,7 +277,6 @@ pub(crate) fn parse_request(value: Value, model: Option<&str>) -> Result<RouterR
         cooldown_time: spec.cooldown_time,
         health_check_probe: spec.health_check_probe.unwrap_or(false),
         outcome_callbacks: spec.outcome_callbacks.unwrap_or_default(),
-        payload: None,
     })
 }
 

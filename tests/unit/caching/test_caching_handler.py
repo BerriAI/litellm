@@ -58,6 +58,7 @@ from fastapi.testclient import TestClient
 from contextlib import nullcontext
 from litellm._internal_context import current_service_target, in_post_response_phase, internal_sub_call
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
@@ -287,6 +288,62 @@ async def test_existing_provider_response_cache_still_hits(copilot_response_cach
     hidden_params: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(hidden_params_value)
     assert second.choices[0].message.content == first.choices[0].message.content
     assert hidden_params.get("cache_hit") is True
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_logs_the_vertex_location_the_deployment_is_configured_with(
+    monkeypatch: pytest.MonkeyPatch, copilot_response_cache: Cache
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged_locations: Final[list[tuple[object, object]]] = []
+    both_logged: Final = asyncio.Event()
+
+    class LocationRecorder(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            payload: Final = TypeAdapter(Mapping[str, object]).validate_python(kwargs["standard_logging_object"])
+            breakdown: Final = TypeAdapter(Mapping[str, object]).validate_python(payload["cost_breakdown"])
+            logged_locations.append((payload["cache_hit"], breakdown.get("vertex_location")))
+            if len(logged_locations) == 2:
+                both_logged.set()
+
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [LocationRecorder()])
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "global-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_location": "global",
+                    "mock_response": "ok",
+                },
+            }
+        ]
+    )
+    for _ in range(2):
+        request: Final[dict[str, object]] = {
+            "model": "global-gemini",
+            "messages": [{"role": "user", "content": "cache hit location"}],
+            "caching": True,
+            "litellm_call_id": str(uuid.uuid4()),
+        }
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="acompletion", rules_obj=litellm.utils.Rules(), start_time=datetime(2026, 1, 1), **request
+        )
+        await router.acompletion(**request, litellm_logging_obj=logging_obj)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    await asyncio.wait_for(both_logged.wait(), timeout=10)
+    assert sorted(logged_locations, key=str) == [(None, "global"), (True, "global")], logged_locations
 
 
 @pytest.mark.asyncio
@@ -1399,19 +1456,96 @@ def test_convert_cached_streaming_responses_result_to_iterator():
     )
 
 
-def test_is_chat_completion_cached_dict():
-    assert _is_chat_completion_cached_dict(
-        {"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}
+@pytest.mark.parametrize(
+    ("cached_result", "expected"),
+    [
+        ({"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}, True),
+        ({"id": "other", "object": "chat.completion.chunk", "choices": []}, True),
+        ({"id": "no-object", "choices": [{"index": 0}]}, True),
+        ({"id": "chatcmpl-abc", "object": "custom.object", "choices": []}, True),
+        ({"id": "chatcmpl-abc", "object": None}, True),
+        ({"id": "chatcmpl-abc"}, True),
+        ({"id": "resp_abc", "object": "response", "output": []}, False),
+        ({"id": "chatcmpl-abc", "object": "response", "output": []}, False),
+        ({"id": "other", "object": "custom.object", "choices": []}, False),
+    ],
+)
+def test_is_chat_completion_cached_dict(cached_result: dict[str, object], expected: bool) -> None:
+    assert _is_chat_completion_cached_dict(cached_result) is expected
+
+
+def _bridge_responses_cached_dict() -> dict[str, object]:
+    return {
+        "id": "chatcmpl-bridge-response",
+        "created_at": 1_767_225_600,
+        "status": "completed",
+        "model": "claude-sonnet-4-5",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_bridge_response",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [(responses, CallTypes.responses.value), (aresponses, CallTypes.aresponses.value)],
+)
+def test_bridge_responses_cache_hit_with_chat_completion_id_replays_as_response(
+    original_function: Callable[..., object], call_type: str
+) -> None:
+    caching_handler: Final = LLMCachingHandler(
+        original_function=original_function, request_kwargs={}, start_time=datetime.now()
     )
-    assert _is_chat_completion_cached_dict(
-        {"id": "other", "object": "chat.completion.chunk", "choices": []}
+
+    result: Final = caching_handler._convert_cached_result_to_model_response(
+        cached_result=_bridge_responses_cached_dict(),
+        call_type=call_type,
+        kwargs={"model": "anthropic/claude-sonnet-4-5", "input": "hi", "stream": False},
+        logging_obj=_build_logging_obj(call_type, stream=False),
+        model="anthropic/claude-sonnet-4-5",
+        args=(),
     )
-    assert _is_chat_completion_cached_dict(
-        {"id": "no-object", "choices": [{"index": 0}]}
+
+    assert isinstance(result, ResponsesAPIResponse)
+    assert result.id == "chatcmpl-bridge-response"
+    assert result.output[0].content[0].text == "hello"
+    assert served_from_cache(result)
+
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [(responses, CallTypes.responses.value), (aresponses, CallTypes.aresponses.value)],
+)
+def test_bridge_responses_stream_cache_hit_with_chat_completion_id_replays_response_events(
+    original_function: Callable[..., object], call_type: str
+) -> None:
+    caching_handler: Final = LLMCachingHandler(
+        original_function=original_function, request_kwargs={}, start_time=datetime.now()
     )
-    assert not _is_chat_completion_cached_dict(
-        {"id": "resp_abc", "object": "response", "output": []}
+
+    result: Final = caching_handler._convert_cached_result_to_model_response(
+        cached_result=_bridge_responses_cached_dict(),
+        call_type=call_type,
+        kwargs={"model": "anthropic/claude-sonnet-4-5", "input": "hi", "stream": True},
+        logging_obj=_build_logging_obj(call_type, stream=True),
+        model="anthropic/claude-sonnet-4-5",
+        args=(),
     )
+
+    assert isinstance(result, CachedResponsesAPIStreamingIterator)
+    completed: Final = result.completed_response
+    assert completed is not None
+    assert completed.type == "response.completed"
+    assert completed.response.id == "chatcmpl-bridge-response"
+    assert completed.response.output[0].content[0].text == "hello"
+    assert served_from_cache(completed.response)
 
 
 def test_convert_cached_aresponses_bridge_chat_completion_stream():
@@ -3420,3 +3554,43 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
     assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
+
+
+@pytest.fixture
+def clamping_response_cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "modify_params", True)
+    return cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_async", [True, False], ids=["acompletion", "completion"])
+@pytest.mark.parametrize(
+    "first_request_controls",
+    [{}, {"cache": {"no-cache": True}}],
+    ids=["first_request_reads_the_cache", "first_request_skips_the_cache_read"],
+)
+async def test_a_repeat_of_a_request_whose_max_tokens_was_clamped_is_served_from_the_cache(
+    clamping_response_cache: Cache, call_async: bool, first_request_controls: Mapping[str, object]
+) -> None:
+    model: Final = "gpt-5.6"
+    max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
+    assert max_output_tokens is not None
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": f"clamped {uuid.uuid4()}"}],
+        "max_tokens": max_output_tokens * 10,
+        "mock_response": "fresh",
+    }
+
+    async def send(controls: Mapping[str, object]) -> ModelResponse:
+        if call_async:
+            return await litellm.acompletion(**request, **controls)
+        return litellm.completion(**request, **controls)
+
+    first: Final = await send(first_request_controls)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeat: Final = await send({})
+
+    assert repeat.id == first.id

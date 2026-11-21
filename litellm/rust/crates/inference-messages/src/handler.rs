@@ -7,20 +7,29 @@ use litellm_secret_value::SecretValue;
 
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
-    get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
+    get_provider_specific_headers::get_provider_specific_headers,
 };
-use litellm_host::interceptors::{
-    Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
-    ResponseHead, ResultSource, WireRequest,
+use litellm_env::Lookup;
+use litellm_host::{
+    interceptors::{
+        Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
+        ResponseHead, ResultSource, WireRequest,
+    },
+    protocol::UnobservedTail,
 };
+use litellm_http::Phases;
+use litellm_llms::anthropic::messages::transformation::is_claude_model;
 use litellm_llms::base_llm::{
-    auth::{Authenticated, ValidatedEnvironment, resolve_auth},
+    auth::{
+        Authenticated, AzureAdTokenHosts, ValidatedEnvironment, log_in_to_vertex, resolve_auth,
+    },
     messages::{
         context::MessagesTransformContext,
-        streaming::{self, ByteStream, StreamDecoder},
+        streaming::{ByteStream, StreamDecoder},
         transformation::{BaseMessagesConfig, FederatedEnvironment},
     },
 };
+use litellm_llms::vertex_ai::messages::transformation::vertex_connection_params;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -30,10 +39,12 @@ use serde_json::{Map, Value};
 
 use super::{
     Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
-    Transport, TransportRequest, TransportResponse, UnencodableHeader, WorkloadIdentity,
+    Transport, TransportRequest, TransportResponse, UnencodableHeader, UnsendableUrl,
+    WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{
-        MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
+        MESSAGES_CONNECT_TIMEOUT_SECS, MESSAGES_HTTP_ERROR_ATTEMPTS,
+        MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
     },
     route::Messages,
     types::invalid_request,
@@ -53,10 +64,37 @@ struct ProviderCall {
     stream: bool,
     whole_sse_frames: bool,
     joined_reads: bool,
+    detached_drain: Option<litellm_host::protocol::DetachedDrain>,
     transform_context: MessagesTransformContext,
+    native_output_fallback: Option<NativeOutputFallback>,
     ascii_response_headers: bool,
     unencodable_request_header: Option<Vec<u8>>,
     ascii_request_headers: bool,
+    connect_retry: bool,
+}
+
+struct NativeOutputFallback {
+    input: MessagesRequest,
+    context: MessagesTransformContext,
+    headers: Vec<(String, String)>,
+    tool_custom_field: litellm_llms::base_llm::messages::tools::ToolCustomField,
+    drops_unsupported_params: bool,
+    drop_params: bool,
+}
+
+impl NativeOutputFallback {
+    fn body(&self, config: &dyn BaseMessagesConfig) -> Result<Value, Error> {
+        let rebuilt = config.request_body(
+            self.tool_custom_field.apply(
+                config.transform_anthropic_messages_request(self.input.clone(), &self.context)?,
+                self.drops_unsupported_params,
+            ),
+            &self.headers,
+            self.drop_params,
+        )?;
+        let (rebuilt, _) = config.finalize_request(rebuilt, self.headers.clone(), &self.context)?;
+        Ok(config.wire_body(serde_json::to_value(&rebuilt).map_err(serialize_failure)?))
+    }
 }
 
 impl ProviderCall {
@@ -179,8 +217,12 @@ pub(super) async fn execute(
 ) -> Result<MessagesCallResponse, Error> {
     let caller_keyed = caller_keyed(route).is_some();
     let request = provider_call(
-        &route.auth,
-        route.workload_identity.as_deref(),
+        CallerCredentials {
+            auth: &route.auth,
+            workload_identity: route.workload_identity.as_deref(),
+            azure_ad_token_hosts: route.azure_ad_token_hosts.clone(),
+            deferred_secrets: Some(route.secrets.as_ref()),
+        },
         provider,
         model,
         call,
@@ -245,9 +287,17 @@ fn execution_facts(
     }
 }
 
+/// What a provider call may authenticate with beyond its config: the shared token caches, a
+/// workload identity federation host and the Entra ID token sources of the caller and host.
+struct CallerCredentials<'a> {
+    auth: &'a AuthServices,
+    workload_identity: Option<&'a dyn WorkloadIdentity>,
+    azure_ad_token_hosts: AzureAdTokenHosts,
+    deferred_secrets: Option<&'a dyn litellm_secrets::source::SecretSource>,
+}
+
 async fn provider_call(
-    auth: &AuthServices,
-    workload_identity: Option<&dyn WorkloadIdentity>,
+    credentials: CallerCredentials<'_>,
     provider: MessagesProvider,
     model: String,
     call: MessagesCall,
@@ -278,12 +328,20 @@ async fn provider_call(
     )?;
     let transform_context = MessagesTransformContext {
         drops_unsupported_params: shaping.settings.drops_unsupported_params,
+        global_drop_params: shaping.settings.global_drop_params,
+        claude_base_model: shaping
+            .settings
+            .base_model
+            .as_deref()
+            .is_some_and(is_claude_model),
         ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
     };
     let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
     let without_keys = without_additional_drop_params(sanitized, &dropped_keys)?;
     let requested = requested_optional_params(without_keys, provider, &transform_context)?;
-    let requested_params = serde_json::to_value(&requested.params).map_err(serialize_failure)?;
+    let requested_params =
+        serde_json::to_value(config.logged_params(requested.params.clone(), &transform_context)?)
+            .map_err(serialize_failure)?;
     let trimmed =
         without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 
@@ -293,9 +351,35 @@ async fn provider_call(
         extra_headers.unwrap_or_default(),
         scoped,
     ])))?;
+    let configured_key = match shaping.settings.module_api_key.as_ref() {
+        Some(module_key) => api_key
+            .as_deref()
+            .filter(|key| !key.is_empty())
+            .or(Some(module_key.expose())),
+        None => api_key.as_deref(),
+    };
+    let deferred = match (
+        credentials.deferred_secrets,
+        config.deferred_secret_names(
+            credentials.azure_ad_token_hosts.host.is_some(),
+            &forwarded,
+            configured_key,
+            api_base.as_deref(),
+            &connection_params,
+            &env_lookup,
+        ),
+    ) {
+        (Some(source), names) if !names.is_empty() => Some(source.resolve(names).await?),
+        _ => None,
+    };
+    let env_lookup = |key: &str| {
+        secrets
+            .get(key)
+            .or_else(|| deferred.as_ref().and_then(|deferred| deferred.get(key)))
+    };
     let validated = match config.validate_federated_environment(
         forwarded,
-        api_key.as_deref(),
+        configured_key,
         &trimmed.model,
         &trimmed.params,
         &connection_params,
@@ -306,7 +390,7 @@ async fn provider_call(
             headers,
             missing,
             federate,
-        } => match workload_identity {
+        } => match credentials.workload_identity {
             Some(identity) => match identity
                 .token(&connection_params, api_base.as_deref())
                 .await?
@@ -316,13 +400,29 @@ async fn provider_call(
             },
             None => return Err(missing.into()),
         },
-    };
+    }
+    .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts)?;
+    let (validated, logged_in_project) =
+        log_in_to_vertex(credentials.auth, validated, &env_lookup).await?;
+    let connection_params = vertex_connection_params(
+        connection_params,
+        &trimmed.model,
+        logged_in_project,
+        &shaping.vertex.supported_regions,
+        &env_lookup,
+    );
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();
+    let fallback = config
+        .native_output_fallback(&trimmed, &transform_context)
+        .map(|fallback_context| (trimmed.clone(), fallback_context));
     let body = config.request_body(
         tool_custom_field.apply(
-            config.transform_anthropic_messages_request(trimmed, &transform_context)?,
+            config.transform_anthropic_messages_request(
+                config.without_rejected_params(trimmed, &connection_params)?,
+                &transform_context,
+            )?,
             shaping.settings.drops_unsupported_params,
         ),
         &validated.headers,
@@ -335,25 +435,43 @@ async fn provider_call(
         body.params.streams(),
         &env_lookup,
     )?;
-    let environment = ValidatedEnvironment {
-        headers: config.headers_for_url(
-            config.request_headers(
-                with_python_default_headers(validated.headers, config.default_headers()),
-                &with_requested_output_format(&body, requested_output_format),
-            ),
-            &url,
+    let headers = config.headers_for_url(
+        config.request_headers(
+            with_python_default_headers(validated.headers, config.default_headers()),
+            &with_requested_output_format(&body, requested_output_format),
         ),
+        &url,
+    );
+    let native_output_fallback = fallback.map(|(input, context)| NativeOutputFallback {
+        input,
+        context,
+        headers: headers.clone(),
+        tool_custom_field,
+        drops_unsupported_params: shaping.settings.drops_unsupported_params,
+        drop_params: shaping.settings.drop_params,
+    });
+    let (body, headers) = config.finalize_request(body, headers, &transform_context)?;
+    let environment = ValidatedEnvironment {
+        headers,
         auth: validated.auth,
     };
 
     let request_context = RequestContext {
-        model: body.model.clone(),
+        model: config.logged_model(&body.model),
         custom_llm_provider: provider.as_str().to_string(),
         optional_params: requested_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
+    let serialized = serde_json::to_value(&body).map_err(serialize_failure)?;
+    let serialized_stream = serialized.get("stream").is_some();
+    let wire_body = config.wire_body(serialized);
+    let stream_moved_to_url =
+        body.params.streams() && serialized_stream && wire_body.get("stream").is_none();
+    let authenticated = resolve_auth(credentials.auth, environment, &|key| {
+        std::env::var(key).ok()
+    })
+    .await?;
     let identity = ProviderIdentity {
         model: request_context.model.clone(),
         provider: request_context.custom_llm_provider.clone(),
@@ -364,15 +482,15 @@ async fn provider_call(
             WireRequest {
                 url,
                 headers: joined_header_values(authenticated.headers),
-                body: config.wire_body(serde_json::to_value(&body).map_err(serialize_failure)?),
+                body: wire_body,
             },
             request_context,
         )
         .await?;
-    let stream = wire
-        .body
-        .get("stream")
-        .is_some_and(litellm_llms_types::recognized::python_truthy);
+    let stream = wire.body.get("stream").map_or(
+        stream_moved_to_url,
+        litellm_python_compat::truthy::json_truthy,
+    );
     Ok(ProviderCall {
         identity,
         wire,
@@ -382,10 +500,13 @@ async fn provider_call(
         stream,
         whole_sse_frames: shaping.settings.whole_sse_frames,
         joined_reads: shaping.settings.joined_reads,
+        detached_drain: shaping.settings.detached_drain(),
         transform_context,
+        native_output_fallback,
         ascii_response_headers: shaping.settings.ascii_response_headers,
         unencodable_request_header: shaping.settings.unencodable_request_header,
         ascii_request_headers: shaping.settings.ascii_request_headers,
+        connect_retry: shaping.settings.connect_retry,
     })
 }
 
@@ -450,11 +571,29 @@ fn requested_optional_params(
     provider: MessagesProvider,
     context: &MessagesTransformContext,
 ) -> Result<MessagesRequest, Error> {
-    let request = litellm_llms::anthropic::messages::transformation::drop_unsupported_params(
-        request, context,
+    let requested_effort = request.params.reasoning_effort.clone();
+    let clamped = provider
+        .config()
+        .clamp_requested_effort(request, &context.thinking.capabilities)?;
+    let gated = litellm_llms::anthropic::messages::transformation::drop_unsupported_params(
+        clamped, context,
     )?;
+    let request = MessagesRequest {
+        params: MessagesOptionalParams {
+            reasoning_effort: gated.params.reasoning_effort.and(requested_effort),
+            ..gated.params
+        },
+        ..gated
+    };
     if provider.accepts_service_tier() {
         return Ok(request);
+    }
+    if request.params.service_tier.is_some() {
+        litellm_tracing::warn!(
+            "Dropping `service_tier` for model={} on provider={}. Only the Anthropic API routes accept it.",
+            request.model,
+            provider.as_str()
+        );
     }
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
@@ -518,6 +657,7 @@ async fn call_provider(
         stream,
         whole_sse_frames,
         joined_reads,
+        detached_drain,
         ..
     } = request;
     let provider_name = provider.as_str();
@@ -539,6 +679,7 @@ async fn call_provider(
             timeout,
             joined_reads,
         );
+        let streamed = draining_after_detach(streamed, config.stream_decoder(), detached_drain);
         return Ok(if whole_sse_frames {
             framed(streamed)
         } else {
@@ -574,6 +715,7 @@ async fn hosted_response(
         identity,
         provider,
         whole_sse_frames,
+        detached_drain,
         ..
     } = request;
     let provider_name = provider.as_str();
@@ -591,6 +733,7 @@ async fn hosted_response(
                 .await?;
             let streamed =
                 hosted_streaming_response(headers, chunks, config.stream_decoder(), provider_name);
+            let streamed = draining_after_detach(streamed, config.stream_decoder(), detached_drain);
             return Ok(if whole_sse_frames {
                 framed(streamed)
             } else {
@@ -654,6 +797,13 @@ fn hosted_request(
     })
 }
 
+fn unsendable_url(provider: MessagesProvider, url: &str) -> Option<UnsendableUrl> {
+    provider
+        .refuses_unsendable_urls()
+        .then(|| UnsendableUrl::of(url))
+        .flatten()
+}
+
 async fn send_recovering(
     http: &litellm_http::Client,
     transport: Option<&dyn Transport>,
@@ -664,10 +814,14 @@ async fn send_recovering(
     let config = request.provider.config();
     let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
     let mut attempt = 1;
+    let mut recovered: Vec<(u16, String)> = Vec::new();
     loop {
         log_request_body(request.provider.as_str(), request.stream, &body);
         if let Some(value) = &request.unencodable_request_header {
             return Err(Error::transport(UnencodableHeader::Sent(value.clone())));
+        }
+        if let Some(unsendable) = unsendable_url(request.provider, &request.wire.url) {
+            return Err(Error::transport(unsendable));
         }
         // The credential header built from the caller's api_key never passes the caller header
         // check, so it is checked on the wire headers as Python's client encodes them.
@@ -694,7 +848,13 @@ async fn send_recovering(
                     authenticated,
                     &request.wire.url,
                     sent_body.clone(),
-                    timeout,
+                    Phases {
+                        connect: request
+                            .timeout
+                            .unwrap_or(Duration::from_secs(MESSAGES_CONNECT_TIMEOUT_SECS)),
+                        read: timeout,
+                    },
+                    request.connect_retry,
                 )
                 .await?,
             ),
@@ -737,6 +897,20 @@ async fn send_recovering(
             }
             hosted @ Upstream::Hosted(_) => return Ok((hosted, sent_body)),
         };
+        if let Some(fallback) = request.native_output_fallback.as_ref().filter(|_| {
+            config.retries_without_native_output(
+                failure.status,
+                &failure.text,
+                &body,
+                &request.identity.model,
+            )
+        }) {
+            let rebuilt = fallback.body(config)?;
+            let replayed = replayed_recoveries(config, rebuilt, &recovered, request);
+            body = std::borrow::Cow::Owned(replayed.body.clone());
+            context.provider_request_retried(replayed).await?;
+            continue;
+        }
         let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
             None
         } else {
@@ -751,12 +925,43 @@ async fn send_recovering(
             return Err(failure.into());
         };
         attempt += 1;
+        recovered.push((failure.status, failure.text.clone()));
         tracing::debug!(
             "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt}/{MESSAGES_HTTP_ERROR_ATTEMPTS})."
         );
         body = std::borrow::Cow::Owned(retried.body.clone());
         context.provider_request_retried(retried).await?;
     }
+}
+
+fn replayed_recoveries(
+    config: &dyn BaseMessagesConfig,
+    rebuilt: Value,
+    recovered: &[(u16, String)],
+    request: &ProviderCall,
+) -> litellm_host::interceptors::RetriedRequest {
+    recovered.iter().fold(
+        litellm_host::interceptors::RetriedRequest {
+            reasons: Vec::new(),
+            body: rebuilt,
+        },
+        |replayed, (status, text)| match config.retry_after_http_error(
+            *status,
+            text,
+            &replayed.body,
+            &request.transform_context,
+        ) {
+            Some(retried) => litellm_host::interceptors::RetriedRequest {
+                reasons: replayed
+                    .reasons
+                    .into_iter()
+                    .chain(retried.reasons)
+                    .collect(),
+                body: retried.body,
+            },
+            None => replayed,
+        },
+    )
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -771,12 +976,12 @@ async fn send(
     authenticated: Authenticated,
     url: &str,
     body: Bytes,
-    timeout: Duration,
+    phases: Phases,
+    connect_retry: bool,
 ) -> Result<reqwest::Response, Error> {
     let request = serialized_outbound_request(authenticated, url, body, None)?;
-    tokio::time::timeout(timeout, litellm_inference::outbound::send(request, http))
+    litellm_inference::outbound::send_in_phases(request, http, phases, connect_retry)
         .await
-        .map_err(litellm_http::Error::read_timeout)?
         .map(super::encoding::decoded)
         .map_err(Error::from)
 }
@@ -883,7 +1088,11 @@ fn decode_response(
                 )));
             };
             body.entry("stop_sequence").or_insert(Value::Null);
-            return Ok(MessagesBody::Unchecked(body));
+            return config
+                .transform_unchecked_response(body)
+                .map(MessagesBody::Unchecked)
+                .map_err(Error::from)
+                .map_err(Error::after_send);
         }
     };
     let message = config
@@ -930,16 +1139,23 @@ fn streaming_response(
         _ => chunks.boxed(),
     }
     .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
-    let chunks = match decoder {
+    let unobserved_tail = decoder.map(|_| UnobservedTail::default());
+    let chunks = match decoder.zip(unobserved_tail.clone()) {
         None => chunks.map_err(Error::from).boxed(),
-        Some(decode) => decoded_chunks(
+        Some((decode, tail)) => decoded_chunks(
             chunks.map_err(std::io::Error::other).boxed(),
             decode,
+            headers.clone(),
             provider,
+            tail,
         ),
     };
     MessagesCallResponse::Stream {
-        head: super::route::MessagesStreamHead { headers },
+        head: super::route::MessagesStreamHead {
+            headers,
+            detached_drain: None,
+            unobserved_tail,
+        },
         chunks,
     }
 }
@@ -951,17 +1167,41 @@ fn hosted_streaming_response(
     provider: &'static str,
 ) -> MessagesCallResponse {
     let chunks = chunks.inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
-    let chunks = match decoder {
+    let unobserved_tail = decoder.map(|_| UnobservedTail::default());
+    let chunks = match decoder.zip(unobserved_tail.clone()) {
         None => chunks.boxed(),
-        Some(decode) => decoded_chunks(
+        Some((decode, tail)) => decoded_chunks(
             chunks.map_err(std::io::Error::other).boxed(),
             decode,
+            headers.clone(),
             provider,
+            tail,
         ),
     };
     MessagesCallResponse::Stream {
-        head: super::route::MessagesStreamHead { headers },
+        head: super::route::MessagesStreamHead {
+            headers,
+            detached_drain: None,
+            unobserved_tail,
+        },
         chunks,
+    }
+}
+
+fn draining_after_detach(
+    response: MessagesCallResponse,
+    decoder: Option<StreamDecoder>,
+    detached_drain: Option<litellm_host::protocol::DetachedDrain>,
+) -> MessagesCallResponse {
+    match response {
+        MessagesCallResponse::Stream { head, chunks } => MessagesCallResponse::Stream {
+            head: super::route::MessagesStreamHead {
+                detached_drain: decoder.and(detached_drain),
+                ..head
+            },
+            chunks,
+        },
+        complete => complete,
     }
 }
 
@@ -1014,17 +1254,14 @@ fn complete_frames_end(pending: &[u8]) -> usize {
 fn decoded_chunks(
     bytes: ByteStream,
     decode: StreamDecoder,
+    headers: Vec<(String, String)>,
     provider: &'static str,
+    tail: UnobservedTail,
 ) -> BoxStream<'static, Result<Bytes, Error>> {
-    futures_util::stream::try_unfold(decode(bytes), move |mut events| async move {
-        let Some(event) = events.try_next().await? else {
-            return Ok(None);
-        };
-        let chunk = streaming::encode(&event)?;
-        log_chunk(provider, "client_response", &chunk);
-        Ok(Some((chunk, events)))
-    })
-    .boxed()
+    let frames = decode(bytes, headers).map_err(Error::from).boxed();
+    super::relay::relayed(frames, tail)
+        .inspect_ok(move |chunk| log_chunk(provider, "client_response", chunk))
+        .boxed()
 }
 
 fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
@@ -1070,6 +1307,7 @@ fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {
 
 #[cfg(test)]
 mod tests {
+    use litellm_llms::base_llm::messages::streaming;
     use litellm_llms_types::headers::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
@@ -1079,9 +1317,87 @@ mod tests {
     use crate::{MessagesSettings, MessagesShaping, common_utils::messages_provider};
     use litellm_inference::provider::resolve_llm_provider;
 
+    #[rstest]
+    #[case::anthropic(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::Anthropic,
+        false
+    )]
+    #[case::azure_ai(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::AzureAi,
+        false
+    )]
+    #[case::vertex_ai(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::VertexAi,
+        true
+    )]
+    fn only_vertex_ai_refuses_a_url_with_a_control_character(
+        #[case] provider: litellm_core_utils::get_llm_provider_logic::LlmProviders,
+        #[case] refused: bool,
+    ) {
+        let provider = crate::common_utils::messages_provider(provider, "claude-sonnet-4-5")
+            .expect("provider");
+        assert_eq!(
+            super::unsendable_url(provider, "https://api.example.com/v1\t/messages").is_some(),
+            refused
+        );
+    }
+
     #[fixture]
     fn shaping() -> MessagesShaping {
         MessagesShaping::default()
+    }
+
+    fn opus_4_6_on_bedrock() -> MessagesTransformContext {
+        use litellm_llms::base_llm::messages::context::{
+            BedrockCapabilities, MessagesModelCapabilities, SupportedEffortTiers,
+        };
+        MessagesTransformContext::new(
+            MessagesModelCapabilities {
+                supports_reasoning: true,
+                supports_adaptive_thinking: true,
+                supports_output_config: true,
+                effort_tiers: SupportedEffortTiers {
+                    low: true,
+                    medium: true,
+                    high: true,
+                    max: true,
+                    ..SupportedEffortTiers::default()
+                },
+                bedrock: BedrockCapabilities {
+                    supports_adaptive_thinking: true,
+                    output_config_effort_ceiling: Some(
+                        litellm_llms_types::formats::messages::EffortLevel::Max,
+                    ),
+                    ..BedrockCapabilities::default()
+                },
+                ..MessagesModelCapabilities::default()
+            },
+            true,
+        )
+    }
+
+    #[rstest]
+    #[case::bedrock_clamps_before_the_gate("bedrock/anthropic.claude-opus-4-6-v1", Some(json!("xhigh")))]
+    #[case::anthropic_has_no_clamp("anthropic/claude-opus-4-6", None)]
+    fn drop_params_keeps_an_effort_the_bedrock_ceiling_clamps(
+        #[case] model: &str,
+        #[case] kept: Option<Value>,
+    ) {
+        let resolved = resolve_llm_provider(model, None, "messages").unwrap();
+        let provider = messages_provider(resolved.provider, resolved.model).unwrap();
+        let requested = requested_optional_params(
+            body(json!({"model": resolved.model, "max_tokens": 4096, "messages": [{"role": "user", "content": "hi"}], "reasoning_effort": "xhigh"})),
+            provider,
+            &opus_4_6_on_bedrock(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&requested.params)
+                .unwrap()
+                .get("reasoning_effort")
+                .cloned(),
+            kept
+        );
     }
 
     fn body(value: Value) -> MessagesRequest {
@@ -1091,6 +1407,8 @@ mod tests {
     async fn provider_call_for(call: MessagesCall) -> Result<ProviderCall, Error> {
         provider_call_with_secrets(call, &|_: &str| None).await
     }
+
+    use litellm_auth_gcp::{google::OnGce, vertex::VertexLoginService};
 
     async fn provider_call_with_secrets(
         call: MessagesCall,
@@ -1114,9 +1432,20 @@ mod tests {
         let model = provider.model.to_owned();
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
+        let auth = AuthServices {
+            vertex_login: VertexLoginService::new(std::sync::Arc::new(OnGce {
+                project: "token-project",
+                token: "google-token",
+            })),
+            ..AuthServices::default()
+        };
         provider_call(
-            &AuthServices::default(),
-            workload_identity,
+            CallerCredentials {
+                auth: &auth,
+                workload_identity,
+                azure_ad_token_hosts: AzureAdTokenHosts::default(),
+                deferred_secrets: None,
+            },
             config,
             model,
             call,
@@ -1272,6 +1601,48 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn vertex_sends_the_google_token_beside_a_caller_bearer_and_only_vertex_betas(
+        shaping: MessagesShaping,
+    ) {
+        let call = vertex_call_requesting(shaping, "2023-06-01", false);
+        let call = MessagesCall {
+            extra_headers: call.extra_headers.map(|headers| {
+                headers
+                    .into_iter()
+                    .chain([(
+                        "anthropic-beta".to_string(),
+                        json!("files-api-2025-04-14,context-1m-2025-08-07"),
+                    )])
+                    .collect()
+            }),
+            ..call
+        };
+        let call = provider_call_with_secrets(call, &vertex_project)
+            .await
+            .unwrap();
+        let sent = |name: &str| {
+            call.wire
+                .headers
+                .iter()
+                .find(|(present, _)| present.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(
+            (
+                sent("authorization"),
+                sent("anthropic-beta"),
+                sent("content-type")
+            ),
+            (
+                Some("Bearer vertex-token, Bearer google-token"),
+                Some("context-1m-2025-08-07"),
+                Some("application/json")
+            )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
         assert!(matches!(
             provider_call_with_secrets(
@@ -1280,7 +1651,7 @@ mod tests {
             )
             .await,
             Err(Error::Llm(litellm_llms::Error::InvalidRequest(
-                litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+                litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
             )))
         ));
     }
@@ -1803,8 +2174,8 @@ mod tests {
 
     #[rstest]
     #[case::event(
-        "data: {\"type\":\"ping\"}\n\n",
-        Some("event: ping\ndata: {\"type\":\"ping\"}\n\n")
+        "data: {\"type\":\"message_stop\"}\n\n",
+        Some("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
     )]
     #[rstest::rstest]
     #[case::invalid_event("data: invalid\n\ndata: {\"type\":\"ping\"}\n\n", None)]
@@ -1825,7 +2196,11 @@ mod tests {
             .unwrap();
         let MessagesCallResponse::Stream { mut chunks, .. } = streaming_response(
             response,
-            Some(streaming::event_stream),
+            Some(|bytes, _| {
+                streaming::event_stream(bytes)
+                    .and_then(|event| futures_util::future::ready(streaming::encode(&event)))
+                    .boxed()
+            }),
             "test",
             Duration::from_secs(5),
             false,
@@ -1839,6 +2214,78 @@ mod tests {
             None => assert!(chunk.unwrap_err().is_response()),
         }
         assert!(chunks.next().await.is_none());
+    }
+
+    async fn upstream_stream(body: &'static str) -> reqwest::Response {
+        let upstream = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+            .mount(&upstream)
+            .await;
+        litellm_http::Client::for_test()
+            .get(upstream.uri())
+            .send()
+            .await
+            .unwrap()
+    }
+
+    fn reencoding(bytes: ByteStream, _: Vec<(String, String)>) -> streaming::FrameStream {
+        streaming::event_stream(bytes)
+            .and_then(|event| futures_util::future::ready(streaming::encode(&event)))
+            .boxed()
+    }
+
+    #[rstest]
+    #[case::decoded_and_cut_short(
+        Some(reencoding as StreamDecoder),
+        "data: {\"type\":\"ping\"}\n\n",
+        true
+    )]
+    #[case::decoded_and_stopped(
+        Some(reencoding as StreamDecoder),
+        "data: {\"type\":\"ping\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+        false
+    )]
+    #[case::passed_through_and_cut_short(None, "data: {\"type\":\"ping\"}\n\n", false)]
+    #[tokio::test]
+    async fn a_decoded_stream_cut_short_ends_with_the_incomplete_stream_error_on_its_tail(
+        #[case] decoder: Option<StreamDecoder>,
+        #[case] body: &'static str,
+        #[case] incomplete: bool,
+    ) {
+        let relays = decoder.is_some();
+        let MessagesCallResponse::Stream { head, mut chunks } = streaming_response(
+            upstream_stream(body).await,
+            decoder,
+            "test",
+            Duration::from_secs(5),
+            false,
+        ) else {
+            panic!("a streaming response returns chunks");
+        };
+        let tail = head.unobserved_tail;
+        assert_eq!(tail.is_some(), relays);
+        let mut delivered = Vec::new();
+        let mut on_tail = Vec::new();
+        while let Some(chunk) = chunks.try_next().await.unwrap() {
+            match tail.as_ref().is_some_and(UnobservedTail::begun) {
+                true => on_tail.push(chunk),
+                false => delivered.push(chunk),
+            }
+        }
+        let error_event = Bytes::from(format!(
+            "event: error\ndata: {{\"type\": \"error\", \"error\": {{\"type\": \"api_error\", \"message\": \"{}\"}}}}\n\n",
+            super::super::relay::INCOMPLETE_STREAM_ERROR_MESSAGE
+        ));
+        assert!(!delivered.contains(&error_event));
+        assert_eq!(
+            on_tail,
+            if incomplete {
+                vec![error_event]
+            } else {
+                Vec::new()
+            }
+        );
     }
 
     #[rstest]
@@ -1883,5 +2330,123 @@ mod tests {
                 .map(Bytes::from_static)
                 .collect::<Vec<_>>()
         );
+    }
+
+    async fn mantle_call(model: &str, fields: Value, api_key: Option<&str>) -> ProviderCall {
+        provider_call_with_secrets(
+            MessagesCall {
+                body: body(Value::Object(
+                    [
+                        ("model".to_string(), json!(model)),
+                        ("max_tokens".to_string(), json!(16)),
+                        (
+                            "messages".to_string(),
+                            json!([{"role": "user", "content": "hi"}]),
+                        ),
+                    ]
+                    .into_iter()
+                    .chain(fields.as_object().cloned().unwrap_or_default())
+                    .collect(),
+                )),
+                api_key: api_key.map(str::to_string),
+                api_base: Some("https://mantle.test".into()),
+                custom_llm_provider: None,
+                litellm_params: crate::litellm_params(Map::from_iter([
+                    ("model".into(), json!(model)),
+                    ("aws_access_key_id".into(), json!("AKIDEXAMPLE")),
+                    ("aws_secret_access_key".into(), json!("secret")),
+                ]))
+                .unwrap(),
+                extra_headers: None,
+                provider_specific_header: None,
+                timeout: None,
+                shaping: MessagesShaping::default(),
+            },
+            &|name: &str| (name == "AWS_BEARER_TOKEN_BEDROCK").then(|| "env-token".into()),
+        )
+        .await
+        .unwrap()
+    }
+
+    fn authorization(call: &ProviderCall) -> Option<&str> {
+        call.wire
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle_route_signs("bedrock/mantle/anthropic.claude-sonnet-5-5", None)]
+    #[case::bedrock_mantle_provider_reads_the_env(
+        "bedrock_mantle/anthropic.claude-sonnet-5-5",
+        Some("Bearer env-token")
+    )]
+    #[case::bedrock_invoke_signs("bedrock/anthropic.claude-sonnet-5-5", None)]
+    #[tokio::test]
+    async fn an_empty_api_key_reads_the_env_only_on_the_bedrock_mantle_provider(
+        #[case] model: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let call = mantle_call(model, json!({}), Some("")).await;
+        assert_eq!(
+            (authorization(&call), call.signer.is_some()),
+            (expected, expected.is_none())
+        );
+    }
+
+    #[rstest]
+    #[case::listed_region_is_routing_only(
+        "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        "anthropic.claude-sonnet-5-5"
+    )]
+    #[case::unlisted_region_stays_in_the_model(
+        "bedrock_mantle/ca-west-1/anthropic.claude-sonnet-5-5",
+        "ca-west-1/anthropic.claude-sonnet-5-5"
+    )]
+    #[case::bedrock_route_logs_its_mantle_prefix(
+        "bedrock/mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        "mantle/us-west-2/anthropic.claude-sonnet-5-5"
+    )]
+    #[tokio::test]
+    async fn mantle_calls_are_logged_under_the_model_python_resolves(
+        #[case] model: &str,
+        #[case] logged: &str,
+    ) {
+        let call = mantle_call(model, json!({}), Some("key")).await;
+        assert_eq!(call.identity.model, logged);
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5-5")]
+    #[case::bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5-5")]
+    #[tokio::test]
+    async fn a_string_stream_flag_neither_streams_nor_sends_a_stream_key_to_mantle(
+        #[case] model: &str,
+    ) {
+        let call = mantle_call(model, json!({"stream": "true"}), Some("key")).await;
+        assert_eq!((call.wire.body.get("stream"), call.stream), (None, false));
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(litellm_core_utils::get_llm_provider_logic::LlmProviders::BedrockMantle, "anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::bedrock_mantle_route(litellm_core_utils::get_llm_provider_logic::LlmProviders::Bedrock, "mantle/anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::anthropic(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::Anthropic,
+        "claude-sonnet-5-5",
+        None
+    )]
+    fn an_error_envelope_bills_zero_usage_only_on_mantle(
+        #[case] provider: litellm_core_utils::get_llm_provider_logic::LlmProviders,
+        #[case] model: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let config = messages_provider(provider, model).unwrap().config();
+        let envelope =
+            r#"{"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}"#;
+        let Ok(MessagesBody::Unchecked(body)) = decode_response(config, model, envelope) else {
+            panic!("an error envelope decodes unchecked");
+        };
+        assert_eq!(body.get("usage").cloned(), expected);
     }
 }

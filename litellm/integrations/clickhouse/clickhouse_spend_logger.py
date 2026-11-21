@@ -19,13 +19,12 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
-from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload, SpendLogRecord
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.tracing.types import SpendLogPayload, SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
 
 # litellm_logging.py rewrites cache-hit ids as f"{id}_cache_hit{time.time()}"
@@ -229,7 +228,6 @@ def spend_log_row_from_payload(
                 {
                     **request_metadata,
                     **metadata,
-                    "litellm_lens_internal": is_lens_analysis(),
                     **({} if track_end_user else {"user_api_key_end_user_id": None}),
                 }
             )

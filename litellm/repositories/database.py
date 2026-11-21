@@ -1,34 +1,112 @@
 import asyncio
-from collections.abc import AsyncGenerator, Coroutine
+import urllib.parse
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from litellm.rust_bridge._native import NativeDatabase
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import proxy_service_logging
+from litellm.proxy.db.native_database import (
+    ServiceLoggingEvents,
+    TokenRotation,
+    client_identity,
+    keep_token_fresh,
+    reader_token_rotation,
+    writer_token_rotation,
+)
+from litellm.repositories import rust_database
+from litellm.rust_bridge._native import DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
+def _token_refresh(
+    install: Callable[[str], None], rotation: TokenRotation | None, url: str
+) -> "tuple[asyncio.Task[None], ...]":
+    if rotation is None:
+        return ()
+    current: Final = urllib.parse.unquote(urllib.parse.urlsplit(url).password or "")
+    return (asyncio.create_task(keep_token_fresh(install, rotation, current)),)
+
+
+async def _warn_if_unreachable(native: NativeDatabase) -> None:
+    try:
+        await native.health_check()
+    except NativeDatabaseFailure as error:
+        verbose_proxy_logger.warning(
+            "Native database pool cannot reach the database, so operations ported to it will fail until it"
+            " connects. Prisma is checked separately. Cause: %s",
+            error,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Database:
     prisma: "PrismaClient"
-    native: NativeDatabase
+    native: NativeDatabase | None
+    tasks: "tuple[asyncio.Task[None], ...]" = ()
+    boot_probe: "asyncio.Task[None] | None" = None
 
     @classmethod
-    async def open(cls, prisma: "PrismaClient") -> "Database":
+    async def open(
+        cls,
+        prisma: "PrismaClient",
+        writer_url: str,
+        reader_url: str | None,
+        *,
+        writer_connections: int,
+        reader_connections: int,
+    ) -> "Database":
+        if writer_connections == 0:
+            return cls(prisma=prisma, native=None)
         try:
-            native: Final = await NativeDatabase.connect()
+            writer: Final = await DatabaseEndpoint.resolve(
+                writer_url, writer_connections, client_identity=client_identity(writer_url)
+            )
+            reader: Final = (
+                None
+                if reader_url is None or reader_connections == 0
+                else await DatabaseEndpoint.resolve(
+                    reader_url, reader_connections, replica=True, client_identity=client_identity(reader_url)
+                )
+            )
+            native: Final = await NativeDatabase.connect(
+                ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=proxy_service_logging),
+                writer,
+                reader,
+            )
         except BaseException:
             await prisma.aclose()
             raise
-        return cls(prisma=prisma, native=native)
+        writer_refresh: Final = _token_refresh(
+            native.set_writer_password, writer_token_rotation(writer_url), writer_url
+        )
+        reader_refresh: Final = (
+            ()
+            if reader is None or reader_url is None
+            else _token_refresh(native.set_reader_password, reader_token_rotation(reader_url), reader_url)
+        )
+        rust_database.install(native)
+        return cls(
+            prisma=prisma,
+            native=native,
+            tasks=(*writer_refresh, *reader_refresh),
+            boot_probe=asyncio.create_task(_warn_if_unreachable(native)),
+        )
 
     async def aclose(self) -> None:
+        background: Final = (*self.tasks, *(() if self.boot_probe is None else (self.boot_probe,)))
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
         try:
             await self.prisma.aclose()
         finally:
-            await self.native.close()
+            if self.native is not None:
+                rust_database.clear(self.native)
+                await self.native.close()
 
 
 @asynccontextmanager

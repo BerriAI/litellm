@@ -4,6 +4,7 @@ import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActiv
 import type { DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import {
   customerOrganizationRows,
+  customerOrganizationBudgetSource,
   customerOrganizationsCall,
   customerOrganizationsUsageCall,
   sortCustomerOrganizations,
@@ -45,6 +46,7 @@ const activity = (id: string, spend: number): DailyActivityAggregatedResponse =>
     flat_cost: 0,
     gateway_injected_caching_savings_spend: 0,
     guardrail_spend: 0,
+    customer_margin_spend: 0,
     prompt_caching_savings_spend: 0,
     ptu_hours: 0,
   };
@@ -138,6 +140,25 @@ describe("complete customer organization usage", () => {
 });
 
 describe("customer organization sorting and budgets", () => {
+  it.each([false, true])("sorts by displayed budget with stable ties and uncapped rows last, descending %s", (desc) => {
+    const organizations = [
+      org("none"),
+      org("twenty", { budget: { max_budget: 20 } }),
+      org("z-first-tie", { budget: { max_budget: 7 } }),
+      org("a-second-tie", { budget: { max_budget: 90, budget_limits: [{ budget_duration: "1mo", max_budget: 7 }] } }),
+      org("annual", { budget: { budget_limits: [{ budget_duration: "12mo", max_budget: 100 }] } }),
+      org("zero", { budget: { max_budget: 0 } }),
+    ];
+    const rows = customerOrganizationRows(organizations, mergeCustomerActivityPages([]));
+    const expected = desc
+      ? ["annual", "twenty", "z-first-tie", "a-second-tie", "zero", "none"]
+      : ["zero", "z-first-tie", "a-second-tie", "twenty", "annual", "none"];
+    expect(
+      sortCustomerOrganizations(rows, "", [{ id: "budget", desc }]).map((row) => row.organization.customer_org_id),
+    ).toEqual(expected);
+    expect(sortCustomerOrganizations(rows, "absent", [{ id: "budget", desc }])).toEqual([]);
+  });
+
   it("sorts the full list before pagination with newest customers first by default", () => {
     const organizations = Array.from({ length: 30 }, (_, index) =>
       org(`org-${String(index).padStart(2, "0")}`, {
@@ -193,5 +214,40 @@ describe("customer organization sorting and budgets", () => {
     expect(sortCustomerOrganizations(rows, "", [{ id: "status", desc: true }])[0].status).toBe(
       "customerPortal.analytics.reachedLimit",
     );
+  });
+});
+
+describe("customer organization budget assignments", () => {
+  const groups = [{ budget_id: "group-1", name: "Growth" }];
+
+  it("resolves the organization budget ID against the shared catalog, not its member groups", () => {
+    const organization = org("org", {
+      budget_id: "group-1",
+      default_budgets: [{ budget_id: "group-1", name: "Member group" }],
+    });
+    expect(customerOrganizationBudgetSource(organization, groups)).toEqual({
+      kind: "group",
+      name: "Growth",
+    });
+    expect(customerOrganizationBudgetSource({ ...organization, budget_id: "private" }, groups)).toEqual({
+      kind: "custom",
+    });
+    expect(customerOrganizationBudgetSource(org("unlimited"), groups)).toBeNull();
+  });
+
+  it("does not mislabel shared or unresolved assignments as custom when the catalog is unavailable", () => {
+    const organization = org("org", { budget_id: "group-1" });
+    expect(customerOrganizationBudgetSource(organization)).toBeNull();
+    expect(customerOrganizationBudgetSource({ ...organization, budget_is_shared: true })).toEqual({
+      kind: "group",
+      name: null,
+    });
+    expect(customerOrganizationBudgetSource({ ...organization, budget_is_shared: true }, [])).toEqual({
+      kind: "group",
+      name: null,
+    });
+    expect(customerOrganizationBudgetSource({ ...organization, budget_is_shared: false })).toEqual({
+      kind: "custom",
+    });
   });
 });
