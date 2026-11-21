@@ -8,11 +8,12 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from functools import reduce
+from importlib.machinery import PathFinder
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -25,19 +26,54 @@ from pydantic import TypeAdapter
 from litellm.proxy.types_utils.utils import get_instance_fn
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.process import (
+    OWNED_STATE_VARIABLE,
     OwnedProxy,
+    OwnedState,
+    PrivateState,
     WorkerHealthcheck,
     WorkerKill,
     _is_gone,
+    _proxy_environment,
+    boots_private_state,
     healthcheck_seconds,
     kill_stray_process,
+    owned_environment,
     owned_proxy_process,
+    pool_limit_for_prisma,
+    private_configuration,
     replacement_pid,
     stop_process_group,
     worker_configuration,
 )
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    ("inherited", "explicit", "remaining"),
+    (
+        (None, None, ()),
+        ("inherited", None, ("inherited",)),
+        ("inherited", "explicit", ("explicit",)),
+        ("inherited", "", ()),
+    ),
+)
+def test_gateway_children_find_moved_launcher_and_keep_the_effective_pythonpath(
+    process_module: ModuleType, inherited: str | None, explicit: str | None, remaining: tuple[str, ...]
+) -> None:
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = process_module._gateway_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"),
+            {} if explicit is None else {"PYTHONPATH": explicit},
+            {} if inherited is None else {"PYTHONPATH": inherited},
+        )
+    root: Final = TESTS_DIR.parent
+    paths: Final = tuple(environment["PYTHONPATH"].split(os.pathsep))
+    assert paths == (str(root / "litellm/runtime"), str(TESTS_DIR), str(root), *remaining)
+    package: Final = PathFinder.find_spec("gateway", paths)
+    assert package is not None
+    launcher: Final = PathFinder.find_spec("gateway.launch", package.submodule_search_locations)
+    assert launcher is not None and launcher.origin == str(root / "litellm/runtime/gateway/launch.py")
 
 
 @pytest.mark.parametrize("config_contents", ("[]\n", "general_settings: []\n", "general_settings: {}\n"))
@@ -84,9 +120,20 @@ def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserve
         "token_url": "http://127.0.0.1:8202/_oauth/token",
         "peer": "http://127.0.0.1:81910/v1",
         "custom": "http://127.0.0.1:9000/v1",
-        "general_settings": {"database_connection_pool_limit": 2},
+        "general_settings": {"database_connection_pool_limit": 6},
     }
     assert source.read_text() == original
+
+
+@pytest.mark.parametrize(("prisma", "limit"), ((1, 2), (2, 6), (4, 8)))
+def test_pool_limit_for_prisma_leaves_prisma_its_connections_after_the_rust_share(prisma: int, limit: int) -> None:
+    assert pool_limit_for_prisma(prisma) == limit
+
+
+@pytest.mark.parametrize("prisma", (0, -1))
+def test_pool_limit_for_prisma_refuses_fewer_than_one_prisma_connection(prisma: int) -> None:
+    with pytest.raises(ValueError, match="at least one connection"):
+        pool_limit_for_prisma(prisma)
 
 
 @pytest.mark.parametrize("limit", (1, 5, 0, None, "", "bad"))
@@ -116,7 +163,7 @@ def test_worker_configuration_budgets_implicit_pools_without_changing_connection
     decoded: Final = TypeAdapter(dict[str, object]).validate_python(yaml.safe_load(configured.read_text()))
     assert decoded == {
         "general_settings": {
-            "database_connection_pool_limit": 2,
+            "database_connection_pool_limit": 6,
             "database_extra_connection_params": {"connection_limit": "1"},
         }
     }
@@ -361,6 +408,19 @@ def test_owned_writer_keeps_only_a_reader_paired_with_its_database(
     assert environment.get("DATABASE_URL_READ_REPLICA") == expected_reader
 
 
+@pytest.mark.parametrize("inherited", (None, "", "0"))
+@pytest.mark.parametrize("override", (None, ""))
+def test_owned_proxies_always_record_fatal_signal_stacks(inherited: str | None, override: str | None) -> None:
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"),
+            {} if override is None else {"PYTHONFAULTHANDLER": override},
+            (),
+            {} if inherited is None else {"PYTHONFAULTHANDLER": inherited},
+        )
+    assert environment["PYTHONFAULTHANDLER"] == "1"
+
+
 @pytest.mark.parametrize("explicit", (False, True))
 @pytest.mark.parametrize("remove", (False, True))
 def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(
@@ -383,6 +443,98 @@ def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(
         )
         if hook
     )
+
+
+WORKER_STATE: Final = MappingProxyType(
+    {"DATABASE_URL": "postgresql://admin@127.0.0.1/worker", "REDIS_HOST": "127.0.0.1", "REDIS_PORT": "6379"}
+)
+PRIVATE_DATABASE: Final = "postgresql://admin@127.0.0.1/owned_private"
+
+
+@contextmanager
+def _private_state(directory: Path, inherited: Mapping[str, str]) -> Iterator[PrivateState]:
+    yield PrivateState(
+        PRIVATE_DATABASE,
+        MappingProxyType({"DATABASE_URL": PRIVATE_DATABASE, "REDIS_HOST": "127.0.0.2", "REDIS_PORT": "6390"}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "overrides", "remove_environment", "marked", "private"),
+    (
+        (None, {}, (), False, True),
+        (None, {"DATABASE_URL": "postgresql://admin@127.0.0.1/scratch"}, (), False, False),
+        (None, {}, ("DATABASE_URL",), False, False),
+        (OwnedState.SHARED_WITH_WORKER, {}, (), False, False),
+        (None, {}, (), True, False),
+        (OwnedState.PRIVATE, {}, (), True, True),
+    ),
+    ids=("default", "explicit-database", "stripped-database", "shared", "marked-module", "private-in-marked-module"),
+)
+def test_an_owned_proxy_boots_private_state_unless_it_shares_or_brings_its_own_database(
+    state: OwnedState | None,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    marked: bool,
+    private: bool,
+) -> None:
+    marker: Final = {OWNED_STATE_VARIABLE: OwnedState.SHARED_WITH_WORKER.value} if marked else {}
+    inherited: Final = {**WORKER_STATE, **marker}
+    assert boots_private_state(state, overrides, remove_environment, inherited) is private
+
+
+def test_a_default_owned_proxy_runs_on_its_own_database_and_redis(tmp_path: Path) -> None:
+    with (
+        httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
+        owned_environment(tmp_path, {}, (), None, WORKER_STATE, _private_state) as owned,
+    ):
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"), owned.overrides, (), WORKER_STATE
+        )
+    assert environment["DATABASE_URL"] == PRIVATE_DATABASE != WORKER_STATE["DATABASE_URL"]
+    assert (environment["REDIS_HOST"], environment["REDIS_PORT"]) == ("127.0.0.2", "6390")
+    assert owned.database_url == PRIVATE_DATABASE
+
+
+@pytest.mark.parametrize(
+    ("overrides", "remove_environment", "redis"),
+    (
+        ({}, ("REDIS_HOST", "REDIS_PORT"), (None, None)),
+        ({"REDIS_HOST": "redis.caller", "REDIS_PORT": "7000"}, (), ("redis.caller", "7000")),
+    ),
+    ids=("stripped", "caller-owned"),
+)
+def test_a_private_owned_proxy_leaves_redis_to_a_caller_that_chose_it(
+    tmp_path: Path,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    redis: tuple[str | None, str | None],
+) -> None:
+    with (
+        httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
+        owned_environment(tmp_path, overrides, remove_environment, None, WORKER_STATE, _private_state) as owned,
+    ):
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"), owned.overrides, remove_environment, WORKER_STATE
+        )
+    assert environment["DATABASE_URL"] == PRIVATE_DATABASE
+    assert (environment.get("REDIS_HOST"), environment.get("REDIS_PORT")) == redis
+
+
+@pytest.mark.parametrize(
+    ("router_settings", "retries"),
+    (({"allowed_fails": 3}, 0), ({"num_retries": 2}, 2), (None, 0)),
+    ids=("inherits-worker-default", "keeps-explicit", "no-router-settings"),
+)
+def test_a_private_owned_proxy_keeps_the_worker_retry_default_unless_its_config_sets_one(
+    tmp_path: Path, router_settings: dict[str, int] | None, retries: int
+) -> None:
+    source: Final = tmp_path / "source.yaml"
+    router: Final = {"router_settings": router_settings} if router_settings else {}
+    source.write_text(yaml.safe_dump({"model_list": [], **router}))
+    configured: Final = yaml.safe_load(private_configuration(source, tmp_path / "proxy").read_text())
+    assert configured["router_settings"]["num_retries"] == retries
+    assert configured["model_list"] == []
 
 
 _SUPERVISOR: Final = """import multiprocessing

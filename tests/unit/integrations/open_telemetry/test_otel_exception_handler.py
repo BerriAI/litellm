@@ -3,18 +3,23 @@ that fail after auth but before the route handler runs (e.g. /model/new
 TypeError or RequestValidationError)."""
 
 import asyncio
+from collections.abc import Callable
+from typing import Final
 
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.proxy._types import ProxyException
+from litellm.proxy.management_endpoints.scim.scim_errors import scim_error_from
 from litellm.proxy.proxy_server import (
     _close_dangling_otel_server_span,
     openai_exception_handler,
     otel_request_validation_exception_handler,
     otel_unhandled_exception_handler,
+    scim_error_exception_handler,
 )
 
 from litellm.integrations._types.open_inference import ErrorAttributes
@@ -133,10 +138,76 @@ def test_openai_exception_handler_stamps_structured_error_on_span(
         expected_url_path=path,
         where=f"openai_exception_handler ({path})",
     )
-    attrs = get_server_span(wired_otel).attributes
+    server_span = get_server_span(wired_otel)
+    attrs = server_span.attributes
     assert attrs.get(ErrorAttributes.ERROR_MESSAGE) == msg
     assert attrs.get(ErrorAttributes.ERROR_TYPE) == "ProxyException"
     assert attrs.get(ErrorAttributes.ERROR_CODE) == "401"
+    assert server_span.status.description == msg
+
+
+def test_validation_handler_puts_the_error_message_on_the_span_status(
+    wired_otel: InMemorySpanExporter, server_span_factory: Callable[[str], object]
+) -> None:
+    path: Final = "/team/new"
+    request: Final = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    exc: Final = RequestValidationError(
+        errors=[{"type": "float_parsing", "loc": ("body", "max_budget"), "msg": "Input should be a valid number"}]
+    )
+
+    response: Final = asyncio.run(otel_request_validation_exception_handler(request, exc))
+
+    assert response.status_code == 422
+    server_span: Final = get_server_span(wired_otel)
+    description: Final = server_span.status.description or ""
+    assert "Input should be a valid number" in description
+    assert description == server_span.attributes.get(ErrorAttributes.ERROR_MESSAGE)
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        (
+            ProxyException(
+                message="Authentication Error, Invalid API key provided.", type="auth_error", param="key", code=401
+            ),
+            "ProxyException",
+        ),
+        (
+            RequestValidationError(
+                errors=[
+                    {
+                        "type": "bool_parsing",
+                        "loc": ("body", "active"),
+                        "msg": "Input should be a valid boolean",
+                        "input": "s3cret-input",
+                    }
+                ]
+            ),
+            "RequestValidationError",
+        ),
+        (
+            HTTPException(status_code=409, detail={"error": "User already exists with username: erin@example.com"}),
+            "HTTPException",
+        ),
+    ],
+    ids=["auth", "validation", "duplicate"],
+)
+def test_a_scim_error_keeps_the_error_type_the_route_raised_on_the_span(
+    wired_otel: InMemorySpanExporter,
+    server_span_factory: Callable[[str], object],
+    failure: ProxyException | RequestValidationError | HTTPException,
+    error_type: str,
+) -> None:
+    path: Final = "/scim/v2/Users"
+    request: Final = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    answered: Final = scim_error_from(failure)
+
+    response: Final = asyncio.run(scim_error_exception_handler(request, answered))
+
+    attributes: Final = get_server_span(wired_otel).attributes
+    assert (response.status_code, attributes.get(ErrorAttributes.ERROR_TYPE)) == (answered.status_code, error_type)
+    assert "s3cret-input" not in str(attributes.get(ErrorAttributes.ERROR_MESSAGE))
 
 
 def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_factory):

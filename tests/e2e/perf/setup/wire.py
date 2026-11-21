@@ -51,6 +51,8 @@ class WireRequest(BaseModel):
     token_source: TokenSource | None = None
     stream: bool
     blocked: bool
+    send_at_s: float | None = None
+    """Seconds after the run starts to send this request, set when the case ramps; otherwise the users pace."""
 
 
 class WireRecord(BaseModel):
@@ -72,6 +74,8 @@ class WireRecord(BaseModel):
     call_id: str | None
     error: str | None
     response_id: str | None = None
+    litellm_overhead_ms: float | None = None
+    litellm_response_ms: float | None = None
 
 
 def response_id(payload: Mapping[str, object]) -> str | None:

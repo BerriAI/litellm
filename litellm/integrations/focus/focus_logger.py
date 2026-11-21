@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,6 +28,10 @@ FOCUS_USAGE_DATA_JOB_NAME: Final = "focus_export_usage_data"
 DEFAULT_DRY_RUN_LIMIT: Final = 500
 
 
+class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class FocusLogger(CustomLogger):
     """Coordinates Focus export jobs across transformer/serializer/destination layers."""
 
@@ -39,8 +46,8 @@ class FocusLogger(CustomLogger):
         cron_offset_minute: int | None = None,
         interval_seconds: int | None = None,
         prefix: str | None = None,
-        destination_config: dict[str, Any] | None = None,
-        **kwargs: Any,
+        destination_config: Mapping[str, str | None] | None = None,
+        **kwargs: Unpack[_CustomLoggerOptions],
     ) -> None:
         super().__init__(**kwargs)
         self.provider = (provider or os.getenv("FOCUS_PROVIDER") or "s3").lower()

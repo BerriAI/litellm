@@ -3,17 +3,20 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Final
 
+import pytest
+
+from cases.large_bodies_300_users import CASE as LARGE_BODY_CASE
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture
 from setup.datastore import DbCounters, StatementCalls
-from setup.observe import Observation, evaluate, junit_properties
+from setup.observe import Contributor, Observation, breakdown, evaluate, junit_properties, render
 from setup.performance_test_case import Limit
 from setup.wire import WireRecord
 
 NO_RSS: Final = RssCapture(readings=(), failures=())
 
 
-def served(seq: int, total_s: float) -> WireRecord:
+def served(seq: int, total_s: float, response_ms: float | None = None) -> WireRecord:
     return WireRecord(
         seq=seq,
         marker=f"perfreq-{seq:06d}-n",
@@ -32,11 +35,17 @@ def served(seq: int, total_s: float) -> WireRecord:
         mock_delay_s=1.0,
         call_id=None,
         error=None,
+        litellm_response_ms=response_ms,
     )
 
 
 def _key_lookup(calls: int) -> StatementCalls:
-    return StatementCalls(queryid=1, query='SELECT * FROM "LiteLLM_VerificationToken" WHERE token = $1', calls=calls)
+    return StatementCalls(
+        queryid=1,
+        query='SELECT * FROM "LiteLLM_VerificationToken" WHERE token = $1',
+        calls=calls,
+        total_exec_ms=calls * 2.0,
+    )
 
 
 def test_junit_properties_carry_each_observed_metric_and_each_limit_including_unobserved_ones() -> None:
@@ -62,8 +71,10 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
     properties: Final = junit_properties(rows)
 
     assert len({name for name, _ in properties}) == len(properties)
-    assert dict(properties) == {
+    assert {name: value for name, value in properties if not name.endswith("_breakdown")} == {
         "perf_unexpected_status_count": 0.0,
+        "perf_client_total_seconds_p50": 1.5,
+        "perf_client_total_seconds_p95": 1.75,
         "perf_gateway_added_seconds_p50": 0.5,
         "perf_gateway_added_seconds_p50_limit": 0.625,
         "perf_gateway_added_seconds_p99": 0.75,
@@ -71,8 +82,101 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
         "perf_postgres_background_calls_per_request": 0.0,
         "perf_postgres_max_statement_per_request": 10.0,
         "perf_postgres_max_background_statement_per_request": 0.0,
+        "perf_postgres_active_sessions": 0.02,
+        "perf_postgres_slowest_statement_seconds": 0.002,
         "perf_redis_calls_per_request_limit": 35.0,
     }
+
+
+def test_large_bodies_gate_client_p50_but_report_client_p95_without_a_limit() -> None:
+    observation: Final = Observation(
+        records=tuple(served(seq, total, response_ms=4500.0) for seq, total in enumerate((0.5, 1.0, 2.0))),
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=30.0,
+        gateway_cpu_seconds=0.18,
+        gateway_cpu_coverage=0.98,
+    )
+
+    rows, exceeded = evaluate(LARGE_BODY_CASE, observation)
+    properties: Final = dict(junit_properties(rows))
+    output: Final = render(LARGE_BODY_CASE, observation, rows)
+
+    assert exceeded == []
+    assert {name: value for name, value in properties.items() if name.startswith("perf_client_total_seconds")} == {
+        "perf_client_total_seconds_p50": 1.0,
+        "perf_client_total_seconds_p50_limit": 1.5,
+        "perf_client_total_seconds_p95": 2.0,
+        "perf_client_total_seconds_p50_breakdown": '[{"label": "chat_completions", "value": 1.0, "share": 1.0}]',
+        "perf_client_total_seconds_p95_breakdown": '[{"label": "chat_completions", "value": 2.0, "share": 1.0}]',
+    }
+    assert [line.split() for line in output.splitlines() if line.strip().startswith("client_total_seconds")] == [
+        ["client_total_seconds", "percentile", "50", "1.0000", "1.5000"],
+        ["client_total_seconds", "percentile", "95", "2.0000"],
+    ]
+    assert properties["perf_litellm_response_seconds_p50"] == 4.5
+    assert properties["perf_litellm_response_seconds_p50_limit"] == 5.0
+    assert properties["perf_cpu_seconds_per_request"] == 0.06
+    assert properties["perf_cpu_seconds_per_request_limit"] == 0.09
+
+
+@pytest.mark.parametrize(
+    ("response_ms", "cpu_seconds", "client_seconds", "expected"),
+    (
+        (4500.0, 0.06, 1.6, ["client_total_seconds percentile 50: observed 1.6000 > limit 1.5000"]),
+        (5100.0, 0.06, 1.0, ["litellm_response_seconds percentile 50: observed 5.1000 > limit 5.0000"]),
+        (4500.0, 0.1, 1.0, ["cpu_seconds_per_request: observed 0.1000 > limit 0.0900"]),
+        (
+            None,
+            None,
+            1.0,
+            [
+                "litellm_response_seconds percentile 50: limit set but nothing observed",
+                "cpu_seconds_per_request: limit set but nothing observed",
+            ],
+        ),
+    ),
+)
+def test_large_bodies_fail_on_a_steady_metric_step_or_missing_reading(
+    response_ms: float | None, cpu_seconds: float | None, client_seconds: float, expected: list[str]
+) -> None:
+    observation: Final = Observation(
+        records=(served(0, client_seconds, response_ms=response_ms),),
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=20.0,
+        gateway_cpu_seconds=cpu_seconds,
+    )
+
+    _, exceeded = evaluate(LARGE_BODY_CASE, observation)
+
+    assert exceeded == expected
+
+
+def test_empty_large_body_pass_fails_the_gates_but_keeps_client_p95_report_only() -> None:
+    observation: Final = Observation(
+        records=(), mock_requests=(), guardrail_calls=(), rss_before=NO_RSS, rss_after=NO_RSS, wall_seconds=0.0
+    )
+
+    rows, exceeded = evaluate(LARGE_BODY_CASE, observation)
+
+    assert exceeded == [
+        "client_total_seconds percentile 50: limit set but nothing observed",
+        "litellm_response_seconds percentile 50: limit set but nothing observed",
+        "cpu_seconds_per_request: limit set but nothing observed",
+    ]
+    assert [
+        line.split()
+        for line in render(LARGE_BODY_CASE, observation, rows).splitlines()
+        if line.strip().startswith("client_total_seconds")
+    ] == [
+        ["client_total_seconds", "percentile", "50", "n/a", "1.5000", "MISSING"],
+        ["client_total_seconds", "percentile", "95", "n/a"],
+    ]
 
 
 def _statement(queryid: int, query: str, calls: int) -> StatementCalls:
@@ -167,3 +271,56 @@ def test_background_cap_without_exemptions_counts_the_guardrail_upsert() -> None
     assert exceeded == [
         f"postgres_max_background_statement_per_request: observed 1.1500 > limit 0.9000 ({GUARDRAIL_UPSERT})"
     ], exceeded
+
+
+def _guardrail_rollup(calls: int) -> StatementCalls:
+    return StatementCalls(
+        queryid=2,
+        query='INSERT INTO "LiteLLM_DailyGuardrailMetrics" ("guardrail_id","date") VALUES ($1,$2) ON CONFLICT DO UPDATE',
+        calls=calls,
+        total_exec_ms=calls * 1.0,
+    )
+
+
+def _model_rollup(calls: int) -> StatementCalls:
+    return StatementCalls(
+        queryid=3,
+        query='INSERT INTO "LiteLLM_DailyModelUsage" ("model","date") VALUES ($1,$2) ON CONFLICT DO UPDATE',
+        calls=calls,
+        total_exec_ms=calls * 1.0,
+    )
+
+
+def test_breakdown_names_the_slices_behind_each_metric_and_skips_plain_gauges() -> None:
+    failed: Final = served(3, 1.0).model_copy(update={"status": 500, "ok": False})
+    observation: Final = Observation(
+        records=(served(0, 1.25), served(1, 1.5), served(2, 1.75), failed),
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=4.0,
+        db_before=DbCounters(
+            commits=100, statements=(_key_lookup(calls=100), _guardrail_rollup(calls=100), _model_rollup(calls=100))
+        ),
+        db_after=DbCounters(
+            commits=130, statements=(_key_lookup(calls=130), _guardrail_rollup(calls=124), _model_rollup(calls=112))
+        ),
+        gateway_cpu_seconds=2.0,
+    )
+
+    busiest: Final = breakdown("postgres_max_background_statement_per_request", None, observation)
+    assert [(item.value, item.share) for item in busiest] == [(6.0, 24 / 36), (3.0, 12 / 36)]
+    assert "LiteLLM_DailyGuardrailMetrics" in busiest[0].label
+    assert breakdown("gateway_added_seconds", 50, observation) == (Contributor("chat_completions", 0.5, 1.0),)
+    assert breakdown("unexpected_status_count", None, observation) == (
+        Contributor("chat_completions status 500", 1.0, 1.0),
+    )
+    assert breakdown("cpu_seconds_per_request", None, observation) == ()
+
+    rows, _ = evaluate(CASE, observation)
+    properties: Final = dict(junit_properties(rows))
+    assert "perf_cpu_seconds_per_request_breakdown" not in properties
+    assert properties["perf_unexpected_status_count_breakdown"] == (
+        '[{"label": "chat_completions status 500", "value": 1.0, "share": 1.0}]'
+    )

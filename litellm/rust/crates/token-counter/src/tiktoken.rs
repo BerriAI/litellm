@@ -1,0 +1,31 @@
+pub use litellm_token_counter_tiktoken::{TiktokenTokenizer, Vocabulary, encoding_for_model};
+
+use crate::{Error, TextCodec, TokenCounter, Tokenizer};
+
+impl TokenCounter {
+    pub fn from_tiktoken(encoding: &str) -> Result<Self, Error> {
+        TiktokenTokenizer::from_name(encoding)
+            .map(Self::new)
+            .map_err(Error::from)
+    }
+}
+
+impl Tokenizer for TiktokenTokenizer {
+    fn count_tokens(&self, text: &str) -> Result<usize, Error> {
+        Ok(TiktokenTokenizer::count_tokens(self, text))
+    }
+}
+
+impl TextCodec for TiktokenTokenizer {
+    fn encode(&self, text: &str) -> Result<Vec<u32>, Error> {
+        Ok(TiktokenTokenizer::encode(self, text))
+    }
+
+    fn decode(&self, ids: &[u32], _skip_special_tokens: bool) -> Result<String, Error> {
+        TiktokenTokenizer::decode(self, ids).map_err(Error::from)
+    }
+
+    fn name(&self) -> &str {
+        TiktokenTokenizer::name(self)
+    }
+}

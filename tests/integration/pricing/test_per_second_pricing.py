@@ -64,8 +64,8 @@ def _stream_content(event: dict[str, JsonValue]) -> str:
 
 
 def _clear_observations(upstream: httpx.Client) -> None:
-    response: Final = upstream.get("/__observations")
-    assert response.status_code == 200, response.text
+    response: Final = upstream.delete("/__observations")
+    assert response.status_code == 204, response.text
 
 
 def _observed_request_body(upstream: httpx.Client) -> dict[str, JsonValue]:
@@ -201,17 +201,24 @@ def test_streaming_chat_per_second_pricing_covers_the_full_stream(
 
 
 @pytest.mark.parametrize(
-    ("model", "custom_llm_provider", "expected_cost"),
+    ("model", "custom_llm_provider"),
     (
-        ("deepgram/nova-3", "deepgram", (0.0007167, 0.0)),
-        ("mistral/voxtral-mini-transcribe-realtime-latest", "mistral", (0.001, 0.0)),
+        ("deepgram/nova-3", "deepgram"),
+        ("mistral/voxtral-mini-transcribe-realtime-latest", "mistral"),
     ),
     ids=("deepgram_nova_3", "mistral_voxtral_realtime"),
 )
 def test_transcription_per_second_model_bills_request_time_through_cost_per_token(
-    model: str, custom_llm_provider: str, expected_cost: tuple[float, float]
+    model: str, custom_llm_provider: str
 ) -> None:
-    cost: Final = litellm.cost_per_token(model=model, custom_llm_provider=custom_llm_provider, response_time_ms=10_000.0)
+    duration_seconds: Final = 10.0
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    input_rate: Final = model_info.get("input_cost_per_second")
+    assert input_rate is not None, model_info
+    expected_cost: Final = (input_rate * duration_seconds, 0.0)
+    cost: Final = litellm.cost_per_token(
+        model=model, custom_llm_provider=custom_llm_provider, response_time_ms=duration_seconds * 1000
+    )
 
     assert cost == pytest.approx(expected_cost)
 

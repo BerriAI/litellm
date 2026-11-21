@@ -144,7 +144,7 @@ async def test_mapped_failure_identity_and_deployment_snapshot(server: Recording
     with pytest.raises(litellm.InternalServerError) as caught:
         await call_aocr(server, callbacks=[recorder])
     failures: Final = tuple(event for event in recorder.events if "failure" in event.name)
-    assert [event.name for event in failures] == ["log_failure_event", "async_log_failure_event"]
+    assert [event.name for event in failures] == ["async_log_failure_event"]
     assert all(event.kwargs["exception"] is caught.value for event in failures)
     assert caught.value.status_code == 500
     assert snapshots[0] is not caught.value
@@ -211,13 +211,50 @@ async def test_deferred_logging_requires_release_and_runs_at_most_once(server: R
     response: Final = await call_aocr(server, litellm_logging_obj=logger)
     await drain_logging()
     assert "async_log_success_event" not in recorder.names
+    assert logger.deferred_success_result is not None
+    assert logger.deferred_success_result[0] is response
+    assert not logger.async_success_log_enqueued
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
+    assert logger.async_success_log_enqueued is not blocked
     await drain_logging()
     events: Final = tuple(event for event in recorder.events if event.name == "async_log_success_event")
     assert len(events) == int(not blocked)
     if events:
         assert events[0].response is response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_deferred_sync_success_callbacks_wait_for_release(server: RecordingServer, blocked: bool) -> None:
+    finished: Final = threading.Event()
+    observations: Final = []
+
+    class Observe(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observations.append(response_obj)
+            finished.set()
+
+    logger: Final = Logging(
+        model="mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="deferred-sync",
+        function_id="deferred-sync",
+        dynamic_success_callbacks=[Observe()],
+    )
+    logger._defer_async_logging = True
+    response: Final = await call_aocr(server, litellm_logging_obj=logger)
+    await drain_logging()
+    assert not await asyncio.to_thread(finished.wait, 0.2)
+    assert observations == []
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
+    await drain_logging()
+    assert await asyncio.to_thread(finished.wait, 0.5 if blocked else 5) is not blocked
+    assert observations == ([] if blocked else [response])
 
 
 def test_sync_success_uses_executor_and_copied_caller_context(server: RecordingServer) -> None:
@@ -324,24 +361,26 @@ async def test_failure_callbacks_continue_within_both_families(server: Recording
     server.enqueue(ResponseSpec(body={"message": "failed"}, status=500))
     observed: Final = []
 
-    class Broken(CustomLogger):
+    class BrokenSync(CustomLogger):
         def log_failure_event(self, kwargs, response_obj, start_time, end_time):
             observed.append(("broken-sync", kwargs["exception"]))
             raise RuntimeError("sync observer")
 
+    class FollowingSync(CustomLogger):
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(("following-sync", kwargs["exception"]))
+
+    class BrokenAsync(CustomLogger):
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
             observed.append(("broken-async", kwargs["exception"]))
             raise RuntimeError("async observer")
 
-    class Following(CustomLogger):
-        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            observed.append(("following-sync", kwargs["exception"]))
-
+    class FollowingAsync(CustomLogger):
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
             observed.append(("following-async", kwargs["exception"]))
 
     with pytest.raises(litellm.InternalServerError) as caught:
-        await call_aocr(server, callbacks=[Broken(), Following()])
+        await call_aocr(server, callbacks=[BrokenSync(), FollowingSync(), BrokenAsync(), FollowingAsync()])
     assert [name for name, _ in observed] == ["broken-sync", "following-sync", "broken-async", "following-async"]
     assert all(error is caught.value for _, error in observed)
 
@@ -452,7 +491,7 @@ async def test_empty_callbacks_run_deployment_hooks_and_defer_like_the_python_cl
         assert logger.model_call_details["first_api_call_start_time"] <= logger.model_call_details["end_time"]
         assert logger.model_call_details["response_cost"] == 0
     else:
-        assert getattr(logger, "_native_pending_logging", None) is not None
+        assert logger.enqueue_deferred_logging is not None
         assert "end_time" not in logger.model_call_details
 
 

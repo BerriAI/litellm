@@ -46,6 +46,7 @@ _CLAUDE_BACKEND: Final = "claude-haiku-4-5"
 _GEMINI_BACKEND: Final = "gemini-2.5-flash"
 _PROVIDER_KEY: Final = "scripted-malformed-tools-key"
 _COUNT: Final = 37
+_PROVIDER_SOURCE: Final[Mapping[str, JsonValue]] = MappingProxyType({"litellm_count_source": "provider"})
 _CONFIG_STORE: Final = "vs_integration_config_store"
 _OTHER_STORE: Final = "vs_malformed_tools_other_store"
 _CLAUDE_CODE_AGENT: Final = "claude-cli/2.1.0 (external, cli)"
@@ -821,7 +822,7 @@ def test_count_tokens_forwards_well_formed_tools(rig: _Rig) -> None:
         "POST", "/v1/messages/count_tokens", _count_body(rig, marker, tools=[MESSAGES.tool])
     )
     assert response.status_code == 200, response.text
-    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT}, response.text
+    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT, **_PROVIDER_SOURCE}, response.text
     assert _one_delivery(rig, marker, "/v1/messages/count_tokens")["tools"] == [MESSAGES.tool]
 
 
@@ -853,6 +854,7 @@ def test_responses_input_tokens_counts_well_formed_tools(rig: _Rig) -> None:
     assert _JSON_OBJECT.validate_json(response.content) == {
         "object": "response.input_tokens",
         "input_tokens": _COUNT,
+        **_PROVIDER_SOURCE,
     }, response.text
     sent: Final = _one_delivery(rig, marker, "/v1/messages/count_tokens")
     assert "get_weather" in json.dumps(sent["tools"]), sent
@@ -1396,7 +1398,7 @@ def test_count_tokens_drops_the_bad_entry_a_deployment_list_names(rig: _Rig, fie
         {**_count_body(rig, marker, tools=[MESSAGES.tool, 5]), "model": field_groups.anthropic},
     )
     assert response.status_code == 200, response.text
-    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT}, response.text
+    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT, **_PROVIDER_SOURCE}, response.text
     assert _one_delivery(rig, marker, "/v1/messages/count_tokens")["tools"] == [MESSAGES.tool]
 
 
@@ -1416,7 +1418,7 @@ def test_count_tokens_rejects_malformed_tools_when_a_request_list_replaces_the_d
     assert _delivered(rig, marker) == ()
 
 
-def test_responses_input_tokens_drops_the_bad_entry_a_deployment_list_names(
+def test_responses_input_tokens_drops_the_tools_a_deployment_list_names(
     rig: _Rig, field_groups: _FieldGroups
 ) -> None:
     marker: Final = _marker()
@@ -1426,8 +1428,7 @@ def test_responses_input_tokens_drops_the_bad_entry_a_deployment_list_names(
         {"model": field_groups.anthropic, "input": marker, "tools": [RESPONSES.tool, 5]},
     )
     assert response.status_code == 200, response.text
-    tools: Final = _one_delivery(rig, marker, "/v1/messages/count_tokens")["tools"]
-    assert isinstance(tools, list) and len(tools) == 1 and "get_weather" in json.dumps(tools), tools
+    assert "tools" not in _one_delivery(rig, marker, "/v1/messages/count_tokens")
 
 
 def test_responses_input_tokens_rejects_malformed_tools_when_a_request_list_replaces_the_deployment_list(
@@ -1656,7 +1657,7 @@ _CHECKED: Final[Mapping[str, _Checked]] = MappingProxyType(
             named_as=MESSAGES,
             send=_count_tokens,
             target="/v1/messages/count_tokens",
-            answered=_counted({"input_tokens": _COUNT}),
+            answered=_counted({"input_tokens": _COUNT, **_PROVIDER_SOURCE}),
             kept_by_a_tools_list=("get_weather",),
             bad_entry=_MESSAGES_BAD_ENTRY,
         ),
@@ -1666,8 +1667,8 @@ _CHECKED: Final[Mapping[str, _Checked]] = MappingProxyType(
             named_as=MESSAGES,
             send=_input_tokens,
             target="/v1/messages/count_tokens",
-            answered=_counted({"object": "response.input_tokens", "input_tokens": _COUNT}),
-            kept_by_a_tools_list=("get_weather",),
+            answered=_counted({"object": "response.input_tokens", "input_tokens": _COUNT, **_PROVIDER_SOURCE}),
+            kept_by_a_tools_list=(),
             bad_entry=_RESPONSES_BAD_ENTRY,
         ),
     }
@@ -2334,14 +2335,14 @@ def test_a_deployment_list_with_a_non_string_entry_drops_tools_it_names_on_messa
 
 
 @_TOKEN_COUNTS
-def test_token_counting_with_a_request_list_with_a_non_string_entry_drops_the_bad_entry(
+def test_token_counting_with_a_request_list_with_a_non_string_entry_counts_the_tools_its_route_keeps(
     rig: _Rig, checked: _Checked
 ) -> None:
     marker: Final = _marker()
     response: Final = checked.send(
         rig, rig.anthropic, marker, {"tools": [checked.tool, 5], "additional_drop_params": ["tools", 5]}
     )
-    _assert_forwarded(rig, checked, response, marker, ("get_weather",))
+    _assert_forwarded(rig, checked, response, marker, checked.kept_by_a_tools_list)
 
 
 def _alias(suffix: str, variant: str) -> str:

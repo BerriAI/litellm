@@ -23,6 +23,7 @@ def _gemini_case_response(
     response: JsonResponse | SseResponse,
     model_version: str,
     usage_fields: dict[str, JsonValue] | None = None,
+    omit_usage_fields: frozenset[str] = frozenset(),
 ) -> JsonResponse | SseResponse:
     match response:
         case JsonResponse():
@@ -35,11 +36,11 @@ def _gemini_case_response(
                         **(
                             {
                                 "usageMetadata": {
-                                    **cast(dict[str, JsonValue], usage),
-                                    **usage_fields,
+                                    **{key: value for key, value in usage.items() if key not in omit_usage_fields},
+                                    **(usage_fields or {}),
                                 }
                             }
-                            if usage_fields is not None and isinstance(usage, dict)
+                            if (usage_fields is not None or omit_usage_fields) and isinstance(usage, dict)
                             else {}
                         ),
                     }
@@ -49,17 +50,21 @@ def _gemini_case_response(
             return response.model_copy(
                 update={
                     "frames": tuple(
-                        _gemini_case_frame(frame, model_version, usage_fields) for frame in response.frames
+                        _gemini_case_frame(frame, model_version, usage_fields, omit_usage_fields)
+                        for frame in response.frames
                     )
                 }
             )
 
 
 def _gemini_case_frame(
-    frame: str, model_version: str, usage_fields: dict[str, JsonValue] | None
+    frame: str,
+    model_version: str,
+    usage_fields: dict[str, JsonValue] | None,
+    omit_usage_fields: frozenset[str] = frozenset(),
 ) -> str:
     replaced: Final = frame.replace("gemini-3.8-flash", model_version)
-    if usage_fields is None:
+    if usage_fields is None and not omit_usage_fields:
         return replaced
     prefix, separator, payload = replaced.partition("data: ")
     if not separator or payload == "[DONE]":
@@ -68,7 +73,11 @@ def _gemini_case_frame(
     usage: Final = event.get("usageMetadata")
     if not isinstance(usage, dict):
         return replaced
-    return f"{prefix}data: {json.dumps({**event, 'usageMetadata': {**usage, **usage_fields}})}"
+    updated_usage: Final = {
+        **{key: value for key, value in usage.items() if key not in omit_usage_fields},
+        **(usage_fields or {}),
+    }
+    return f"{prefix}data: {json.dumps({**event, 'usageMetadata': updated_usage})}"
 
 
 def _gemini_case(
@@ -79,13 +88,14 @@ def _gemini_case(
     expected: ExactExpected,
     *,
     usage_fields: dict[str, JsonValue] | None = None,
+    omit_usage_fields: frozenset[str] = frozenset(),
 ) -> CostTrackingTestCase:
     return sibling.model_copy(
         update={
             "name": name,
             "model": model,
             "response": _gemini_case_response(
-                cast(JsonResponse | SseResponse, sibling.response), model_version, usage_fields
+                cast(JsonResponse | SseResponse, sibling.response), model_version, usage_fields, omit_usage_fields
             ),
             "expected": expected,
         }
@@ -1544,6 +1554,73 @@ GEMINI_3_1_PRO_PASSTHROUGH_GENERATE_CONTENT_PRICED_VIA_GEMINI_KEY: Final = CostT
     ),
 )
 
+GEMINI_3_1_PRO_PASSTHROUGH_STREAM_GENERATE_CONTENT_PRICED_VIA_GEMINI_KEY: Final = CostTrackingTestCase(
+    name="gemini-3.1-pro-passthrough-stream_generate_content_priced_via_gemini_key",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gemini/gemini-3.1-pro",
+    endpoint="/gemini/v1beta/models/$MODEL:streamGenerateContent?alt=sse",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "52b6a80ff038 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "scripted answer 52b6a80ff038"}], "role": "model"},
+                        "finishReason": "STOP",
+                        "index": 0,
+                    }
+                ],
+                "modelVersion": "gemini-3.1-pro",
+            },
+            {
+                "candidates": [],
+                "usageMetadata": {
+                    "promptTokenCount": 1840,
+                    "candidatesTokenCount": 412,
+                    "totalTokenCount": 2252,
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
+                },
+                "modelVersion": "gemini-3.1-pro",
+            },
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.008624,
+        input_cost=0.00368,
+        output_cost=0.004944,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        breakdown_persisted=False,
+        cost_header=False,
+    ),
+)
+
 
 # gemini/gemini-3.8-flash
 GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT: Final = CostTrackingTestCase(
@@ -2591,7 +2668,7 @@ GEMINI_GEMINI_3_8_FLASH_STREAM_FULL_USAGE: Final = CostTrackingTestCase(
         ),
     ),
     expected=ExactExpected(
-        spend=0.0076232, input_cost=0.0015572, output_cost=0.006066, prompt_tokens=8314, completion_tokens=1592
+        spend=0.0066182, input_cost=0.0013922, output_cost=0.005226, prompt_tokens=8314, completion_tokens=1592
     ),
 )
 
@@ -3281,10 +3358,10 @@ GEMINI_GEMINI_3_1_PRO_CACHE_CREATION: Final = CostTrackingTestCase(
     response=RoutedResponse(
         content_type="application/x-routed",
         routes={
-            "GET /models/gemini-3.1-pro:cachedContents": JsonResponse(
+            "GET /cachedContents": JsonResponse(
                 content_type="application/json", body={"cachedContents": []}
             ),
-            "POST /models/gemini-3.1-pro:cachedContents": JsonResponse(
+            "POST /cachedContents": JsonResponse(
                 content_type="application/json",
                 body={
                     "name": "cachedContents/$REQUEST_ID",
@@ -3370,6 +3447,14 @@ GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY: Final = _gemini_case(
         spend=0.02018016, input_cost=0.0086112, output_cost=0.01156896, prompt_tokens=1840, completion_tokens=412
     ),
 )
+GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX: Final = _gemini_case(
+    GEMINI_GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
+    "gemini-gemini-3.1-pro-preview-service_tier_flex",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(spend=0.0056056, input_cost=0.002392, output_cost=0.0032136, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={"serviceTier": "flex"},
+)
 GEMINI_GEMINI_4_ARGON_TOOL_CALL: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_TOOL_CALL, "gemini-gemini-4-argon-tool_call", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412)
@@ -3413,6 +3498,21 @@ GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K: Final = _gemini_case(
     ),
     usage_fields={"serviceTier": "standard"},
 )
+GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K: Final = _gemini_case(
+    GEMINI_GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "gemini-gemini-3.1-pro-preview-tiered_flex_above_200k",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.539734, input_cost=0.53248, output_cost=0.007254, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={"serviceTier": "flex"},
+).model_copy(
+    update={
+        "known_bug": "gemini route bills the standard above-200k rate (1.079468) when the Gemini API reply marks flex only "
+        "through usageMetadata.serviceTier, so the above_200k_tokens_flex prices are never applied"
+    }
+)
 GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
     GEMINI_GEMINI_3_1_PRO_TIERED_CACHE_READ_ABOVE_200K,
     "gemini-gemini-3.1-pro-preview-tiered_cache_read_above_200k",
@@ -3425,6 +3525,10 @@ GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case
 )
 GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_GEMINI_4_ARGON_INPUT_TEXT, GEMINI_GEMINI_4_ARGON_STREAM),
+    ("/v1/responses", "/v1/messages"),
+)
+GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_GEMINI_3_8_FLASH_STREAM),
     ("/v1/responses", "/v1/messages"),
 )
 GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES: Final = bridge_pairs(
@@ -3475,6 +3579,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_3_8_FLASH_STREAM_FULL_USAGE,
     GEMINI_EMBEDDINGS_002,
     GEMINI_3_1_PRO_PASSTHROUGH_GENERATE_CONTENT_PRICED_VIA_GEMINI_KEY,
+    GEMINI_3_1_PRO_PASSTHROUGH_STREAM_GENERATE_CONTENT_PRICED_VIA_GEMINI_KEY,
     GEMINI_GEMINI_3_8_FLASH_LITE_INPUT_BELOW_128K,
     GEMINI_GEMINI_3_8_FLASH_LITE_INPUT_ABOVE_128K,
     GEMINI_NANO_BANANA_2_1_INPUT_TEXT,
@@ -3500,10 +3605,13 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX,
     *(pair.bridged for pair in GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES),
+    *(pair.bridged for pair in GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
 )
 
@@ -3539,6 +3647,14 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES[3].bridged,
     ),
     StreamParityTestCase(
+        plain=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES[3].bridged,
+    ),
+    StreamParityTestCase(
         plain=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[0].bridged,
         streamed=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[2].bridged,
     ),
@@ -3550,14 +3666,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *bridge_pairs(
-        (
-            GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT,
-            GEMINI_GEMINI_3_8_FLASH_CACHE_READ,
-            GEMINI_GEMINI_3_8_FLASH_REASONING,
-            GEMINI_GEMINI_3_8_FLASH_STREAM,
-        ),
+        (GEMINI_GEMINI_3_8_FLASH_CACHE_READ, GEMINI_GEMINI_3_8_FLASH_REASONING),
         ("/v1/responses", "/v1/messages"),
     ),
+    *GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES,
     *GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES,
     *GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES,
 )

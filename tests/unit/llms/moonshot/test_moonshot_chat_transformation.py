@@ -5,6 +5,7 @@ These tests validate the MoonshotChatConfig class which extends OpenAIGPTConfig.
 Moonshot AI is an OpenAI-compatible provider with minor customizations.
 """
 
+from typing import Final
 from unittest.mock import patch
 
 
@@ -12,7 +13,8 @@ import pytest
 
 import litellm
 import litellm.utils
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, get_model_cost_map
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
 
@@ -684,6 +686,26 @@ class TestKimiK26ModelRegistry:
         return GetModelCostMap.load_local_model_cost_map()
 
 
+def test_kimi_k3_registry_prices_completion_usage() -> None:
+    row: Final = GetModelCostMap.load_local_model_cost_map()["moonshot/kimi-k3"]
+    response: Final = litellm.ModelResponse(
+        model="moonshot/kimi-k3", usage=litellm.Usage(prompt_tokens=100, completion_tokens=50)
+    )
+
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        100 * row["input_cost_per_token"] + 50 * row["output_cost_per_token"]
+    )
+
+
+def test_kimi_k3_registry_context_is_exposed_by_model_info() -> None:
+    row: Final = GetModelCostMap.load_local_model_cost_map()["moonshot/kimi-k3"]
+    info: Final = litellm.get_model_info("moonshot/kimi-k3")
+
+    assert (info["max_input_tokens"], info["max_output_tokens"]) == (
+        row["max_input_tokens"], row["max_output_tokens"]
+    )
+
+
 class TestMoonshotResponseSchemaSupport:
     """Every model currently live on api.moonshot.ai supports json_schema
     response_format, which gates discovery via litellm.responses(). The flag
@@ -692,6 +714,7 @@ class TestMoonshotResponseSchemaSupport:
     LIVE_MODELS = [
         "moonshot/kimi-k2.5",
         "moonshot/kimi-k2.6",
+        "moonshot/kimi-k3",
         "moonshot/moonshot-v1-8k",
         "moonshot/moonshot-v1-32k",
         "moonshot/moonshot-v1-128k",
@@ -705,6 +728,12 @@ class TestMoonshotResponseSchemaSupport:
     def model_cost_map(self):
         return GetModelCostMap.load_local_model_cost_map()
 
+    @pytest.mark.parametrize("model", LIVE_MODELS)
+    def test_response_schema_discovery_matches_registry(self, model, model_cost_map):
+        assert litellm.supports_response_schema(model=model) == model_cost_map[model].get(
+            "supports_response_schema", False
+        )
+
 
 class TestMoonshotReasoningEffort:
     """Moonshot documents reasoning_effort as a top-level chat completions field for its reasoning
@@ -713,15 +742,22 @@ class TestMoonshotReasoningEffort:
 
     @pytest.fixture(autouse=True)
     def force_local_model_cost(self, monkeypatch):
-        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
 
     @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6"])
     def test_reasoning_model_supports_reasoning_effort(self, model):
         assert "reasoning_effort" in MoonshotChatConfig().get_supported_openai_params(model)
 
-    @pytest.mark.parametrize("model", ["moonshot-v1-8k", "kimi-latest", "kimi-k2-turbo-preview"])
+    @pytest.mark.parametrize("model", ["moonshot-v1-8k", "kimi-k2-turbo-preview"])
     def test_non_reasoning_model_does_not_support_reasoning_effort(self, model):
         assert "reasoning_effort" not in MoonshotChatConfig().get_supported_openai_params(model)
+
+    def test_latest_alias_uses_target_supported_params(self) -> None:
+        target: Final = get_model_latest_aliases()["moonshot"]["kimi-latest"]
+        assert MoonshotChatConfig().get_supported_openai_params(
+            "kimi-latest"
+        ) == MoonshotChatConfig().get_supported_openai_params(target)
 
     @pytest.mark.parametrize("effort", ["low", "high", "max"])
     def test_declared_effort_reaches_optional_params(self, effort):
@@ -752,6 +788,16 @@ class TestMoonshotReasoningEffort:
         )
 
         assert optional_params["reasoning_effort"] == "high"
+
+    def test_drop_params_omits_reasoning_effort_for_non_reasoning_model(self) -> None:
+        optional_params: Final = litellm.get_optional_params(
+            model="moonshot-v1-8k",
+            custom_llm_provider="moonshot",
+            reasoning_effort="max",
+            drop_params=True,
+        )
+
+        assert "reasoning_effort" not in optional_params
 
     @pytest.mark.parametrize("value", [{"summary": "detailed"}, {"effort": 3}, 7])
     def test_effort_without_a_level_string_is_omitted(self, value):
