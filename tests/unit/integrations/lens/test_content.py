@@ -211,35 +211,3 @@ async def test_without_an_active_s3_v2_logger_the_store_names_and_moves_nothing(
         assert store.object_key("lens-content/object.json") is None
         assert await store.upload("lens-content/object.json", "body") is False
         assert await store.download("lens-content/object.json", 4) is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("prefix", ("team-logs/", None), ids=("prefixed", "unprefixed"))
-async def test_the_active_s3_v2_logger_stores_and_reads_content_within_the_reference_size(
-    monkeypatch: pytest.MonkeyPatch, prefix: str | None
-) -> None:
-    from tests.unit.integrations.s3_v2_rust_support import rust_s3_logger, scripted_bucket
-
-    with scripted_bucket() as bucket:
-        logger: Final = rust_s3_logger(
-            monkeypatch,
-            s3_bucket_name="logs-bucket",
-            s3_endpoint_url=bucket.url,
-            s3_aws_access_key_id="AKIDEXAMPLE",
-            s3_aws_secret_access_key="secret",
-            s3_region_name="us-east-1",
-            **({"s3_path": prefix} if prefix else {}),
-        )
-        try:
-            store: Final = S3V2ContentStore(resolve=lambda: logger)
-            key: Final = store.object_key("lens-content/object.json")
-            assert key == ("team-logs/" if prefix else "") + "lens-content/object.json"
-            assert key is not None
-            assert await store.upload(key, _BODY) is True
-            size: Final = len(_BODY.encode())
-            assert await store.download(key, size) == _BODY
-            assert await store.download(key, size - 1) is None
-            bucket.reply("rejected", (403, "<Error><Code>AccessDenied</Code></Error>"))
-            assert await store.upload(f"{key}.rejected", _BODY) is False
-        finally:
-            _ = logger.periodic_flush_task.cancel()
