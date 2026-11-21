@@ -2500,7 +2500,9 @@ class MCPRequestHandler:
         owning ``org_id`` so the team's budget accumulates and the right org is charged."""
         from litellm.proxy.auth.auth_checks import personal_key_inherits_team_grants
 
-        if not is_mcp_admitted_user_subject(auth) and not personal_key_inherits_team_grants(auth):
+        if not is_mcp_admitted_user_subject(auth) and not personal_key_inherits_team_grants(
+            auth, dashboard_session=True
+        ):
             return auth
         try:
             from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
@@ -2707,7 +2709,7 @@ class MCPRequestHandler:
             return MCPServerAccess(
                 server_ids=tuple(await MCPRequestHandler.resolve_admitted_subject_servers(user_api_key_auth)),
             )
-        if personal_key_inherits_team_grants(user_api_key_auth):
+        if personal_key_inherits_team_grants(user_api_key_auth, dashboard_session=True):
             return await MCPRequestHandler.resolve_personal_key_team_servers(user_api_key_auth)
         return None
 
@@ -2715,7 +2717,7 @@ class MCPRequestHandler:
     def is_personal_key_inheriting_team_grants(auth: UserAPIKeyAuth) -> bool:
         from litellm.proxy.auth.auth_checks import personal_key_inherits_team_grants
 
-        return personal_key_inherits_team_grants(auth)
+        return personal_key_inherits_team_grants(auth, dashboard_session=True)
 
     @staticmethod
     async def personal_key_team_sources(auth: UserAPIKeyAuth) -> tuple[UserAPIKeyAuth, ...]:
@@ -3262,7 +3264,7 @@ class MCPRequestHandler:
             if is_mcp_admitted_user_subject(user_api_key_auth):
                 return await MCPRequestHandler.resolve_admitted_subject_tools(server_id, user_api_key_auth)
 
-            if personal_key_inherits_team_grants(user_api_key_auth):
+            if personal_key_inherits_team_grants(user_api_key_auth, dashboard_session=True):
                 return _as_list(await MCPRequestHandler.resolve_personal_key_team_tools(server_id, user_api_key_auth))
 
             return await MCPRequestHandler._single_credential_tools(
@@ -3285,7 +3287,7 @@ class MCPRequestHandler:
                 unreadable_entitlement
                 or keyless_source
                 or is_mcp_admitted_user_subject(user_api_key_auth)
-                or personal_key_inherits_team_grants(user_api_key_auth)
+                or personal_key_inherits_team_grants(user_api_key_auth, dashboard_session=True)
             )
             return [] if deny_all else None
 

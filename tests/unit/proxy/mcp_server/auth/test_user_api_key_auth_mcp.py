@@ -4583,7 +4583,13 @@ async def test_get_allowed_tools_for_server_ui_session_team_keeps_key_restrictio
                 detail={"error": "Team doesn't exist in db. Team=litellm-dashboard."},
             ),
         ):
-            with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
+            with (
+                patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm),
+                patch(
+                    "litellm.proxy.mcp_server.mcp_server_manager.MCPServerManager.operator_open_server_ids",
+                    AsyncMock(return_value=frozenset({"server_1"})),
+                ),
+            ):
                 result = await MCPRequestHandler.get_allowed_tools_for_server(
                     server_id="server_1",
                     user_api_key_auth=user_api_key_auth,
@@ -12925,3 +12931,41 @@ async def test_admin_dashboard_session_keeps_the_whole_mcp_registry(
     assert set(await global_mcp_server_manager.get_allowed_mcp_servers(dashboard_session)) == set(
         global_mcp_server_manager.get_registry()
     )
+
+
+def _dashboard_session(user_role: LitellmUserRoles) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-ui-session", user_id="alice", team_id=UI_TEAM_ID, user_role=user_role)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+@pytest.mark.parametrize("user_role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY])
+async def test_dashboard_session_reaches_the_servers_its_owner_teams_grant(
+    personal_key_owner_teams: UserAPIKeyAuth, user_role: LitellmUserRoles
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    session: Final = _dashboard_session(user_role)
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(session)) == {"srv-a", "srv-b", "srv-open"}
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", session) == ["add"]
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-c", session) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_dashboard_session_of_a_user_on_no_team_reaches_no_team_server(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setattr(
+        auth_checks, "get_user_object", AsyncMock(return_value=LiteLLM_UserTable(user_id="mallory", teams=[]))
+    )
+    stranger: Final = _dashboard_session(LitellmUserRoles.INTERNAL_USER_VIEW_ONLY).model_copy(
+        update={"user_id": "mallory"}
+    )
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(stranger)) == {"srv-open"}

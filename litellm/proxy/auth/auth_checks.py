@@ -6004,13 +6004,14 @@ def personal_key_team_model_access_applies(valid_token: UserAPIKeyAuth | None) -
     )
 
 
-def personal_key_inherits_team_grants(valid_token: UserAPIKeyAuth | None) -> bool:
+def personal_key_inherits_team_grants(valid_token: UserAPIKeyAuth | None, *, dashboard_session: bool = False) -> bool:
     """MCP server, MCP tool and agent inheritance is for a virtual key only. A keyless auth with no
-    team (one grant source of an admitted subject, a JWT user) resolves as the plain caller it is."""
+    team (one grant source of an admitted subject, a JWT user) resolves as the plain caller it is.
+    ``dashboard_session`` also admits a UI session, whose key is minted on the ``UI_TEAM_ID`` sentinel."""
     return (
         personal_key_team_model_access_applies(valid_token)
         and valid_token is not None
-        and valid_token.team_id is None
+        and (valid_token.team_id is None or (dashboard_session and valid_token.team_id == UI_TEAM_ID))
         and valid_token.api_key is not None
     )
 
