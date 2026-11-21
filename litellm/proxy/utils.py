@@ -2079,6 +2079,10 @@ def _overrides_hook(callback: object, hook_name: str) -> bool:
     return subclass_overrides_hook(type(callback), hook_name)
 
 
+def _records_response_ownership(callback: object) -> bool:
+    return isinstance(callback, CustomLogger) and callback.records_response_ownership
+
+
 def routes_through_apply_guardrail(callback: CustomGuardrail) -> bool:
     return subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail) and not getattr(
         callback, "use_native_lifecycle_hooks", False
@@ -4838,7 +4842,8 @@ class ProxyLogging:
 
         ``guardrails_only`` is for a relayed response that never reached a router deployment and isn't in the shape the
         other hooks expect: only the guardrails the request selected run, not the guardrails of a model that merely
-        shares the body's ``model`` name, nor the callbacks that aren't guardrails.
+        shares the body's ``model`` name, nor the callbacks that aren't guardrails, except the ones that record who
+        owns the response.
         """
 
         from litellm.proxy.proxy_server import llm_router
@@ -4854,7 +4859,11 @@ class ProxyLogging:
         pipeline_managed: Final = pipeline_managed_guardrail_names(data, "post_call")
         request_view: Final = _REQUEST_FIELDS.validate_python(data)
         guardrail_callbacks, all_other_callbacks = _partition_post_call_callbacks()
-        other_callbacks: Final[tuple[CustomLogger, ...]] = () if guardrails_only else all_other_callbacks
+        other_callbacks: Final[tuple[CustomLogger, ...]] = (
+            tuple(callback for callback in all_other_callbacks if _records_response_ownership(callback))
+            if guardrails_only
+            else all_other_callbacks
+        )
         guardrails: Final = _PostCallGuardrails(
             data=data,
             guardrail_data=(

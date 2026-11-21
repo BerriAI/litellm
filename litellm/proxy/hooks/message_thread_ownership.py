@@ -1,7 +1,7 @@
 import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterable, Mapping
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol
 
 import httpx
 from fastapi import HTTPException
@@ -231,6 +231,8 @@ class _StreamedMessageIdScanner:
 
 
 class MessageThreadOwnership(CustomLogger):
+    records_response_ownership: ClassVar[bool] = True
+
     def __init__(self, message_thread_owner_cache: "InternalUsageCache") -> None:
         self._owners: Final = message_thread_owner_cache
 
