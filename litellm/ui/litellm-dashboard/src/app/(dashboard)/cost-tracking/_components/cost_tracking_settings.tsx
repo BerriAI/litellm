@@ -22,7 +22,7 @@ import ProviderMarginTable from "./provider_margin_table";
 import AddMarginForm from "./add_margin_form";
 import PricingCalculator from "./pricing_calculator/index";
 import { DocsMenu } from "@/components/DocsMenu";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
@@ -198,7 +198,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   }
 
   return (
-    <Page>
+    <>
       <PageHeader>
         <div className="flex flex-wrap items-center gap-2">
           <PageHeaderTitle>
@@ -453,7 +453,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
           </div>
         </DialogContent>
       </Dialog>
-    </Page>
+    </>
   );
 };
 

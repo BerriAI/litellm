@@ -119,7 +119,16 @@ const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
 const PAGE_FRAME_CLASS_NAMES = { default: "" } as const;
 
-const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([["caching", "default"]]);
+const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
+  ["admin-panel", "default"],
+  ["agents", "default"],
+  ["caching", "default"],
+  ["cost-optimization", "default"],
+  ["cost-tracking", "default"],
+  ["guardrails", "default"],
+  ["guardrails-monitor", "default"],
+  ["logging-and-alerts", "default"],
+]);
 
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
   useCloseMobileSidebarOn(navigationKey);
