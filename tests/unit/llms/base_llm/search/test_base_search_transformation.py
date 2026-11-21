@@ -22,6 +22,7 @@ from litellm.llms.base_llm.search.transformation import (
     _is_trusted_search_api_base,
 )
 from litellm.llms.brave.search.transformation import BraveSearchConfig
+from litellm.llms.cloro.search.transformation import CloroSearchConfig
 from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
@@ -61,6 +62,7 @@ _BASE_ENV_VARS = (
     "CRW_API_BASE",
     "NIMBLE_API_BASE",
     "BING_GROUNDING_PROJECT_ENDPOINT",
+    "CLORO_API_BASE",
 )
 
 
@@ -102,6 +104,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
     (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
     (BingGroundingSearchConfig, {"BING_GROUNDING_TOKEN": "srv"}, "caller-key", {}),
+    (CloroSearchConfig, {"CLORO_API_KEY": "srv"}, "caller-key", {}),
 )
 
 _IDS = tuple(spec[0].__name__ for spec in PROVIDERS)
