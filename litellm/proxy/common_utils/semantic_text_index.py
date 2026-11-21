@@ -15,6 +15,8 @@ from openai import OpenAIError
 from pydantic import ConfigDict
 
 from litellm.exceptions import BudgetExceededError, ContextWindowExceededError
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_HEADERS
+from litellm.proxy.auth.caller_model_checks import caller_can_call_model
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -27,6 +29,7 @@ Vector: TypeAlias = tuple[float, ...]
 DEFAULT_MAX_CACHED_VECTORS: Final = 5000
 """Ceiling on how many (embedding model, text) vectors one index keeps; the least recently searched are evicted first."""
 DEFAULT_TOO_LONG_TTL_SECONDS: Final = 3600.0
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 class Embedder(Protocol):
@@ -36,6 +39,16 @@ class Embedder(Protocol):
 @dataclass(frozen=True, slots=True)
 class EmbeddingFailed:
     reason: str
+
+
+class SubCallModelRefused(ValueError):
+    """The caller's model allowlist, budget or rate limit refuses the sub-call's model, as it would refuse a direct call."""
+
+
+async def admit_sub_call_model(user_api_key_dict: UserAPIKeyAuth, model: str, router: Router) -> None:
+    verdict: Final = await caller_can_call_model(user_api_key_auth=user_api_key_dict, model=model, llm_router=router)
+    if verdict != "allowed":
+        raise SubCallModelRefused(f"{model} is not available to this key ({verdict})")
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,26 +91,39 @@ def cosine_similarity(left: Vector, right: Vector) -> float:
     return dot / norms if norms else 0.0
 
 
-def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:  # mutable-ok: router mutates it
+def embedding_spend_metadata(
+    user_api_key_dict: UserAPIKeyAuth, request_headers: Mapping[str, str] = _NO_HEADERS
+) -> dict[str, object]:  # mutable-ok: router mutates it
+    """Attributes the sub-call's spend to the caller and keeps the caller's message-redaction headers, and no others."""
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+    redaction_headers: Final = {
+        name.lower(): value for name, value in request_headers.items() if name.lower() in MESSAGE_REDACTION_HEADERS
+    }
     return {
         **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
         **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
         "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+        **({"headers": redaction_headers} if redaction_headers else {}),
     }
 
 
 def router_embedder(
-    router: Router, embedding_model: str, user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: ProxyLogging
+    router: Router,
+    embedding_model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+    request_headers: Mapping[str, str] = _NO_HEADERS,
 ) -> Embedder:
-    """Embeds through the router after the same key rate-limit, budget and guardrail pre-call hooks /embeddings runs."""
+    """Embeds through the router after the caller's model access and budget checks and the same key rate-limit,
+    budget and guardrail pre-call hooks /embeddings runs."""
 
     async def embed(texts: Sequence[str]) -> Sequence[Vector]:
+        await admit_sub_call_model(user_api_key_dict, embedding_model, router)
         request: Final = {
             "model": embedding_model,
             "input": list(texts),
-            "metadata": embedding_spend_metadata(user_api_key_dict),
+            "metadata": embedding_spend_metadata(user_api_key_dict, request_headers),
         }
         processed: Final = _EmbeddingRequest.model_validate(
             await proxy_logging_obj.pre_call_hook(

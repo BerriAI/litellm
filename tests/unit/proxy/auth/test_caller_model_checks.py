@@ -8,11 +8,6 @@ from starlette.requests import Request
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.llms.anthropic.messages.caller_model_checks import (
-    _caller_within_team_member_model_budget,
-    caller_model_verdict,
-    rate_limit_verdict,
-)
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
@@ -22,6 +17,11 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     UserAPIKeyAuth,
+)
+from litellm.proxy.auth.caller_model_checks import (
+    _caller_within_team_member_model_budget,
+    caller_model_verdict,
+    rate_limit_verdict,
 )
 from litellm.proxy.auth.user_api_key_auth import run_centralized_common_checks
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -33,7 +33,7 @@ from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.router import Router
 from litellm.types.agents import AgentResponse
 from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
-from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.proxy_auth_state import ProxyAuthState
 from tests.unit.proxy.rust_auth_stores import FakeTeamMembershipStore, RustAuthStores, install_rust_auth_stores
 
 CLASSIFIER: Final = "classifier"

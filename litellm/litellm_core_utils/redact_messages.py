@@ -52,6 +52,7 @@ class _HasArguments(Protocol):
 
 
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
+MESSAGE_REDACTION_HEADERS: Final = frozenset({"litellm-disable-message-redaction", *MESSAGE_REDACTION_ENABLE_HEADERS})
 
 
 def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:

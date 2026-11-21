@@ -29,7 +29,7 @@ from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.ptu_pricing import AZURE_SPILLOVER_FROM_HEADER, AZURE_SPILLOVER_HEADER
-from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_HEADERS
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.litellm_core_utils.secret_redaction import (
     _token_redactor,  # pyright: ignore[reportPrivateUsage]  # the row builder shares the process's compiled token redactor
@@ -72,7 +72,6 @@ _REQUEST_METADATA_KEYS: Final = frozenset(
         SESSION_ID_GENERATED_METADATA_KEY,
     }
 )
-_MESSAGE_REDACTION_HEADERS: Final = frozenset({"litellm-disable-message-redaction", *MESSAGE_REDACTION_ENABLE_HEADERS})
 _PAYLOAD_KEYS: Final = frozenset(
     {
         "prompt_tokens",
@@ -183,7 +182,7 @@ def _request_metadata(litellm_params: Mapping[str, object]) -> Mapping[str, obje
         key: {
             **_projected(metadata, _REQUEST_METADATA_KEYS),
             **(
-                {"headers": _projected_headers(metadata.get("headers"), _MESSAGE_REDACTION_HEADERS)}
+                {"headers": _projected_headers(metadata.get("headers"), MESSAGE_REDACTION_HEADERS)}
                 if "headers" in metadata
                 else {}
             ),

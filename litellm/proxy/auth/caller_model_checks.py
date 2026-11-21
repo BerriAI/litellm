@@ -1,8 +1,8 @@
 """Checks a proxy-made sub-call runs against the caller of the parent request.
 
-The compaction summary call and the safeguards classifier call go to a model the
-admin configured, not the one the client asked for, and they never pass back
-through the proxy's auth, budget, or rate-limit hooks. These checks apply the
+The Anthropic compaction summary call, the safeguards classifier call and the search
+embedding call go to a model the admin configured, not the one the client asked for,
+and they never pass back through the proxy's auth, budget, or rate-limit hooks. These checks apply the
 caller's model allowlists, per-model budgets, and RPM/TPM limits to that model
 before the sub-call runs.
 """
