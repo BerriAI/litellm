@@ -382,8 +382,8 @@ const SUPPRESSED_BY_DESCRIPTION = "";
 
 const numericInputSchema = z.union([z.string(), z.number()]).nullish();
 
-const buildMemberDefaultsSchema = (t: TFunction) =>
-  z.object({
+const buildMemberDefaultsSchema = (t: TFunction) => {
+  const fields = {
     default_team_member_models: z.array(z.string()).optional(),
     team_member_budget: numericInputSchema,
     team_member_budget_duration: z.string().nullish(),
@@ -395,7 +395,9 @@ const buildMemberDefaultsSchema = (t: TFunction) =>
         ? t("teams.teamInfo.validation.thresholdRange")
         : t("teams.teamInfo.validation.duplicateThreshold"),
     ).optional(),
-  });
+  };
+  return z.object(fields);
+};
 
 const buildTeamUpdateFieldsSchema = (t: TFunction) => {
   const fields = z.object({
@@ -1077,7 +1079,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       typeof budget === "number" &&
       shouldPromptMemberBudgetReset(budget, info.team_member_budget_table?.max_budget, customBudgetUserIds)
     ) {
-      memberBudgetReset.prompt({ teamId, updateData, userIds: customBudgetUserIds, newBudget: budget });
+      const pendingBudgetReset = { teamId, updateData, userIds: customBudgetUserIds, newBudget: budget };
+      memberBudgetReset.prompt(pendingBudgetReset);
       return;
     }
 

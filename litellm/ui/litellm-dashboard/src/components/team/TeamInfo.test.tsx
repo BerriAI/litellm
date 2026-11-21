@@ -2600,14 +2600,15 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       ...alwaysSent,
       object_permission: { ...mcpPermissions, search_tools: ["tool-a"] },
     };
-    expect(wireBody(defaultsPayload)).toStrictEqual({
+    const expectedDefaults = {
       team_id: "123",
       team_member_budget_duration: "30d",
       team_member_budget: 42,
       team_member_tpm_limit: 11,
       team_member_rpm_limit: 22,
       default_team_member_models: ["gpt-4"],
-    });
+    };
+    expect(wireBody(defaultsPayload)).toStrictEqual(expectedDefaults);
     expect(payload).toStrictEqual(expected);
     expect(wireBody(payload)).toStrictEqual(expected);
   });
