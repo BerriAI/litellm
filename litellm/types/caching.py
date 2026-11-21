@@ -84,7 +84,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: Sequence[str]
+    values: ReadOnly[Sequence[str]]
 
 
 class RedisPipelineLpopOperation(TypedDict):

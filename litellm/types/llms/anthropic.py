@@ -252,7 +252,7 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str
-    input: object
+    input: ReadOnly[object]
     cache_control: dict | ChatCompletionCachedContent | None
     caller: ToolCaller | None
 
