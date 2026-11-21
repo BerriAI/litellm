@@ -788,6 +788,9 @@ class RealTimeStreaming:
     def _flush_unbilled_transcription_usage(self) -> None:
         if self.provider_config is None:
             return
+        unbilled_response: Final = self.provider_config.unbilled_response_on_session_close(self.model)
+        if unbilled_response is not None:
+            self.store_message(unbilled_response)
         usage: Final = self.provider_config.unbilled_usage_on_session_close(self.model)
         if usage is None:
             return

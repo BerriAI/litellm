@@ -403,6 +403,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
     drop_params_flag,
+    finite_cost,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
@@ -13126,11 +13127,14 @@ def _passthrough_block_response(e: ModifyResponseException) -> ModelResponse:
     )
 
 
-async def _record_passthrough_block(e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth) -> None:
+async def _record_passthrough_block(
+    e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth, *, reply_logs_success: bool = False
+) -> None:
     await proxy_logging_obj.post_call_failure_hook(
         user_api_key_dict=user_api_key_dict,
         original_exception=e,
         request_data=e.request_data,
+        reply_logs_success=reply_logs_success,
     )
 
 
@@ -13139,7 +13143,8 @@ async def _stream_chat_passthrough_block(
 ) -> StreamingResponse:
     # Read before post_call_failure_hook, which pops it from the request data.
     logging_obj: Final = e.request_data.get("litellm_logging_obj")
-    await _record_passthrough_block(e, user_api_key_dict)
+    # The stream wrapper below logs this reply as a success event once it has been sent.
+    await _record_passthrough_block(e, user_api_key_dict, reply_logs_success=True)
     streaming_response: Final = litellm.CustomStreamWrapper(
         completion_stream=litellm.utils.ModelResponseIterator(
             model_response=_passthrough_block_response(e), convert_to_delta=True
@@ -13842,7 +13847,8 @@ async def audio_speech(
             model_id: Final = hidden_params.get("model_id", None) or ""
             cache_key: Final = hidden_params.get("cache_key", None) or ""
             api_base: Final = hidden_params.get("api_base", None) or ""
-            response_cost: Final = hidden_params.get("response_cost", None) or ""
+            speech_cost: Final = finite_cost(hidden_params.get("response_cost"))
+            response_cost: Final = "" if speech_cost is None else speech_cost
             response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
             custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
