@@ -6,12 +6,20 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Literal
 
 import httpx
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value, string_value
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows, scratch_database
 from integration._support.mcp import (
     ENTRY_POINTS,
@@ -30,8 +38,8 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.mcp_grants import SUBJECTS, Subject, create_toolset, grant
-from integration._support.process import owned_proxy
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from integration._support.process import owned_proxy, owned_proxy_process
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 CALLABLE: Final = {"add": {"a": 1, "b": 2}, "multiply": {"a": 2, "b": 3}}
 RESULTS: Final = {"add": "3", "multiply": "6"}
@@ -547,10 +555,16 @@ class _ForwardedIpRig:
     internal_peer: McpPeer
     public_alias: str
     internal_alias: str
+    log: Path
 
 
 @contextmanager
-def _forwarded_ip_rig(gateway: Gateway, tmp_path: Path, settings: Mapping[str, JsonValue]) -> Iterator[_ForwardedIpRig]:
+def _forwarded_ip_rig(
+    gateway: Gateway,
+    tmp_path: Path,
+    settings: Mapping[str, JsonValue],
+    environment: Mapping[str, str] = MappingProxyType({}),
+) -> Iterator[_ForwardedIpRig]:
     config: Final = JSON_OBJECT.validate_python(
         yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
     )
@@ -565,14 +579,15 @@ def _forwarded_ip_rig(gateway: Gateway, tmp_path: Path, settings: Mapping[str, J
         peer_of("http") as public_peer,
         peer_of("http") as internal_peer,
         scratch_database() as database_url,
-        owned_proxy(
+        owned_proxy_process(
             gateway,
             tmp_path,
-            {"DATABASE_URL": database_url, "FORWARDED_ALLOW_IPS": "192.0.2.1"},
+            {"DATABASE_URL": database_url, "FORWARDED_ALLOW_IPS": "192.0.2.1", **environment},
             config=path,
             remove_environment=("DATABASE_URL_READ_REPLICA",),
-        ) as candidate,
+        ) as owned,
     ):
+        candidate: Final = owned.gateway
         suffix: Final = uuid.uuid4().hex[:8]
         public: Final = _created_server(
             candidate,
@@ -595,7 +610,7 @@ def _forwarded_ip_rig(gateway: Gateway, tmp_path: Path, settings: Mapping[str, J
             candidate.post("/key/generate", {"object_permission": {"mcp_servers": [public, internal]}})["key"]
         )
         yield _ForwardedIpRig(
-            candidate, public, internal, key, public_peer, internal_peer, "pub" + suffix, "int" + suffix
+            candidate, public, internal, key, public_peer, internal_peer, "pub" + suffix, "int" + suffix, owned.log
         )
 
 
@@ -915,3 +930,30 @@ def test_trusted_hop_count_takes_the_client_from_a_load_balancer_chain_and_ignor
             rig.internal_peer,
         )
         _assert_external_rpc_view(rig, rig.candidate.client, "203.0.113.7")
+
+
+class _LogRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    level: str
+
+
+XFF_DISABLED_ADVISORY: Final = "X-Forwarded-For header but use_x_forwarded_for is not enabled"
+
+
+def _advisory_records(log: Path) -> tuple[_LogRecord, ...]:
+    return tuple(
+        _LogRecord.model_validate_json(line)
+        for line in log.read_text().splitlines()
+        if line.startswith("{") and XFF_DISABLED_ADVISORY in line
+    )
+
+
+def test_forwarded_header_with_use_x_forwarded_for_off_serves_the_call_and_advises_once_at_warning(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _forwarded_ip_rig(gateway, tmp_path, {"use_x_forwarded_for": False}, {"JSON_LOGS": "true"}) as rig:
+        for _ in range(2):
+            _assert_rpc_served(_rpc_server_call(rig.candidate.client, rig.key, "203.0.113.7", rig.public_alias))
+        records: Final = eventually(lambda: _advisory_records(rig.log), lambda found: len(found) > 0)
+    assert [record.level for record in records] == ["WARNING"], records
