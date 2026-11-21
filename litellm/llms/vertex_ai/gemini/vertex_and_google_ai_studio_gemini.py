@@ -27,7 +27,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason, normalize_drop_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -228,6 +228,52 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
+
+
+def _names_its_finish(candidate: Candidates) -> bool:
+    return (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+
+
+def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
+    content: Final = candidate.get("content")
+    return content.get("parts", ()) if content is not None else ()
+
+
+def _inline_image(part: HttpxPartType) -> ImageURLListItem | None:
+    inline_data: Final = part.get("inlineData", {})
+    mime_type: Final = inline_data.get("mimeType", "")
+    if not mime_type.startswith("image/"):
+        return None
+    return ImageURLListItem(
+        image_url=ImageURLObject(url=f"data:{mime_type};base64,{inline_data.get('data', '')}", detail="auto"),
+        index=0,
+        type="image_url",
+    )
+
+
+def _images_in(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return tuple(image for image in map(_inline_image, parts) if image is not None)
+
+
+def _final_images(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return _images_in(tuple(part for part in parts if part.get("thought") is not True))
+
+
+def _last_thought_image(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return _images_in(tuple(part for part in parts if part.get("thought") is True))[-1:]
+
+
+def _blocks_its_output(candidate: Candidates) -> bool:
+    reason: Final = candidate.get("finishReason")
+    return reason is not None and map_finish_reason(reason) == "content_filter"
+
+
+def _fallback_thought_image(candidate: Candidates) -> tuple[ImageURLListItem, ...]:
+    return () if _blocks_its_output(candidate) else _last_thought_image(_content_parts(candidate))
+
+
+def _with_delta_images(choice: "StreamingChoices", images: tuple[ImageURLListItem, ...]) -> "StreamingChoices":
+    return choice.model_copy(update={"delta": choice.delta.model_copy(update={"images": list(images)})})
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -1602,7 +1648,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         thinking_blocks: Final[list[ChatCompletionThinkingBlock]] = []
         for part in parts:
-            if part.get("thought") is True:
+            if part.get("thought") is True and "inlineData" not in part:
                 thinking_text = part.get("text", "")
                 block: ChatCompletionThinkingBlock = {
                     "type": "thinking",
@@ -1692,26 +1738,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             invocations.append(resp_entry)
 
         return invocations if invocations else None
-
-    def _extract_image_response_from_parts(self, parts: list[HttpxPartType]) -> list[ImageURLListItem] | None:
-        """Extract image response from parts if present"""
-        images: Final[list[ImageURLListItem]] = []
-        for part in parts:
-            if "inlineData" in part:
-                inline_data = part.get("inlineData", {})
-                mime_type = inline_data.get("mimeType", "")
-                data = inline_data.get("data", "")
-                if mime_type.startswith("image/"):
-                    # Convert base64 data to data URI format
-                    data_uri = f"data:{mime_type};base64,{data}"
-                    images.append(
-                        ImageURLListItem(
-                            image_url=ImageURLObject(url=data_uri, detail="auto"),
-                            index=0,
-                            type="image_url",
-                        )
-                    )
-        return images
 
     def _extract_audio_response_from_parts(self, parts: list[HttpxPartType]) -> ChatCompletionAudioResponse | None:
         """Extract audio response from parts if present"""
@@ -2518,8 +2544,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
                     parts=candidate["content"]["parts"]
                 )
-                image_response = VertexGeminiConfig()._extract_image_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                image_response = list(
+                    _final_images(candidate["content"]["parts"])
+                    if isinstance(model_response, ModelResponseStream)
+                    else _final_images(candidate["content"]["parts"]) or _fallback_thought_image(candidate)
                 )
 
                 thinking_blocks = VertexGeminiConfig()._extract_thinking_blocks_from_parts(
@@ -2539,9 +2567,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if audio_response is not None:
                     cast(dict[str, object], chat_completion_message)["audio"] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
-                if image_response is not None:
-                    # Handle image response - combine with text content into structured format
-                    cast(dict[str, object], chat_completion_message)["images"] = image_response
+                cast(dict[str, object], chat_completion_message)["images"] = image_response
                 if content is not None:
                     chat_completion_message["content"] = content
 
@@ -3542,6 +3568,8 @@ class ModelResponseIterator:
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
+        self._token_after_unsent_images: str | None = None
+        self._stream_end_after_unsent_images: Exception | None = None
         self._first_response_id: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
@@ -3550,6 +3578,8 @@ class ModelResponseIterator:
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
+        self._held_thought_images: Mapping[int, tuple[ImageURLListItem, ...]] = MappingProxyType({})
+        self._image_settled_indexes: frozenset[int] = frozenset()
 
     @property
     def accumulated_json(self) -> str:
@@ -3715,7 +3745,8 @@ class ModelResponseIterator:
             processed_chunk: Final = self._with_answer_offset(
                 self._with_usage_offset(GenerateContentResponseBody(**chunk))
             )
-            response_id: Final = self._first_response_id or processed_chunk.get("responseId")
+            self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
+            response_id: Final = self._first_response_id
             served: Final = _served_model_name(processed_chunk.get("modelVersion"))
             model_response = ModelResponseStream(
                 choices=[],
@@ -3752,9 +3783,11 @@ class ModelResponseIterator:
 
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
+            self._hold_thought_images(_candidates or ())
+            released_response: Final = self._release_held_thought_images(_candidates or (), model_response)
 
-            model_response.hidden_params["is_finished"] = False
-            return model_response
+            released_response.hidden_params["is_finished"] = False
+            return released_response
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
@@ -3776,6 +3809,82 @@ class ModelResponseIterator:
             return chunk
         return {**chunk, "candidates": [with_spans_shifted(candidates[0], self._answer_offset), *candidates[1:]]}
 
+    def _hold_thought_images(self, candidates: Sequence[Candidates]) -> None:
+        indexed_parts: Final = tuple(
+            (candidate.get("index", position), _content_parts(candidate))
+            for position, candidate in enumerate(candidates)
+        )
+        self._image_settled_indexes = self._image_settled_indexes | frozenset(
+            index for index, parts in indexed_parts if _final_images(parts)
+        )
+        self._held_thought_images = MappingProxyType(
+            {
+                **self._held_thought_images,
+                **{
+                    index: _last_thought_image(parts) or self._held_thought_images.get(index, ())
+                    for index, parts in indexed_parts
+                },
+            }
+        )
+
+    def _release_held_thought_images(
+        self, candidates: Sequence[Candidates], model_response: "ModelResponseStream"
+    ) -> "ModelResponseStream":
+        finishing: Final = MappingProxyType(
+            {
+                candidate.get("index", position): candidate
+                for position, candidate in enumerate(candidates)
+                if _names_its_finish(candidate)
+            }
+        )
+        settling: Final = frozenset(
+            choice.index
+            for choice in model_response.choices
+            if choice.index in finishing
+            and choice.finish_reason is not None
+            and choice.index not in self._image_settled_indexes
+        )
+        self._image_settled_indexes = self._image_settled_indexes | settling
+        released: Final = MappingProxyType(
+            {
+                index: held
+                for index in settling
+                if (held := self._held_thought_images.get(index)) and not _blocks_its_output(finishing[index])
+            }
+        )
+        if not released:
+            return model_response
+        return model_response.model_copy(
+            update={
+                "choices": [
+                    _with_delta_images(choice, released[choice.index]) if choice.index in released else choice
+                    for choice in model_response.choices
+                ]
+            }
+        )
+
+    def _take_unsent_thought_images(self) -> Mapping[int, tuple[ImageURLListItem, ...]]:
+        unsent: Final = MappingProxyType(
+            {
+                index: held
+                for index, held in self._held_thought_images.items()
+                if held and index not in self._image_settled_indexes
+            }
+        )
+        self._image_settled_indexes = self._image_settled_indexes | frozenset(unsent)
+        return unsent
+
+    def _unsent_thought_images_end(self) -> Optional["ModelResponseStream"]:
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        unsent: Final = self._take_unsent_thought_images()
+        if not unsent:
+            return None
+        return ModelResponseStream(
+            id=self._first_response_id,
+            choices=[StreamingChoices(index=index, delta=Delta(images=list(held))) for index, held in unsent.items()],
+        )
+
     def _plan_resume(self, processed_chunk: GenerateContentResponseBody, model_response: "ModelResponseStream") -> None:
         if self._output_cap is None:
             return
@@ -3788,7 +3897,6 @@ class ModelResponseIterator:
         if token is None:
             return
         self._pending_hop_token = token
-        self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
         for choice in model_response.choices:
             delta_fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
             choice.finish_reason = None
@@ -3812,6 +3920,9 @@ class ModelResponseIterator:
     def _truncated_stream_end(self, token: str) -> "ModelResponseStream":
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
+        if (images_end := self._unsent_thought_images_end()) is not None:
+            self._token_after_unsent_images = token
+            return images_end
         return ModelResponseStream(
             id=self._first_response_id,
             choices=[
@@ -3822,6 +3933,27 @@ class ModelResponseIterator:
                 )
             ],
         )
+
+    def _end_after_unsent_images(self) -> Optional["ModelResponseStream"]:
+        token: Final = self._token_after_unsent_images
+        if token is None:
+            return None
+        self._token_after_unsent_images = None
+        return self._truncated_stream_end(token)
+
+    def _unsent_thought_images_before(self, stream_end: Exception) -> "ModelResponseStream":
+        images_end: Final = self._unsent_thought_images_end()
+        if images_end is None:
+            raise stream_end
+        self._stream_end_after_unsent_images = stream_end
+        return images_end
+
+    def _raise_after_unsent_images(self) -> None:
+        stream_end: Final = self._stream_end_after_unsent_images
+        if stream_end is None:
+            return
+        self._stream_end_after_unsent_images = None
+        raise stream_end
 
     def _end_of_unanswered_hop(
         self, reason: Exception | str = "the continuation stream ended without a readable frame"
@@ -3930,13 +4062,18 @@ class ModelResponseIterator:
             raise
 
     def __next__(self) -> Optional["ModelResponseStream"]:
+        if (end_after_images := self._end_after_unsent_images()) is not None:
+            return end_after_images
+        self._raise_after_unsent_images()
         try:
             return self._next_chunk()
         except HOP_FAILURES as e:
             if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
+                return self._unsent_thought_images_before(e)
             self.close()
             return unanswered_end
+        except (StopIteration, RuntimeError) as e:
+            return self._unsent_thought_images_before(e)
 
     def _next_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
@@ -3971,13 +4108,18 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self) -> Optional["ModelResponseStream"]:
+        if (end_after_images := self._end_after_unsent_images()) is not None:
+            return end_after_images
+        self._raise_after_unsent_images()
         try:
             return await self._anext_chunk()
         except HOP_FAILURES as e:
             if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
+                return self._unsent_thought_images_before(e)
             await self.aclose()
             return unanswered_end
+        except (StopAsyncIteration, RuntimeError) as e:
+            return self._unsent_thought_images_before(e)
 
     async def _anext_chunk(self) -> Optional["ModelResponseStream"]:
         while True:

@@ -50,6 +50,7 @@ import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
 import qwenLogo from "../../public/assets/logos/qwen.png";
 import recraftLogo from "../../public/assets/logos/recraft.svg";
 import replicateLogo from "../../public/assets/logos/replicate.svg";
+import resetdataLogo from "../../public/assets/logos/resetdata.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
@@ -166,6 +167,7 @@ export enum Providers {
   QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
   REPLICATE = "Replicate",
+  RESETDATA = "ResetData",
   RunwayML = "RunwayML",
   SAGEMAKER_LEGACY = "Sagemaker",
   Sail = "Sail",
@@ -291,6 +293,7 @@ export const provider_map: Record<string, string> = {
   QwenCloud: "qwencloud",
   RECRAFT: "recraft",
   REPLICATE: "replicate",
+  RESETDATA: "resetdata",
   RunwayML: "runwayml",
   SAGEMAKER_LEGACY: "sagemaker",
   SageMaker: "sagemaker_chat",
@@ -399,6 +402,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.QwenCloud]: qwenLogo.src,
   [Providers.RECRAFT]: recraftLogo.src,
   [Providers.REPLICATE]: replicateLogo.src,
+  [Providers.RESETDATA]: resetdataLogo.src,
   [Providers.RunwayML]: runwayLogo.src,
   [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
   [Providers.Sambanova]: sambanovaLogo.src,
@@ -490,6 +494,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Voyage]: "voyage/",
   [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
   [Providers.ZAI]: "zai/glm-4.5",
+  [Providers.RESETDATA]: "resetdata/zai/glm-5.3",
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {
