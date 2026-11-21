@@ -1178,12 +1178,32 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
 
 
+@pytest.mark.parametrize(
+    ("api_base", "model_params", "message"),
+    [
+        pytest.param(
+            None,
+            {"model": "elevenlabs/scribe_v2_realtime", "vad_threshold": -1},
+            "Invalid ElevenLabs realtime options",
+            id="options",
+        ),
+        pytest.param(
+            "ws://127.0.0.1:1",
+            {"model": "elevenlabs/scribe_v2_realtime"},
+            "ElevenLabs api_base must be an absolute wss://",
+            id="api_base",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_elevenlabs_realtime_health_check_validates_the_deployment_options_before_connecting():
-    with pytest.raises(ValueError, match="Invalid ElevenLabs realtime options"):
+async def test_elevenlabs_realtime_health_check_passes_the_deployment_settings_to_the_probe_before_connecting(
+    api_base: str | None, model_params: dict[str, object], message: str
+):
+    with pytest.raises(ValueError, match=message):
         await realtime_main.realtime_health_check(
             model="scribe_v2_realtime",
             custom_llm_provider="elevenlabs",
             api_key="elevenlabs-key",
-            model_params={"model": "elevenlabs/scribe_v2_realtime", "vad_threshold": -1},
+            api_base=api_base,
+            model_params=model_params,
         )

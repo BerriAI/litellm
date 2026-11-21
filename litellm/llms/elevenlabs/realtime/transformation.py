@@ -259,11 +259,11 @@ def _new_words(emitted: str, words: tuple[str, ...]) -> str:
 
 
 def _new_text(emitted: str, previous: str | None, text: str) -> str:
-    if any(char.isspace() for char in text):
+    if text.isascii() or any(char.isspace() for char in text):
         return _new_words(emitted, tuple(text.split()[:-1]))
     if previous is None:
         return ""
-    stable: Final = os.path.commonprefix((previous, text))
+    stable: Final = os.path.commonprefix((previous, text))[: len(text) - 1]
     return stable[len(emitted) :] if stable.startswith(emitted) else ""
 
 
@@ -526,12 +526,17 @@ async def elevenlabs_realtime_health_check(
     options: ElevenLabsRealtimeOptions,
     *,
     connect: RealtimeConnect = open_realtime_websocket,
+    start_timeout: float = OPEN_TIMEOUT_SECONDS,
 ) -> bool:
     config: Final = ElevenLabsRealtimeConfig()
     url: Final = config.get_complete_url(api_base, model)
     headers: Final = config.validate_environment({}, model, api_key)
     backend: Final = await connect(f"{url}?{default_session_config(options).query()}", headers)
     try:
-        return await asyncio.wait_for(_session_start_outcome(backend), OPEN_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(_session_start_outcome(backend), start_timeout)
+    except asyncio.TimeoutError:
+        raise ElevenLabsException(
+            status_code=504, message="ElevenLabs did not start the realtime session in time"
+        ) from None
     finally:
         await backend.close()
