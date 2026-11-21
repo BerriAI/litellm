@@ -1,10 +1,13 @@
+import base64
 import json
 import logging
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -70,23 +73,102 @@ def test_auto_router_capability_limit() -> None:
 
 
 def _signed_license(
-    expiration_date: str, allowed_features: tuple[str, ...] = ("auto_router",)
+    expiration_date: str,
+    allowed_features: tuple[str, ...] = ("auto_router",),
+    *,
+    user_id: str = "u",
+    key_size: int = 2048,
 ) -> tuple[RSAPublicKey, str]:
-    import base64
-
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    message = json.dumps(
-        {"expiration_date": expiration_date, "user_id": "u", "allowed_features": list(allowed_features)}
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
+    message: Final = json.dumps(
+        {"expiration_date": expiration_date, "user_id": user_id, "allowed_features": list(allowed_features)}
     ).encode()
-    signature = private_key.sign(
+    signature: Final = private_key.sign(
         message,
         padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
         hashes.SHA256(),
     )
     return private_key.public_key(), base64.b64encode(message + b"." + signature).decode()
+
+
+@pytest.mark.parametrize("key_size", [2048, 2050, 3072])
+@pytest.mark.parametrize(
+    ("user_id", "omit_padding"),
+    [("u", False), ("qa.example.test", False), ("user@qa.example.test", True)],
+)
+def test_offline_license_preserves_dotted_user_ids(key_size: int, user_id: str, omit_padding: bool) -> None:
+    public_key, signed_key = _signed_license("2999-01-01", user_id=user_id, key_size=key_size)
+    license_key: Final = signed_key.rstrip("=") if omit_padding else signed_key
+    license_check: Final = LicenseCheck()
+
+    assert license_check.verify_license_without_api_request(public_key, license_key) is True
+    assert license_check.airgapped_license_data == {
+        "expiration_date": "2999-01-01",
+        "user_id": user_id,
+        "allowed_features": ["auto_router"],
+    }
+
+
+def test_offline_license_accepts_dot_bytes_inside_the_rsa_signature() -> None:
+    public_key: Final = serialization.load_pem_public_key(
+        b"""-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz8McedOGZ4LV1b7Pyqn0
+U2/LjBgKDiI+RPDC2fuP1ZGO5FWay/uxq2vb1foUde5W7+EXEpWsbRP18dWzJXXo
+/QWm0VOEHyfK9JPHtblShLK/6MpsEif9ck+iGVoirJz7DhyY4U8PzzHu7TUbivt7
+6LR+ntT1xBtMbZVuVPGclpF/qhwi1hcZaYodzJjdpLvnpl21w4CVtPRHGY6dKgs7
+BFRzfxIXqbPReJlUQsDxNfZryKMtTAwnK9veiQMFrBNaA0DmCFmGc34jq671RLqh
+P/pZAoERnJiRvqXEkSfioFjfahT6y+m/L/Feb4phpvlYHWF/dM9m7Lechagg7mWU
+2wIDAQAB
+-----END PUBLIC KEY-----
+"""
+    )
+    message: Final = b'{"expiration_date":"2999-01-01","user_id":"u"}'
+    signature: Final = base64.b64decode(
+        "QwLSziyXpGpf95yT9lp2/L5qq6r9laCKV/IIxbMuciWuLT32a2wqi1118ZxwC54WMVNU51aF9LUfEIx1tr+yriEb09qzQvHNM6bx41agflZ/"
+        "NPbQoIBTjtRbZVc3RqupJmMb0F2mkwATA3lHqLAJ6EEATprnvOuMN8T0ucqBiQqk7FYGQ4spAxPsw/9IEBECfEV0VQX/PujIqJP7gu9qZ2eqI"
+        "+tZLYjx3RfzebRpMfH1/3DpCimDIVs3p7dpSlAfqnv9NXfL20WYVOIVAOIDKto9Not3Ivwq/bgjY2QBFY5CkHvLCe5BIWzWejHIyCHaryqsphUkFx"
+        "+C7Ekmkgkvig=="
+    )
+    license_key: Final = base64.b64encode(message + b"." + signature).decode()
+    license_check: Final = LicenseCheck()
+
+    assert b"." in signature
+    assert license_check.verify_license_without_api_request(public_key, license_key) is True
+    assert license_check.airgapped_license_data == {"expiration_date": "2999-01-01", "user_id": "u"}
+
+
+@pytest.mark.parametrize("corruption", ["separator", "truncated", "appended", "payload", "signature"])
+def test_offline_license_rejects_corruption_and_clears_prior_grants(corruption: str) -> None:
+    public_key, license_key = _signed_license("2999-01-01")
+    decoded: Final = base64.b64decode(license_key)
+    corrupted: Final = MappingProxyType(
+        {
+            "separator": decoded.replace(b".", b"!", 1),
+            "truncated": decoded[:-1],
+            "appended": decoded + b"!",
+            "payload": decoded.replace(b'"u"', b'"v"', 1),
+            "signature": decoded[:-1] + bytes([decoded[-1] ^ 1]),
+        }
+    )[corruption]
+    invalid_key: Final = base64.b64encode(corrupted).decode()
+    license_check: Final = LicenseCheck()
+    assert license_check.verify_license_without_api_request(public_key, license_key) is True
+
+    assert license_check.verify_license_without_api_request(public_key, invalid_key) is False
+    assert license_check.airgapped_license_data is None
+    assert license_check.auto_router_capability_limit() == 1
+
+
+def test_offline_license_without_a_public_key_clears_prior_grants() -> None:
+    public_key, license_key = _signed_license("2999-01-01")
+    license_check: Final = LicenseCheck()
+    assert license_check.verify_license_without_api_request(public_key, license_key) is True
+
+    assert license_check.verify_license_without_api_request(None, license_key) is False
+    assert license_check.airgapped_license_data is None
 
 
 def test_expired_or_unreadable_license_grants_no_features() -> None:
@@ -270,7 +352,7 @@ def test_local_license_exception_does_not_log_license(
     license_logs: pytest.LogCaptureFixture,
 ) -> None:
     _public_key, license_value = _signed_license("2999-01-01")
-    failing_public_key: Final = MagicMock()
+    failing_public_key: Final = MagicMock(spec=RSAPublicKey, key_size=_public_key.key_size)
     failing_public_key.verify.side_effect = ValueError(license_value)
     license_check: Final = LicenseCheck()
     assert license_check.verify_license_without_api_request(failing_public_key, license_value) is False
