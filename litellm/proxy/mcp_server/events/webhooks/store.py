@@ -72,6 +72,7 @@ class SubscriptionQuery(BaseModel):
     key_hash: str | None = None
     server_id: str | None = None
     status: SubscriptionStatus | None = None
+    live_only: bool = False
     limit: int = Field(default=100, ge=1, le=1000)
 
 
@@ -274,8 +275,9 @@ class PrismaEventStore:
             )
             if value is not None
         }
+        live: Final = {"status": {"in": list(LIVE_STATUSES)}} if query.live_only and query.status is None else {}
         records: Final = await self._subscriptions.find_many(
-            where=where, take=query.limit, order={"created_at": "desc"}
+            where={**where, **live}, take=query.limit, order={"created_at": "desc"}
         )
         return tuple(_row_from_record(record) for record in records)
 

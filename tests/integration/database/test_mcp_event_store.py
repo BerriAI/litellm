@@ -12,6 +12,7 @@ from litellm.proxy.mcp_server.events.webhooks.store import (
     Activation,
     PrismaEventStore,
     QueuedDelivery,
+    SubscriptionQuery,
     SubscriptionRow,
 )
 from tests.integration._support.prisma_clients import connected_proxy_prisma
@@ -197,3 +198,16 @@ async def test_a_prepared_delivery_is_claimed_with_its_built_body() -> None:
         ]
         assert (claimed.prepared, claimed.webhook_id, claimed.attempt) == (True, "msg_built", 1)
         await store.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_a_live_only_query_skips_terminated_rows() -> None:
+    async with _connected() as store:
+        live: Final = await _active(store)
+        ended: Final = await _active(store)
+        await store.terminate(ended.id)
+        found: Final = await store.find(SubscriptionQuery(key_hash="abc", live_only=True, limit=1000))
+        ids: Final = {row.id for row in found}
+        assert live.id in ids and ended.id not in ids
+        await store.delete(live.id)
+        await store.delete(ended.id)

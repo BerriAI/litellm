@@ -98,6 +98,7 @@ class MemoryStore:
             and (query.key_hash is None or row.key_hash == query.key_hash)
             and (query.server_id is None or row.server_id == query.server_id)
             and (query.status is None or row.status == query.status)
+            and (not query.live_only or row.status in LIVE_STATUSES)
         )
 
     async def due_for_upstream_refresh(self, before: datetime) -> tuple[SubscriptionRow, ...]:

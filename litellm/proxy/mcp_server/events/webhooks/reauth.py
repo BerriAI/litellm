@@ -81,12 +81,18 @@ async def stored_caller(row: SubscriptionRow) -> Reauthorization:
     if _key_revoked(key):
         return Revoked("key")
     try:
-        return Authorized(await with_team_org(key, _team_org))
+        return await with_team(key, _team_facts)
     except Exception as error:  # noqa: BLE001  # a transient lookup failure delays delivery instead of ending the subscription
         return Unavailable(str(error))
 
 
-async def _team_org(team_id: str) -> str | None:
+@dataclass(frozen=True, slots=True)
+class TeamFacts:
+    org_id: str | None
+    blocked: bool
+
+
+async def _team_facts(team_id: str) -> TeamFacts:
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
@@ -97,15 +103,19 @@ async def _team_org(team_id: str) -> str | None:
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=True,
     )
-    return team.organization_id
+    return TeamFacts(org_id=team.organization_id, blocked=bool(team.blocked))
 
 
-async def with_team_org(key: UserAPIKeyAuth, team_org: Callable[[str], Awaitable[str | None]]) -> UserAPIKeyAuth:
-    """The org ceiling a request would apply: the key's own org, else its team's, as the request path inherits it."""
-    if key.org_id is not None or key.team_id is None:
-        return key
-    org_id: Final = await team_org(key.team_id)
-    return key.model_copy(update={"org_id": org_id}) if org_id is not None else key
+async def with_team(key: UserAPIKeyAuth, team_facts: Callable[[str], Awaitable[TeamFacts]]) -> Reauthorization:
+    """Authorize a stored key the way a request would: refused while its team is blocked, under the team's org
+    when the key has none, and with permissions read fresh rather than from the cache."""
+    facts: Final = await team_facts(key.team_id) if key.team_id is not None else None
+    if facts is not None and facts.blocked:
+        return Revoked("team")
+    org_id: Final = key.org_id or (facts.org_id if facts is not None else None)
+    fresh: Final = key.model_copy(update={"org_id": org_id})
+    fresh.requires_fresh_policy = True
+    return Authorized(fresh)
 
 
 async def authorize_row(

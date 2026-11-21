@@ -149,7 +149,7 @@ async def terminate_key_subscriptions(
         return
     for token in (item for item in token_hashes if item):
         try:
-            rows = await services.store.find(SubscriptionQuery(key_hash=token, limit=1000))
+            rows = await services.store.find(SubscriptionQuery(key_hash=token, live_only=True, limit=1000))
             for row in rows:
                 await terminate_subscription(row, forbidden("Key revoked"), services, notify=notify)
         except Exception as error:  # noqa: BLE001  # key lifecycle must not fail on event cleanup; deliveries re-authorize anyway

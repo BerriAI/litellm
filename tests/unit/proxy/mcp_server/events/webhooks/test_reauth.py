@@ -13,7 +13,8 @@ from litellm.proxy.mcp_server.events.webhooks.reauth import (
     Unavailable,
     _key_revoked,  # pyright: ignore[reportPrivateUsage]  # the key-state rule is the unit under test
     admitted_user,
-    with_team_org,
+    TeamFacts,
+    with_team,
     authorize_row,
 )
 from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow
@@ -126,8 +127,10 @@ async def test_a_keyless_subscription_follows_the_live_user(
     assert await admitted_user("u-1", reload) == expected
 
 
-async def _team_in_org(team_id: str) -> str | None:
-    return {"team-1": "org-1"}.get(team_id)
+async def _team(team_id: str) -> TeamFacts:
+    return {"team-1": TeamFacts("org-1", False), "team-blocked": TeamFacts(None, True)}.get(
+        team_id, TeamFacts(None, False)
+    )
 
 
 @pytest.mark.parametrize(
@@ -135,9 +138,17 @@ async def _team_in_org(team_id: str) -> str | None:
     (
         (UserAPIKeyAuth(api_key="sk-a", team_id="team-1"), "org-1"),
         (UserAPIKeyAuth(api_key="sk-a", team_id="team-1", org_id="org-own"), "org-own"),
-        (UserAPIKeyAuth(api_key="sk-a", team_id="team-none"), None),
+        (UserAPIKeyAuth(api_key="sk-a", team_id="team-other"), None),
         (UserAPIKeyAuth(api_key="sk-a"), None),
     ),
 )
-async def test_a_stored_key_gets_the_org_ceiling_its_requests_get(key: UserAPIKeyAuth, org: str | None) -> None:
-    assert (await with_team_org(key, _team_in_org)).org_id == org
+async def test_a_stored_key_gets_the_org_ceiling_and_fresh_policy_its_requests_get(
+    key: UserAPIKeyAuth, org: str | None
+) -> None:
+    outcome: Final = await with_team(key, _team)
+    assert isinstance(outcome, Authorized)
+    assert (outcome.caller.org_id, outcome.caller.requires_fresh_policy) == (org, True)
+
+
+async def test_a_key_on_a_blocked_team_stops_receiving() -> None:
+    assert await with_team(UserAPIKeyAuth(api_key="sk-a", team_id="team-blocked"), _team) == Revoked("team")
