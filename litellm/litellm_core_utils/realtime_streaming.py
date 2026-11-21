@@ -1250,7 +1250,12 @@ class RealTimeStreaming:
         self._held_client_content_bytes = 0
         self._held_client_content_deadline = None
         for message in held:
-            await self._send_to_backend(message)
+            # Gemini Live drops content received before setupComplete, so a deferred
+            # setup keeps it with the other pending frames
+            if self._should_buffer_client_message_until_setup(message):
+                self._buffer_pending_message_until_setup(message)
+            else:
+                await self._send_to_backend(message)
 
     def _setup_deadline(self) -> float:
         content_deadline: Final = self._held_client_content_deadline
@@ -1412,7 +1417,9 @@ class RealTimeStreaming:
             msg_obj: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return False
-        return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
+        # Gemini Live drops any frame received between setup and setupComplete; a video
+        # (avatar) setup takes long enough for the first content to lose that race
+        return msg_obj.get("type") != "session.update"
 
     def _buffer_pending_message_until_setup(self, message: str) -> None:
         try:

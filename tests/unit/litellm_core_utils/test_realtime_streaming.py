@@ -3396,6 +3396,9 @@ async def test_a_session_update_between_the_first_items_and_response_create_join
     )
 
     await streaming.client_ack_messages()
+    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -3510,6 +3513,9 @@ async def test_deferred_setup_merges_session_updates_until_the_first_content(mon
     )
 
     await streaming.client_ack_messages()
+    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -3542,6 +3548,9 @@ async def test_deferred_setup_sends_the_default_setup_before_text_content_that_c
     )
 
     await streaming.client_ack_messages()
+    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -3582,6 +3591,9 @@ async def test_a_transcription_guardrail_refuses_gemini_audio_it_cannot_screen(m
     )
 
     await streaming.client_ack_messages()
+    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
@@ -3607,12 +3619,37 @@ async def test_a_control_event_before_session_update_leaves_the_setup_open(monke
     )
 
     await streaming.client_ack_messages()
+    # Gemini drops frames sent before setupComplete, so everything but the setup waits for it
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
     assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert [event["type"] for event in _events_sent_to_client(streaming) if event["type"] == "error"] == []
 
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_holds_every_client_frame_until_backend_setup_complete(monkeypatch):
+    """A client frame that reaches Gemini Live between the setup and its setupComplete is
+    answered with the text "Error: Session is not set up yet" and dropped; a Live Avatar
+    (video) setup is slow enough for the first item to lose that race every time. Only the
+    session.update that triggers the setup may pass; items, triggers and audio wait."""
+    session_update: Final = json.dumps({"type": "session.update", "session": {"modalities": ["audio"]}})
+    trigger: Final = json.dumps({"type": "response.create"})
+    audio: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [session_update, _TEXT_ITEM_CREATE, trigger, audio], model="gemini-3.8-live", defer_setup=True
+    )
+
+    await streaming.client_ack_messages()
+
+    assert [next(iter(json.loads(call.args[0]))) for call in backend_ws.send.await_args_list] == ["setup"]
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
+    sent_after: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list[1:]]
+    assert [next(iter(frame)) for frame in sent_after] == ["clientContent", "realtimeInput"]
 
 @pytest.mark.asyncio
 async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeypatch):

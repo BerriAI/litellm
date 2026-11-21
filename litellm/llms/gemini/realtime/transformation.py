@@ -16,6 +16,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.realtime.transcription_protocol import new_event_id
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
@@ -39,6 +40,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeEventTypes,
     OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeOutputItemDone,
+    OpenAIRealtimeOutputVideoDelta,
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeResponseDelta,
@@ -56,6 +58,7 @@ from litellm.types.llms.vertex_ai import (
     GeminiResponseModalities,
     HttpxBlobType,
     HttpxContentType,
+    HttpxPartType,
 )
 from litellm.types.realtime import (
     ALL_DELTA_TYPES,
@@ -79,6 +82,8 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
 _GEMINI_LIVE_RESPONSE_MODALITIES: Final = frozenset({"TEXT", "AUDIO"})
+# a Live Avatar session (avatarConfig) answers in VIDEO, which carries the audio too
+_GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES: Final = _GEMINI_LIVE_RESPONSE_MODALITIES | {"VIDEO"}
 
 
 OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
@@ -120,6 +125,15 @@ GEMINI_LIVE_DOCUMENTED_VOICES: Final[frozenset[str]] = frozenset(
         "zubenelgenubi",
     }
 )
+
+_GENERATION_CONFIG_SCALARS: Final[Mapping[str, str]] = {
+    "temperature": "temperature",
+    "max_response_output_tokens": "maxOutputTokens",
+}
+_AVATAR_CONFIG_KEYS: Final[Mapping[str, str]] = {
+    "avatar": "avatarName",
+    "avatar_video_bitrate_bps": "videoBitrateBps",
+}
 
 
 def _is_undocumented_live_voice(voice: object) -> bool:
@@ -315,7 +329,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if "parts" in model_turn:
             parts: Final = model_turn["parts"]
             if len(parts) != 1:
-                verbose_logger.warning("Realtime: Expected 1 part, got %s for Gemini model turn event.", len(parts))
+                verbose_logger.debug("Realtime: Expected 1 part, got %s for Gemini model turn event.", len(parts))
             part: Final = parts[0]
             if "text" in part:
                 return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
@@ -414,6 +428,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "input_audio_transcription",
             "turn_detection",
             "voice",
+            "avatar",
+            "avatar_video_bitrate_bps",
+            "avatar_video_bitrate_bps",
         ]
 
     def map_openai_params(self, optional_params: dict, non_default_params: dict, *, model: str) -> dict:
@@ -422,10 +439,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         for key, value in non_default_params.items():
             if key == "instructions":
                 optional_params["systemInstruction"] = HttpxContentType(role="user", parts=[{"text": value}])
-            elif key == "temperature":
-                optional_params["generationConfig"]["temperature"] = value
-            elif key == "max_response_output_tokens" and isinstance(value, int):
-                optional_params["generationConfig"]["maxOutputTokens"] = value
+            elif key in _GENERATION_CONFIG_SCALARS and (key != "max_response_output_tokens" or isinstance(value, int)):
+                optional_params["generationConfig"][_GENERATION_CONFIG_SCALARS[key]] = value
             elif key == "modalities":
                 optional_params["generationConfig"]["responseModalities"] = list(
                     GeminiRealtimeConfig._requested_response_modalities(cast(object, value))
@@ -453,6 +468,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
+            elif key in _AVATAR_CONFIG_KEYS and value:
+                optional_params.setdefault("avatarConfig", {})[_AVATAR_CONFIG_KEYS[key]] = value
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
         return optional_params
@@ -565,8 +582,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return tuple(str(modality).upper() for modality in _JSON_ARRAY.validate_python(value))
 
     @staticmethod
-    def _unsupported_response_modalities(model: str, requested: tuple[str, ...]) -> tuple[str, ...]:
-        unknown: Final = tuple(modality for modality in requested if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES)
+    def _unsupported_response_modalities(
+        model: str, requested: tuple[str, ...], producible: frozenset[str] = _GEMINI_LIVE_RESPONSE_MODALITIES
+    ) -> tuple[str, ...]:
+        unknown: Final = tuple(modality for modality in requested if modality not in producible)
         if unknown:
             return unknown
         if GeminiRealtimeConfig._is_audio_only_live_model(model) and frozenset(requested) == frozenset(("TEXT",)):
@@ -596,7 +615,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def _modality_rejection(model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
         param: Final = "output_modalities" if "output_modalities" in session else "modalities"
         unsupported: Final = GeminiRealtimeConfig._unsupported_response_modalities(
-            model, GeminiRealtimeConfig._requested_response_modalities(session.get(param))
+            model,
+            GeminiRealtimeConfig._requested_response_modalities(session.get(param)),
+            _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES if session.get("avatar") else _GEMINI_LIVE_RESPONSE_MODALITIES,
         )
         if not unsupported:
             return None
@@ -626,26 +647,31 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
 
     @staticmethod
-    def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+    def _coerce_response_modalities(
+        model: str, modalities: Sequence[object], producible: frozenset[str] = _GEMINI_LIVE_RESPONSE_MODALITIES
+    ) -> tuple[str, ...]:
         """Drop modalities Gemini Live cannot produce at all, swap the ones this
         model cannot (TEXT to AUDIO for audio-only models, AUDIO to TEXT for
         text-only ones such as transcribe-live), then keep a single modality
         because Gemini Live rejects a setup naming two."""
         return GeminiRealtimeConfig._single_response_modality(
             GeminiRealtimeConfig._swap_unsupported_response_modalities(
-                model, GeminiRealtimeConfig._known_response_modalities(model, modalities)
+                model, GeminiRealtimeConfig._known_response_modalities(model, modalities, producible)
             )
         )
 
     @staticmethod
-    def _known_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+    def _known_response_modalities(
+        model: str, modalities: Sequence[object], producible: frozenset[str] = _GEMINI_LIVE_RESPONSE_MODALITIES
+    ) -> tuple[str, ...]:
         normalized: Final = tuple(str(modality).upper() for modality in modalities)
-        known: Final = tuple(modality for modality in normalized if modality in _GEMINI_LIVE_RESPONSE_MODALITIES)
+        known: Final = tuple(modality for modality in normalized if modality in producible)
         if len(known) < len(normalized):
             verbose_logger.warning(
-                "Gemini Live: %s only produces TEXT or AUDIO; ignoring the requested %s",
+                "Gemini Live: %s only produces %s here; ignoring the requested %s",
                 model,
-                ", ".join(modality for modality in normalized if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES),
+                " or ".join(sorted(producible)),
+                ", ".join(modality for modality in normalized if modality not in producible),
             )
         return known or (GeminiRealtimeConfig._default_response_modality(model),)
 
@@ -665,7 +691,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def _single_response_modality(modalities: tuple[str, ...]) -> tuple[str, ...]:
         if len(modalities) <= 1:
             return modalities
-        chosen: Final = "AUDIO" if "AUDIO" in modalities else modalities[0]
+        chosen: Final = next((preferred for preferred in ("VIDEO", "AUDIO") if preferred in modalities), modalities[0])
         verbose_logger.warning(
             "Gemini Live: at most one response modality is allowed per session; using %s for the requested %s",
             chosen,
@@ -680,7 +706,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             modalities: Final = generation_config.get("responseModalities")
             if isinstance(modalities, list):
                 generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
-                    model, modalities
+                    model,
+                    modalities,
+                    _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES
+                    if setup.get("avatarConfig")
+                    else _GEMINI_LIVE_RESPONSE_MODALITIES,
                 )
         return setup
 
@@ -1019,7 +1049,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 for part in message["modelTurn"]["parts"]:
                     if "text" in part:
                         delta += part["text"]
-                    elif "inlineData" in part:
+                    elif "inlineData" in part and self._video_mime_type(part) is None:
                         delta += part["inlineData"].get("data", "")
         except Exception as e:
             raise ValueError(f"Error transforming content delta events: {e}, got message: {message}")
@@ -1033,6 +1063,45 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             response_id=response_id,
             delta=delta,
         )
+
+    @staticmethod
+    def _video_mime_type(part: HttpxPartType) -> str | None:
+        inline_data: Final = part.get("inlineData")
+        mime_type: Final = inline_data.get("mimeType") if inline_data else None
+        return mime_type if mime_type is not None and mime_type.startswith("video/") else None
+
+    @staticmethod
+    def _model_turn_parts(server_content: BidiGenerateContentServerContent) -> Sequence[HttpxPartType]:
+        return server_content["modelTurn"].get("parts", []) if "modelTurn" in server_content else []
+
+    def _video_delta(
+        self, part: HttpxPartType, output_item_id: str | None, response_id: str | None
+    ) -> OpenAIRealtimeOutputVideoDelta | None:
+        mime_type: Final = self._video_mime_type(part)
+        if mime_type is None:
+            return None
+        inline_data: Final = part.get("inlineData")
+        return {
+            "type": "response.output_video.delta",
+            "event_id": new_event_id(),
+            "response_id": response_id,
+            "item_id": output_item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "mime_type": mime_type,
+            "delta": inline_data.get("data", "") if inline_data else "",
+        }
+
+    def transform_video_delta_events(
+        self,
+        parts: Sequence[HttpxPartType],
+        output_item_id: str | None,
+        response_id: str | None,
+    ) -> Sequence[OpenAIRealtimeOutputVideoDelta]:
+        """Each video/* inlineData part (a fragmented MP4 chunk) becomes one
+        response.output_video.delta; the audio and item done events close the item."""
+        deltas: Final = (self._video_delta(part, output_item_id, response_id) for part in parts)
+        return [delta for delta in deltas if delta is not None]
 
     def transform_content_done_event(
         self,
@@ -1296,6 +1365,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             _chat_completion_usage,
         )
         _usage_dict: Final = responses_api_usage.model_dump()
+        # the responses usage conversion drops video output tokens
+        _video_tokens: Final = getattr(
+            getattr(_chat_completion_usage, "completion_tokens_details", None), "video_tokens", None
+        )
+        if _video_tokens:
+            _usage_dict.setdefault("output_tokens_details", {})["video_tokens"] = _video_tokens
         self._add_pipecat_usage_detail_aliases(_usage_dict)
         response_done_event: Final = OpenAIRealtimeDoneEvent(
             type="response.done",
@@ -1350,13 +1425,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
 
             # send the list of standard 'new' content.delta events
+            server_content: Final = BidiGenerateContentServerContent(**json_message["serverContent"])
             transformed_message: Final = self.transform_content_delta_events(
-                BidiGenerateContentServerContent(**json_message["serverContent"]),
+                server_content,
                 current_output_item_id,
                 current_response_id,
                 delta_type=delta_type,
             )
-            returned_message.append(transformed_message)
+            video_events: Final = self.transform_video_delta_events(
+                server_content["modelTurn"].get("parts", []) if "modelTurn" in server_content else [],
+                current_output_item_id,
+                current_response_id,
+            )
+            if transformed_message["delta"] or not video_events:
+                returned_message.append(transformed_message)
+            returned_message.extend(video_events)
         elif (
             openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
             or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
@@ -1508,6 +1591,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         server_content: Final = json_message.get("serverContent")
         if isinstance(server_content, dict):
+            # Live Avatar video flows continuously, outside any turn: a video-only model
+            # turn must not open a response; the spoken turn is opened by its transcript
+            _avatar_parts: Final = self._model_turn_parts(
+                cast(BidiGenerateContentServerContent, server_content)  # cast-ok: a serverContent frame
+            )
+            if _avatar_parts and all(self._video_mime_type(part) is not None for part in _avatar_parts):
+                returned_message.extend(
+                    self.transform_video_delta_events(_avatar_parts, current_output_item_id, current_response_id)
+                )
+                del server_content["modelTurn"]
             input_tx: Final = server_content.get("inputTranscription")
             if isinstance(input_tx, dict) and input_tx.get("text"):
                 transcription_usage: Final = self._consume_input_transcription_usage_estimate(model)
@@ -1516,7 +1609,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         OpenAIRealtimeEvents,
                         {
                             "type": "conversation.item.input_audio_transcription.completed",
-                            "event_id": f"event_{uuid.uuid4()}",
+                            "event_id": new_event_id(),
                             "transcript": input_tx["text"],
                             "item_id": f"item_{uuid.uuid4()}",
                             "content_index": 0,
