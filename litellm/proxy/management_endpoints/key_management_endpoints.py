@@ -998,6 +998,7 @@ def raise_on_invalid_key_expiry_alert_days(metadata: Mapping[str, object] | None
 
 
 def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None:
+    """Every key metadata check that rejects a write: logging config and expiry alert days."""
     raise_on_invalid_key_logging_config(metadata)
     raise_on_invalid_key_expiry_alert_days(metadata)
     validate_required_customer_headers_metadata(metadata)
@@ -3231,7 +3232,7 @@ async def _check_customer_header_team_change(
         user_api_key_cache=user_api_key_cache,
         check_db_only=True,
     )
-    metadata: Final = _METADATA_OBJECT.validate_python(team.metadata or {})
+    metadata: Final = _METADATA_OBJECT.validate_python(getattr(team, "metadata", None) or {})
     required: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING)
     if required is not None and REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(required):
         raise HTTPException(
@@ -3249,14 +3250,6 @@ async def prepare_key_update_data(
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     if user_api_key_dict is not None:
-        enforce_batch_limits_are_admin_only(
-            data=data,
-            existing_metadata=_METADATA_OBJECT.validate_python(
-                _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata or {}
-            ),
-            user_api_key_dict=user_api_key_dict,
-            entity="key",
-        )
         await _check_customer_header_team_change(data, existing_key_row, user_api_key_dict, prisma_client)
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
@@ -3583,6 +3576,12 @@ async def _process_single_key_update(
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
 
+    enforce_batch_limits_are_admin_only(
+        data=update_key_request,
+        existing_metadata=existing_key_row.metadata,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
     enforce_vector_store_index_grants_are_admin_only(
         data=update_key_request,
         top_level_grants=update_key_request.allowed_vector_store_indexes,
@@ -4103,6 +4102,12 @@ async def _validate_update_key_data(
     await validate_scalar_budget_attachment(checked_prisma_client, data.budget_id)
 
     enforce_output_token_estimates_are_admin_only(
+        data=data,
+        existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
         user_api_key_dict=user_api_key_dict,
@@ -6552,6 +6557,12 @@ async def _execute_virtual_key_regeneration(
     if data is not None:
         _existing_key_metadata: Final = getattr(key_in_db, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="key",
+        )
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,

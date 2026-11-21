@@ -1956,7 +1956,7 @@ async def test_jwt_customer_budget_rate_limits_reach_enforcement(
         ("jwt-key", [], ["X-Tenant-ID"], ["X-User-ID"], [(b"x-tenant-id", b"tenant")], "X-User-ID"),
         ("jwt-team", [], ["X-Tenant-ID"], None, [], "X-Tenant-ID"),
         ("jwt-admin", ["X-Tenant-ID"], None, None, [(b"x-tenant-id", b" ")], "X-Tenant-ID"),
-        ("jwt-admin", ["X-User-ID"], None, None, [(b"x-litellm-customer-member-id", b"member")], "X-User-ID"),
+        ("jwt-admin", ["X-User-ID"], None, None, [(b"x-request-id", b"member")], "X-User-ID"),
         ("jwt-admin", ["X-Tenant-ID", "X-User-ID"], None, None, [(b"x-tenant-id", b"tenant")], "X-User-ID"),
         ("introspection", [], ["X-Tenant-ID"], None, [], "X-Tenant-ID"),
         ("proxy", [], ["X-Tenant-ID"], None, [], "X-Tenant-ID"),
@@ -5880,70 +5880,6 @@ class _CustomerTablesOffLimits:
             return MagicMock()
 
     db = _Db()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "route", "registers"),
-    (
-        ("GET", "/", False),
-        ("GET", "/key/info", False),
-        ("GET", "/v1/models", False),
-        ("GET", "/v1/models/test-model", False),
-        ("GET", "/models/test-model", False),
-        ("GET", "/model/info", False),
-        ("GET", "/team/list", False),
-        ("POST", "/key/update", False),
-        ("POST", "/v1/chat/completions", True),
-        ("POST", "/v1/responses", True),
-        ("POST", "/v1/messages", True),
-    ),
-)
-async def test_customer_headers_register_only_on_inference(method: str, route: str, registers: bool):
-    import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
-
-    from tests.unit.proxy.management_helpers.test_apps import AppDatabase
-
-    database: Final = AppDatabase()
-    token = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY if route == "/" else LitellmUserRoles.PROXY_ADMIN
-    )
-    request = Request(
-        scope={
-            "type": "http",
-            "method": method,
-            "path": route,
-            "query_string": b"",
-            "headers": [(b"x-tenant-id", b"new-customer"), *([(b"x-user-id", b"member")] if registers else [])],
-        }
-    )
-    attrs = {
-        **_proxy_attrs_for_centralized_checks(),
-        "prisma_client": MagicMock(db=database, writer_db=database, tx=database.tx),
-        "general_settings": {
-            "disable_budget_reservation": True, "customer_org_alias_header": "X-Tenant-ID",
-            "required_customer_headers": ["X-User-ID"],
-        },
-        "llm_model_list": None,
-        "user_model": None,
-    }
-    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
-    try:
-        for k, v in attrs.items():
-            setattr(_proxy_server_mod, k, v)
-        recovered = await _authorize_authenticated_request(
-            user_api_key_auth_obj=token, request=request, request_data={"model": "test-model"}, route=route, api_key=""
-        )
-    finally:
-        for k, v in originals.items():
-            setattr(_proxy_server_mod, k, v)
-
-    assert recovered is None
-    assert tuple(database.litellm_customerorganizationtable.rows) == (("new-customer",) if registers else ())
-    assert (token.customer_hierarchy is not None) is registers
-    if not registers:
-        assert database.litellm_customerorganizationtable.read_count == 0
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from collections import UserDict
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import reduce
@@ -637,6 +638,24 @@ async def test_team_require_trace_id_skips_non_dict_team_metadata() -> None:
         metadata="not a mapping",
     )
     assert await _run_team_trace_id_check(route="/v1/chat/completions", team_object=team) is True
+
+
+class _ReadCountingHeaders(UserDict[str, str]):
+    reads = 0
+
+    def __getitem__(self, key: str) -> str:
+        self.reads += 1
+        return super().__getitem__(key)
+
+
+def test_duplicate_required_customer_headers_do_not_multiply_header_reads_or_admit_a_blank_header() -> None:
+    from litellm.proxy.auth.auth_checks import _missing_customer_header
+
+    headers: Final = _ReadCountingHeaders(
+        {**{f"x-extra-{index}": "value" for index in range(100)}, "hOsT": "gateway", "X-Tenant-ID": " \t "}
+    )
+    assert _missing_customer_header(headers, (*("Host" for _ in range(1000)), "X-Tenant-ID")) == "X-Tenant-ID"
+    assert headers.reads <= len(headers)
 
 
 @pytest.mark.parametrize("route", ("/lens/datasets", "/lens/tracing/keys"))

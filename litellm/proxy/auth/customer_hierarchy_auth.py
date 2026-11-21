@@ -143,15 +143,6 @@ def _header_value(headers: Mapping[str, object] | None, header: str) -> str | No
     return values[0] if values else None
 
 
-def check_required_customer_headers(headers: Mapping[str, object], specified: object) -> None:
-    present: Final = frozenset(
-        name.lower() for name, value in headers.items() if isinstance(value, str) and value.strip()
-    )
-    for header in REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(specified):
-        if header.lower() not in present:
-            raise _forbidden(f"Missing required customer header {header}", header)
-
-
 def validate_required_customer_headers_metadata(metadata: Mapping[str, object] | None) -> None:
     specified: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING) if metadata else None
     if specified is None:

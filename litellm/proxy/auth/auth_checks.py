@@ -58,6 +58,8 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     UI_TEAM_ID,
     CallInfo,
     ConfigGeneralSettings,
@@ -339,6 +341,7 @@ typed_general_settings: Final = _typed_request_body
 
 
 _TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_REQUEST_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
 
 def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
@@ -363,6 +366,27 @@ def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
         team_object.metadata.get("require_trace_id")  # pyright: ignore[reportUnknownMemberType]  # narrowed to dict
         is True
     )
+
+
+def _scope_required_customer_headers(scope: object) -> tuple[str, ...]:
+    if not _metadata_is_mapping(scope):
+        return ()
+    return REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(
+        _TRACE_ID_METADATA_ADAPTER.validate_python(scope).get(REQUIRED_CUSTOMER_HEADERS_SETTING) or ()
+    )
+
+
+def _metadata_is_mapping(metadata: object) -> bool:
+    return isinstance(metadata, Mapping)
+
+
+def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(map(_scope_required_customer_headers, scopes)))
+
+
+def _missing_customer_header(headers: Mapping[str, str], required: tuple[str, ...]) -> str | None:
+    present: Final = frozenset(name.lower() for name, value in headers.items() if value.strip())
+    return next((header for header in required if header.lower() not in present), None)
 
 
 def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
@@ -1497,6 +1521,33 @@ async def common_checks(
             type=ProxyErrorTypes.bad_request_error,
             param="trace_id",
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    required_customer_headers: Final = (
+        _required_customer_headers(
+            (
+                general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
+                team_object.metadata if team_object is not None else None,  # pyright: ignore[reportUnknownMemberType]  # LiteLLM_TeamTable.metadata is a bare dict
+                valid_token.metadata if valid_token is not None else None,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a bare dict
+            )
+        )
+        if RouteChecks.runs_inference_checks(route) and not RouteChecks.is_info_route(route)
+        else ()
+    )
+    missing_customer_header: Final = (
+        _missing_customer_header(
+            _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+            required_customer_headers,
+        )
+        if required_customer_headers
+        else None
+    )
+    if missing_customer_header is not None:
+        raise ProxyException(
+            message=f"Missing required customer header {missing_customer_header}",
+            type=ProxyErrorTypes.auth_error,
+            param=missing_customer_header,
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     await can_agent_call_model(
