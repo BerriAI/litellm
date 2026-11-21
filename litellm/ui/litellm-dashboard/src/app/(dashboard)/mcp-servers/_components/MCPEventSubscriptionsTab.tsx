@@ -68,7 +68,9 @@ function SubscriptionRow({
       <TableCell className="text-xs">
         {subscription.last_error ? t(`mcpServers.eventSubscriptionsTab.failure.${subscription.last_error}`) : "-"}
       </TableCell>
-      <TableCell className="text-xs">{subscription.refresh_before ?? t("mcpServers.eventSubscriptionsTab.noExpiry")}</TableCell>
+      <TableCell className="text-xs">
+        {subscription.refresh_before ?? t("mcpServers.eventSubscriptionsTab.noExpiry")}
+      </TableCell>
       {canManage ? (
         <TableCell className="space-x-2 text-right">
           <Button

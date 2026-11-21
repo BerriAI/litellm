@@ -4705,9 +4705,12 @@ export const sendMCPEventTestDelivery = async (
   accessToken: string,
   subscriptionId: string,
 ): Promise<MCPEventTestDeliveryResult> =>
-  apiClient.post<MCPEventTestDeliveryResult>(`/v1/mcp/events/subscriptions/${encodeURIComponent(subscriptionId)}/test`, {
-    accessToken,
-  });
+  apiClient.post<MCPEventTestDeliveryResult>(
+    `/v1/mcp/events/subscriptions/${encodeURIComponent(subscriptionId)}/test`,
+    {
+      accessToken,
+    },
+  );
 
 export const fetchMCPEventTypes = async (accessToken: string, serverId: string): Promise<MCPEventType[]> =>
   apiClient.get<MCPEventType[]>(`/v1/mcp/events/types`, { accessToken, query: { server_id: serverId } });

@@ -29,7 +29,12 @@ export interface EventServer {
 }
 
 export function eventServers(
-  servers: readonly { server_id: string; server_name?: string | null; alias?: string | null; events?: { enabled: boolean } | null }[],
+  servers: readonly {
+    server_id: string;
+    server_name?: string | null;
+    alias?: string | null;
+    events?: { enabled: boolean } | null;
+  }[],
 ): EventServer[] {
   return servers
     .filter((server) => server.events?.enabled === true)

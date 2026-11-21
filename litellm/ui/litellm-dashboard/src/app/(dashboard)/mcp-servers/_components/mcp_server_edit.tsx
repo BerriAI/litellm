@@ -1015,10 +1015,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
                       </SimpleTooltip>
                     </span>
-                    <p className="text-sm text-muted-foreground mt-1">{t("mcpServers.serverEdit.events.description")}</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {t("mcpServers.serverEdit.events.description")}
+                    </p>
                   </div>
                   <MountedFormField name="events_enabled" className="mb-0">
-                    {(control) => <Switch aria-label={t("mcpServers.serverEdit.events.enabled")} {...switchControl(control)} />}
+                    {(control) => (
+                      <Switch aria-label={t("mcpServers.serverEdit.events.enabled")} {...switchControl(control)} />
+                    )}
                   </MountedFormField>
                 </div>
 

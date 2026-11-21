@@ -809,16 +809,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           {isProxyAdminTierRole(userRole) && (
             <>
               <TabsContent value="connections">
-                <MCPGatewaySessionsTab
-                  accessToken={accessToken}
-                  canTerminate={canManageLiveState}
-                />
+                <MCPGatewaySessionsTab accessToken={accessToken} canTerminate={canManageLiveState} />
               </TabsContent>
               <TabsContent value="event-subscriptions">
-                <MCPEventSubscriptionsTab
-                  accessToken={accessToken}
-                  canManage={canManageLiveState}
-                />
+                <MCPEventSubscriptionsTab accessToken={accessToken} canManage={canManageLiveState} />
               </TabsContent>
             </>
           )}

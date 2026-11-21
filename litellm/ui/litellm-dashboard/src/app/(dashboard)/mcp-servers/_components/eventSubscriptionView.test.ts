@@ -12,7 +12,9 @@ describe("eventSubscriptionView", () => {
   });
 
   it("summarizes arguments as key=value pairs", () => {
-    expect(argumentsSummary({ repo: "acme/web", severity: 1, tags: ["a"] })).toBe("repo=acme/web, severity=1, tags=[\"a\"]");
+    expect(argumentsSummary({ repo: "acme/web", severity: 1, tags: ["a"] })).toBe(
+      'repo=acme/web, severity=1, tags=["a"]',
+    );
     expect(argumentsSummary({})).toBe("-");
   });
 
