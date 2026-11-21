@@ -21,7 +21,6 @@ from itertools import chain, count, filterfalse, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
-from anthropic.types.beta import BetaToolUnionParam
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -67,7 +66,6 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     AllAnthropicToolsValues,
-    AnthropicAdvisorTool,
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.openai import (
@@ -403,9 +401,6 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
     return {**tool, "function": {**function, "name": original}}
 
 
-_NATIVE_TOOL: Final[TypeAdapter[BetaToolUnionParam | AnthropicAdvisorTool]] = TypeAdapter(
-    BetaToolUnionParam | AnthropicAdvisorTool
-)
 _MAPPED_TOOL_FIELDS: Final = frozenset(
     {"name", "input_schema", "description", "custom", "cache_control", "strict", "type", "eager_input_streaming"}
 )
@@ -414,24 +409,20 @@ _TOOL_METADATA_FIELDS: Final = frozenset(
 )
 
 
-def _is_native_tool(tool: Mapping[str, object]) -> bool:
-    if is_provider_native_tool_dict(tool):
-        return True
-    if tool.get("type") in (None, "custom", "function"):
-        return False
-    try:
-        _NATIVE_TOOL.validate_python(tool)
-    except ValidationError:
-        return False
-    return True
-
-
-def _tool_scan_source(tool: AllAnthropicToolsValues) -> AllAnthropicToolsValues:
+def _tool_scan_source(tool: Mapping[str, object]) -> AllAnthropicToolsValues:
     return (
-        tool
+        cast(  # cast-ok: only the nested function name identifies an OpenAI tool
+            AllAnthropicToolsValues, {key: value for key, value in tool.items() if key != "name"}
+        )
         if tool.get("type") == "function"
         else cast(  # cast-ok: normalize only the guardrail scan copy
-            AllAnthropicToolsValues, {**tool, "type": "custom", "input_schema": tool.get("input_schema", {})}
+            AllAnthropicToolsValues,
+            {
+                **tool,
+                "type": "custom",
+                "input_schema": tool.get("input_schema", {}),
+                **({"name": tool.get("mcp_server_name", "mcp_toolset")} if tool.get("type") == "mcp_toolset" else {}),
+            },
         )
     )
 
@@ -1119,7 +1110,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             Sequence[AllAnthropicToolsValues], list_field(data, "tools")
         )
         custom_original_indices: Final = tuple(
-            index for index, tool in enumerate(original_tools) if not _is_native_tool(tool)
+            index for index, tool in enumerate(original_tools) if not is_provider_native_tool_dict(tool)
         )
         original_to_scanned: Final = MappingProxyType(
             {index: scanned for scanned, index in enumerate(custom_original_indices) if not scan_only_tool_results}

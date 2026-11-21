@@ -2116,7 +2116,7 @@ async def test_guardrail_preserves_original_tool_dicts_except_explicit_edits(mod
     }
     expected: Final = [
         *([rewritten] if mode not in ("remove", "empty") else []),
-        *native,
+        *(native if mode != "empty" else [{"googleSearch": {}}]),
         *([untouched] if mode != "empty" else []),
         *(
             [{"name": "Added", "input_schema": {"type": "object", "properties": {}}, "type": "custom"}]
@@ -2179,7 +2179,7 @@ async def test_repeated_tool_names_keep_each_schema_and_apply_each_guardrail_edi
             else tool
         )
 
-    native: Final = {"type": "web_search_20250305", "name": "web_search"}
+    native: Final = {"googleSearch": {}}
     tools: Final = [formatted(custom[0]), native, formatted(custom[1])]
     expected_custom: Final = [
         {
@@ -2251,7 +2251,7 @@ async def test_guardrail_removals_fail_closed_when_a_long_name_collides_with_its
         {"name": long_name, "description": "Read private data", "input_schema": {"type": "object"}},
         {"name": truncate_tool_name(long_name), "description": "Read public data", "input_schema": {"type": "object"}},
     ]
-    native: Final = {"type": "mcp_toolset", "mcp_server_name": "github"}
+    native: Final = {"googleSearch": {}}
     data: Final = {"tools": [native, *tools], "messages": [{"role": "user", "content": "Read data"}]}
     result: Final = await AnthropicMessagesHandler().process_input_messages(
         data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
@@ -2281,7 +2281,75 @@ async def test_unknown_typed_tools_are_scanned_instead_of_bypassing_the_guardrai
         if mode == "empty"
         else [{**custom, "description": "Read [MASKED] data"} if mode == "description" else custom]
     )
-    assert result["tools"] == [*expected_custom, native]
+    assert result["tools"] == [*expected_custom, *([] if mode == "empty" else [native])]
+
+
+class NamedToolScanGuardrail(CustomGuardrail):
+    def __init__(self, name: str, remove: bool):
+        super().__init__(guardrail_name="named-tool-scan")
+        self.name: Final = name
+        self.remove: Final = remove
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        assert [tool["function"]["name"] for tool in inputs.get("tools", [])] == [self.name]
+        return {**inputs, "tools": []} if self.remove else inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remove", (False, True))
+@pytest.mark.parametrize(
+    ("tool", "name"),
+    (
+        ({"type": "memory_20250818", "name": "memory"}, "memory"),
+        ({"type": "code_execution_20250825", "name": "code_execution"}, "code_execution"),
+        ({"type": "web_search_20250305", "name": "web_search"}, "web_search"),
+        ({"type": "mcp_toolset", "mcp_server_name": "github"}, "github"),
+    ),
+)
+async def test_typed_tools_are_scanned_without_widening_the_provider_native_exemption(
+    tool: dict[str, object], name: str, remove: bool
+) -> None:
+    wrapper: Final = {"googleSearch": {}}
+    data: Final = {"tools": [tool, wrapper], "messages": [{"role": "user", "content": "Use a safe tool"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=NamedToolScanGuardrail(name, remove)
+    )
+    assert result["tools"] == [*(() if remove else (tool,)), wrapper]
+    assert result["tools"][-1] is wrapper
+
+
+class SafeToolOnlyGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        assert [tool["function"]["name"] for tool in inputs.get("tools", [])] == ["decoy", "blocked", "safe"]
+        return {
+            **inputs,
+            "tools": [tool for tool in inputs.get("tools", []) if tool["function"]["name"] == "safe"],
+        }
+
+
+@pytest.mark.asyncio
+async def test_web_search_named_openai_envelope_cannot_shift_filtered_tool_identity() -> None:
+    decoy: Final = {"type": "function", "name": "web_search", "function": {"name": "decoy"}}
+    blocked: Final = {"name": "blocked", "input_schema": {"type": "object", "properties": {}}}
+    safe: Final = {"name": "safe", "input_schema": {"type": "object", "properties": {}}}
+    data: Final = {"tools": [decoy, blocked, safe], "messages": [{"role": "user", "content": "Use a safe tool"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=SafeToolOnlyGuardrail(guardrail_name="safe-only")
+    )
+    assert result["tools"] == [safe]
+    assert result["tools"][0] is safe
 
 
 class RelocatedToolFieldGuardrail(CustomGuardrail):

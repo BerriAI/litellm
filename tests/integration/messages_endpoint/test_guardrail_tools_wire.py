@@ -116,7 +116,11 @@ def test_guardrail_preserves_anthropic_tools_except_explicit_edits(
         scanned: Final = _OBJECTS.validate_python(object_value(json.loads(calls[0].body))["tools"])
         assert [
             object_value(tool["function"])["name"] for tool in scanned if isinstance(tool.get("function"), dict)
-        ] == ["Read", "Untouched"]
+        ] == [
+            *(object_value(tool).get("name", object_value(tool).get("mcp_server_name")) for tool in native),
+            "Read",
+            "Untouched",
+        ]
         captured: Final = httpx.get(f"{gateway.upstream_url}/__observations", trust_env=False).json()["requests"]
         assert len(captured) == 1, captured
         assert captured[0]["body"]["tools"] == expected
