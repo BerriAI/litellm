@@ -22,3 +22,16 @@ export function sameEventPermissions(left: EventPermissions, right: EventPermiss
     );
   return normalize(left) === normalize(right);
 }
+
+export interface EventServer {
+  serverId: string;
+  label: string;
+}
+
+export function eventServers(
+  servers: readonly { server_id: string; server_name?: string | null; alias?: string | null; events?: { enabled: boolean } | null }[],
+): EventServer[] {
+  return servers
+    .filter((server) => server.events?.enabled === true)
+    .map((server) => ({ serverId: server.server_id, label: server.server_name || server.alias || server.server_id }));
+}

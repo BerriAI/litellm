@@ -907,7 +907,6 @@ export default function KeyInfoView({
                     <MCPEventPermissionsEditor
                       key={currentKeyData.token}
                       accessToken={accessToken}
-                      serverIds={currentKeyData.object_permission?.mcp_servers ?? []}
                       value={currentKeyData.object_permission?.mcp_event_permissions ?? {}}
                       onSave={saveEventPermissions}
                     />

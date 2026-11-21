@@ -7,13 +7,13 @@ import { Button } from "@/components/ui/button";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { fetchMCPEventTypes } from "@/components/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
-import { type EventPermissions, sameEventPermissions, withServerEvents } from "./eventPermissions";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { type EventPermissions, eventServers, sameEventPermissions, withServerEvents } from "./eventPermissions";
 
 const eventTypeKeys = createQueryKeys("mcpEventTypes");
 
 interface MCPEventPermissionsEditorProps {
   accessToken: string | null;
-  serverIds: readonly string[];
   value: EventPermissions;
   disabled?: boolean;
   onSave: (next: Record<string, string[]>) => Promise<void>;
@@ -21,7 +21,6 @@ interface MCPEventPermissionsEditorProps {
 
 export function MCPEventPermissionsEditor({
   accessToken,
-  serverIds,
   value,
   disabled = false,
   onSave,
@@ -29,16 +28,18 @@ export function MCPEventPermissionsEditor({
   const { t } = useTranslation();
   const [draft, setDraft] = useState<EventPermissions>(value);
   const [saving, setSaving] = useState(false);
+  const { data: allServers } = useMCPServers();
+  const candidates = eventServers(allServers ?? []);
   const queries = useQueries({
-    queries: serverIds.map((serverId) => ({
+    queries: candidates.map(({ serverId }) => ({
       queryKey: eventTypeKeys.detail(serverId),
       queryFn: () => fetchMCPEventTypes(accessToken!, serverId),
       enabled: !!accessToken,
       retry: false,
     })),
   });
-  const servers = serverIds
-    .map((serverId, index) => ({ serverId, types: queries[index]?.data ?? [] }))
+  const servers = candidates
+    .map((candidate, index) => ({ ...candidate, types: queries[index]?.data ?? [] }))
     .filter((server) => server.types.length > 0);
   if (servers.length === 0) return null;
   const dirty = !sameEventPermissions(draft, value);
@@ -56,9 +57,9 @@ export function MCPEventPermissionsEditor({
         <h4 className="text-sm font-medium text-foreground">{t("mcpServerManagement.eventPermissions.title")}</h4>
         <p className="text-xs text-muted-foreground">{t("mcpServerManagement.eventPermissions.description")}</p>
       </div>
-      {servers.map(({ serverId, types }) => (
+      {servers.map(({ serverId, label, types }) => (
         <div key={serverId} className="space-y-1">
-          <span className="font-mono text-xs text-foreground">{serverId}</span>
+          <span className="text-xs font-medium text-foreground">{label}</span>
           <MultiSelect
             value={[...(draft[serverId] ?? [])]}
             onValueChange={(selected) => setDraft(withServerEvents(draft, serverId, selected))}

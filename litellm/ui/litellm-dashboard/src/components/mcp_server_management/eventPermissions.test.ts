@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sameEventPermissions, withServerEvents } from "./eventPermissions";
+import { eventServers, sameEventPermissions, withServerEvents } from "./eventPermissions";
 
 describe("withServerEvents", () => {
   it("restricts one server without touching the others", () => {
@@ -23,5 +23,23 @@ describe("sameEventPermissions", () => {
   it("notices a changed restriction", () => {
     expect(sameEventPermissions({ a: ["x"] }, { a: ["x", "y"] })).toBe(false);
     expect(sameEventPermissions({ a: ["x"] }, {})).toBe(false);
+  });
+});
+
+describe("eventServers", () => {
+  it("lists only events-enabled servers, labelled by name, then alias, then id", () => {
+    expect(
+      eventServers([
+        { server_id: "a", server_name: "CI", events: { enabled: true } },
+        { server_id: "b", alias: "deploys", events: { enabled: true } },
+        { server_id: "c", events: { enabled: true } },
+        { server_id: "d", server_name: "off", events: { enabled: false } },
+        { server_id: "e", server_name: "never" },
+      ]),
+    ).toEqual([
+      { serverId: "a", label: "CI" },
+      { serverId: "b", label: "deploys" },
+      { serverId: "c", label: "c" },
+    ]);
   });
 });

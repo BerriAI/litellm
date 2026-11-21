@@ -97,7 +97,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, MCPServerEventsConfig, PinnedMCPTool
 
 _TSessionResult = TypeVar("_TSessionResult")
 
@@ -23245,3 +23245,19 @@ def test_stored_events_config_accepts_json_or_mappings_and_ignores_anything_else
 
     config = _stored_events_config(stored)
     assert (config.enabled if config is not None else None) is enabled
+
+
+@pytest.mark.parametrize(
+    "events",
+    (None, MCPServerEventsConfig(enabled=True, allowed_events=["build.*"]), MCPServerEventsConfig(enabled=False)),
+)
+def test_the_server_listing_row_carries_the_events_config(events):
+    server = MCPServer(
+        server_id="events-server",
+        name="ci",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        events=events,
+    )
+
+    assert MCPServerManager().build_mcp_server_table(server).events == events

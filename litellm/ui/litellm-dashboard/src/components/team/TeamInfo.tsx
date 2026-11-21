@@ -1611,7 +1611,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <MCPEventPermissionsEditor
                 key={info.team_id}
                 accessToken={accessToken}
-                serverIds={info.object_permission?.mcp_servers ?? []}
                 value={info.object_permission?.mcp_event_permissions ?? {}}
                 onSave={saveTeamEventPermissions}
               />
