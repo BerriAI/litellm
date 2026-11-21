@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, cast
 from unittest.mock import patch
 
 import httpx
@@ -10,8 +10,9 @@ import pytest
 import respx
 
 import litellm
-from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langfuse.langfuse import LangFuseLogger, langfuse_trace_id
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.messages.adapters.handler import (
@@ -515,6 +516,7 @@ async def _send_parent_request(
     general_settings: Mapping[str, object],
     litellm_metadata: Mapping[str, object],
     parent_ids: Mapping[str, str],
+    request_headers: Mapping[str, str] | None = None,
 ) -> None:
     parent_logging: Final = Logging(
         model="fireworks_ai/kimi",
@@ -557,6 +559,7 @@ async def _send_parent_request(
             litellm_logging_obj=parent_logging,
             safeguards=SAFEGUARDS,
             context_management={"edits": [{"type": "compact_20260112"}]},
+            **({} if request_headers is None else {"proxy_server_request": {"headers": dict(request_headers)}}),
             **parent_ids,
         )
         await _drain_logging_worker()
@@ -564,34 +567,44 @@ async def _send_parent_request(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "general_settings, parent_metadata, parent_ids, parent_session",
+    "request_correlation_in_logs, parent_metadata, parent_ids, parent_session",
     [
         (
-            {},
+            False,
             {},
             {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
             "claude-code-session",
         ),
-        ({}, {}, {"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
-        ({}, {}, {}, "trace-the-parent-minted"),
+        (False, {}, {"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
+        (False, {}, {}, "trace-the-parent-minted"),
+        (
+            True,
+            {"session_id": "client-trace", "trace_id": "client-trace", CALLER_SESSION_ID_METADATA_KEY: "claude-code-session"},
+            {"litellm_session_id": "client-trace", "litellm_trace_id": "client-trace"},
+            "claude-code-session",
+        ),
     ],
-    ids=["claude-code-session-header", "session-and-trace-sent-apart", "no-session-sent"],
+    ids=[
+        "claude-code-session-header",
+        "session-and-trace-sent-apart",
+        "no-session-sent",
+        "trace-header-beside-the-claude-code-session-under-request-correlation",
+    ],
 )
 async def test_the_classifier_and_summary_spend_rows_land_in_the_parent_requests_session(
     monkeypatch: pytest.MonkeyPatch,
-    general_settings: Mapping[str, object],
+    request_correlation_in_logs: bool,
     parent_metadata: Mapping[str, object],
     parent_ids: Mapping[str, str],
     parent_session: str,
 ) -> None:
     await _drain_logging_worker()
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
     spend: Final = _SpendRows()
     monkeypatch.setattr(litellm, "callbacks", [spend])
     monkeypatch.setattr(litellm, "_async_success_callback", [spend])
 
-    await _send_parent_request(
-        _classifier_and_summarizer_router(), general_settings, {**LITELLM_METADATA, **parent_metadata}, parent_ids
-    )
+    await _send_parent_request(_classifier_and_summarizer_router(), {}, {**LITELLM_METADATA, **parent_metadata}, parent_ids)
 
     assert {row["model_group"]: row["session_id"] for row in spend.rows} == {
         "classifier": parent_session,
@@ -653,3 +666,70 @@ async def test_the_classifier_call_sends_the_parents_session_as_its_affinity_hea
 
     assert classifier_route.call_count == 1
     assert classifier_route.calls.last.request.headers.get("x-session-affinity") == affinity_header
+
+
+class _LoggedCalls(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: Final[list[Mapping[str, object]]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.calls.append(kwargs)
+
+
+def _langfuse_trace(logged_call: Mapping[str, object]) -> tuple[object, bool]:
+    litellm_params: Final = cast(dict[str, object], logged_call["litellm_params"])
+    trace_metadata: Final = LangFuseLogger.add_metadata_from_header(
+        litellm_params, dict(cast(Mapping[str, object], litellm_params.get("metadata") or {}))
+    )
+    standard_logging_object: Final = cast(Mapping[str, object], logged_call["standard_logging_object"])
+    trace_id: Final = langfuse_trace_id(
+        metadata=trace_metadata,
+        standard_trace_id=standard_logging_object["trace_id"],
+        litellm_trace_id=logged_call.get("litellm_trace_id"),
+        litellm_call_id=logged_call.get("litellm_call_id"),
+        proxy_server_request=litellm_params.get("proxy_server_request"),
+    )
+    return trace_id, "existing_trace_id" in trace_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parent_metadata, parent_ids, request_headers, parent_trace",
+    [
+        (
+            {"session_id": "claude-code-session"},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            {"x-claude-code-session-id": "claude-code-session"},
+            "parent-call",
+        ),
+        ({}, {}, None, "trace-the-parent-minted"),
+        (
+            {},
+            {},
+            {"langfuse_existing_trace_id": "trace-the-client-continues"},
+            "trace-the-client-continues",
+        ),
+    ],
+    ids=["claude-code-session-header", "no-session-sent", "client-continues-its-own-langfuse-trace"],
+)
+async def test_the_classifier_and_summary_join_the_parent_requests_langfuse_trace_without_renaming_it(
+    monkeypatch: pytest.MonkeyPatch,
+    parent_metadata: Mapping[str, object],
+    parent_ids: Mapping[str, str],
+    request_headers: Mapping[str, str] | None,
+    parent_trace: str,
+) -> None:
+    await _drain_logging_worker()
+    logged: Final = _LoggedCalls()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logged])
+
+    await _send_parent_request(
+        _classifier_and_summarizer_router(), {}, {**LITELLM_METADATA, **parent_metadata}, parent_ids, request_headers
+    )
+
+    assert {
+        cast(Mapping[str, object], call["standard_logging_object"])["model_group"]: _langfuse_trace(call)
+        for call in logged.calls
+    } == {"classifier": (parent_trace, True), "summarizer": (parent_trace, True)}

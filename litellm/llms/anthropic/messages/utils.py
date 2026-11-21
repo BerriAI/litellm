@@ -9,7 +9,11 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
-from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY, X_LITELLM_DISABLE_CALLBACKS
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+    X_LITELLM_DISABLE_CALLBACKS,
+)
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
@@ -137,7 +141,9 @@ PROXY_SUB_CALL_METADATA_KEYS: Final = (
     "litellm_parent_otel_span",
     "headers",
     SESSION_ID_GENERATED_METADATA_KEY,
+    CALLER_SESSION_ID_METADATA_KEY,
 )
+_LANGFUSE_EXISTING_TRACE_HEADER: Final = "langfuse_existing_trace_id"
 _USER_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
@@ -160,8 +166,9 @@ def proxy_sub_call_metadata(
     """The parent request's auth, budget, and header fields, so a sub-call bills the same key, team, and end
     user, the router filters deployments by the caller's access groups, and header-driven logging options
     such as message redaction apply to it, plus the marker of a session the proxy minted, so the sub-call never
-    sends that session upstream as a provider affinity header. The caller's auth object goes without its budget
-    reservation, which belongs to the parent request."""
+    sends that session upstream as a provider affinity header, and the caller's session an ``x-litellm-trace-id``
+    header displaced, so the sub-call logs in the session the parent does. The caller's auth object goes without its
+    budget reservation, which belongs to the parent request."""
     if not parent_litellm_metadata:
         return {}
     carried: Final = {
@@ -187,17 +194,20 @@ def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxyS
     deployment affinity and complexity router tier pins read. Of the parent's ``proxy_server_request`` only the
     ``x-litellm-disable-callbacks`` header is carried, since dispatch reads it there: the router reads per-request
     routing inputs from the rest, such as the Claude Code session that would pull a sub-call off its configured model,
-    and redaction headers already ride in ``proxy_sub_call_metadata``."""
+    and redaction headers already ride in ``proxy_sub_call_metadata``. Beside it goes the Langfuse trace the parent
+    logs to, as ``langfuse_existing_trace_id``, so the sub-call lands in that trace without renaming it."""
     parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
     session: Final = _parent_session(parent_kwargs)
     parent_params: Final[ProxySubCallLoggingKwargs] = (
         {**parent_logging.standard_callback_dynamic_params, **session} if parent_logging is not None else session
     )
     disable_header: Final = _disable_callbacks_header(parent_kwargs)
+    sub_call_headers: Final = {
+        **({} if disable_header is None else {X_LITELLM_DISABLE_CALLBACKS: disable_header}),
+        **_parent_langfuse_trace_header(parent_kwargs, parent_logging),
+    }
     dynamic_params: Final[ProxySubCallLoggingKwargs] = (
-        parent_params
-        if disable_header is None
-        else {**parent_params, "proxy_server_request": {"headers": {X_LITELLM_DISABLE_CALLBACKS: disable_header}}}
+        {**parent_params, "proxy_server_request": {"headers": sub_call_headers}} if sub_call_headers else parent_params
     )
     trusted_vars: Final = object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
     if trusted_vars is None:
@@ -223,6 +233,31 @@ def _parent_session(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingK
         {"litellm_session_id": session_id} if isinstance(session_id, str) and session_id else {}
     )
     return session if trace_id is None else {**session, "litellm_trace_id": trace_id}
+
+
+def _parent_langfuse_trace_header(
+    parent_kwargs: Mapping[str, object], parent_logging: "LiteLLMLoggingObject | None"
+) -> Mapping[str, str]:
+    if parent_logging is None:
+        return {}
+    from litellm.integrations.langfuse.langfuse import request_langfuse_trace_id
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    parent_logged_params: Final = object_mapping(
+        parent_logging.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+    )
+    logged_params: Final = {**parent_kwargs, **(parent_logged_params or {})}
+    params: Final = {
+        **logged_params,
+        "metadata": logged_params.get("metadata") or logged_params.get("litellm_metadata"),
+    }
+    trace_id: Final = request_langfuse_trace_id(
+        params,
+        standard_trace_id=StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(parent_logging, params),
+        litellm_trace_id=parent_logging.litellm_trace_id,
+        litellm_call_id=parent_logging.litellm_call_id,
+    )
+    return {} if trace_id is None else {_LANGFUSE_EXISTING_TRACE_HEADER: trace_id}
 
 
 def _disable_callbacks_header(parent_kwargs: Mapping[str, object]) -> str | None:
