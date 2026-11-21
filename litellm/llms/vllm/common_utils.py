@@ -5,7 +5,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, PLACEHOLDER_API_KEY
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.secret_managers.main import get_secret_str
@@ -54,6 +54,11 @@ def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
 
 
 class VLLMModelInfo(BaseLLMModelInfo):
+    def get_token_counter(self) -> BaseTokenCounter | None:
+        from litellm.llms.hosted_vllm.count_tokens.token_counter import HostedVLLMTokenCounter
+
+        return HostedVLLMTokenCounter()
+
     def validate_environment(
         self,
         headers: dict[str, str],
