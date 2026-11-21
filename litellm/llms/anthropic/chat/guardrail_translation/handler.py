@@ -444,6 +444,35 @@ def _loaded_up_front(tools: Sequence[object]) -> Sequence[object]:
     )
 
 
+def _declared_tool_name(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return None
+    function: Final = as_str_mapping(fields.get("function"))
+    return fields.get("name") if function is None else function.get("name")
+
+
+def _rewritten_in_place(
+    request_tools: Sequence[object],
+    open_positions: Sequence[int],
+    converted: Sequence[AllAnthropicToolsValues],
+) -> Mapping[int, AllAnthropicToolsValues]:
+    rewritten: Final[dict[int, AllAnthropicToolsValues]] = {}  # mutable-ok: built here, read-only to the caller
+    for tool in converted:
+        name = _declared_tool_name(tool)
+        position = next(
+            (
+                position
+                for position in open_positions
+                if position not in rewritten and _declared_tool_name(request_tools[position]) == name
+            ),
+            None,
+        )
+        if name is not None and position is not None:
+            rewritten[position] = tool
+    return rewritten
+
+
 def _occurrences(fingerprints: Iterable[str]) -> tuple[int, ...]:
     seen: Final[Counter[str]] = Counter()  # mutable-ok: running count local to this call
     occurrences: Final[list[int]] = []  # mutable-ok: built here, returned as a tuple
@@ -482,7 +511,6 @@ def _tools_after_guardrail(
     as_sent_positions: Final = frozenset(position for position, _ in as_sent)
     as_sent_counts: Final = Counter(fingerprint for _, fingerprint in as_sent)
     removed_or_rewritten: Final = frozenset(shown_positions) - as_sent_positions
-    kept: Final = tuple(tool for position, tool in enumerate(request_tools) if position not in removed_or_rewritten)
     converted: Final = _converted_tools(
         tuple(
             tool
@@ -493,7 +521,17 @@ def _tools_after_guardrail(
         ),
         original_names,
     )
-    return [*(kept if converted or len(returned_tools) >= len(shown) else _loaded_up_front(kept)), *converted]
+    rewritten: Final = _rewritten_in_place(request_tools, sorted(removed_or_rewritten), converted)
+    in_place: Final = tuple(
+        rewritten.get(position, tool)
+        for position, tool in enumerate(request_tools)
+        if position in rewritten or position not in removed_or_rewritten
+    )
+    placed: Final = frozenset(map(id, rewritten.values()))
+    return [
+        *(in_place if converted or len(returned_tools) >= len(shown) else _loaded_up_front(in_place)),
+        *(tool for tool in converted if id(tool) not in placed),
+    ]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:

@@ -3393,8 +3393,7 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
     async def test_only_the_tool_the_guardrail_changed_is_rewritten(self, in_place: bool) -> None:
         tools: Final = await self._tools_after(ToolDescriptionMaskingGuardrail(tool_name="Read", in_place=in_place))
 
-        assert tools[:-1] == self._sent_tools()[1:]
-        assert tools[-1] == {**self._READ, "type": "custom", "description": "[MASKED]"}
+        assert tools == [{**self._READ, "type": "custom", "description": "[MASKED]"}, *self._sent_tools()[1:]]
 
     async def test_a_tool_the_guardrail_removed_stays_removed_and_the_rest_are_not_rewritten(self):
         tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write"))
@@ -3426,9 +3425,15 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
             MockPassThroughGuardrail(guardrail_name="test"), [openai_format, self._READ]
         )
 
-        assert tools[0] == self._READ
-        assert (tools[1]["name"], tools[1]["input_schema"]) == ("Grep", self._READ["input_schema"])
-        assert "function" not in tools[1]
+        assert tools == [
+            {
+                "name": "Grep",
+                "description": "Searches files",
+                "input_schema": self._READ["input_schema"],
+                "type": "custom",
+            },
+            self._READ,
+        ]
 
     async def test_one_returned_tool_keeps_only_the_last_of_two_tools_the_guardrail_cannot_tell_apart(self):
         first, last = (
@@ -3467,6 +3472,17 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         )
 
         assert tools == [self._READ, self._DEFERRED]
+
+    async def test_a_tool_the_guardrail_renamed_goes_after_the_tools_that_kept_their_place(self):
+        def renamed(returned: list[object]) -> list[object]:
+            first: Final = cast(dict[str, dict[str, object]], json.loads(json.dumps(returned[0])))
+            return [{**first, "function": {**first["function"], "name": "ReadFile"}}, *returned[1:]]
+
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(renamed), json.loads(json.dumps([self._READ, self._WRITE]))
+        )
+
+        assert tools == [self._WRITE, {**self._READ, "name": "ReadFile", "type": "custom"}]
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
