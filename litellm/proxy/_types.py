@@ -2595,6 +2595,10 @@ class SpendLogsMetadataFields(BaseModel):
 
 DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
 
+RequiredCustomerHeaders: TypeAlias = tuple[Annotated[str, Field(pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")], ...]
+REQUIRED_CUSTOMER_HEADERS_SETTING: Final = "required_customer_headers"
+REQUIRED_CUSTOMER_HEADERS_ADAPTER: Final = TypeAdapter[RequiredCustomerHeaders](RequiredCustomerHeaders)
+
 
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
