@@ -632,6 +632,56 @@ class TestManagedWebSocketHandlerIntegration:
         assert [item.get("type") for item in second_turn_input] == ["message", "message"]
 
     @pytest.mark.asyncio
+    async def test_next_turn_keeps_the_tool_search_the_provider_already_ran(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        search: Final = (
+            {
+                "type": "tool_search_call",
+                "id": "tsc_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "arguments": {"pattern": "weather"},
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "tools": [],
+            },
+        )
+        call: Final = {"type": "function_call", "id": "fc_1", "call_id": "call_weather", "name": "weather", "arguments": "{}"}
+        answer: Final = {"type": "function_call_output", "call_id": "call_weather", "output": "sunny"}
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((*search, call)), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "weather in Paris?"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": [answer]}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert second_turn_input[1:] == [*search, call, answer]
+
+    @pytest.mark.asyncio
     async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(
         self, monkeypatch
     ):
