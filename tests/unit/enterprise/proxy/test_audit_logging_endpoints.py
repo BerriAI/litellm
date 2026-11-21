@@ -1,12 +1,12 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from litellm_enterprise.proxy.audit_logging_endpoints import router as audit_router
 from litellm_enterprise.types.proxy.audit_logging_endpoints import AuditLogResponse
 
@@ -180,6 +180,8 @@ def test_an_empty_search_leaves_the_where_clause_unchanged(mock_prisma_client):
 
 
 class _StoredAuditRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     id: str = "old-row-1"
     updated_at: datetime = datetime(2026, 1, 1)
     changed_by: str = "admin"
