@@ -327,14 +327,16 @@ class AmazonNovaEmbeddingConfig:
             _estimated_input_tokens(response) if metered is None else metered
             for response, metered in zip_longest(response_list, text_and_image_metered)
         )
-        is_image: Final = tuple(_is_image_request(request_data) for request_data in requests)
-        image_count: Final = sum(is_image)
+        is_media: Final = tuple(
+            _is_image_request(request_data) or _is_audio_or_video_request(request_data) for request_data in requests
+        )
+        image_count: Final = sum(_is_image_request(request_data) for request_data in requests)
         prompt_tokens: Final = sum(input_tokens)
         prompt_tokens_details: Final = (
             PromptTokensDetailsWrapper(
                 image_count=image_count,
                 text_tokens=sum(
-                    tokens for tokens, image in zip_longest(input_tokens, is_image, fillvalue=False) if not image
+                    tokens for tokens, media in zip_longest(input_tokens, is_media, fillvalue=False) if not media
                 ),
             )
             if image_count > 0

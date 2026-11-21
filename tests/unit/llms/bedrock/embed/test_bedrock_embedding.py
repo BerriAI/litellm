@@ -2290,6 +2290,30 @@ def test_bedrock_nova_embedding_bills_the_text_sent_beside_an_image(
     )
 
 
+def test_bedrock_nova_embedding_keeps_the_cost_of_an_image_sent_beside_audio(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": "0"},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for embedding_type in ("IMAGE", "AUDIO")
+        ]
+    )
+
+    response: Final = litellm.embedding(
+        model=f"bedrock/{_NOVA_MODEL_ID}",
+        input=["data:image/png;base64,AAAA", "data:audio/mp3;base64,AAAA"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_image"]
+    )
+
+
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
 @pytest.mark.parametrize(
     ("metered_per_input", "expected_tokens"),
