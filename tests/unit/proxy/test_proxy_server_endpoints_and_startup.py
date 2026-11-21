@@ -7484,7 +7484,7 @@ async def test_async_data_generator_cleanup_on_early_exit():
     from litellm.proxy.proxy_server import async_data_generator
     from litellm.proxy.utils import ProxyLogging
 
-    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth, budget_reservation=None)
     mock_request_data = {
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "test"}],
@@ -7633,7 +7633,9 @@ async def test_async_data_generator_closes_the_guardrail_chain_before_returning_
             cleanup_ran.append(True)
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", _guarded_chain_logging(guarded_chain)):
-        gen = async_data_generator(MagicMock(), MagicMock(spec=UserAPIKeyAuth), {"model": "gpt-4o-mini"})
+        gen = async_data_generator(
+            MagicMock(), MagicMock(spec=UserAPIKeyAuth, budget_reservation=None), {"model": "gpt-4o-mini"}
+        )
         first_chunk = await gen.__anext__()
         await gen.aclose()
 
@@ -7694,7 +7696,9 @@ async def test_async_data_generator_closes_the_guardrail_chain_while_a_keepalive
         patch.object(litellm, "sse_keepalive_ping_interval_seconds", 1.0),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", _guarded_chain_logging(guarded_chain)),
     ):
-        gen = async_data_generator(MagicMock(), MagicMock(spec=UserAPIKeyAuth), {"model": "gpt-4o-mini"})
+        gen = async_data_generator(
+            MagicMock(), MagicMock(spec=UserAPIKeyAuth, budget_reservation=None), {"model": "gpt-4o-mini"}
+        )
         first_chunk = await gen.__anext__()
         heartbeat = await gen.__anext__()
         await gen.aclose()
