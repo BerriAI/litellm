@@ -79,9 +79,7 @@ def test_transcription_sends_each_param_as_its_own_multipart_text_part(
 
     litellm.transcription(model="elevenlabs/scribe_v2", file=b"fake audio", **params)
 
-    fields: Final = _sent_fields(route)
-    assert {name: values for name, values in fields.items() if name in expected} == expected
-    assert not [values for values in fields.values() if any("[" in value for value in values)]
+    assert _sent_fields(route) == {"model_id": ["scribe_v2"], **expected}
 
 
 @pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
@@ -98,7 +96,7 @@ async def test_router_deployment_keyterms_default_is_sent_as_repeated_parts(resp
 
     await router.atranscription(model="scribe", file=b"fake audio")
 
-    assert _sent_fields(route).get("keyterms") == ["BOI report", "EIN"]
+    assert _sent_fields(route) == {"model_id": ["scribe_v2"], "keyterms": ["BOI report", "EIN"]}
 
 
 def _transform(payload: object) -> TranscriptionResponse:
