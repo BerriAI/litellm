@@ -19,7 +19,7 @@ PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = T
 )
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
-    {"tavily": "search_depth", "linkup": "depth"}
+    {"tavily": "search_depth", "linkup": "depth", "seltz": "tier"}
 )
 
 
@@ -48,6 +48,13 @@ def _tavily_auto_depth(response: SearchResponse | None) -> str | None:
     return depth if isinstance(depth, str) else None
 
 
+def _priced_search_mode(provider: str | None, mode: object) -> object:
+    """Seltz matches a tier name without case or surrounding whitespace, and that name selects the price."""
+    if provider == "seltz" and isinstance(mode, str):
+        return mode.strip().lower()
+    return mode
+
+
 def _pricing_model(
     model: str,
     custom_llm_provider: str | None,
@@ -61,7 +68,10 @@ def _pricing_model(
     generic_model: Final = f"{custom_llm_provider}/search"
     if mode_param is None or model not in (generic_model, f"{custom_llm_provider}/{generic_model}"):
         return model
-    requested_mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
+    requested_mode: Final = _priced_search_mode(
+        custom_llm_provider,
+        (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param),
+    )
     mode: Final = (
         _tavily_auto_depth(search_response)
         if requested_mode is None and custom_llm_provider == "tavily"

@@ -26000,6 +26000,33 @@
         "litellm_provider": "webiq",
         "mode": "search"
     },
+    "seltz/search": {
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "seltz",
+        "mode": "search",
+        "source": "https://docs.seltz.ai/pricing",
+        "metadata": {
+            "notes": "Seltz POST /v1/search Pro tier, the default when tier is omitted. $5 per 1,000 searches. https://docs.seltz.ai/pricing"
+        }
+    },
+    "seltz/search-pro": {
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "seltz",
+        "mode": "search",
+        "source": "https://docs.seltz.ai/pricing",
+        "metadata": {
+            "notes": "Seltz POST /v1/search Pro tier. $5 per 1,000 searches. https://docs.seltz.ai/pricing"
+        }
+    },
+    "seltz/search-base": {
+        "input_cost_per_query": 0.003,
+        "litellm_provider": "seltz",
+        "mode": "search",
+        "source": "https://docs.seltz.ai/pricing",
+        "metadata": {
+            "notes": "Seltz POST /v1/search Base tier. $3 per 1,000 searches. https://docs.seltz.ai/pricing"
+        }
+    },
     "perplexity/search": {
         "input_cost_per_query": 0.005,
         "litellm_provider": "perplexity",
