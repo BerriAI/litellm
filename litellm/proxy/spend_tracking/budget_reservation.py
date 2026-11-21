@@ -901,7 +901,7 @@ async def _get_team_member_budget_counter(
     if isinstance(cached_team_membership, LiteLLM_TeamMembership):
         team_membership = cached_team_membership
     elif isinstance(cached_team_membership, dict):
-        team_membership = LiteLLM_TeamMembership(**cached_team_membership)
+        team_membership = LiteLLM_TeamMembership.model_validate(cached_team_membership)
 
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)

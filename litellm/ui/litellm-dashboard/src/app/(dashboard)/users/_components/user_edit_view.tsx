@@ -201,7 +201,7 @@ export function UserEditView({
     }
 
     const { tpm_limit: tpmLimitInput, rpm_limit: rpmLimitInput, rollover_max_budget, ...formValues } = values;
-    const rolloverCap = rollover_max_budget === "" || rollover_max_budget == null ? null : Number(rollover_max_budget);
+    const rolloverCap = isBlank(rollover_max_budget) ? null : Number(rollover_max_budget);
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
     const tpmLimit = changedLimit(tpmLimitInput, userData.user_info?.tpm_limit);
     const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
@@ -336,27 +336,29 @@ export function UserEditView({
               />
             )}
           </FormField>
-          {!isBulkEdit && (
-            <FormField
-              control={form.control}
-              name="rollover_max_budget"
-              label={labelWithHint(t("users.editView.fields.rolloverCap"), t("users.editView.fields.rolloverCapHint"))}
-            >
-              {({ value, onChange, ...field }) => (
-                <Input
-                  {...field}
-                  type="number"
-                  min={0.01}
-                  step="any"
-                  value={value ?? ""}
-                  onChange={(event) => onChange(event.target.value)}
-                />
-              )}
-            </FormField>
-          )}
 
           {!isBulkEdit && (
             <>
+              <FormField
+                control={form.control}
+                name="rollover_max_budget"
+                label={labelWithHint(
+                  t("users.editView.fields.rolloverCap"),
+                  t("users.editView.fields.rolloverCapHint"),
+                )}
+              >
+                {({ value, onChange, ...field }) => (
+                  <Input
+                    {...field}
+                    type="number"
+                    min={0.01}
+                    step="any"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                  />
+                )}
+              </FormField>
+
               <FormField
                 control={form.control}
                 name="tpm_limit"

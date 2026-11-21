@@ -247,6 +247,10 @@ def _rollover_enabled() -> bool:
     return litellm.budget_rollover is True
 
 
+def _has_personal_rollover(row: object) -> bool:
+    return isinstance(row, LiteLLM_UserTable) and row.active_rollover_credit() is not None
+
+
 def _rollover_cap(max_budget: float | None) -> float | None:
     if max_budget is None or not math.isfinite(max_budget):
         return None
@@ -1515,11 +1519,7 @@ class ResetBudgetJob:
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
             for u in updated_users:
-                if (
-                    isinstance(u.row, LiteLLM_UserTable)
-                    and u.row.active_rollover_credit() is not None
-                    and u.row.budget_reset_at is not None
-                ):
+                if _has_personal_rollover(u.row) and u.row.budget_reset_at is not None:
                     uow.users.queue_credit_reset(
                         user_id=u.row.user_id,
                         budget_reset_at=u.row.budget_reset_at,
@@ -1729,10 +1729,9 @@ class ResetBudgetJob:
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
-                        reset_user: Final = (
-                            LiteLLM_UserTable.model_validate(user.model_dump())
+                        reset_user = (
+                            LiteLLM_UserTable.model_validate(user, from_attributes=True)
                             if getattr(user, "rollover_max_budget", None) is not None
-                            and not isinstance(user, LiteLLM_UserTable)
                             else user
                         )
                         pre_reset_spend, expected_reset_at = (
@@ -1773,11 +1772,7 @@ class ResetBudgetJob:
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
                             await self._invalidate_global_proxy_spend_cache()
                     await self._evict_on_every_worker(
-                        tuple(
-                            u.row.user_id
-                            for u in updated_users
-                            if isinstance(u.row, LiteLLM_UserTable) and u.row.active_rollover_credit() is not None
-                        )
+                        tuple(u.row.user_id for u in updated_users if _has_personal_rollover(u.row))
                     )
 
             end_time = time.time()

@@ -237,3 +237,23 @@ def test_rollover_requires_a_reset_period_and_cap_above_the_base(
 ) -> None:
     response: Final = rollover_proxy.request("POST", path, payload)
     assert response.status_code == 400 and "rollover requires a reset period" in response.text, response.text
+
+
+def test_management_responses_omit_rollover_cap_without_opt_in(rollover_proxy: Gateway) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        user: Final = proxy.post(
+            "/user/new", {"max_budget": 100.0, "budget_duration": "monthly", "auto_create_key": False}
+        )
+        scenario.cleanups.callback(scenario.delete_user, string_value(user["user_id"]))
+        assert "rollover_max_budget" not in user
+
+        budget: Final = proxy.post("/budget/new", {"max_budget": 100.0, "budget_duration": "monthly"})
+        budget_id: Final = string_value(budget["budget_id"])
+        scenario.cleanups.callback(scenario.delete_budget, budget_id)
+        assert "rollover_max_budget" not in budget
+
+        response: Final = proxy.request("POST", "/budget/info", {"budgets": [budget_id]})
+        assert response.status_code == 200, response.text
+        rows: Final = _MEMBERS.validate_json(response.content)
+        assert len(rows) == 1 and "rollover_max_budget" not in rows[0], rows

@@ -16,7 +16,7 @@ import asyncio
 import contextlib
 import json
 import traceback
-from collections.abc import Awaitable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast, overload
@@ -147,6 +147,8 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
+_USER_ROLLOVER_BASE: Final = TypeAdapter(float | None)
+_USER_ROLLOVER_PERIOD: Final = TypeAdapter(str | None)
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
@@ -660,7 +662,13 @@ async def new_user(
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
-        _require_valid_rollover(data_json.get("max_budget"), data.rollover_max_budget, data_json.get("budget_duration"))
+        if data.rollover_max_budget is not None:
+            configured_budget: Final = as_str_mapping(data_json) or {}
+            _require_valid_rollover(
+                _USER_ROLLOVER_BASE.validate_python(configured_budget.get("max_budget")),
+                data.rollover_max_budget,
+                _USER_ROLLOVER_PERIOD.validate_python(configured_budget.get("budget_duration")),
+            )
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
@@ -1484,10 +1492,6 @@ def _require_valid_rollover(base: float | None, cap: float | None, duration: str
         )
 
 
-def _rollover_credit_patch(fields: Collection[str], cap: float | None) -> Mapping[str, None]:
-    return MappingProxyType({"rollover_credit": None} if "rollover_max_budget" in fields and cap is None else {})
-
-
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -1517,7 +1521,8 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if "budget_limits" in non_default_values:
         non_default_values["budget_limits"] = budget_windows_json(data.budget_limits, stored=None)
 
-    non_default_values.update(_rollover_credit_patch(non_default_values.keys(), data.rollover_max_budget))
+    if "rollover_max_budget" in data.model_fields_set and data.rollover_max_budget is None:
+        non_default_values["rollover_credit"] = None
 
     is_internal_user = False
     if data.user_role == LitellmUserRoles.INTERNAL_USER:

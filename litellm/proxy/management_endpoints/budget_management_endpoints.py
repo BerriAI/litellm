@@ -403,6 +403,14 @@ async def update_budget(
     return response
 
 
+def _budget_response(row: PrismaRecord | None) -> Mapping[str, object] | None:
+    if row is None:
+        return None
+    return {
+        field: value for field, value in row.model_dump().items() if field != "rollover_max_budget" or value is not None
+    }
+
+
 @router.post(
     "/budget/new",
     tags=["budget management"],
@@ -413,7 +421,7 @@ async def new_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> object:
-    return await new_budget(budget_obj, user_api_key_dict)
+    return _budget_response(await new_budget(budget_obj, user_api_key_dict))
 
 
 @router.post(
@@ -426,7 +434,7 @@ async def update_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> object:
-    return await update_budget(budget_obj, user_api_key_dict)
+    return _budget_response(await update_budget(budget_obj, user_api_key_dict))
 
 
 @router.post(
@@ -455,7 +463,7 @@ async def info_budget(data: BudgetRequest):
         where={"budget_id": {"in": data.budgets}},
     )
 
-    return response
+    return tuple(_budget_response(row) for row in response)
 
 
 @router.get(
@@ -555,7 +563,7 @@ async def list_budget(
 
     response: Final = await BudgetRepository(prisma_client).table.find_many()
 
-    return response
+    return tuple(_budget_response(row) for row in response)
 
 
 @router.post(
@@ -614,4 +622,4 @@ async def delete_budget(
             detail={"error": "Budget is attached to a customer or app. Remove it through the owning entity."},
         )
 
-    return response
+    return _budget_response(response)

@@ -1801,7 +1801,7 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: float | None = None
-    rollover_max_budget: float | None = None
+    rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     user_email: str | None = None
     user_role: (
         Literal[

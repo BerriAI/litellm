@@ -841,31 +841,25 @@ class TeamMemberBudgetHandler:
         budget_duration: str | None = None,
         model_max_budget: GenericBudgetConfigType | None = None,
     ) -> TeamMemberBudgetWrite:
-        patch: Final = MappingProxyType(
-            {
-                name: value
-                for name, value, include in (
-                    ("budget_id", budget_id, True),
-                    ("max_budget", max_budget, max_budget is not None or "team_member_budget" in fields),
-                    ("rollover_max_budget", rollover_max_budget, "team_member_rollover_max_budget" in fields),
-                    ("rpm_limit", rpm_limit, rpm_limit is not None or "team_member_rpm_limit" in fields),
-                    ("tpm_limit", tpm_limit, tpm_limit is not None or "team_member_tpm_limit" in fields),
-                    (
-                        "budget_duration",
-                        budget_duration,
-                        budget_duration is not None or "team_member_budget_duration" in fields,
-                    ),
-                    ("budget_reset_at", None, budget_duration is None and "team_member_budget_duration" in fields),
-                    (
-                        "model_max_budget",
-                        MappingProxyType({}) if model_max_budget is None else model_max_budget,
-                        model_max_budget is not None or "team_member_model_max_budget" in fields,
-                    ),
-                )
-                if include
-            }
+        candidates: Final[tuple[tuple[str, object, bool], ...]] = (
+            ("budget_id", budget_id, True),
+            ("max_budget", max_budget, max_budget is not None or "team_member_budget" in fields),
+            ("rollover_max_budget", rollover_max_budget, "team_member_rollover_max_budget" in fields),
+            ("rpm_limit", rpm_limit, rpm_limit is not None or "team_member_rpm_limit" in fields),
+            ("tpm_limit", tpm_limit, tpm_limit is not None or "team_member_tpm_limit" in fields),
+            (
+                "budget_duration",
+                budget_duration,
+                budget_duration is not None or "team_member_budget_duration" in fields,
+            ),
+            ("budget_reset_at", None, budget_duration is None and "team_member_budget_duration" in fields),
+            (
+                "model_max_budget",
+                MappingProxyType({}) if model_max_budget is None else model_max_budget,
+                model_max_budget is not None or "team_member_model_max_budget" in fields,
+            ),
         )
-        return TeamMemberBudgetWrite.model_validate(patch)
+        return TeamMemberBudgetWrite.model_validate({name: value for name, value, include in candidates if include})
 
     @staticmethod
     async def upsert_team_member_budget_table(
@@ -948,12 +942,10 @@ class TeamMemberBudgetHandler:
         """Remove team member fields from data dictionary"""
         data_dict.pop("team_member_budget", None)
         data_dict.pop("team_member_budget_duration", None)
-        data_dict.pop("team_member_rollover_max_budget", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
-        data_dict.pop(  # pyright: ignore[reportUnknownMemberType]  # legacy raw dict lacks key typing
-            "team_member_model_max_budget", None
-        )
+        for field in ("team_member_model_max_budget", "team_member_rollover_max_budget"):
+            data_dict.pop(field, None)  # pyright: ignore[reportUnknownMemberType]  # legacy raw dict lacks key typing
 
     _clean_team_member_fields = clean_team_member_fields
 
@@ -962,7 +954,7 @@ class TeamMemberBudgetHandler:
         team_table: _TeamBudgetRow,
         user_api_key_dict: "UserAPIKeyAuth",
         updated_kv: dict,
-        explicitly_set_fields: set,
+        explicitly_set_fields: AbstractSet[str],
         user_api_key_cache: UserApiKeyCache | None = None,
     ) -> dict:
         """Clear explicitly-nulled fields on the team member budget row."""

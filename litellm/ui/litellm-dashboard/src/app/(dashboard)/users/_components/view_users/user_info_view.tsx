@@ -49,7 +49,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
 import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_components/AutoRouterBenchmarksTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
-import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { UserSpendCard } from "./UserSpendCard";
 
 interface UserInfoViewProps {
   userId: string;
@@ -74,6 +74,9 @@ interface TeamOption {
   team_id: string;
   team_alias: string;
 }
+
+const shouldRefreshBudget = (user: UserInfoV2Response, changes: Record<string, unknown>) =>
+  user.rollover_max_budget != null || changes.rollover_max_budget !== undefined;
 
 export default function UserInfoView({
   userId,
@@ -340,7 +343,7 @@ export default function UserInfoView({
       );
 
       // Update local state with new values
-      if (formValues.rollover_max_budget !== undefined || userData.rollover_max_budget != null) {
+      if (shouldRefreshBudget(userData, formValues)) {
         setUserData(await userGetInfoV2(accessToken, userData.user_id));
       } else
         setUserData({
@@ -405,8 +408,6 @@ export default function UserInfoView({
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
   const unlimited = t("users.userInfo.unlimited");
-  const effectiveBudget = userData.effective_max_budget ?? userData.max_budget;
-  const budgetLimit = effectiveBudget === null ? unlimited : `$${formatNumberWithCommas(effectiveBudget, 2)}`;
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -534,28 +535,7 @@ export default function UserInfoView({
         {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <Card className="block p-6">
-              <p>
-                {t("users.userInfo.overview.spend")}
-                <BudgetPeriodTooltip
-                  spend={userData.spend}
-                  maxBudget={effectiveBudget}
-                  budgetDuration={userData.budget_duration}
-                  budgetResetAt={userData.budget_reset_at}
-                />
-              </p>
-              <div className="mt-2">
-                <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
-                <p>{t("users.userInfo.overview.budgetOf", { budget: budgetLimit })}</p>
-                {userData.rollover_credit != null && (
-                  <p>
-                    {t("users.userInfo.overview.rolledOver", {
-                      amount: formatNumberWithCommas(userData.rollover_credit, 2),
-                    })}
-                  </p>
-                )}
-              </div>
-            </Card>
+            <UserSpendCard user={userData} />
 
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-2">

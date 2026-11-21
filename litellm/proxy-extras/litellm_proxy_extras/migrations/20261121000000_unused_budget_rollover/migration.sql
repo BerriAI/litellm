@@ -1,6 +1,8 @@
-ALTER TABLE "LiteLLM_UserTable" ADD COLUMN "rollover_max_budget" DOUBLE PRECISION,
-    ADD COLUMN "rollover_credit" DOUBLE PRECISION;
+SET LOCAL lock_timeout = '10s';
 
-ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN "rollover_max_budget" DOUBLE PRECISION;
+ALTER TABLE "LiteLLM_UserTable" ADD COLUMN IF NOT EXISTS "rollover_max_budget" DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS "rollover_credit" DOUBLE PRECISION;
 
-ALTER TABLE "LiteLLM_TeamMembership" ADD COLUMN "rollover_credit" DOUBLE PRECISION;
+ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN IF NOT EXISTS "rollover_max_budget" DOUBLE PRECISION;
+
+ALTER TABLE "LiteLLM_TeamMembership" ADD COLUMN IF NOT EXISTS "rollover_credit" DOUBLE PRECISION;
