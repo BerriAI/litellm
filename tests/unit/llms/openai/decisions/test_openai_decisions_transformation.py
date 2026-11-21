@@ -173,6 +173,84 @@ def test_answers_openai_did_not_return_are_refusals() -> None:
     assert [answer.name for answer in response.answers] == ["damaged", None, "severity", "fraud"]
 
 
+@pytest.mark.parametrize("order", [(3, 2, 1, 0), (1, 2, 3, 0), (0, 2, 1, 3)], ids=("reversed", "rotated", "swapped"))
+def test_answers_openai_returned_out_of_order_keep_their_own_values(order: tuple[int, ...]) -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [_OPENAI_RESPONSE["answers"][index] for index in order]}
+
+    parsed: Final = OpenAIDecisionsConfig().parse_response(payload, ir)
+
+    assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
+
+
+def test_an_out_of_order_answer_stays_with_its_question_when_another_is_missing() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [_REFUSAL_ANSWER, _PREDICATE_ANSWER]}
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        _PREDICATE_ANSWER,
+        {"type": "refusal", "name": None},
+        {"type": "refusal", "name": "severity"},
+        _REFUSAL_ANSWER,
+    ]
+
+
+_TWO_UNNAMED_QUESTIONS: Final[Mapping[str, object]] = {
+    "input": "The screen is cracked.",
+    "questions": [
+        {"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"},
+        {"type": "predicate", "instructions": "Is this fraud?"},
+        {"type": "predicate", "instructions": "Is this urgent?"},
+    ],
+}
+_UNNAMED_ANSWER: Final[Mapping[str, object]] = {"type": "predicate", "name": None, "probability": 0.2}
+
+
+@pytest.mark.parametrize(
+    ("request_body", "answers"),
+    [
+        (_OPENAI_REQUEST, [{**_PREDICATE_ANSWER, "name": "broken"}]),
+        (_OPENAI_REQUEST, [_REFUSAL_ANSWER, _PREDICATE_ANSWER, _PREDICATE_ANSWER]),
+        (_OPENAI_REQUEST, [*_OPENAI_RESPONSE["answers"], {**_PREDICATE_ANSWER, "name": "extra"}]),
+        (_OPENAI_REQUEST, [*_OPENAI_RESPONSE["answers"], _PREDICATE_ANSWER]),
+        (_TWO_UNNAMED_QUESTIONS, [_UNNAMED_ANSWER, _PREDICATE_ANSWER, _UNNAMED_ANSWER]),
+        (_TWO_UNNAMED_QUESTIONS, [_UNNAMED_ANSWER, _PREDICATE_ANSWER]),
+    ],
+    ids=(
+        "name_no_question_has",
+        "repeated_name_out_of_order",
+        "extra_answer",
+        "extra_answer_repeating_a_name",
+        "unnamed_answers_out_of_order",
+        "one_unnamed_answer_for_two_unnamed_questions",
+    ),
+)
+def test_answers_that_cannot_be_matched_to_a_question_are_a_provider_error(
+    request_body: Mapping[str, object], answers: list[Mapping[str, object]]
+) -> None:
+    with pytest.raises(DecisionsResponseValidationError) as raised:
+        OpenAIDecisionsConfig().transform_decisions_response(
+            "gpt-6-luna",
+            "openai",
+            httpx.Response(200, json={**_OPENAI_RESPONSE, "answers": answers}),
+            _openai_ir(request_body),
+        )
+    assert raised.value.status_code == 500
+
+
+def test_unnamed_answers_in_question_order_keep_their_positions() -> None:
+    ir: Final = _openai_ir(_TWO_UNNAMED_QUESTIONS)
+    answers: Final = [_PREDICATE_ANSWER, _UNNAMED_ANSWER, {**_UNNAMED_ANSWER, "probability": 0.6}]
+
+    response: Final = ir_to_openai_response(
+        OpenAIDecisionsConfig().parse_response({**_OPENAI_RESPONSE, "answers": answers}, ir), ir, "requested"
+    )
+
+    assert [answer.model_dump(mode="json") for answer in response.answers] == answers
+
+
 def test_a_box_answer_from_openai_keeps_its_box_instead_of_becoming_a_refusal() -> None:
     request: Final = {
         "input": _OPENAI_REQUEST["input"],
@@ -317,7 +395,7 @@ def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_lab
         **_OPENAI_RESPONSE,
         "answers": [
             _PREDICATE_ANSWER,
-            _CHOICE_ANSWER,
+            {**_CHOICE_ANSWER, "name": "action"},
             {
                 "type": "score",
                 "name": "severity",

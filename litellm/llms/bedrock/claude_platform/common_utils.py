@@ -12,7 +12,6 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
 CLAUDE_PLATFORM_SERVICE_NAME: Final = "aws-external-anthropic"
-CLAUDE_PLATFORM_BEDROCK_ROUTE: Final = "claude_platform/"
 
 CLAUDE_PLATFORM_UNSUPPORTED_PARAMS_OVERRIDE_KEY: Final = "claude_platform_unsupported_params"
 CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS: Final = frozenset(
@@ -71,12 +70,6 @@ def resolve_unsupported_override(
             type(raw).__name__,
         )
     return None
-
-
-def strip_claude_platform_route(model: str) -> str:
-    if model.startswith(CLAUDE_PLATFORM_BEDROCK_ROUTE):
-        return model.replace(CLAUDE_PLATFORM_BEDROCK_ROUTE, "", 1)
-    return model
 
 
 class BedrockClaudePlatformMixin(BaseAWSLLM):

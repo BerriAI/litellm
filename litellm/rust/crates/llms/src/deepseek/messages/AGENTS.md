@@ -6,4 +6,5 @@
 
 # references
 
+- Python counterpart `litellm/llms/deepseek/messages/transformation.py` (`DeepSeekAnthropicMessagesConfig`)
 - https://api-docs.deepseek.com/guides/anthropic_api

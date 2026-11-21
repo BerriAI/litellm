@@ -1,18 +1,18 @@
 import json
-import threading
 import os
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
-from enum import Enum
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from ipaddress import IPv4Address
 from itertools import accumulate
 from pathlib import Path
@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
+from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, ConnectionBudget, rust_writer_reserve
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
 from tests.integration._support.database import scratch_database
@@ -738,6 +739,20 @@ def private_configuration(config: Path, directory: Path) -> Path:
     return destination
 
 
+def pool_limit_for_prisma(connections: int, *, rust_spend_log_writer: bool = True) -> int:
+    """The smallest ``database_connection_pool_limit`` that leaves Prisma ``connections`` on the writer after the
+    Rust writer pool's share, which includes the spend log writer's reserve since the ledger is on by default.
+    Pass ``rust_spend_log_writer=False`` for a proxy configured with ``use_spend_logs_ledger: false``."""
+    if connections < 1:
+        raise ValueError(f"Prisma needs at least one connection, not {connections}")
+    reserved: Final = rust_writer_reserve(rust_spend_log_writer=rust_spend_log_writer)
+    return next(
+        total
+        for total in range(MIN_CONNECTION_LIMIT, connections + reserved + 1)
+        if ConnectionBudget.split(total, reserved).python == connections
+    )
+
+
 def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, str] = os.environ) -> Path:
     if inherited.get("INTEGRATION_WORKER_ISOLATION") != "1":
         return config
@@ -760,7 +775,10 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return destination
     configured: Final = {
         **settings,
-        "general_settings": {"database_connection_pool_limit": 2, **CONFIGURATION.validate_python(general)},
+        "general_settings": {
+            "database_connection_pool_limit": pool_limit_for_prisma(2),
+            **CONFIGURATION.validate_python(general),
+        },
     }
     destination.write_text(yaml.safe_dump(configured, sort_keys=False))
     return destination
@@ -790,7 +808,11 @@ def _proxy_environment(
         {
             **{name: value for name, value in inherited.items() if name not in removed},
             "LITELLM_MASTER_KEY": gateway.key,
-            "LITELLM_SALT_KEY": source.get("LITELLM_SALT_KEY", "sk-integration-salt"),
+            **(
+                {}
+                if "LITELLM_SALT_KEY" in removed
+                else {"LITELLM_SALT_KEY": source.get("LITELLM_SALT_KEY", "sk-integration-salt")}
+            ),
             "STORE_MODEL_IN_DB": "True",
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,

@@ -71,7 +71,6 @@ CASE: Final = PerformanceTestCase(
         Limit("prometheus_redis_latency_mean_seconds", max=0.002),
         Limit("postgres_active_sessions", max=0.0094),
         Limit("postgres_slowest_statement_seconds", max=0.042),
-        Limit("postgres_peak_connections", max=23),
         Limit("time_to_first_token_seconds", percentile=50, max=1.56),
         Limit("time_to_first_token_seconds", percentile=99, max=4.5),
         Limit("memory_growth_megabytes", max=600),

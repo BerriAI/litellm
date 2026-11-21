@@ -14,6 +14,7 @@ from litellm import (
     EvalTask,
     PredicateCheck,
     aagent_eval,
+    aagent_eval_attempt,
     agent_eval,
 )
 from litellm.harness.errors import SandboxError
@@ -116,6 +117,105 @@ async def test_should_evaluate_a_text_task_with_default_execution_settings() -> 
     assert report.runs[0].result is not None
     assert report.runs[0].result.text == "done"
     assert report.summaries[0].total == 1
+
+
+async def test_should_grade_a_single_attempt_before_cleaning_its_independent_workspace(tmp_path: Path) -> None:
+    original: Final = tmp_path / "project"
+    original.mkdir()
+    (original / "state.txt").write_text("original")
+
+    async def command(box: RecordingSandbox, cmd: Sequence[str]) -> CompletedRun:
+        if tuple(cmd) == ("prepare",):
+            assert await box.read("state.txt") == b"original"
+            await box.write("state.txt", b"changed")
+            return CompletedRun(stdout="prepared", stderr="", exit_code=0)
+        assert await box.read("state.txt") == b"changed"
+        assert await box.read("nested/input.txt") == b"overlay"
+        assert box.close_count == 0
+        return CompletedRun(stdout="verified", stderr="", exit_code=0)
+
+    factory: Final = RecordingFactory(command)
+    run: Final = await aagent_eval_attempt(
+        EvalTask(
+            "edit",
+            "Complete the task",
+            check=CommandCheck(("verify",)),
+            workspace=original,
+            files={"nested/input.txt": "overlay"},
+            setup=(("prepare",),),
+        ),
+        _target("candidate"),
+        trial=3,
+        suite_id="resumable-suite",
+        sandbox=factory,
+    )
+
+    assert (run.task_id, run.target, run.trial, run.status) == ("edit", "candidate", 3, EvalStatus.PASS)
+    assert run.check is not None and run.check.detail == "exit 0: verified"
+    assert run.stop_reason == "done"
+    assert len(factory.boxes) == 1
+    assert factory.boxes[0].commands == (("prepare",), ("verify",))
+    assert factory.boxes[0].close_count == 1
+    assert not Path(factory.boxes[0].workdir).exists()
+    assert (original / "state.txt").read_text() == "original"
+
+
+async def test_should_preserve_unknown_metrics_when_a_single_attempt_cannot_start() -> None:
+    def unavailable(workspace: Path) -> RecordingSandbox:
+        raise SandboxError("workspace unavailable")
+
+    run: Final = await aagent_eval_attempt(
+        EvalTask("answer", "Answer", check=PredicateCheck(_passes)), _target(), sandbox=unavailable
+    )
+
+    assert run.status is EvalStatus.ERROR
+    assert run.result is None and run.check is None
+    assert run.cost is None and run.usage is None and run.tool_calls is None
+    assert "workspace unavailable" in run.detail
+
+
+async def test_should_cleanup_a_single_attempt_when_its_caller_cancels() -> None:
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def blocked(box: RecordingSandbox, cmd: Sequence[str]) -> CompletedRun:
+        entered.set()
+        await release.wait()
+        return CompletedRun(stdout="ok", stderr="", exit_code=0)
+
+    factory: Final = RecordingFactory(blocked)
+    pending: Final = asyncio.create_task(
+        aagent_eval_attempt(EvalTask("blocked", "Answer", check=CommandCheck(("verify",))), _target(), sandbox=factory)
+    )
+    await entered.wait()
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert len(factory.boxes) == 1
+    assert factory.boxes[0].close_count == 1
+    assert not Path(factory.boxes[0].workdir).exists()
+
+
+@pytest.mark.parametrize(
+    ("trial", "suite_id", "turns", "timeout", "setup_timeout"),
+    ((0, None, None, 1, 1), (1, " ", None, 1, 1), (1, None, 0, 1, 1), (1, None, None, 0, 1), (1, None, None, 1, 0)),
+)
+async def test_should_reject_invalid_attempt_options_before_creating_a_sandbox(
+    trial: int, suite_id: str | None, turns: int | None, timeout: float, setup_timeout: float
+) -> None:
+    factory: Final = RecordingFactory()
+    with pytest.raises(ValueError, match=r"positive|greater than zero|non-empty"):
+        await aagent_eval_attempt(
+            EvalTask("answer", "Answer", check=PredicateCheck(_passes)),
+            _target(),
+            trial=trial,
+            suite_id=suite_id,
+            max_turns=turns,
+            timeout=timeout,
+            setup_timeout=setup_timeout,
+            sandbox=factory,
+        )
+    assert factory.boxes == ()
 
 
 async def test_should_copy_each_workspace_and_run_setup_and_checks_in_the_same_sandbox(tmp_path: Path) -> None:

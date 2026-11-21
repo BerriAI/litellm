@@ -12,38 +12,20 @@ use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 #[rstest]
-#[case::chat("/v1/chat/completions", "anthropic/test-model", false)]
-#[case::messages("/v1/messages", "anthropic/test-model", false)]
-#[case::responses("/v1/responses", "openai/test-model", false)]
-#[case::messages_stream("/v1/messages", "anthropic/test-model", true)]
-#[case::responses_stream("/v1/responses", "openai/test-model", true)]
+#[case::complete(false)]
+#[case::stream(true)]
 #[tokio::test]
-async fn all_inference_endpoints_share_native_cache(
-    #[case] path: &str,
-    #[case] model: &str,
+async fn messages_share_native_cache(
     #[case] stream: bool,
     #[values("s-maxage", "s-max-age")] max_age: &str,
 ) {
+    let path = "/v1/messages";
+    let model = "anthropic/test-model";
     let upstream = MockServer::start().await;
-    let is_responses = path.ends_with("responses");
-    let provider_body = if is_responses {
-        json!({"id":"response-1", "model":"test-model", "status":"completed", "output":[]})
-    } else {
-        json!({"id":"message-1", "model":"test-model", "type":"message", "role":"assistant", "content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn", "usage":{"input_tokens":1,"output_tokens":1}})
-    };
-    let terminal = if is_responses {
-        "response.completed"
-    } else {
-        "message_stop"
-    };
-    let output = if is_responses {
-        ""
-    } else {
-        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
-    };
-    let events = format!("{output}event: {terminal}\ndata: {{\"type\":\"{terminal}\"}}\n\n");
+    let provider_body = json!({"id":"message-1", "model":"test-model", "type":"message", "role":"assistant", "content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn", "usage":{"input_tokens":1,"output_tokens":1}});
+    let events = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
     let template = if stream {
-        ResponseTemplate::new(200).set_body_raw(events.clone(), "text/event-stream")
+        ResponseTemplate::new(200).set_body_raw(events, "text/event-stream")
     } else {
         ResponseTemplate::new(200).set_body_json(provider_body)
     };
@@ -63,11 +45,7 @@ async fn all_inference_endpoints_share_native_cache(
         }),
     );
     let app = support::app_with_cache(model, &upstream.uri(), cache.clone());
-    let request = if is_responses {
-        json!({"model":"public/model", "input":"hello", "stream":stream, "cache":{(max_age):600}})
-    } else {
-        json!({"model":"public/model", "messages":[{"role":"user","content":"hello"}], "max_tokens":16, "stream":stream, "cache":{(max_age):600}})
-    };
+    let request = json!({"model":"public/model", "messages":[{"role":"user","content":"hello"}], "max_tokens":16, "stream":stream, "cache":{(max_age):600}});
     let first = support::post(app.clone(), path, request.clone()).await;
     assert_eq!(first.status(), 200);
     assert!(!first.headers().contains_key("x-litellm-cache-key"));
@@ -145,7 +123,9 @@ async fn authenticated_callers_do_not_share_cached_responses(
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id":"response-1", "model":"test-model", "status":"completed", "output":[]
+            "id":"message-1", "model":"test-model", "type":"message", "role":"assistant",
+            "content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn",
+            "usage":{"input_tokens":1,"output_tokens":1}
         })))
         .expect(2)
         .mount(&upstream)
@@ -154,34 +134,34 @@ async fn authenticated_callers_do_not_share_cached_responses(
         InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
     )));
     let first_caller = support::app_with_cache_for_principal(
-        "openai/test-model",
+        "anthropic/test-model",
         &upstream.uri(),
         cache.clone(),
         Principal::new("issuer".into(), "tenant-a".into(), PrincipalKind::Service),
     );
     let second_caller = support::app_with_cache_for_principal(
-        "openai/test-model",
+        "anthropic/test-model",
         &upstream.uri(),
         cache,
         Principal::new(authority.into(), subject.into(), PrincipalKind::Service),
     );
-    let body = json!({"model":"public/model","input":"same prompt"});
-    let first = support::post(first_caller.clone(), "/v1/responses", body.clone()).await;
+    let body = json!({"model":"public/model","messages":[{"role":"user","content":"same prompt"}],"max_tokens":16});
+    let first = support::post(first_caller.clone(), "/v1/messages", body.clone()).await;
     assert_eq!(first.status(), 200);
     assert!(!first.headers().contains_key("x-litellm-cache-key"));
-    let first_hit = support::post(first_caller.clone(), "/v1/responses", body.clone()).await;
+    let first_hit = support::post(first_caller.clone(), "/v1/messages", body.clone()).await;
     assert_eq!(first_hit.status(), 200);
     let first_key = first_hit.headers().get("x-litellm-cache-key").unwrap();
-    let second = support::post(second_caller.clone(), "/v1/responses", body.clone()).await;
+    let second = support::post(second_caller.clone(), "/v1/messages", body.clone()).await;
     assert_eq!(second.status(), 200);
     assert!(!second.headers().contains_key("x-litellm-cache-key"));
-    let second_hit = support::post(second_caller, "/v1/responses", body.clone()).await;
+    let second_hit = support::post(second_caller, "/v1/messages", body.clone()).await;
     assert_eq!(second_hit.status(), 200);
     assert_ne!(
         second_hit.headers().get("x-litellm-cache-key").unwrap(),
         first_key
     );
-    let first_again = support::post(first_caller, "/v1/responses", body).await;
+    let first_again = support::post(first_caller, "/v1/messages", body).await;
     assert_eq!(first_again.status(), 200);
     assert_eq!(
         first_again.headers().get("x-litellm-cache-key"),

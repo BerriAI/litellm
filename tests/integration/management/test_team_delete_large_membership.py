@@ -14,7 +14,6 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from hashlib import sha256
-from itertools import count
 from pathlib import Path
 from typing import Final
 
@@ -27,7 +26,6 @@ from pydantic import JsonValue
 from redis import Redis
 
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
-from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, ConnectionBudget
 from tests.integration._support.client import (
     Gateway,
     Scenario,
@@ -37,7 +35,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process, pool_limit_for_prisma
 
 LARGE_ROSTER: Final = 250
 POOL_LIMIT: Final = 5
@@ -62,9 +60,7 @@ LOCK_TEAM_KEY_ROWS_SQL: Final = 'SELECT token FROM "LiteLLM_VerificationToken" W
 LOCK_BUDGET_ROW_SQL: Final = 'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s FOR UPDATE'
 LOCK_HELD_PAST_DEFAULT_TRANSACTION_SECONDS: Final = 7
 POOL_HELD_PAST_DELETE_RETRIES_SECONDS: Final = 12
-TWO_PRISMA_CONNECTIONS_POOL_LIMIT: Final = next(
-    total for total in count(MIN_CONNECTION_LIMIT) if ConnectionBudget.split(total).python == 2
-)
+TWO_PRISMA_CONNECTIONS_POOL_LIMIT: Final = pool_limit_for_prisma(2)
 OLDEST_TRANSACTION_BLOCKED_BY_SQL: Final = """
 SELECT coalesce(max(extract(epoch FROM clock_timestamp() - xact_start)), 0)::float AS age
 FROM pg_stat_activity

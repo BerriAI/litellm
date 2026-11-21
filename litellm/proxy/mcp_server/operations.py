@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
-from typing import Any, Final, NoReturn, TypeAlias, overload
+from typing import Final, NoReturn, TypeAlias, overload
 
 import anyio
 from fastapi import HTTPException
@@ -60,8 +60,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    publish_auth_cache_invalidation,
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
@@ -88,6 +88,7 @@ from litellm.proxy.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
     ProgressCallback,
+    ToolCallLoggingData,
 )
 from litellm.proxy.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.mcp_server.exceptions import (
@@ -141,7 +142,9 @@ from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
     handler_outcome,
+    is_url_elicitation_required,
     to_call_tool_result,
+    url_elicitation_as_error_result,
 )
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_blocked
 from litellm.proxy.mcp_server.tool_registry import (
@@ -233,7 +236,7 @@ async def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
     """Drop a stored-or-deleted BYOK credential from this worker's cache and from every peer worker's."""
     cache_key: Final = byok_credential_cache_key(user_id, server_id)
     byok_credential_cache.delete_cache(cache_key)
-    await publish_auth_cache_invalidation(cache_key=cache_key)
+    await publish_cache_invalidation(cache_key=cache_key)
 
 
 def _mcp_session_id_from_headers(
@@ -2160,7 +2163,8 @@ async def execute_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
-    **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
+    flatten_url_elicitation: bool = False,
+    **kwargs: Unpack[ToolCallLoggingData],  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
         user_api_key_auth=user_api_key_auth,
@@ -2180,9 +2184,10 @@ async def execute_mcp_tool(
         host_progress_callback=host_progress_callback,
         guardrail_context=guardrail_context,
         guardrail_auth=guardrail_auth,
-        logging_data=types.MappingProxyType(kwargs),
+        logging_data=kwargs,
         input_responses=input_responses,
         request_state=request_state,
+        flatten_url_elicitation=flatten_url_elicitation,
     )
     return await GatewayOperations().execute(operation, context)
 
@@ -2205,7 +2210,8 @@ async def _execute_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
-    **kwargs: Any,
+    flatten_url_elicitation: bool = False,
+    **kwargs: Unpack[ToolCallLoggingData],
 ) -> CallToolResult | InputRequiredResult:
     """
     Execute MCP tool.
@@ -2499,7 +2505,7 @@ async def _execute_mcp_tool(
     # Primary and recommended way to use external MCP servers
     #########################################################
     elif mcp_server:
-        response = await _handle_managed_mcp_tool(
+        managed_execution: Final = _handle_managed_mcp_tool(
             server_name=server_name,
             name=original_tool_name,
             arguments=arguments,
@@ -2524,6 +2530,18 @@ async def _execute_mcp_tool(
             input_responses=input_responses,
             request_state=request_state,
             incoming_bearer_token=incoming_bearer_token,
+        )
+        response = await (
+            url_elicitation_as_error_result(managed_execution)
+            if flatten_url_elicitation
+            else _relay_guarded_url_elicitation(
+                managed_execution,
+                logging_obj=litellm_logging_obj,
+                original_auth=user_api_key_auth,
+                guardrail_auth=effective_guardrail_auth,
+                request_data=kwargs,
+                start_time=start_time,
+            )
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2617,6 +2635,82 @@ async def _execute_mcp_tool(
         original_auth=user_api_key_auth,
         guardrail_auth=effective_guardrail_auth,
         request_data=kwargs,
+    )
+
+
+def _json_object(value: object) -> Mapping[str, JsonValue] | None:
+    return TypeAdapter(dict[str, JsonValue]).validate_python(value) if isinstance(value, dict) else None
+
+
+def _elicitation_message(elicitation: Mapping[str, JsonValue] | None) -> str | None:
+    message: Final = elicitation.get("message") if elicitation is not None else None
+    return message if isinstance(message, str) else None
+
+
+async def _result_or_url_elicitation(
+    execution: Awaitable[CallToolResult | InputRequiredResult],
+) -> CallToolResult | InputRequiredResult | MCPError:
+    try:
+        return await execution
+    except MCPError as error:
+        if not is_url_elicitation_required(error):
+            raise
+        return error
+
+
+async def _relay_guarded_url_elicitation(
+    execution: Awaitable[CallToolResult | InputRequiredResult],
+    logging_obj: LiteLLMLoggingObj | None,
+    original_auth: UserAPIKeyAuth | None,
+    guardrail_auth: UserAPIKeyAuth | None,
+    request_data: Mapping[str, object],
+    start_time: datetime,
+) -> CallToolResult | InputRequiredResult:
+    elicitation_error: Final = await _result_or_url_elicitation(execution)
+    if not isinstance(elicitation_error, MCPError):
+        return elicitation_error
+    data: Final = _json_object(elicitation_error.error.data)
+    listed: Final = data.get("elicitations") if data is not None else None
+    elicitations: Final = TypeAdapter(list[JsonValue]).validate_python(listed) if isinstance(listed, list) else []
+    entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
+    messages: Final = tuple(_elicitation_message(entry) for entry in entries)
+    guarded: Final = tuple(index for index, message in enumerate(messages) if message is not None)
+    guarded_result: Final = await _run_post_mcp_call_guardrails(
+        CallToolResult(
+            content=[
+                TextContent(type="text", text=elicitation_error.error.message),
+                *(TextContent(type="text", text=message) for message in messages if message is not None),
+            ]
+        ),
+        litellm_logging_obj=logging_obj,
+        original_auth=original_auth,
+        guardrail_auth=guardrail_auth,
+        request_data=request_data,
+    )
+    checked: Final = (
+        await logging_obj.async_post_mcp_tool_call_hook(  # pyright: ignore[reportUnknownMemberType]  # hook takes the logger's untyped call details
+            kwargs=logging_obj.model_call_details,
+            response_obj=guarded_result,
+            start_time=start_time,
+            end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
+        )
+        if logging_obj is not None
+        else guarded_result
+    )
+    texts: Final = tuple(TextContent.model_validate(block).text for block in checked.content)
+    replaced: Final = dict(zip(guarded, texts[1:], strict=True))
+    raise MCPError(
+        code=elicitation_error.error.code,
+        message=texts[0],
+        data={
+            **data,
+            "elicitations": [
+                {**entry, "message": replaced[index]} if entry is not None and index in replaced else elicitation
+                for index, (elicitation, entry) in enumerate(zip(elicitations, entries, strict=True))
+            ],
+        }
+        if data is not None and replaced
+        else elicitation_error.error.data,
     )
 
 
@@ -3642,6 +3736,8 @@ async def _execute_mcp_server_tool_call(
             is_error=True,
         )
     except Exception as e:
+        if is_url_elicitation_required(e):
+            raise
         verbose_logger.exception("MCP mcp_server_tool_call - error: %s", e)
         return CallToolResult(
             content=[TextContent(text=f"Error: {e}", type="text")],
@@ -4054,6 +4150,7 @@ class GatewayOperations:
                     input_responses=operation.input_responses,
                     request_state=operation.request_state,
                     incoming_bearer_token=context.incoming_bearer_token,
+                    flatten_url_elicitation=operation.flatten_url_elicitation,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):

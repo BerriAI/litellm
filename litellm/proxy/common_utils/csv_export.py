@@ -1,10 +1,13 @@
 import csv
 import io
-from collections.abc import Sequence
+import json
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 
 def csv_cell(value: object) -> object:
+    if isinstance(value, Mapping):
+        return json.dumps(value, separators=(",", ":"))
     if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
         return f"'{value}"
     return value

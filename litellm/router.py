@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 # against them and ``Router.__init__`` reports them. The body is never run.
 def _router_init(
     self: object,
-    model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
+    model_list: list[DeploymentTypedDict] | Sequence[Mapping[str, object]] | None = None,
     ## ASSISTANTS API ##
     assistants_config: AssistantsTypedDict | None = None,
     ## SEARCH API ##
@@ -127,6 +127,7 @@ def _router_init(
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
     _host: PythonHost = python_host,
+    enable_cross_model_group_collision_check: bool | None = None,
 ) -> None:
     """
     Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -168,6 +169,7 @@ def _router_init(
             whose deployment is in cooldown or removed. Async routes only. Defaults to False. Applied at startup.
         ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+        enable_cross_model_group_collision_check (Optional[bool]): When True, a request naming a raw `litellm_params.model` string (with or without `specific_deployment`) whose eligible deployments belong to more than one model group is refused with a 400 instead of load-balanced across those groups. When None, read from the `LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK` environment variable. Defaults to off.
         enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
         fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
@@ -323,6 +325,7 @@ if TYPE_CHECKING:
         afile_delete: Callable[..., Awaitable[FileDeleted]]
         avector_store_create: Callable[..., Awaitable[VectorStoreCreateResponse]]
         allm_passthrough_route: Callable[..., Awaitable[httpx.Response | AsyncGenerator[bytes, bytes]]]
+        schedule_acompletion: Callable[..., Awaitable[object]]
 
         def __getattr__(self, name: str) -> Any: ...  # the endpoints served by name
 
