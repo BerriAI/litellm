@@ -234,10 +234,10 @@ impl PyAuthObject {
     }
 }
 
-/// `UserApiKeyCache` with `enable_redis_auth_cache` on. The sync methods back `DualCache`'s sync
+/// `UserApiKeyCache`, always native: memory only until `attach` adds Redis. The sync methods back `DualCache`'s sync
 /// API and block with the GIL released, like redis-py's sync client.
 #[pyclass(frozen, name = "NativeAuthCache")]
-pub(crate) struct NativeAuthCache(Arc<AuthCache>);
+pub(crate) struct NativeAuthCache(pub(super) Arc<AuthCache>);
 
 #[pymethods]
 impl NativeAuthCache {
@@ -257,6 +257,11 @@ impl NativeAuthCache {
         ))))
     }
 
+    /// Adds the Redis tier and keeps memory; `false` when one was already attached.
+    fn attach(&self, client: PyRef<'_, NativeRedisClient>) -> bool {
+        self.0.attach(remote(&client))
+    }
+
     #[getter]
     fn has_redis(&self) -> bool {
         self.0.has_redis()
@@ -267,23 +272,26 @@ impl NativeAuthCache {
     fn get<'py>(
         &self,
         py: Python<'py>,
-        key: String,
+        key: PyAuthObject,
         request: Option<&NativeRequestRedis>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let request = request.map(|request| request.0.clone());
         redis_async(py, "async_get_cache", kind_error, async move {
             store
-                .get(request.as_ref(), &key)
+                .get(request.as_ref(), &key.0)
                 .await
                 .map(|value| value.map(PyValue))
         })
     }
 
-    fn get_sync(&self, py: Python<'_>, key: String) -> PyResult<Option<PyValue>> {
+    fn get_sync(&self, py: Python<'_>, key: PyAuthObject) -> PyResult<Option<PyValue>> {
         let store = self.0.clone();
         redis_sync(py, "get_cache", kind_error, async move {
-            store.get(None, &key).await.map(|value| value.map(PyValue))
+            store
+                .get(None, &key.0)
+                .await
+                .map(|value| value.map(PyValue))
         })
     }
 
@@ -302,7 +310,7 @@ impl NativeAuthCache {
     fn set<'py>(
         &self,
         py: Python<'py>,
-        key: String,
+        key: PyAuthObject,
         value: PyValue,
         ttl_seconds: Option<f64>,
         request: Option<&NativeRequestRedis>,
@@ -311,7 +319,7 @@ impl NativeAuthCache {
         let ttl = ttl(ttl_seconds)?;
         let request = request.map(|request| request.0.clone());
         redis_async(py, "async_set_cache", kind_error, async move {
-            store.set(request.as_ref(), &key, value.0, ttl).await
+            store.set(request.as_ref(), &key.0, value.0, ttl).await
         })
     }
 
@@ -319,7 +327,7 @@ impl NativeAuthCache {
     fn set_sync(
         &self,
         py: Python<'_>,
-        key: String,
+        key: PyAuthObject,
         value: PyValue,
         ttl_seconds: Option<f64>,
         request: Option<&NativeRequestRedis>,
@@ -328,14 +336,14 @@ impl NativeAuthCache {
         let ttl = ttl(ttl_seconds)?;
         let request = request.map(|request| request.0.clone());
         redis_sync(py, "set_cache", kind_error, async move {
-            store.set_str(request.as_ref(), &key, value.0, ttl).await
+            store.set_str(request.as_ref(), &key.0, value.0, ttl).await
         })
     }
 
-    fn lease<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
+    fn lease<'py>(&self, py: Python<'py>, key: PyAuthObject) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         redis_async(py, "async_get_cache", kind_error, async move {
-            Ok::<_, litellm_redis_store::Error>(store.lease(&key).await)
+            Ok::<_, litellm_redis_store::Error>(store.lease(&key.0).await)
         })
     }
 
@@ -344,7 +352,7 @@ impl NativeAuthCache {
     fn set_leased<'py>(
         &self,
         py: Python<'py>,
-        key: String,
+        key: PyAuthObject,
         lease: Option<String>,
         value: PyValue,
         ttl_seconds: Option<f64>,
@@ -356,7 +364,7 @@ impl NativeAuthCache {
         redis_async(py, "async_set_cache", kind_error, async move {
             Ok::<_, litellm_redis_store::Error>(
                 store
-                    .set_leased(request.as_ref(), &key, lease.as_deref(), value.0, ttl)
+                    .set_leased(request.as_ref(), &key.0, lease.as_deref(), value.0, ttl)
                     .await,
             )
         })
@@ -366,14 +374,14 @@ impl NativeAuthCache {
     #[pyo3(signature = (key, value, ttl_seconds, send))]
     fn declare_set(
         &self,
-        key: String,
+        key: PyAuthObject,
         value: PyValue,
         ttl_seconds: Option<f64>,
         send: &NativeSend,
     ) -> PyResult<NativePending> {
         let written = self
             .0
-            .declare_set(send.send(), &key, value.0, ttl(ttl_seconds)?)
+            .declare_set(send.send(), &key.0, value.0, ttl(ttl_seconds)?)
             .map_err(kind_error)?;
         Ok(pending(
             "async_set_cache",
@@ -400,14 +408,14 @@ impl NativeAuthCache {
     fn set_many<'py>(
         &self,
         py: Python<'py>,
-        entries: Vec<(String, PyValue)>,
+        entries: Vec<(PyAuthObject, PyValue)>,
         ttl_seconds: Option<f64>,
         request: Option<&NativeRequestRedis>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let entries = entries
             .into_iter()
-            .map(|(key, value)| (key, value.0))
+            .map(|(key, value)| (key.0, value.0))
             .collect();
         let ttl = ttl(ttl_seconds)?;
         let request = request.map(|request| request.0.clone());
@@ -420,12 +428,12 @@ impl NativeAuthCache {
     fn write_back<'py>(
         &self,
         py: Python<'py>,
-        entries: Vec<(String, PyValue, Option<f64>)>,
+        entries: Vec<(PyAuthObject, PyValue, Option<f64>)>,
         send: &NativeSend,
     ) -> PyResult<Bound<'py, PyAny>> {
         let entries = entries
             .into_iter()
-            .map(|(key, value, seconds)| Ok((key, value.0, ttl(seconds)?)))
+            .map(|(key, value, seconds)| Ok((key.0, value.0, ttl(seconds)?)))
             .collect::<PyResult<_>>()?;
         let written = self
             .0
@@ -455,7 +463,8 @@ impl NativeAuthCache {
 
     /// One `MGET` of keys the caller found missing in memory, on the batch `send` picks; `None`
     /// without Redis.
-    fn get_many(&self, keys: Vec<String>, send: &NativeSend) -> Option<NativePending> {
+    fn get_many(&self, keys: Vec<PyAuthObject>, send: &NativeSend) -> Option<NativePending> {
+        let keys: Vec<AuthObject> = keys.into_iter().map(|key| key.0).collect();
         let read = self.0.get_many(send.send(), &keys)?;
         Some(pending("async_batch_get_cache", kind_error, read, values))
     }
@@ -463,23 +472,36 @@ impl NativeAuthCache {
     fn increment_if_present<'py>(
         &self,
         py: Python<'py>,
-        key: String,
+        key: PyAuthObject,
         amount: PyNumber,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         redis_async(py, "async_increment_if_present", kind_error, async move {
-            store.increment_if_present(&key, amount.0).await
+            store.increment_if_present(&key.0, amount.0).await
         })
     }
 
-    fn get_local(&self, key: &str) -> PyResult<Option<PyValue>> {
-        Ok(self.0.get_local(key).map_err(kind_error)?.map(PyValue))
+    fn get_local(&self, key: PyRef<'_, PyAuthObject>) -> PyResult<Option<PyValue>> {
+        Ok(self.0.get_local(&key.0).map_err(kind_error)?.map(PyValue))
+    }
+
+    fn get_local_by_key(&self, key: &str) -> PyResult<Option<PyValue>> {
+        Ok(self
+            .0
+            .get_local_by_key(key)
+            .map_err(kind_error)?
+            .map(PyValue))
     }
 
     #[pyo3(signature = (key, value, ttl_seconds = None))]
-    fn set_local(&self, key: &str, value: PyValue, ttl_seconds: Option<f64>) -> PyResult<()> {
+    fn set_local(
+        &self,
+        key: PyRef<'_, PyAuthObject>,
+        value: PyValue,
+        ttl_seconds: Option<f64>,
+    ) -> PyResult<()> {
         self.0
-            .set_local(key, value.0, ttl(ttl_seconds)?)
+            .set_local(&key.0, value.0, ttl(ttl_seconds)?)
             .map_err(kind_error)
     }
 

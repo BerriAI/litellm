@@ -1,7 +1,10 @@
-from collections.abc import Callable, Mapping, Sequence
+import hashlib
+from collections.abc import Callable, Container, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
 from functools import reduce
+from itertools import chain
+from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias, TypeVar
 
 from pydantic import BeforeValidator, ConfigDict, Json, TypeAdapter, ValidationError
@@ -11,6 +14,25 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.types.utils import (
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Choices,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
+
+# OpenAI has a 64-character limit for function/tool names
+# Anthropic does not have this limit, so we need to truncate long names
+OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
+TOOL_NAME_HASH_LENGTH: Final = 8
+TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
+
+
+BRIDGED_TOOL_NAMES_KWARG: Final = "litellm_bridged_tool_names"
 
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
@@ -69,6 +91,122 @@ def declared_function_name(tool: object) -> str | None:
 
 def qualified_member_name(namespace: str, name: str) -> str:
     return f"{namespace}__{name}"
+
+
+@dataclass(frozen=True, slots=True)
+class BridgedToolNames:
+    full_name_by_sent_name: tuple[tuple[str, str], ...]
+
+    def as_mapping(self) -> Mapping[str, str]:
+        return dict(self.full_name_by_sent_name)
+
+
+@dataclass(frozen=True, slots=True)
+class SentToolNames:
+    member_chat_names: Mapping[str, str]
+    self_named_namespace_members: Container[str]
+
+
+_RenamableResponse: Final = TypeVar("_RenamableResponse", ModelResponse, ModelResponseStream)
+_RenamableToolCall: Final = TypeVar(
+    "_RenamableToolCall",
+    ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+    ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall,
+)
+
+
+def with_renamed_tool_calls(response: _RenamableResponse, new_names: Mapping[str, str]) -> _RenamableResponse:
+    if not new_names:
+        return response
+    return response.model_copy(
+        update={"choices": [_choice_with_renamed_tool_calls(choice, new_names) for choice in response.choices]}
+    )
+
+
+def _choice_with_renamed_tool_calls(
+    choice: Choices | StreamingChoices, new_names: Mapping[str, str]
+) -> Choices | StreamingChoices:
+    if isinstance(choice, StreamingChoices):
+        return _streaming_choice_with_renamed_tool_calls(choice, new_names)
+    if not choice.message.tool_calls:
+        return choice
+    tool_calls: Final = [_renamed_tool_call(tool_call, new_names) for tool_call in choice.message.tool_calls]
+    return choice.model_copy(update={"message": choice.message.model_copy(update={"tool_calls": tool_calls})})
+
+
+def _streaming_choice_with_renamed_tool_calls(
+    choice: StreamingChoices, new_names: Mapping[str, str]
+) -> StreamingChoices:
+    if not choice.delta.tool_calls:
+        return choice
+    tool_calls: Final = [_renamed_tool_call(tool_call, new_names) for tool_call in choice.delta.tool_calls]
+    return choice.model_copy(update={"delta": choice.delta.model_copy(update={"tool_calls": tool_calls})})
+
+
+def _renamed_tool_call(tool_call: _RenamableToolCall, new_names: Mapping[str, str]) -> _RenamableToolCall:
+    if not isinstance(tool_call, ChatCompletionMessageToolCall | ChatCompletionDeltaToolCall):
+        return tool_call
+    new_name: Final = new_names.get(tool_call.function.name or "")
+    if new_name is None or new_name == tool_call.function.name:
+        return tool_call
+    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"name": new_name})})
+
+
+def _function_call_names(choice: Choices | StreamingChoices) -> tuple[str, ...]:
+    if not isinstance(choice, Choices):
+        return ()
+    return tuple(
+        tool_call.function.name
+        for tool_call in choice.message.tool_calls or ()
+        if isinstance(tool_call, ChatCompletionMessageToolCall) and tool_call.function.name
+    )
+
+
+def declared_function_names(tools: object) -> frozenset[str]:
+    try:
+        entries: Final = _TOOLS.validate_python(tools)
+    except ValidationError:
+        return frozenset()
+    return frozenset(name for name in map(declared_function_name, entries) if name)
+
+
+def with_tool_calls_named_as_declared(response: ModelResponse, declared_names: frozenset[str]) -> ModelResponse:
+    called_names: Final = frozenset(chain.from_iterable(map(_function_call_names, response.choices)))
+    return with_renamed_tool_calls(
+        response,
+        MappingProxyType(
+            {
+                name: truncate_tool_name(name)
+                for name in called_names
+                if name not in declared_names and truncate_tool_name(name) in declared_names
+            }
+        ),
+    )
+
+
+def truncate_tool_name(name: str) -> str:
+    """
+    Truncate tool names that exceed OpenAI's 64-character limit.
+
+    Uses format: {55-char-prefix}_{8-char-hash} to avoid collisions
+    when multiple tools have similar long names.
+
+    Args:
+        name: The original tool name
+
+    Returns:
+        The original name if <= 64 chars, otherwise truncated with hash
+    """
+    if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
+        return name
+
+    # Create deterministic hash from full name to avoid collisions
+    name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
+    return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
+
+
+def chat_member_name(namespace: str, name: str) -> str:
+    return truncate_tool_name(qualified_member_name(namespace, name))
 
 
 @dataclass(frozen=True, slots=True)

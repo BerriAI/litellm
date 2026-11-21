@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CustomerBudgetDialog } from "../../customers/_components/CustomerBudgetDialog";
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -28,6 +29,14 @@ import {
 import { useAppBudgetGroups } from "./useAppBudgetGroups";
 import { AppBudgetRow, AppBudgetTable, type AppUsageContext } from "./AppBudgetCells";
 import { calendarDate, customerPresetRange } from "../../customers/_components/customerUsageRange";
+
+const ORGANIZATION_APPS_TABLE = {
+  keyPrefix: "org_apps_",
+  sortFields: [],
+  defaultSort: { id: "", desc: false },
+  defaultPageSize: 5,
+  filterColumns: [],
+};
 
 export default function CustomerOrganizationApps({
   organizationId,
@@ -245,9 +254,26 @@ function OrganizationAppsTable({
   usageLayout: boolean;
 }) {
   const { t } = useTranslation();
+  const { pagination, onPaginationChange } = useUrlTableState(ORGANIZATION_APPS_TABLE);
+  const { pageSize, pageIndex } = pagination;
+  const page = Math.min(pageIndex, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
   return (
-    <AppBudgetTable scope="organization" usageLayout={usageLayout}>
-      {rows.map(({ app, row }) => (
+    <AppBudgetTable
+      scope="organization"
+      usageLayout={usageLayout}
+      footer={
+        <DataTablePagination
+          className="justify-end border-t px-4 py-3"
+          page={page}
+          pageSize={pageSize}
+          pageSizeOptions={[5, 10, 25]}
+          rowCount={rows.length}
+          onPageChange={(pageIndex) => onPaginationChange({ pageIndex, pageSize })}
+          onPageSizeChange={(pageSize) => onPaginationChange({ pageIndex: 0, pageSize })}
+        />
+      }
+    >
+      {rows.slice(page * pageSize, (page + 1) * pageSize).map(({ app, row }) => (
         <AppBudgetRow
           key={app.app_id}
           scope="organization"
