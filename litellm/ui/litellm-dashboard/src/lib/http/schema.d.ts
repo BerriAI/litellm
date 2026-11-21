@@ -22517,6 +22517,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/events/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Subscriptions */
+        get: operations["list_subscriptions_v1_mcp_events_subscriptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/events/subscriptions/{subscription_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Subscription */
+        delete: operations["delete_subscription_v1_mcp_events_subscriptions__subscription_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/events/subscriptions/{subscription_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Test Event */
+        post: operations["send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/events/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Event Types */
+        get: operations["list_event_types_v1_mcp_events_types_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/make_public": {
         parameters: {
             query?: never;
@@ -33094,6 +33162,37 @@ export interface components {
              */
             mcp_disabled_capabilities?: ("prompts" | "resources")[] | null;
             /**
+             * Mcp Event Max Events Per Minute
+             * @description Events delivered to one caller per minute before events are dropped. Defaults to 600.
+             */
+            mcp_event_max_events_per_minute?: number | null;
+            /**
+             * Mcp Event Max Streams
+             * @description Concurrent events/stream requests one replica serves. Defaults to 512.
+             */
+            mcp_event_max_streams?: number | null;
+            /**
+             * Mcp Event Max Streams Per Caller
+             * @description Concurrent events/stream requests one caller may hold on a replica. Defaults to 50.
+             */
+            mcp_event_max_streams_per_caller?: number | null;
+            /**
+             * Mcp Event Max Subscriptions Per Key
+             * @description Webhook event subscriptions one caller may hold. Defaults to 50.
+             */
+            mcp_event_max_subscriptions_per_key?: number | null;
+            /**
+             * Mcp Events Enabled
+             * @description Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. Each upstream server also needs events.enabled. Off by default.
+             * @default false
+             */
+            mcp_events_enabled: boolean;
+            /**
+             * Mcp Events Public Base Url
+             * @description Public https base URL of this proxy that upstream MCP servers can reach, used to build the callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.
+             */
+            mcp_events_public_base_url?: string | null;
+            /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */
@@ -35497,6 +35596,27 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /** EventType */
+        EventType: {
+            /** Meta */
+            _meta?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Delivery */
+            delivery: ("poll" | "push" | "webhook")[];
+            /** Description */
+            description?: string | null;
+            /** Inputschema */
+            inputSchema?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Name */
+            name: string;
+            /** Payloadschema */
+            payloadSchema?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /**
          * ExportType
@@ -38015,6 +38135,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -38285,6 +38406,10 @@ export interface components {
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
             mcp_access_groups?: string[] | null;
+            /** Mcp Event Permissions */
+            mcp_event_permissions?: {
+                [key: string]: string[];
+            } | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
             /** Mcp Tool Permissions */
@@ -38331,6 +38456,10 @@ export interface components {
              * @default []
              */
             mcp_access_groups: string[] | null;
+            /** Mcp Event Permissions */
+            mcp_event_permissions?: {
+                [key: string]: string[];
+            } | null;
             /**
              * Mcp Servers
              * @default []
@@ -41279,6 +41408,26 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MCPServerEventsConfig */
+        MCPServerEventsConfig: {
+            /** Allowed Events */
+            allowed_events?: string[] | null;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Legacy Webhook Id Equals Event Id
+             * @default false
+             */
+            legacy_webhook_id_equals_event_id: boolean;
+            /**
+             * Min Poll Interval Ms
+             * @default 1000
+             */
+            min_poll_interval_ms: number;
+        };
         /**
          * MCPServerUserCredentialListItem
          * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
@@ -42527,6 +42676,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -51065,6 +51215,11 @@ export interface components {
             /** Fixed Cost */
             fixed_cost: number | null;
         };
+        /** SubscriptionList */
+        SubscriptionList: {
+            /** Subscriptions */
+            subscriptions: components["schemas"]["SubscriptionView"][];
+        };
         /** SubscriptionUsageResponse */
         SubscriptionUsageResponse: {
             /** Accounts */
@@ -51081,6 +51236,40 @@ export interface components {
             start_date: string;
             /** Subscription Providers */
             subscription_providers: string[];
+        };
+        /** SubscriptionView */
+        SubscriptionView: {
+            /** Arguments */
+            arguments: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Callback Host */
+            callback_host: string;
+            /** Created At */
+            created_at: string | null;
+            /** Event Name */
+            event_name: string;
+            /** Failed Since */
+            failed_since: string | null;
+            /** Id */
+            id: string;
+            /** Last Delivery At */
+            last_delivery_at: string | null;
+            /** Last Error */
+            last_error: ("connection_refused" | "timeout" | "tls_error" | "http_4xx" | "http_5xx" | "challenge_failed") | null;
+            /** Refresh Before */
+            refresh_before: string | null;
+            /** Server Id */
+            server_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "active" | "suspended" | "terminated";
+            /** Team Id */
+            team_id: string | null;
+            /** User Id */
+            user_id: string | null;
         };
         /**
          * SuccessfulKeyUpdate
@@ -52157,6 +52346,15 @@ export interface components {
             } | null;
             /** Success */
             success: boolean;
+        };
+        /** TestDeliveryResult */
+        TestDeliveryResult: {
+            /** Delivered */
+            delivered: boolean;
+            /** Error */
+            error?: ("connection_refused" | "timeout" | "tls_error" | "http_4xx" | "http_5xx" | "challenge_failed") | null;
+            /** Status */
+            status?: number | null;
         };
         /**
          * TestPoliciesAndGuardrailsRequest
@@ -53639,6 +53837,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -89163,6 +89362,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_subscriptions_v1_mcp_events_subscriptions_get: {
+        parameters: {
+            query?: {
+                server_id?: string | null;
+                status?: ("pending" | "active" | "suspended" | "terminated") | null;
+                key_alias?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_subscription_v1_mcp_events_subscriptions__subscription_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscription_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscription_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestDeliveryResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_event_types_v1_mcp_events_types_get: {
+        parameters: {
+            query: {
+                server_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventType"][];
                 };
             };
             /** @description Validation Error */

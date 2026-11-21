@@ -20,6 +20,7 @@ import { StdioDisabledBanner } from "./StdioAvailability";
 import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
+import { MCPServerEventsPanel } from "./MCPServerEventsPanel";
 
 interface MCPServerViewProps {
   mcpServer: MCPServer;
@@ -171,6 +172,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           {canViewUserCredentials && (
             <TabsTrigger value="3" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.serverView.tabs.userCredentials")}
+            </TabsTrigger>
+          )}
+          {mcpServer.events?.enabled && (
+            <TabsTrigger value="4" className="flex-none rounded-none px-4 py-2">
+              {t("mcpServers.serverView.tabs.events")}
             </TabsTrigger>
           )}
         </TabsList>
@@ -468,6 +474,13 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 accessToken={accessToken}
                 canRevoke={canRevokeUserCredentials}
               />
+            </Card>
+          </TabsContent>
+        )}
+        {mcpServer.events?.enabled && (
+          <TabsContent value="4">
+            <Card className="p-6">
+              <MCPServerEventsPanel serverId={mcpServer.server_id} accessToken={accessToken} />
             </Card>
           </TabsContent>
         )}

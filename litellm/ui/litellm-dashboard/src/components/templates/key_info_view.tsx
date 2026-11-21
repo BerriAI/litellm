@@ -49,6 +49,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
+import MCPEventPermissionsEditor from "../mcp_server_management/MCPEventPermissionsEditor";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
@@ -127,6 +128,20 @@ export default function KeyInfoView({
   );
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const saveEventPermissions = async (next: Record<string, string[]>) => {
+    if (!accessToken || !currentKeyData) return;
+    try {
+      const updated = await keyUpdateCall(accessToken, {
+        key: currentKeyData.token,
+        object_permission: { mcp_event_permissions: next },
+      });
+      setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...updated } : undefined));
+      void queryClient.invalidateQueries({ queryKey: keyKeys.all });
+      toast.success(t("keyDetail.keyInfoView.toasts.updated"));
+    } catch (error) {
+      toast.fromError(parseErrorMessage(error));
+    }
+  };
   const { teams: teamsData } = useTeams();
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
@@ -887,6 +902,17 @@ export default function KeyInfoView({
                   variant="inline"
                   accessToken={accessToken}
                 />
+                {userRole != null && rolesWithWriteAccess.includes(userRole) ? (
+                  <div className="mt-4">
+                    <MCPEventPermissionsEditor
+                      key={currentKeyData.token}
+                      accessToken={accessToken}
+                      serverIds={currentKeyData.object_permission?.mcp_servers ?? []}
+                      value={currentKeyData.object_permission?.mcp_event_permissions ?? {}}
+                      onSave={saveEventPermissions}
+                    />
+                  </div>
+                ) : null}
               </Card>
 
               <Card className="block p-6">

@@ -13236,6 +13236,14 @@
       "actions": {
         "cancel": "Cancel",
         "save": "Save Changes"
+      },
+      "events": {
+        "enabled": "MCP events",
+        "enabledTooltip": "Relay the upstream server's events/* (poll, push and webhook) through the gateway. Needs protocol 2026-07-28 and mcp_events_enabled in general settings.",
+        "description": "Clients subscribe to this server's event types through the gateway, with the same keys, guardrails and logs as tool calls.",
+        "allowed": "Allowed event types",
+        "allowedTooltip": "Glob patterns such as build.* that limit which upstream event types the gateway publishes. Leave empty to allow every type.",
+        "allowedPlaceholder": "Leave empty to allow every event type"
       }
     },
     "oauthFormFields": {
@@ -13633,7 +13641,8 @@
         "toolSearch": "Tool Search",
         "networkSettings": "Network Settings",
         "submitted": "Submitted MCPs",
-        "liveConnections": "Live Connections"
+        "liveConnections": "Live Connections",
+        "eventSubscriptions": "Event Subscriptions"
       },
       "searchPlaceholder": "Search by name, alias, URL, or ID",
       "resultCount": "{{shown}} of {{total}} servers",
@@ -14388,7 +14397,8 @@
         "overview": "Overview",
         "tools": "MCP Tools",
         "settings": "Settings",
-        "userCredentials": "User Credentials"
+        "userCredentials": "User Credentials",
+        "events": "Events"
       },
       "overview": {
         "transport": "Transport",
@@ -14421,6 +14431,16 @@
           "disabled": "Disabled",
           "enabledPkcePassthrough": "Enabled (PKCE Pass-Through)",
           "allToolsEnabled": "All tools enabled"
+        }
+      },
+      "events": {
+        "loading": "Loading event types...",
+        "loadError": "Could not load event types",
+        "empty": "The upstream server publishes no event types the gateway allows.",
+        "columns": {
+          "name": "Event type",
+          "description": "Description",
+          "delivery": "Delivery"
         }
       }
     },
@@ -14560,6 +14580,60 @@
         "calling": "Calling Tool...",
         "callAgain": "Call Again",
         "call": "Call Tool"
+      }
+    },
+    "eventSubscriptionsTab": {
+      "title": "Event subscriptions",
+      "description": "Webhook subscriptions the gateway relays from upstream MCP servers to clients. Push and poll subscriptions last only as long as a request and are not listed.",
+      "refresh": "Refresh",
+      "loading": "Loading event subscriptions...",
+      "loadError": "Could not load event subscriptions",
+      "empty": "No webhook event subscriptions yet.",
+      "regionLabel": "Webhook event subscriptions",
+      "noExpiry": "No expiry",
+      "columns": {
+        "event": "Event",
+        "server": "Server",
+        "arguments": "Arguments",
+        "callback": "Callback host",
+        "status": "Status",
+        "owner": "Owner",
+        "lastDelivery": "Last delivery",
+        "lastError": "Last error",
+        "expires": "Expires",
+        "actions": "Actions"
+      },
+      "status": {
+        "pending": "Pending",
+        "active": "Active",
+        "suspended": "Suspended",
+        "terminated": "Terminated"
+      },
+      "failure": {
+        "connection_refused": "Connection refused",
+        "timeout": "Timed out",
+        "tls_error": "TLS error",
+        "http_4xx": "Client error (4xx)",
+        "http_5xx": "Server error (5xx)",
+        "challenge_failed": "Verification failed"
+      },
+      "test": {
+        "label": "Send test event",
+        "ariaLabel": "Send a signed test event to subscription {{id}}",
+        "delivered": "Test event delivered (HTTP {{status}})",
+        "failed": "Test event was not delivered",
+        "httpStatus": "The callback answered HTTP {{status}}"
+      },
+      "terminate": {
+        "label": "Terminate",
+        "ariaLabel": "Terminate subscription {{id}}",
+        "error": "Could not terminate the subscription"
+      },
+      "confirm": {
+        "title": "Terminate this subscription?",
+        "body": "The client receives a terminated notice for {{event}} and the gateway ends the upstream subscription.",
+        "cancel": "Cancel",
+        "confirm": "Terminate"
       }
     }
   },
@@ -14710,6 +14784,12 @@
       "noServers": "No MCP Servers",
       "blockAll": "Block all",
       "empty": "No MCP servers found"
+    },
+    "eventPermissions": {
+      "title": "Event permissions",
+      "description": "Pick the event types this credential may subscribe to on each events-enabled server. Leave a server empty to allow every event type the server publishes.",
+      "allEvents": "All event types",
+      "save": "Save event permissions"
     }
   },
   "logs": {

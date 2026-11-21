@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info, TriangleAlert } from "lucide-react";
@@ -80,6 +81,7 @@ import {
   parsesAsJsonObject,
   selectControl,
   selectTriggerControl,
+  switchControl,
   tagsControl,
   textControl,
 } from "./mcpFieldRules";
@@ -161,6 +163,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
       dcr_bridge: Boolean(mcpServer.dcr_bridge),
+      events_enabled: Boolean(mcpServer.events?.enabled),
+      events_allowed: mcpServer.events?.allowed_events ?? [],
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -999,6 +1003,41 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       step={1}
                       placeholder={t("mcpServers.serverEdit.fields.rpmPlaceholder")}
                       className="w-full rounded-lg"
+                    />
+                  )}
+                </MountedFormField>
+
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <span className="text-sm font-medium text-foreground flex items-center">
+                      {t("mcpServers.serverEdit.events.enabled")}
+                      <SimpleTooltip content={t("mcpServers.serverEdit.events.enabledTooltip")}>
+                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                      </SimpleTooltip>
+                    </span>
+                    <p className="text-sm text-muted-foreground mt-1">{t("mcpServers.serverEdit.events.description")}</p>
+                  </div>
+                  <MountedFormField name="events_enabled" className="mb-0">
+                    {(control) => <Switch aria-label={t("mcpServers.serverEdit.events.enabled")} {...switchControl(control)} />}
+                  </MountedFormField>
+                </div>
+
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-foreground flex items-center">
+                      {t("mcpServers.serverEdit.events.allowed")}
+                      <SimpleTooltip content={t("mcpServers.serverEdit.events.allowedTooltip")}>
+                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="events_allowed"
+                >
+                  {(control) => (
+                    <MultiSelect
+                      {...tagsControl(control, t)}
+                      placeholder={t("mcpServers.serverEdit.events.allowedPlaceholder")}
+                      className="rounded-lg"
                     />
                   )}
                 </MountedFormField>

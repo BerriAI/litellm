@@ -426,6 +426,13 @@ export interface MCPToolsViewerProps {
 
 export const MCP_REACHABLE_DESCRIPTION: ParseKeys = "mcpTools.reachableDescription";
 
+export interface MCPServerEventsConfig {
+  enabled: boolean;
+  allowed_events?: string[] | null;
+  min_poll_interval_ms?: number;
+  legacy_webhook_id_equals_event_id?: boolean;
+}
+
 export interface MCPServer {
   server_id: string;
   is_config?: boolean;
@@ -471,6 +478,7 @@ export interface MCPServer {
   dcr_bridge?: boolean | null;
   max_concurrent_requests?: number | null;
   rpm?: number | null;
+  events?: MCPServerEventsConfig | null;
   /** Redacted to null in server responses; present when constructing a server locally. */
   credentials?: Record<string, unknown> | null;
 
@@ -610,6 +618,50 @@ export interface MCPGatewaySessionsResponse {
   by_client: MCPGatewaySessionGroupCount[];
   by_user: MCPGatewaySessionGroupCount[];
   sessions: MCPGatewaySession[];
+}
+
+export type MCPEventSubscriptionStatus = "pending" | "active" | "suspended" | "terminated";
+
+export type MCPEventCallbackFailure =
+  | "connection_refused"
+  | "timeout"
+  | "tls_error"
+  | "http_4xx"
+  | "http_5xx"
+  | "challenge_failed";
+
+export interface MCPEventSubscription {
+  id: string;
+  server_id: string;
+  event_name: string;
+  arguments: Record<string, unknown>;
+  callback_host: string;
+  status: MCPEventSubscriptionStatus;
+  user_id: string | null;
+  team_id: string | null;
+  refresh_before: string | null;
+  last_delivery_at: string | null;
+  last_error: MCPEventCallbackFailure | null;
+  failed_since: string | null;
+  created_at: string | null;
+}
+
+export interface MCPEventSubscriptionsResponse {
+  subscriptions: MCPEventSubscription[];
+}
+
+export interface MCPEventTestDeliveryResult {
+  delivered: boolean;
+  status?: number | null;
+  error?: MCPEventCallbackFailure | null;
+}
+
+export interface MCPEventType {
+  name: string;
+  description?: string | null;
+  delivery: ("poll" | "push" | "webhook")[];
+  inputSchema?: Record<string, unknown>;
+  payloadSchema?: Record<string, unknown>;
 }
 
 export interface MCPGatewaySessionsTerminateResponse {

@@ -114,6 +114,10 @@ import { jsonFields } from "./common_components/check_openapi_schema";
 import type {
   MCPGatewaySessionSelector,
   MCPGatewaySessionsResponse,
+  MCPEventSubscription,
+  MCPEventSubscriptionsResponse,
+  MCPEventTestDeliveryResult,
+  MCPEventType,
   MCPGatewaySessionsTerminateResponse,
   MCPServerUserCredentialListItem,
   MCPServerUserCredentialType,
@@ -4685,6 +4689,28 @@ export const terminateMCPGatewaySessions = async (
   selector: MCPGatewaySessionSelector,
 ): Promise<MCPGatewaySessionsTerminateResponse> =>
   apiClient.delete<MCPGatewaySessionsTerminateResponse>(`/v1/mcp/sessions`, { accessToken, query: { ...selector } });
+
+export const fetchMCPEventSubscriptions = async (accessToken: string): Promise<MCPEventSubscriptionsResponse> =>
+  apiClient.get<MCPEventSubscriptionsResponse>(`/v1/mcp/events/subscriptions`, { accessToken });
+
+export const terminateMCPEventSubscription = async (
+  accessToken: string,
+  subscriptionId: string,
+): Promise<MCPEventSubscription> =>
+  apiClient.delete<MCPEventSubscription>(`/v1/mcp/events/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+    accessToken,
+  });
+
+export const sendMCPEventTestDelivery = async (
+  accessToken: string,
+  subscriptionId: string,
+): Promise<MCPEventTestDeliveryResult> =>
+  apiClient.post<MCPEventTestDeliveryResult>(`/v1/mcp/events/subscriptions/${encodeURIComponent(subscriptionId)}/test`, {
+    accessToken,
+  });
+
+export const fetchMCPEventTypes = async (accessToken: string, serverId: string): Promise<MCPEventType[]> =>
+  apiClient.get<MCPEventType[]>(`/v1/mcp/events/types`, { accessToken, query: { server_id: serverId } });
 
 export const fetchMCPServerUserCredentials = async (
   accessToken: string,

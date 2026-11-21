@@ -13,6 +13,7 @@ import {
   TRANSPORT,
   isClientForwardedTokenMode,
   preservedAdminCredentials,
+  type MCPServerEventsConfig,
 } from "@/components/mcp_tools/types";
 import { AUTH_TYPES_REQUIRING_CREDENTIALS, reduceStaticHeaders } from "./createServerPayload";
 import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
@@ -33,6 +34,8 @@ export interface EditServerFormValues {
   readonly oauth_passthrough?: boolean;
   readonly dcr_bridge?: boolean;
   readonly token_validation_json?: string;
+  readonly events_enabled?: boolean;
+  readonly events_allowed?: readonly string[];
   readonly mcp_access_groups?: readonly MCPAccessGroupValue[];
   readonly transport?: string;
   readonly server_name?: string;
@@ -300,6 +303,8 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     oauth_passthrough: oauthPassthroughRaw,
     dcr_bridge: dcrBridgeRaw,
     token_validation_json: rawTokenValidationJson,
+    events_enabled: eventsEnabledRaw,
+    events_allowed: eventsAllowedRaw,
     ...rawRestValues
   } = values;
 
@@ -428,8 +433,26 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     ...(tokenValidation.value !== null || mcpServer.token_validation
       ? { token_validation: tokenValidation.value }
       : {}),
+    ...eventsEntry(mcpServer.events, eventsEnabledRaw, eventsAllowedRaw),
     ...credentialsEntry,
   };
 
   return { kind: "ok", payload };
 };
+
+export function eventsEntry(
+  current: MCPServerEventsConfig | null | undefined,
+  enabled: boolean | undefined,
+  allowed: readonly string[] | undefined,
+): { readonly events?: MCPServerEventsConfig } {
+  const nextEnabled = enabled ?? current?.enabled ?? false;
+  if (!nextEnabled && !current) return {};
+  const allowedEvents = allowed ?? current?.allowed_events ?? [];
+  return {
+    events: {
+      ...(current ?? {}),
+      enabled: nextEnabled,
+      allowed_events: allowedEvents.length > 0 ? [...allowedEvents] : null,
+    },
+  };
+}

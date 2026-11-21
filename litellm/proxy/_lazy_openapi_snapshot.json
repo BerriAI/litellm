@@ -38804,6 +38804,43 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -38993,6 +39030,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -40830,6 +40877,16 @@
               ],
               "title": "Env Vars"
             },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "extra_headers": {
               "items": {
                 "type": "string"
@@ -41640,6 +41697,43 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -41829,6 +41923,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -43797,6 +43901,73 @@
   "mcp_management": {
     "components": {
       "schemas": {
+        "EventType": {
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "delivery": {
+              "items": {
+                "enum": [
+                  "poll",
+                  "push",
+                  "webhook"
+                ],
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Delivery",
+              "type": "array"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "inputSchema": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Inputschema",
+              "type": "object"
+            },
+            "name": {
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "payloadSchema": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Payloadschema",
+              "type": "object"
+            }
+          },
+          "required": [
+            "name",
+            "delivery"
+          ],
+          "title": "EventType",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -43810,6 +43981,7 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "JsonValue": {},
         "LiteLLM_MCPServerTable": {
           "description": "Represents a LiteLLM_MCPServerTable record",
           "properties": {
@@ -44028,6 +44200,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "items": {
@@ -45353,6 +45535,43 @@
           "title": "MCPOAuthUserCredentialStatus",
           "type": "object"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "MCPServerUserCredentialListItem": {
           "description": "One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.",
           "properties": {
@@ -45873,6 +46092,16 @@
               ],
               "title": "Env Vars"
             },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -46250,6 +46479,208 @@
           "title": "RejectMCPServerRequest",
           "type": "object"
         },
+        "SubscriptionList": {
+          "properties": {
+            "subscriptions": {
+              "items": {
+                "$ref": "#/components/schemas/SubscriptionView"
+              },
+              "title": "Subscriptions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "subscriptions"
+          ],
+          "title": "SubscriptionList",
+          "type": "object"
+        },
+        "SubscriptionView": {
+          "properties": {
+            "arguments": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Arguments",
+              "type": "object"
+            },
+            "callback_host": {
+              "title": "Callback Host",
+              "type": "string"
+            },
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "event_name": {
+              "title": "Event Name",
+              "type": "string"
+            },
+            "failed_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Failed Since"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "last_delivery_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Delivery At"
+            },
+            "last_error": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "connection_refused",
+                    "timeout",
+                    "tls_error",
+                    "http_4xx",
+                    "http_5xx",
+                    "challenge_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Error"
+            },
+            "refresh_before": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Refresh Before"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "suspended",
+                "terminated"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          },
+          "required": [
+            "id",
+            "server_id",
+            "event_name",
+            "arguments",
+            "callback_host",
+            "status",
+            "user_id",
+            "team_id",
+            "refresh_before",
+            "last_delivery_at",
+            "last_error",
+            "failed_since",
+            "created_at"
+          ],
+          "title": "SubscriptionView",
+          "type": "object"
+        },
+        "TestDeliveryResult": {
+          "properties": {
+            "delivered": {
+              "title": "Delivered",
+              "type": "boolean"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "connection_refused",
+                    "timeout",
+                    "tls_error",
+                    "http_4xx",
+                    "http_5xx",
+                    "challenge_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          "required": [
+            "delivered"
+          ],
+          "title": "TestDeliveryResult",
+          "type": "object"
+        },
         "UpdateMCPServerRequest": {
           "properties": {
             "alias": {
@@ -46427,6 +46858,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -46894,6 +47335,243 @@
             }
           ],
           "summary": "Discover Mcp Servers",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/subscriptions": {
+        "get": {
+          "operationId": "list_subscriptions_v1_mcp_events_subscriptions_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "server_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Server Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "status",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "suspended",
+                      "terminated"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Status"
+              }
+            },
+            {
+              "in": "query",
+              "name": "key_alias",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Alias"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SubscriptionList"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Subscriptions",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/subscriptions/{subscription_id}": {
+        "delete": {
+          "operationId": "delete_subscription_v1_mcp_events_subscriptions__subscription_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "subscription_id",
+              "required": true,
+              "schema": {
+                "title": "Subscription Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SubscriptionView"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Subscription",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/subscriptions/{subscription_id}/test": {
+        "post": {
+          "operationId": "send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "subscription_id",
+              "required": true,
+              "schema": {
+                "title": "Subscription Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TestDeliveryResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Send Test Event",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/types": {
+        "get": {
+          "operationId": "list_event_types_v1_mcp_events_types_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/EventType"
+                    },
+                    "title": "Response List Event Types V1 Mcp Events Types Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Event Types",
           "tags": [
             "mcp_management"
           ]
@@ -49147,6 +49825,43 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -49336,6 +50051,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
