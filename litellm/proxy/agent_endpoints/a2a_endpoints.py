@@ -44,6 +44,11 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
     has_databricks_oauth,
     resolve_databricks_backend_auth,
 )
+from litellm.proxy.agent_endpoints.token_exchange import (
+    exchange_agent_token,
+    has_token_exchange,
+    without_token_exchange,
+)
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
@@ -222,7 +227,19 @@ async def _resolve_backend_auth(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
     agent_extra_headers: Mapping[str, str] | None = None,
+    *,
+    agent: "AgentResponse",
+    request_headers: Mapping[str, str],
+    user_api_key_auth: UserAPIKeyAuth,
 ) -> AgentBackendAuth:
+    if has_token_exchange(litellm_params):
+        resource: Final = str((agent.agent_card_params or {}).get("url") or agent.agent_id)
+        return AgentBackendAuth(
+            litellm_params=without_token_exchange(litellm_params),
+            header=await exchange_agent_token(
+                litellm_params, agent.agent_id, resource, request_headers, user_api_key_auth
+            ),
+        )
     databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
     if has_databricks_oauth(litellm_params):
         return databricks_auth
@@ -1011,7 +1028,14 @@ async def invoke_agent_a2a(
             dynamic_headers=dynamic_headers or None,
             static_headers=static_headers or None,
         )
-        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider, merged_agent_headers)
+        backend_auth: Final = await _resolve_backend_auth(
+            litellm_params,
+            custom_llm_provider,
+            merged_agent_headers,
+            agent=agent,
+            request_headers=request.headers,
+            user_api_key_auth=user_api_key_dict,
+        )
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
