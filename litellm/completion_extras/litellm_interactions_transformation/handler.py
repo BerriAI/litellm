@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -31,8 +32,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
-from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ModelResponse, Usage
 
 from .continuation import (
@@ -441,6 +442,15 @@ def _mark_initial_prompt_tokens(result: ModelResponse, hops: Sequence[JsonMappin
         setattr(result, "usage", with_initial_prompt_tokens(usage, initial_input_tokens_of(hops)))  # noqa: B010  # ModelResponse sets usage dynamically
 
 
+_VERTEX_MODEL_PATH: Final = re.compile(
+    r"/v1(?:beta1)?/projects/[^/]+/locations/[^/]+/(?:publishers/[^/]+/)?models/[^/]+/?$"
+)
+
+
+def _without_vertex_model_path(api_base: str | None) -> str | None:
+    return _VERTEX_MODEL_PATH.sub("", api_base) if api_base is not None else None
+
+
 def _interaction_of(response: httpx.Response) -> JsonMapping:
     parsed: Final = _JSON_VALUE.validate_json(response.content)
     return parsed if isinstance(parsed, dict) else MappingProxyType({})
@@ -509,11 +519,15 @@ class InteractionsToCompletionBridgeHandler:
                 litellm_params=generic_params,
             )
         )
+        interactions_base: Final = _without_vertex_model_path(generic_params.api_base or api_base)
         complete_url: Final = interactions_config.get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # BaseInteractionsAPIConfig uses bare dict
-            api_base=generic_params.api_base or api_base,
+            api_base=interactions_base,
             model=model,
             agent=None,
-            litellm_params=generic_params.model_dump(exclude_none=True),
+            litellm_params={
+                **generic_params.model_dump(exclude_none=True),
+                **({"api_base": interactions_base} if interactions_base is not None else {}),
+            },
             stream=is_stream,
         )
         cleaned_optional: Final = {k: v for k, v in optional_params.items() if k not in _STRIPPED_CHAT_PARAM_KEYS}

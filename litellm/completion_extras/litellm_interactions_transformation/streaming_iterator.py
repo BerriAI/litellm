@@ -18,6 +18,7 @@ from litellm.exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    Timeout,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -56,7 +57,7 @@ LineStreamAsync: TypeAlias = AsyncIterator[str | bytes]
 HopBody: TypeAlias = dict[str, object]
 SyncHopOpener: TypeAlias = Callable[[HopBody], httpx.Response]
 AsyncHopOpener: TypeAlias = Callable[[HopBody], Awaitable[httpx.Response]]
-_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError)
+_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError, Timeout)
 
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _EMPTY_JSON_MAP: Final[JsonMapping] = MappingProxyType({})
@@ -224,6 +225,7 @@ class InteractionsChatStreamingIterator:
         self._pending_hop_body: HopBody | None = None
         self._pending_hop_token: str | None = None
         self._hop_usages: tuple[JsonValue, ...] = ()
+        self._hop_open: bool = False
         self._step_index_offset: int = 0
         self._highest_step_index: int = -1
         self.http_response: httpx.Response | None = http_response
@@ -502,6 +504,7 @@ class InteractionsChatStreamingIterator:
             raw_status if isinstance(raw_status, str) else None,
             has_tool_calls=bool(self._tool_slots_by_step),
         )
+        self._hop_open = False
         hop_usage: Final = interaction_map.get("usage") or event.get("usage")
         self._hop_usages = (*self._hop_usages, hop_usage)
         if self._request_body is not None and (self._open_sync_hop or self._open_async_hop) is not None:
@@ -537,13 +540,25 @@ class InteractionsChatStreamingIterator:
         self._pending_hop_body = None
         if hop_body is not None:
             self._done = False
+            self._hop_open = True
             self._step_index_offset = self._highest_step_index + 1
         return hop_body
 
     def _end_after_failed_hop(self, error: Exception) -> None:
         log_failed_hop(error)
         self._done = True
+        self._hop_open = False
         self._buffer.append(self._final_chunk("length", self._pending_hop_token))
+
+    def _end_stream(self) -> None:
+        if self._hop_open:
+            self._end_after_failed_hop(ValueError("the continuation stream ended before the interaction completed"))
+        self._done = True
+
+    def _fail_stream(self, error: Exception) -> None:
+        if not self._hop_open:
+            raise error
+        self._end_after_failed_hop(error)
 
     def _start_sync_hop(self, hop_body: HopBody) -> None:
         if self._open_sync_hop is None:
@@ -635,9 +650,15 @@ class InteractionsChatStreamingIterator:
             try:
                 line = next(self._sync_lines)
             except StopIteration:
-                self._done = True
+                self._end_stream()
                 continue
-            self.feed_line(line)
+            except _HOP_FAILURES as error:
+                self._fail_stream(error)
+                continue
+            try:
+                self.feed_line(line)
+            except _HOP_FAILURES as error:
+                self._fail_stream(error)
         return self._buffer.popleft()
 
     def __aiter__(self) -> InteractionsChatStreamingIterator:
@@ -654,10 +675,17 @@ class InteractionsChatStreamingIterator:
             try:
                 line = await anext(self._async_lines)
             except StopAsyncIteration:
-                self._done = True
+                self._end_stream()
+                continue
+            except _HOP_FAILURES as error:
+                await self.aclose()
+                self._fail_stream(error)
                 continue
             try:
                 self.feed_line(line)
+            except _HOP_FAILURES as error:
+                await self.aclose()
+                self._fail_stream(error)
             except Exception:
                 await self.aclose()
                 raise

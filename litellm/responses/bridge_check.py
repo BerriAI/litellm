@@ -371,6 +371,26 @@ def _is_interactions_eligible_target(
     return True
 
 
+_ONE_CANDIDATE: Final = (None, 1)
+_CANDIDATE_COUNT_KEYS: Final = ("candidate_count", "candidateCount")
+
+
+def _asks_generate_content_for_candidates(*param_sources: Mapping[str, object] | None) -> bool:
+    extra_bodies: Final = (str_keyed_mapping((source or {}).get("extra_body")) for source in param_sources)
+    generation_configs: Final = (
+        str_keyed_mapping((extra_body or {}).get(key))
+        for extra_body in extra_bodies
+        for key in ("generationConfig", "generation_config")
+    )
+    return any(
+        config.get(key) not in _ONE_CANDIDATE
+        for config in generation_configs
+        if config is not None
+        for key in _CANDIDATE_COUNT_KEYS
+        if key in config
+    )
+
+
 def _is_gemini_4_or_newer(model: str) -> bool:
     generation: Final = _GEMINI_GENERATION.match(model.rsplit("/", 1)[-1].lower())
     return generation is not None and int(generation.group(1)) >= _FIRST_GEMINI_GENERATION_ON_INTERACTIONS
@@ -407,6 +427,7 @@ def should_route_to_interactions_api(
     litellm_params: object = None,
     deployment_model_info: object = None,
     skip_bridge: object = False,
+    candidate_count: object = None,
 ) -> bool:
     if bool(skip_bridge):
         return False
@@ -432,7 +453,13 @@ def should_route_to_interactions_api(
     if _shared_routing_mode(model, custom_llm_provider) == "interactions":
         return True
 
-    return bool(litellm.route_all_chat_gemini_to_interactions) or _is_gemini_4_or_newer(model)
+    if bool(litellm.route_all_chat_gemini_to_interactions):
+        return True
+    return (
+        _is_gemini_4_or_newer(model)
+        and candidate_count in _ONE_CANDIDATE
+        and not _asks_generate_content_for_candidates(str_keyed_mapping(optional_params), llm_map)
+    )
 
 
 def resolve_bridge_allowed_openai_params(
@@ -546,7 +573,7 @@ def dispatch_interactions_bridge(
     if stream_options is not None and "stream_options" not in cleaned_opt:
         cleaned_opt["stream_options"] = stream_options
     continuation_token: Final = (str_keyed_mapping(raw_kwargs) or {}).get("continuation_token")
-    if continuation_token is not None:
+    if continuation_token:
         cleaned_opt["continuation_token"] = continuation_token
     llm_map: Final = _merge_vertex_bridge_params(str_keyed_mapping(litellm_params), str_keyed_mapping(raw_kwargs))
     hdr_map: Final = str_keyed_mapping(headers)

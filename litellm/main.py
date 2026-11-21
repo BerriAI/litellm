@@ -6164,6 +6164,7 @@ def completion(
             litellm_params=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs
             deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
             skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
+            candidate_count=n,
         )
         drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
