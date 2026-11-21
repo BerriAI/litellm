@@ -50,7 +50,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import MCP_METADATA_TIMEOUT, MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.mcp_client.client import MCPClient, PersistentMCPSession
+from litellm.mcp_client.client import MCPClient, PersistentMCPSession, ToolListingSession
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -249,6 +249,19 @@ def _listing_client() -> AsyncMock:
     client: Final = AsyncMock()
     client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     return client
+
+
+def _listing_page_fetcher(
+    pages: Iterator[ListToolsResult],
+) -> Callable[[PaginatedRequestParams, ToolListingSession | None], Awaitable[ListToolsResult]]:
+    async def fetch_page(
+        _params: PaginatedRequestParams, listing_session: ToolListingSession | None = None
+    ) -> ListToolsResult:
+        if listing_session is not None:
+            listing_session.mark_initialized(None)
+        return next(pages)
+
+    return fetch_page
 
 
 def _reload_mcp_manager_module():
@@ -22413,11 +22426,15 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
     manager.registry = {server.server_id: server}
     client: Final = _listing_client()
     client._last_initialize_instructions = None
-    client.list_tools_page.side_effect = [
-        ListToolsResult(tools=[first], next_cursor="next"),
-        ListToolsResult(tools=[second]),
-        ListToolsResult(tools=[second]),
-    ]
+    client.list_tools_page.side_effect = _listing_page_fetcher(
+        iter(
+            [
+                ListToolsResult(tools=[first], next_cursor="next"),
+                ListToolsResult(tools=[second]),
+                ListToolsResult(tools=[second]),
+            ]
+        )
+    )
     manager.create_mcp_client = AsyncMock(return_value=client)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     caller = UserAPIKeyAuth(api_key="owned-caller", user_id="alice")
@@ -22572,10 +22589,14 @@ async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metad
     clients: Final = {server.server_id: _listing_client() for server in servers}
     for client in clients.values():
         client._last_initialize_instructions = None
-        client.list_tools_page.side_effect = [
-            ListToolsResult(tools=[first], next_cursor="next"),
-            ListToolsResult(tools=[unseen], next_cursor="next" if client is clients["beta"] else None),
-        ]
+        client.list_tools_page.side_effect = _listing_page_fetcher(
+            iter(
+                [
+                    ListToolsResult(tools=[first], next_cursor="next"),
+                    ListToolsResult(tools=[unseen], next_cursor="next" if client is clients["beta"] else None),
+                ]
+            )
+        )
 
     async def create_client(server, **kwargs):
         return clients[server.server_id]
