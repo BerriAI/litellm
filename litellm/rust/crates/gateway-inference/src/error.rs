@@ -126,9 +126,24 @@ impl<E: Into<Error>> From<E> for Ended {
     }
 }
 
-impl IntoResponse for Ended {
-    fn into_response(self) -> Response {
-        (self.routing(), *self.error).into_response()
+/// The envelope a route answers an error in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ErrorFormat {
+    Anthropic,
+    OpenAi,
+}
+
+impl Ended {
+    pub(crate) fn response(self, format: ErrorFormat, request_id: Option<&str>) -> Response {
+        match format {
+            ErrorFormat::OpenAi => (self.routing(), *self.error).into_response(),
+            ErrorFormat::Anthropic => (
+                self.error.status(),
+                self.routing(),
+                Json(self.error.body(request_id)),
+            )
+                .into_response(),
+        }
     }
 }
 
