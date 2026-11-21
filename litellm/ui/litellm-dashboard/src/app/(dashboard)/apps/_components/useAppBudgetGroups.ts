@@ -6,6 +6,10 @@ export function useOverallAppBudgetGroups(enabled = true) {
   return $api.useQuery("get", "/management/v1/app_budget_groups", {}, { enabled });
 }
 
+export function useAppGroupBudgetGroups(enabled = true) {
+  return $api.useQuery("get", "/management/v1/app_group_budget_groups", {}, { enabled });
+}
+
 export function useAppMemberBudgetGroups(enabled = true) {
   const groups = $api.useQuery("get", "/management/v1/app_customer_member_budget_groups", {}, { enabled });
   return {

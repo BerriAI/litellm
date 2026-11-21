@@ -46,6 +46,7 @@ from .models import (
 )
 from .reasoning import normalize_reasoning_blocks
 
+
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
     {

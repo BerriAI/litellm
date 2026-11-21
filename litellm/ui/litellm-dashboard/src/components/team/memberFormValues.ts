@@ -21,6 +21,7 @@ export type MemberFieldType =
 export interface MemberAdditionalField {
   name: string;
   label: string | React.ReactNode;
+  description?: React.ReactNode;
   type: MemberFieldType;
   options?: Array<{ label: string; value: string }>;
   step?: number;

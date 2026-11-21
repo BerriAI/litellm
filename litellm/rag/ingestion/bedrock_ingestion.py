@@ -105,8 +105,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         )
 
         # Optional config
-        self._data_source_id = self.vector_store_config.get("data_source_id")
-        self._s3_bucket = self.vector_store_config.get("s3_bucket")
+        self._data_source_id: Final[str | None] = self.vector_store_config.get("data_source_id")
+        self._s3_bucket: Final[str | None] = self.vector_store_config.get("s3_bucket")
         self._s3_prefix: str | None = (
             str(self.vector_store_config.get("s3_prefix")) if self.vector_store_config.get("s3_prefix") else None
         )

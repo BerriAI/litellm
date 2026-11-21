@@ -11,11 +11,12 @@ queries next to ported ones. These invariants hold until Prisma is gone:
   connection and auth reads keys through the Rust pool on a cache miss, so the Rust pool needs one too. The
   CLI refuses to start on any other limit rather than leave auth without a pool or open more than the limit.
 - The Rust share is the hard-coded `RUST_RESERVED_CONNECTIONS`, cut down to what is left after Prisma's one.
-  The writer and the reader are split separately, so each Rust pool takes its own pool's share.
+  The writer and the reader are split separately, so each Rust pool takes its own pool's share. When the
+  Rust spend log writer runs (the spend logs ledger is on), the writer's reserve
+  grows by `SPEND_LOG_WRITER_RESERVED_CONNECTIONS` for it, since it writes only on the writer. The reader's reserve stays the base.
 - The split is Python's. It is about Prisma and Prisma lives only in the Python gateway, so this module is
   deleted with Prisma. The CLI hands the worker each Rust share through `RUST_WRITER_CONNECTIONS_ENV_VAR` and
-  `RUST_READER_CONNECTIONS_ENV_VAR`, and a worker started without them reserves the full
-  `RUST_RESERVED_CONNECTIONS` for each.
+  `RUST_READER_CONNECTIONS_ENV_VAR`, and a worker started without them reserves each pool's full reserve.
 - The Rust core takes a plain `max_connections` per pool and never learns about the split. That is already
   its final interface, since the Rust gateway will pass `database_connection_pool_limit` straight to SQLx.
 """
@@ -30,6 +31,7 @@ from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 RUST_RESERVED_CONNECTIONS: Final = 2
+SPEND_LOG_WRITER_RESERVED_CONNECTIONS: Final = 2
 MIN_CONNECTION_LIMIT: Final = 2
 RUST_WRITER_CONNECTIONS_ENV_VAR: Final = "LITELLM_RUST_WRITER_DATABASE_CONNECTIONS"
 RUST_READER_CONNECTIONS_ENV_VAR: Final = "LITELLM_RUST_READER_DATABASE_CONNECTIONS"
@@ -46,6 +48,11 @@ class UnsplittableConnectionLimit(ValueError):
             f"{pool} connection_limit {connection_limit!r} must be a whole number of at least {MIN_CONNECTION_LIMIT}, "
             "one connection for Prisma and at least one for the Rust pool that reads keys for auth"
         )
+
+
+def rust_writer_reserve(rust_spend_log_writer: bool) -> int:
+    """The writer pool's Rust reserve: the auth reads' share, plus the spend log writer's when it runs in Rust."""
+    return RUST_RESERVED_CONNECTIONS + (SPEND_LOG_WRITER_RESERVED_CONNECTIONS if rust_spend_log_writer else 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,10 +88,11 @@ class RustConnections:
     reader: int
 
 
-def rust_connections(environ: Mapping[str, str]) -> RustConnections:
+def rust_connections(environ: Mapping[str, str], *, rust_spend_log_writer: bool) -> RustConnections:
     """The Rust pool sizes the CLI's split left this worker, or the full reserve for each the CLI set none for."""
     return RustConnections(
-        writer=_share(environ, RUST_WRITER_CONNECTIONS_ENV_VAR), reader=_share(environ, RUST_READER_CONNECTIONS_ENV_VAR)
+        writer=_share(environ, RUST_WRITER_CONNECTIONS_ENV_VAR, rust_writer_reserve(rust_spend_log_writer)),
+        reader=_share(environ, RUST_READER_CONNECTIONS_ENV_VAR, RUST_RESERVED_CONNECTIONS),
     )
 
 
@@ -99,13 +107,18 @@ def _capped_prisma_url(url: str, limit: int) -> str:
     return urlunsplit(parsed._replace(query=urlencode((*other, ("connection_limit", min((limit, *tighter_pins)))))))
 
 
-def _configured_pool_env(limit: object, environ: Mapping[str, str]) -> Mapping[str, str]:
+def _configured_pool_env(
+    limit: object, environ: Mapping[str, str], *, rust_spend_log_writer: bool
+) -> Mapping[str, str]:
     writer_url: Final = environ.get("DATABASE_URL")
     if limit is None or not writer_url:
         return MappingProxyType({})
     if not isinstance(limit, (str, int, float)):
         raise UnsplittableConnectionLimit("database_connection_pool_limit", limit)
     budget: Final = ConnectionBudget.of("database_connection_pool_limit", limit)
+    writer_budget: Final = ConnectionBudget.of(
+        "database_connection_pool_limit", limit, rust_writer_reserve(rust_spend_log_writer)
+    )
     reader_url: Final = environ.get("DATABASE_URL_READ_REPLICA")
     reader: Final = (
         {
@@ -117,17 +130,17 @@ def _configured_pool_env(limit: object, environ: Mapping[str, str]) -> Mapping[s
     )
     return MappingProxyType(
         {
-            "DATABASE_URL": _capped_prisma_url(writer_url, budget.python),
-            RUST_WRITER_CONNECTIONS_ENV_VAR: str(budget.rust),
+            "DATABASE_URL": _capped_prisma_url(writer_url, writer_budget.python),
+            RUST_WRITER_CONNECTIONS_ENV_VAR: str(writer_budget.rust),
             **reader,
         }
     )
 
 
 @contextmanager
-def with_configured_connection_budget(limit: object) -> Generator[None, None, None]:
+def with_configured_connection_budget(limit: object, *, rust_spend_log_writer: bool) -> Generator[None, None, None]:
     """Set the worker environment because Prisma and SQLx read it independently during startup."""
-    updates: Final = _configured_pool_env(limit, os.environ)
+    updates: Final = _configured_pool_env(limit, os.environ, rust_spend_log_writer=rust_spend_log_writer)
     previous: Final = tuple((key, os.environ.get(key)) for key in updates)
     os.environ.update(updates)
     try:
@@ -140,9 +153,9 @@ def with_configured_connection_budget(limit: object) -> Generator[None, None, No
                 os.environ[key] = value
 
 
-def _share(environ: Mapping[str, str], name: str) -> int:
+def _share(environ: Mapping[str, str], name: str, reserve: int) -> int:
     share: Final = environ.get(name, "")
-    return int(share) if share.isascii() and share.isdigit() else RUST_RESERVED_CONNECTIONS
+    return int(share) if share.isascii() and share.isdigit() else reserve
 
 
 def _whole_number(connection_limit: str | float) -> int | None:

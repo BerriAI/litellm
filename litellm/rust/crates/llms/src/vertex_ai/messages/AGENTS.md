@@ -9,4 +9,5 @@
 
 # references
 
+- Python counterpart `litellm/llms/vertex_ai/vertex_ai_partner_models/anthropic/messages/transformation.py` (`VertexAIPartnerModelsAnthropicMessagesConfig`)
 - https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/use-claude

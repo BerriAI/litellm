@@ -3089,6 +3089,10 @@ class TranscriptionResponse(OpenAIObject):
     def set_audio_transcription_duration(self, duration: float) -> None:
         self._hidden_params["audio_transcription_duration"] = duration
 
+    def report_duration_usage_when_provider_sent_none(self, duration: object) -> None:
+        if self.usage is None and isinstance(duration, (int, float)) and duration > 0:
+            self.usage = TranscriptionUsageDurationObject(type="duration", seconds=duration)
+
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -3181,6 +3185,7 @@ class AdapterCompletionStreamWrapper:
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_group_id: ReadOnly[NotRequired[str | None]]
     user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
@@ -4896,6 +4901,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"

@@ -14,13 +14,15 @@ Flow:
 import json
 import time
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # see cast-ok markers
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
@@ -31,6 +33,8 @@ if TYPE_CHECKING:
 ToolParam: TypeAlias = object
 
 FILE_SEARCH_FUNCTION_NAME: Final = "litellm_file_search"
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FileSearchToolCallArgs(TypedDict):
@@ -425,7 +429,7 @@ def _extract_tool_call_fields(tool_call: object, fallback_call_id: str) -> tuple
     return call_id, raw_args
 
 
-def _resolve_queries_from_args(args: FileSearchToolCallArgs, input: object) -> list[str]:
+def _resolve_queries_from_args(args: Mapping[str, object], input: object) -> list[str]:
     """Pull the queries list out of parsed tool-call arguments, with backward-compat fallbacks."""
     queries_from_call: Final = args.get("queries")
     if not queries_from_call:
@@ -452,7 +456,11 @@ async def _execute_file_search_tool_calls(
         call_id, raw_args = _extract_tool_call_fields(tool_call, fallback_call_id=file_search_call_id)
 
         try:
-            args: FileSearchToolCallArgs = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            args: Mapping[str, object] = (
+                require_attributes(_DECODED_JSON.validate_python(json.loads(raw_args)), dict[str, object], "get")
+                if isinstance(raw_args, str)
+                else raw_args
+            )
         except json.JSONDecodeError:
             args = {}
 

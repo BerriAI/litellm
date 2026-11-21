@@ -37,6 +37,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.deps.repositories import get_plugin_upload_repository
 from litellm.proxy.proxy_server import LitellmUserRoles, hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.types.proxy.claude_code_endpoints import (
     MarketplaceResponse,
@@ -1115,7 +1116,9 @@ async def test_marketplace_auth_required_keeps_a_valid_key_refusal_status(
     monkeypatch: pytest.MonkeyPatch, limited_key_auth: UserAPIKeyAuth, status_code: int
 ) -> None:
     _require_marketplace_auth(monkeypatch)
-    litellm.proxy.proxy_server.user_api_key_cache.set_cache(key=hash_token(_LIMITED_KEY), value=limited_key_auth)
+    litellm.proxy.proxy_server.user_api_key_cache.set_cache(
+        AuthObject.virtual_key(hash_token(_LIMITED_KEY)), limited_key_auth
+    )
     await _register_public_and_private_plugins()
 
     response: Final = await _get_marketplace_over_http({"Authorization": f"Bearer {_LIMITED_KEY}"})
@@ -1255,7 +1258,8 @@ async def upload_storage(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Uplo
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     for key, skills in ((_LIMITED_KEY, [_UPLOAD_NAME]), ("sk-plain", [])):
         litellm.proxy.proxy_server.user_api_key_cache.set_cache(
-            key=hash_token(key), value=_granted_user(skills).model_copy(update={"token": hash_token(key)}),
+            AuthObject.virtual_key(hash_token(key)),
+            _granted_user(skills).model_copy(update={"token": hash_token(key)}),
         )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=litellm.proxy.proxy_server.app), base_url="http://test",

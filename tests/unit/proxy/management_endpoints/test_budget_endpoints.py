@@ -14,10 +14,13 @@ from prisma import models as prisma_models
 from prisma.builder import QueryBuilder
 
 import litellm.proxy.proxy_server as ps
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.timezone_utils import get_budget_window_reset_fields
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.rust_bridge._native import NativeRedisStoreError
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 
 @pytest.mark.asyncio
@@ -237,9 +240,9 @@ def test_budget_edit_evicts_members_and_organization_aliases(
     updates: dict[str, object],
 ) -> None:
     client, database, _ = client_and_mocks
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
-    member_key: Final = "customer_member_id:member"
-    alias_key: Final = "customer_org_alias:organization"
+    cache: Final = UserApiKeyCache()
+    member_key: Final = AuthObject.customer_member("member")
+    alias_key: Final = AuthObject.customer_org_alias("organization")
     cache.set_cache(member_key, {"stale": True}, local_only=True)
     cache.set_cache(alias_key, {"stale": True}, local_only=True)
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
@@ -255,9 +258,9 @@ def test_budget_edit_evicts_a_members_inherited_team_budget(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, database, _ = client_and_mocks
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
-    member_key: Final = "customer_member_id:through-team"
-    other_key: Final = "customer_member_id:unrelated"
+    cache: Final = UserApiKeyCache()
+    member_key: Final = AuthObject.customer_member("through-team")
+    other_key: Final = AuthObject.customer_member("unrelated")
     cache.set_cache(member_key, {"max_budget": 10}, local_only=True)
     cache.set_cache(other_key, {"max_budget": 20}, local_only=True)
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
@@ -332,12 +335,9 @@ async def test_update_budget_evicts_local_cache_when_redis_delete_fails(
     client_and_mocks, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client, _, _ = client_and_mocks
-    cache_key = "team_member_default_budget:budget_456"
-    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache_key: Final = AuthObject.team_member_default_budget("budget_456")
+    cache, _ = shared_cache(FakeAuthCache(fail=NativeRedisStoreError("transport", "redis unavailable")))
     cache.set_cache(cache_key, {"budget_id": "budget_456"}, local_only=True)
-    redis_cache = MagicMock()
-    redis_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis unavailable"))
-    cache.redis_cache = redis_cache
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
 
     response = client.post("/budget/update", json={"budget_id": "budget_456", "max_budget": 10.0})
@@ -383,9 +383,9 @@ async def test_update_budget_success(client_and_mocks, monkeypatch):
 @pytest.mark.asyncio
 async def test_update_budget_evicts_team_member_default_budget_cache(client_and_mocks, monkeypatch):
     client, _, _ = client_and_mocks
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache: Final = UserApiKeyCache()
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
-    cache_key: Final = "team_member_default_budget:budget_456"
+    cache_key: Final = AuthObject.team_member_default_budget("budget_456")
     await cache.async_set_cache(key=cache_key, value={"budget_id": "budget_456"})
     assert await cache.async_get_cache(key=cache_key) == {"budget_id": "budget_456"}
 
@@ -397,7 +397,7 @@ async def test_update_budget_evicts_team_member_default_budget_cache(client_and_
         assert response.status_code == 200, response.text
         assert await cache.async_get_cache(key=cache_key) is None
     finally:
-        await cache.async_delete_cache(key=cache_key)
+        await cache.async_delete_cache(key=cache_key.key)
 
 
 @pytest.mark.asyncio
@@ -885,3 +885,44 @@ async def test_delete_missing_budget_preserves_prisma_missing_record_error() -> 
     )
     with pytest.raises(RecordNotFoundError):
         await delete_unattached_customer_budget(table, "missing")
+
+
+def test_new_customer_window_start_is_set_by_the_server(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
+    client, _, _ = client_and_mocks
+    response: Final = client.post("/budget/new", json={
+        "budget_id": "windows",
+        "budget_limits": [{"budget_duration": "1mo", "max_budget": 10, "window_start": "2000-01-01T00:00:00Z"}],
+    })
+    assert response.status_code == 200, response.text
+    (window,) = response.json()["budget_limits"]
+    expected: Final = get_budget_window_reset_fields("1mo")
+    assert datetime.fromisoformat(window["window_start"]) == datetime.fromisoformat(expected["window_start"])
+    assert datetime.fromisoformat(window["reset_at"]) == datetime.fromisoformat(expected["reset_at"])
+
+
+def test_budget_update_keeps_the_stored_window_start(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
+    client, database, table = client_and_mocks
+    stored: Final = [{
+        "budget_duration": "1mo", "max_budget": 10.0,
+        "reset_at": "2030-02-01T00:00:00+00:00", "window_start": "2030-01-01T03:00:00+00:00",
+    }]
+    table.find_unique.return_value = types.SimpleNamespace(budget_limits=stored)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": stored}])
+    response: Final = client.post("/budget/update", json={"budget_id": "shared", "budget_limits": [
+        {"budget_duration": "1mo", "max_budget": 20.0, "window_start": "2000-01-01T00:00:00Z"},
+    ]})
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_limits"] == [{**stored[0], "max_budget": 20.0}]
+
+
+def test_admin_set_customer_reset_keeps_a_derived_window_start(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+) -> None:
+    client, _, _ = client_and_mocks
+    window: Final = {"budget_duration": "1mo", "max_budget": 10, "reset_at": "2030-02-01T00:00:00+00:00"}
+    response: Final = client.post(
+        "/budget/new", json={"budget_id": "windows", "budget_limits": [{**window, "window_start": "2000-01-01T00:00:00Z"}]}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_limits"] == [window]

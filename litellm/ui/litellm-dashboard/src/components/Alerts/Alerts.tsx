@@ -5,7 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { isProxyAdminTierRole } from "@/utils/roles";
@@ -57,7 +57,7 @@ export default function Alerts() {
       </Page>
     );
   return (
-    <Page className="mx-auto max-w-[1440px]">
+    <Page>
       {params.alert || params.model ? (
         <SelectedAlert
           auth={auth}
@@ -130,101 +130,105 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   return (
     <>
       <ManageAlerts scope={scope} readOnly={Boolean(auth.isViewOnly)} />
-      <PageTabs
-        value={params.state}
-        onValueChange={(value) => void setParams({ state: value as AlertStatus })}
-        className="flex-none"
-      >
-        <PageTabsList>
-          {Object.values(AlertStatus).map((status) => (
-            <PageTabsTrigger key={status} value={status} className="capitalize">
-              {t(`alerts.status.${status}`)}
-            </PageTabsTrigger>
-          ))}
-        </PageTabsList>
-      </PageTabs>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Select value={params.type} onValueChange={(value) => void setParams({ type: value as AlertFilter })}>
-          <SelectTrigger className="w-52" aria-label={t("alerts.unified.typeFilter")}>
-            <SelectValue>{t(TYPE_LABEL_KEYS[params.type])}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {ALERT_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
-                {t(TYPE_LABEL_KEYS[type])}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex flex-wrap items-center gap-2">
-          <BulkAlertActions
-            filter={params.type}
-            state={params.state}
-            readOnly={Boolean(auth.isViewOnly)}
-            deprecations={deprecations.data}
-            disabled={bulkUnavailable || refreshing}
-          />
-          <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>
-            <RefreshCw className="size-3.5" />
-            {t("alerts.unified.refresh")}
-          </Button>
-        </div>
-      </div>
-      {showDeprecations && deprecations.isError && (
-        <LoadError retry={() => void deprecations.refetch()}>{t("alerts.unified.deprecationsError")}</LoadError>
-      )}
-      {showPromptCache && promptCache.isError && (
-        <LoadError retry={() => void promptCache.refetch()}>{t("alerts.unified.promptCacheError")}</LoadError>
-      )}
-      {showPerformance && list.isError && (
-        <LoadError retry={() => void list.refetch()}>{t("alerts.unified.performanceError")}</LoadError>
-      )}
-      <InboxNotice loading={loading} error={hasError} count={items.length} status={params.state} />
-      <ul className="divide-y divide-border">
-        {items.map((item) => {
-          const alert = presentAlert(item);
-          return (
-            <li
-              key={`${item.source}-${alert.id}`}
-              className="grid min-w-0 gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_200px]"
-            >
-              <div className="min-w-0 space-y-3">
-                <button
-                  className="text-left text-base font-semibold leading-6 hover:underline break-words"
-                  onClick={() =>
-                    void setParams(
-                      item.source === "performance"
-                        ? { alert: item.alert.id, model: null }
-                        : { alert: null, model: item.alert.usageModel },
-                      { history: "push" },
-                    )
-                  }
-                >
-                  {alert.title}
-                </button>
-                <p className="text-sm leading-6 text-muted-foreground">{alert.description}</p>
-                <AlertActions item={item} readOnly={Boolean(auth.isViewOnly)} />
-              </div>
-              <div className="hidden self-center lg:block">
-                <AlertChart alert={alert} compact />
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      {pagedLists.some((query) => query.hasNextPage) && (
-        <Button
-          variant="outline"
-          className="self-center"
-          disabled={pagedLists.some((query) => query.isFetchingNextPage)}
-          onClick={() => pagedLists.filter((query) => query.hasNextPage).forEach((query) => void query.fetchNextPage())}
+      <PageContent>
+        <PageTabs
+          value={params.state}
+          onValueChange={(value) => void setParams({ state: value as AlertStatus })}
+          className="flex-none"
         >
-          {pagedLists.some((query) => query.isFetchingNextPage)
-            ? t("alerts.unified.loadingMore")
-            : t("alerts.unified.loadMore")}
-        </Button>
-      )}
-      <DeprecationEmailSetup />
+          <PageTabsList>
+            {Object.values(AlertStatus).map((status) => (
+              <PageTabsTrigger key={status} value={status} className="capitalize">
+                {t(`alerts.status.${status}`)}
+              </PageTabsTrigger>
+            ))}
+          </PageTabsList>
+        </PageTabs>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Select value={params.type} onValueChange={(value) => void setParams({ type: value as AlertFilter })}>
+            <SelectTrigger className="w-52" aria-label={t("alerts.unified.typeFilter")}>
+              <SelectValue>{t(TYPE_LABEL_KEYS[params.type])}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {ALERT_TYPES.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {t(TYPE_LABEL_KEYS[type])}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            <BulkAlertActions
+              filter={params.type}
+              state={params.state}
+              readOnly={Boolean(auth.isViewOnly)}
+              deprecations={deprecations.data}
+              disabled={bulkUnavailable || refreshing}
+            />
+            <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>
+              <RefreshCw className="size-3.5" />
+              {t("alerts.unified.refresh")}
+            </Button>
+          </div>
+        </div>
+        {showDeprecations && deprecations.isError && (
+          <LoadError retry={() => void deprecations.refetch()}>{t("alerts.unified.deprecationsError")}</LoadError>
+        )}
+        {showPromptCache && promptCache.isError && (
+          <LoadError retry={() => void promptCache.refetch()}>{t("alerts.unified.promptCacheError")}</LoadError>
+        )}
+        {showPerformance && list.isError && (
+          <LoadError retry={() => void list.refetch()}>{t("alerts.unified.performanceError")}</LoadError>
+        )}
+        <InboxNotice loading={loading} error={hasError} count={items.length} status={params.state} />
+        <ul className="divide-y divide-border">
+          {items.map((item) => {
+            const alert = presentAlert(item);
+            return (
+              <li
+                key={`${item.source}-${alert.id}`}
+                className="grid min-w-0 gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_200px]"
+              >
+                <div className="min-w-0 space-y-3">
+                  <button
+                    className="text-left text-base font-semibold leading-6 hover:underline break-words"
+                    onClick={() =>
+                      void setParams(
+                        item.source === "performance"
+                          ? { alert: item.alert.id, model: null }
+                          : { alert: null, model: item.alert.usageModel },
+                        { history: "push" },
+                      )
+                    }
+                  >
+                    {alert.title}
+                  </button>
+                  <p className="text-sm leading-6 text-muted-foreground">{alert.description}</p>
+                  <AlertActions item={item} readOnly={Boolean(auth.isViewOnly)} />
+                </div>
+                <div className="hidden self-center lg:block">
+                  <AlertChart alert={alert} compact />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        {pagedLists.some((query) => query.hasNextPage) && (
+          <Button
+            variant="outline"
+            className="self-center"
+            disabled={pagedLists.some((query) => query.isFetchingNextPage)}
+            onClick={() =>
+              pagedLists.filter((query) => query.hasNextPage).forEach((query) => void query.fetchNextPage())
+            }
+          >
+            {pagedLists.some((query) => query.isFetchingNextPage)
+              ? t("alerts.unified.loadingMore")
+              : t("alerts.unified.loadMore")}
+          </Button>
+        )}
+        <DeprecationEmailSetup />
+      </PageContent>
     </>
   );
 }
