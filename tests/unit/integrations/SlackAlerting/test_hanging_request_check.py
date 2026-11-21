@@ -78,6 +78,36 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.request_id == "test_request_123"
         assert cached_data.model == "gpt-4"
         assert cached_data.api_base == "https://api.openai.com/v1"
+        assert cached_data.key_alias == "test_key"
+        assert cached_data.team_alias == "test_team"
+
+    @pytest.mark.asyncio
+    async def test_add_request_to_hanging_request_check_reads_litellm_metadata(
+        self, hanging_request_checker
+    ):
+        """
+        Routes that store proxy metadata under `litellm_metadata` (e.g. /v1/messages)
+        must still populate the key and team alias of the alert.
+        """
+        request_data = {
+            "litellm_call_id": "litellm_metadata_request",
+            "model": "claude-sonnet",
+            "litellm_metadata": {
+                "user_api_key_alias": "test_key",
+                "user_api_key_team_alias": "test_team",
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(request_data)
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="litellm_metadata_request"
+            )
+        )
+
+        assert cached_data.key_alias == "test_key"
+        assert cached_data.team_alias == "test_team"
 
     @pytest.mark.asyncio
     async def test_add_request_to_hanging_request_check_none_request_data(
