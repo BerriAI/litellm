@@ -9299,8 +9299,8 @@ def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(auth
         _client_headers(None),
         {"content-type": "application/json", "authorization": "Bearer sk-a-normal-key"},
         {"anthropic-beta": "claude-code-20250219", "authorization": "Bearer sk-ant-api03-a-configured-key"},
-        {"x-litellm-api-key": "Bearer sk-1234", "authorization": "sk-ant-oat01-never-forwarded"},
-        {"x-litellm-api-key": "Bearer sk-1234", "authorization": f"Bearer {_UNSIGNED_CHATGPT_JWT}"},
+        {"x-litellm-api-key": "Bearer sk-proxy-virtual-key", "authorization": "sk-ant-oat01-never-forwarded"},
+        {"x-litellm-api-key": "Bearer sk-proxy-virtual-key", "authorization": f"Bearer {_UNSIGNED_CHATGPT_JWT}"},
     ],
 )
 def test_add_provider_specific_headers_reports_no_oauth_credential_without_a_forwarded_token(headers):

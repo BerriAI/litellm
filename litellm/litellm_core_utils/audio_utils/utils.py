@@ -9,8 +9,11 @@ import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.types.files import (
     AUDIO_FILE_TYPES,
     FILE_EXTENSIONS,
@@ -174,7 +177,38 @@ def normalize_transcription_language_to_bcp47(language: str) -> str:
     return BARE_ISO_639_1_TO_BCP47.get(language.lower(), language)
 
 
-def get_audio_file_name(file_obj: FileTypes) -> str:
+class _NamedFile(Protocol):
+    @property
+    def name(self) -> str: ...
+
+
+class _ReadableFile(Protocol):
+    def read(self) -> object: ...
+
+
+class _TellableFile(Protocol):
+    def tell(self) -> object: ...
+
+
+class _SeekableFile(Protocol):
+    def seek(self, offset: object, /) -> object: ...
+
+
+_FILE_TUPLE: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(strict=True))
+
+
+def _file_tuple(file_obj: object) -> tuple[object, ...] | None:
+    try:
+        return _FILE_TUPLE.validate_python(file_obj)
+    except ValidationError:
+        return None
+
+
+def _is_path_like(value: object) -> bool:
+    return isinstance(value, os.PathLike)
+
+
+def get_audio_file_name(file_obj: object) -> str:
     """
     Safely get the name of a file-like object or return its string representation.
 
@@ -184,29 +218,30 @@ def get_audio_file_name(file_obj: FileTypes) -> str:
     Returns:
         str: The name of the file if available, otherwise a string representation of the object.
     """
-    if hasattr(file_obj, "name"):
-        return getattr(file_obj, "name")
+    if has_attributes(file_obj, _NamedFile, "name"):
+        return file_obj.name
     elif hasattr(file_obj, "__str__"):
         return str(file_obj)
     else:
         return repr(file_obj)
 
 
-def get_audio_file_content_hash(file_obj: FileTypes) -> str:
+def get_audio_file_content_hash(file_obj: object) -> str:
     """
     Compute SHA-256 hash of audio file content for cache keys.
     Falls back to filename hash if content extraction fails.
     """
-    file_content: bytes | None = None
+    file_content: object = None
     fallback_filename: str | None = None
 
-    if isinstance(file_obj, tuple):
-        if len(file_obj) < 2:
-            fallback_filename = str(file_obj[0]) if len(file_obj) > 0 else None
+    file_parts: Final = _file_tuple(file_obj)
+    if file_parts is not None:
+        if len(file_parts) < 2:
+            fallback_filename = str(file_parts[0]) if len(file_parts) > 0 else None
             file_content_obj = None
         else:
-            fallback_filename = str(file_obj[0]) if file_obj[0] is not None else None
-            file_content_obj = file_obj[1]
+            fallback_filename = str(file_parts[0]) if file_parts[0] is not None else None
+            file_content_obj = file_parts[1]
     else:
         file_content_obj = file_obj
         fallback_filename = get_audio_file_name(file_obj)
@@ -221,7 +256,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             # itself rather than opening it.
             fallback_filename = file_content_obj
             file_content = None
-        elif isinstance(file_content_obj, os.PathLike):
+        elif _is_path_like(file_content_obj):
             try:
                 with open(str(file_content_obj), "rb") as f:
                     file_content = f.read()
@@ -230,13 +265,15 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             except OSError:
                 fallback_filename = str(file_content_obj)
                 file_content = None
-        elif file_content_obj is not None and hasattr(file_content_obj, "read"):
+        elif file_content_obj is not None and has_attributes(file_content_obj, _ReadableFile, "read"):
             try:
-                current_position: Final = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
-                if hasattr(file_content_obj, "seek"):
+                current_position: Final = (
+                    file_content_obj.tell() if has_attributes(file_content_obj, _TellableFile, "tell") else None
+                )
+                if has_attributes(file_content_obj, _SeekableFile, "seek"):
                     file_content_obj.seek(0)
                 file_content = file_content_obj.read()
-                if current_position is not None and hasattr(file_content_obj, "seek"):
+                if current_position is not None and has_attributes(file_content_obj, _SeekableFile, "seek"):
                     file_content_obj.seek(current_position)
             except (OSError, AttributeError):
                 file_content = None

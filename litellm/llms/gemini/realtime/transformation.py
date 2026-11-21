@@ -200,6 +200,7 @@ def _base64_decoded_byte_count(data: str) -> int:
 
 
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _chat_completion_tool(tool: object) -> dict[str, object]:
@@ -1487,7 +1488,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         verbose_logger.debug(
             "Realtime Response Transform: Gemini frame keys=%s",
-            (sorted(json_message.keys()) if isinstance(json_message, dict) else type(json_message).__name__),
+            (
+                sorted(json_message.keys())
+                if isinstance(json_message, dict)
+                else type(_DECODED_JSON.validate_python(json_message)).__name__
+            ),
         )
 
         logging_session_id: Final = logging_obj.litellm_trace_id

@@ -898,7 +898,7 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking: Mapping[str, object],
         model: str,
         custom_llm_provider: str | None,
-    ) -> Any:
+    ) -> str | Mapping[str, object]:
         """
         Apply the reasoning_effort/summary wrapping rules shared by every
         thinking->reasoning_effort translation path.
@@ -1588,15 +1588,17 @@ class LiteLLMAnthropicMessagesAdapter:
                     # Strip Gemini thought-signature suffix and normalize id chars
                     # (e.g. ``functions.Bash:0`` from cross-provider clients).
                     raw_id = tool_call.id or ""
-                    tool_use_block = AnthropicResponseContentBlockToolUse(
-                        type="tool_use",
-                        id=normalize_anthropic_tool_use_id(raw_id),
-                        name=original_name,
-                        input=parse_tool_call_arguments(
-                            tool_call.function.arguments,
-                            tool_name=original_name,
-                            context="Anthropic pass-through adapter",
-                        ),
+                    tool_use_block = AnthropicResponseContentBlockToolUse.model_validate(
+                        {
+                            "type": "tool_use",
+                            "id": normalize_anthropic_tool_use_id(raw_id),
+                            "name": original_name,
+                            "input": parse_tool_call_arguments(
+                                tool_call.function.arguments,
+                                tool_name=original_name,
+                                context="Anthropic pass-through adapter",
+                            ),
+                        }
                     )
                     # Add provider_specific_fields if signature is present
                     if provider_specific_fields:
