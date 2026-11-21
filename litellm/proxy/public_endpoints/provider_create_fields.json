@@ -3496,6 +3496,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "REDROUTER",
+    "provider_display_name": "RedRouter",
+    "litellm_provider": "redrouter",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://redrouter.org/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "redrouter/red-cyber-1"
+  },
+  {
     "provider": "REFUSELESS",
     "provider_display_name": "Refuseless",
     "litellm_provider": "refuseless",
