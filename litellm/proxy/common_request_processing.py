@@ -5655,7 +5655,9 @@ class ProxyBaseLLMRequestProcessing:
             request_data  # pyright: ignore[reportUnknownArgumentType]  # request_data is the untyped proxy request dict
         )
         cost_injection_enabled: Final = stream_cost_injection_requested(request_headers)
-        fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
+        fast_path: Final = (
+            not caps.has_streaming_chunk_override and not caps.has_streaming_guardrail and not cost_injection_enabled
+        )
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
         client_disconnected = False
