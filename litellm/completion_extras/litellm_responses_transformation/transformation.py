@@ -2,6 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain
@@ -896,6 +897,22 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
+# OpenAI Responses rejects a longer call_id with "string too long" (observed 2026-11-21, gpt-6.2-sol and gpt-5.4)
+_MAX_CALL_ID_LENGTH: Final = 64
+
+
+def _with_bounded_call_id(item: object) -> object:
+    match item:
+        case {
+            "type": "function_call" | "function_call_output" | "custom_tool_call" | "custom_tool_call_output",
+            "call_id": str() as call_id,
+        } if len(call_id) > _MAX_CALL_ID_LENGTH:
+            fields: Final = cast(Mapping[str, object], item)  # cast-ok: matched a JSON input item above
+            return {**fields, "call_id": hashlib.sha256(call_id.encode("utf-8", "surrogatepass")).hexdigest()}
+        case _:
+            return item
+
+
 def tool_call_dict_from_output_item(
     item: Mapping[str, Any], index: int, *, include_namespace: bool = False
 ) -> _ChatToolCallDict:
@@ -1450,16 +1467,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             include_namespace=True,
             replay_openai_history=replays_responses_history(provider),
         )
+        bounded_input_items: Final = [_with_bounded_call_id(item) for item in converted_input_items]
         # Keep the system text in input instead of instructions when the Responses API needs it there.
         # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
         typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         system_goes_in_input: Final = converted_instructions is not None and (
-            not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+            not bounded_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
         )
         target_input_items: Final = (
-            _without_audio_input_parts(converted_input_items)
+            _without_audio_input_parts(bounded_input_items)
             if _drops_audio_input(model, litellm_params)
-            else converted_input_items
+            else bounded_input_items
         )
         input_items: Final = (
             [
