@@ -37,6 +37,7 @@ from litellm.batches.batch_utils import (
 from litellm.cost_calculator import batch_cost_calculator
 from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from litellm.types.llms.openai import BatchInputFormat
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -3608,8 +3609,15 @@ async def test_gemini_native_output_rows_are_priced_from_usage_metadata(monkeypa
 def test_native_row_matches_canonical_input_count(entry: Mapping[str, object], body: Mapping[str, object]) -> None:
     canonical: Final = bu.count_entry_tokens({"body": body})
     assert canonical is not None and canonical > 0
-    assert bu.count_entry_tokens(entry) == canonical
+    counter: Final = bu.batch_row_counter(BatchInputFormat.VERTEX if "request" in entry else BatchInputFormat.BEDROCK)
+    assert counter is not None
+    assert counter(entry) == canonical
 
 
-def test_partially_supported_native_row_signals_whole_row_estimate() -> None:
-    assert bu.count_entry_tokens({"request": {"contents": [{"parts": [{"text": "hello"}, {"fileData": {}}]}]}}) is None
+def test_file_format_selects_only_its_own_parser() -> None:
+    entry: Final = {"body": {"input": "hello"}, "request": {"content": {"parts": [{"text": "hello world"}]}}}
+    vertex: Final = bu.batch_row_counter(BatchInputFormat.VERTEX)
+    assert vertex is not None
+    assert vertex(entry) == bu.count_entry_tokens({"body": {"input": "hello world"}})
+    assert vertex({"body": {"input": "hello"}}) is None
+    assert bu.batch_row_counter(BatchInputFormat.UNKNOWN) is None

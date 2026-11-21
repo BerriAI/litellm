@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
@@ -23,7 +23,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
     native_vertex_batch_row_model,
     native_vertex_batch_row_stats,
 )
-from litellm.types.llms.openai import Batch
+from litellm.types.llms.openai import Batch, BatchInputFormat
 from litellm.types.utils import ModelInfo, Usage
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
@@ -741,23 +741,41 @@ def estimate_batch_entry_tokens(raw_line: bytes) -> int:
 _estimate_batch_entry_tokens = estimate_batch_entry_tokens
 
 
-def _batch_entry_body(entry: Mapping[str, object]) -> Mapping[str, object] | None:
-    if "body" not in entry:
-        if (request := as_str_mapping(entry.get("request"))) is not None:
-            return vertex_batch_input(request)
-        if (model_input := as_str_mapping(entry.get("modelInput"))) is not None:
-            return bedrock_batch_input(model_input)
-    return cast(Mapping[str, object], entry.get("body") or {})  # cast-ok: OpenAI batch bodies are JSON objects
+def _count_vertex_row(entry: Mapping[str, object]) -> int | None:
+    request: Final = as_str_mapping(entry.get("request"))
+    body: Final = vertex_batch_input(request) if request is not None else None
+    return _count_batch_body(body) if body is not None else None
 
 
-def count_entry_tokens(
-    entry: Mapping[str, object],
-    model_name: str | None = None,
-) -> int | None:
-    """Count a batch row, or return None when native content needs a whole-row estimate."""
-    body: Final = _batch_entry_body(entry)
-    if body is None:
-        return None
+def _count_bedrock_row(entry: Mapping[str, object]) -> int | None:
+    request: Final = as_str_mapping(entry.get("modelInput"))
+    body: Final = bedrock_batch_input(request) if request is not None else None
+    return _count_batch_body(body) if body is not None else None
+
+
+def _count_openai_row(entry: Mapping[str, object]) -> int | None:
+    body: Final = as_str_mapping(entry.get("body"))
+    return _count_batch_body(body) if body is not None else None
+
+
+def batch_row_counter(input_format: BatchInputFormat) -> Callable[[Mapping[str, object]], int | None] | None:
+    match input_format:
+        case BatchInputFormat.VERTEX:
+            return _count_vertex_row
+        case BatchInputFormat.BEDROCK:
+            return _count_bedrock_row
+        case BatchInputFormat.OPENAI:
+            return _count_openai_row
+        case BatchInputFormat.UNKNOWN:
+            return None
+
+
+def count_entry_tokens(entry: Mapping[str, object], model_name: str | None = None) -> int:
+    body: Final = cast(Mapping[str, object], entry.get("body") or {})  # cast-ok: OpenAI batch bodies are JSON objects
+    return _count_batch_body(body, model_name)
+
+
+def _count_batch_body(body: Mapping[str, object], model_name: str | None = None) -> int:
     model: Final = cast(str, body.get("model", model_name or ""))  # cast-ok: provider batch model names are strings
 
     messages: Final = body.get("messages")
