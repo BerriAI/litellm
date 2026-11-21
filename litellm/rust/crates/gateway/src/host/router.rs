@@ -41,10 +41,7 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
         &self,
         attempt: &Attempt,
     ) -> Result<Served<A::Outcome>, AttemptFailure<Error>> {
-        self.route
-            .run(attempt)
-            .await
-            .map_err(|error| routing::attempt_failure(attempt, error))
+        routing::attempt(self.gateway, self.route, attempt).await
     }
 
     async fn select(
