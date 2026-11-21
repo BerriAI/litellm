@@ -1,6 +1,12 @@
 import json
+from datetime import datetime, timedelta, timezone
+
+import httpx
 import pytest
+
 import litellm.llms.sap.credentials as sap_credentials
+
+_T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 mock_sap_service_key_dict = {
     "serviceurls": {"AI_API_URL": "https://testurl.hana.ondemand.com/"},
@@ -172,3 +178,36 @@ def test_vcap_services_that_is_not_an_object_is_rejected(monkeypatch, vcap_servi
         match=f"^'{type(vcap_services).__name__}' object has no attribute 'values'$",
     ):
         sap_credentials.fetch_credentials()
+
+
+@pytest.mark.parametrize(
+    "expires_in, expected_token_requests",
+    [(43200, 1), (3000, 3)],
+    ids=["reused-while-valid", "refreshed-inside-60-minute-buffer"],
+)
+def test_token_is_shared_across_token_creators_until_refresh_buffer(aicore, expires_in, expected_token_requests):
+    aicore.token.respond(json={"access_token": "mock-token", "expires_in": expires_in})
+
+    def clock():
+        return _T0
+
+    tokens = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
+
+    assert tokens == ("Bearer mock-token",) * 3
+    assert aicore.token.call_count == expected_token_requests
+
+
+def test_reused_token_is_replaced_once_time_moves_into_refresh_buffer(aicore):
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "first", "expires_in": 43200}),
+        httpx.Response(200, json={"access_token": "second", "expires_in": 43200}),
+    ]
+    call_times = iter((_T0, _T0 + timedelta(hours=1), _T0 + timedelta(hours=11, minutes=30)))
+
+    def clock():
+        return next(call_times)
+
+    tokens = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
+
+    assert tokens == ("Bearer first", "Bearer first", "Bearer second")
+    assert aicore.token.call_count == 2
