@@ -599,7 +599,7 @@ impl KeyContextView {
         Py::new(
             py,
             Self {
-                key: row(py, &context.key),
+                key: row(py, &context.key.row),
                 end_user: row(py, &context.end_user),
                 owner: rows(py, context.owner.as_ref()),
                 team: team.into_pyobject(py)?.into_any().unbind(),
@@ -734,7 +734,7 @@ impl IdentityView {
             },
             Identity::Key(KeyIdentity::UserAuthRoute) => Self::UserAuthRoute(),
             Identity::Key(KeyIdentity::CachedAdmin { key, end_user }) => Self::CachedAdmin {
-                key: row(py, key),
+                key: row(py, &key.row),
                 end_user: row(py, end_user),
             },
             Identity::Key(KeyIdentity::MasterKey { hash, end_user }) => Self::MasterKey {

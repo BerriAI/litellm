@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream};
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use serde_json::{Map, Value};
 
@@ -117,7 +117,7 @@ impl Told {
 /// tells the hooks it failed.
 pub(crate) async fn around<H, F, Fut>(
     gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
+    identity: &Authenticated<H::Rows>,
     call_type: CallType,
     body: Map<String, Value>,
     serve: F,

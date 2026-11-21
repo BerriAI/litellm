@@ -28,7 +28,11 @@ pub enum TeamGrant<R: Rows> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyContext<R: Rows> {
-    pub key: R::Key,
+    /// The hash the key's row is stored under. The key path refuses a key without one, so every
+    /// key that authenticates has it.
+    pub hash: KeyHash,
+    /// The key's row with what it stores, which gives the key its role once it is a caller.
+    pub key: Keyed<R::Key>,
     pub end_user: R::EndUser,
     pub owner: Option<R::User>,
     pub team: TeamGrant<R>,
@@ -43,7 +47,7 @@ pub enum KeyIdentity<R: Rows> {
     },
     UserAuthRoute,
     CachedAdmin {
-        key: R::Key,
+        key: Keyed<R::Key>,
         end_user: R::EndUser,
     },
     /// `hash` is the master key's hash, which the host caches the admin identity under.
@@ -57,6 +61,7 @@ pub enum KeyIdentity<R: Rows> {
 /// Who holds a verified virtual key: its owner, team and project, read before any budget.
 pub(crate) async fn principal<H: AuthHost>(
     host: &H,
+    hash: KeyHash,
     key: Keyed<KeyRow<H>>,
     end_user: EndUserRow<H>,
 ) -> Result<KeyPrincipal<H::Rows>, Refused<H::Rows>> {
@@ -67,6 +72,7 @@ pub(crate) async fn principal<H: AuthHost>(
     let team = team::read(host, &key.record).await?;
     let project = project::read(host, &key.record).await?;
     Ok(KeyPrincipal {
+        hash,
         key,
         end_user,
         owner,
@@ -77,6 +83,7 @@ pub(crate) async fn principal<H: AuthHost>(
 
 /// A virtual key with everything read about who holds it, which admission checks next.
 pub(crate) struct KeyPrincipal<R: Rows> {
+    pub(crate) hash: KeyHash,
     pub(crate) key: Keyed<R::Key>,
     pub(crate) end_user: R::EndUser,
     pub(crate) owner: Option<R::User>,
@@ -87,7 +94,8 @@ pub(crate) struct KeyPrincipal<R: Rows> {
 impl<R: Rows> From<KeyPrincipal<R>> for KeyContext<R> {
     fn from(principal: KeyPrincipal<R>) -> Self {
         Self {
-            key: principal.key.row,
+            hash: principal.hash,
+            key: principal.key,
             end_user: principal.end_user,
             owner: principal.owner,
             team: principal.team,

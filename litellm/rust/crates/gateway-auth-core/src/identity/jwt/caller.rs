@@ -4,7 +4,7 @@ use super::{AgentMode, claims};
 use crate::{
     AuthHost, Error, JwtDenial,
     authn::jwt::{Claims, JwtSettings},
-    identity::{Caller, CallerKind},
+    identity::{CallerKind, ClaimedCaller},
 };
 
 /// `JWTAuthManager.resolve_agent_id`
@@ -40,7 +40,7 @@ pub(crate) async fn caller<H: AuthHost>(
     host: &H,
     claims: &Claims,
     settings: &JwtSettings,
-) -> Result<Caller<H::Rows>, Error> {
+) -> Result<ClaimedCaller<H::Rows>, Error> {
     let issuer = claims.0.get("iss").cloned().unwrap_or(Value::Null);
     let agent = host.managed_agent(&Value::Object(claims.0.clone())).await?;
     if let Some(agent) = agent {
@@ -49,7 +49,7 @@ pub(crate) async fn caller<H: AuthHost>(
             AgentMode::Autonomous => Vec::new(),
             AgentMode::Delegated => claims::scopes(claims)?,
         };
-        return Ok(Caller {
+        return Ok(ClaimedCaller {
             kind,
             rbac_role: None,
             scopes,
@@ -65,7 +65,7 @@ pub(crate) async fn caller<H: AuthHost>(
         false => CallerKind::Jwt,
     };
     let agent_id = resolve_agent_id(host, claims, settings).await?;
-    Ok(Caller {
+    Ok(ClaimedCaller {
         kind,
         rbac_role,
         scopes,

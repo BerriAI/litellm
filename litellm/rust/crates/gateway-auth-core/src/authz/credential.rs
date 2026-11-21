@@ -5,7 +5,7 @@ use crate::{
     Error, JwtDenial, RbacDenial, Rows,
     authn::jwt::{JwtSettings, managed_issuer_is_trusted},
     identity::{
-        Caller, CallerKind,
+        CallerKind, ClaimedCaller,
         jwt::{AgentMode, UserInfo},
     },
     routes::RouteAllowlist,
@@ -170,7 +170,7 @@ impl RoutePolicy<'_> {
     /// role's models and routes, the scope mappings and a proxy admin's routes.
     pub(crate) fn credential<R: Rows>(
         &self,
-        caller: &Caller<R>,
+        caller: &ClaimedCaller<R>,
         target: &Target<'_>,
     ) -> Result<(), Error> {
         if caller.agent.is_some() {
@@ -213,7 +213,7 @@ impl RoutePolicy<'_> {
     /// a managed agent.
     pub(crate) fn email_domain<R: Rows>(
         &self,
-        caller: &Caller<R>,
+        caller: &ClaimedCaller<R>,
         info: &UserInfo,
     ) -> Result<(), JwtDenial> {
         match caller.kind {

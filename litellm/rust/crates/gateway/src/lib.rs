@@ -83,7 +83,7 @@ pub fn router(state: AppState, config: &Config) -> Router {
     let inference = litellm_gateway_inference::router(state.inference.clone()).route_layer(
         axum::middleware::from_fn_with_state(
             state.auth(config),
-            litellm_gateway_auth::authenticate,
+            litellm_gateway_auth::authenticate::<host::NativeRows>,
         ),
     );
     middleware::inference(inference).merge(health::router(state))

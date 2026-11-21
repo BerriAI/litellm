@@ -1,6 +1,6 @@
 use jiff::Timestamp;
 
-use crate::{KeyDenial, token::Shown};
+use crate::{KeyDenial, KeyHash, token::Shown};
 
 use super::{KeyRecord, KeySettings};
 
@@ -19,21 +19,19 @@ pub(super) fn expired(
         })
 }
 
-/// What the key row alone settles, before any read about who holds it.
+/// What the key row alone settles, before any read about who holds it. A usable key has the hash
+/// its row is stored under, which names it from here on.
 pub(super) fn usable(
     key: &KeyRecord,
     now: Timestamp,
     shown: Shown<'_>,
     settings: &KeySettings,
-) -> Result<(), KeyDenial> {
+) -> Result<KeyHash, KeyDenial> {
     if key.blocked {
         return Err(KeyDenial::Blocked);
     }
     if let Some(denial) = expired(key, now, shown, settings) {
         return Err(denial);
     }
-    if key.token.is_none() {
-        return Err(KeyDenial::NoToken);
-    }
-    Ok(())
+    key.token.clone().ok_or(KeyDenial::NoToken)
 }

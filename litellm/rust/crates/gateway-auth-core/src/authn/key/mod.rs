@@ -99,11 +99,13 @@ pub enum Verified<R: Rows> {
         end_user: R::EndUser,
     },
     CachedAdmin {
-        key: R::Key,
+        key: Keyed<R::Key>,
         end_user: R::EndUser,
     },
-    /// A virtual key that is not blocked, expired or missing its token.
+    /// A virtual key that is not blocked, expired or missing its token. `stored` is the hash its
+    /// row is stored under, which is not the hash of a token a JWT mapped to it.
     VirtualKey {
+        stored: KeyHash,
         key: Keyed<R::Key>,
         end_user: R::EndUser,
     },
@@ -148,7 +150,7 @@ pub(crate) async fn verify<H: AuthHost>(
                     Err(Refused::new(denial, Some(&admin.row)))
                 }
                 None => Ok(Verified::CachedAdmin {
-                    key: admin.row,
+                    key: admin,
                     end_user,
                 }),
             };
@@ -165,7 +167,11 @@ pub(crate) async fn verify<H: AuthHost>(
             None => return Err(Refused::new(crate::KeyDenial::NotFound { hash }, None)),
         },
     };
-    expiry::usable(&key.record, request.now, shown, settings)
+    let stored = expiry::usable(&key.record, request.now, shown, settings)
         .map_err(|denial| Refused::new(denial, Some(&key.row)))?;
-    Ok(Verified::VirtualKey { key, end_user })
+    Ok(Verified::VirtualKey {
+        stored,
+        key,
+        end_user,
+    })
 }

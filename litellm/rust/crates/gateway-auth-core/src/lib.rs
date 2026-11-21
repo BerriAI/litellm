@@ -28,6 +28,7 @@ pub use host::{
     AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks,
     OrgRow, ProjectRow, Row, Rows, TeamRow, UserRow,
 };
+pub use identity::{Caller, NotACaller};
 pub use outcome::{Identity, KeyOutcome, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};
 pub use request::Request;

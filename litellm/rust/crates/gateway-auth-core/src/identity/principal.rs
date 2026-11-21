@@ -14,7 +14,7 @@ pub(crate) enum CallerKind {
 /// What a JWT's claims say about who sends it, after the cheap agent reads and before any team,
 /// user or organization is read.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Caller<R: Rows> {
+pub(crate) struct ClaimedCaller<R: Rows> {
     pub(crate) kind: CallerKind,
     pub(crate) rbac_role: Option<RbacRole>,
     pub(crate) scopes: Vec<String>,
@@ -28,7 +28,7 @@ pub(crate) struct Caller<R: Rows> {
 /// Everything identity read for a caller that is neither a proxy admin nor an autonomous agent.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Principal<R: Rows> {
-    pub(crate) caller: Caller<R>,
+    pub(crate) caller: ClaimedCaller<R>,
     pub(crate) user_id: Option<String>,
     pub(crate) user_email: Option<String>,
     pub(crate) user: Option<User<R::User>>,

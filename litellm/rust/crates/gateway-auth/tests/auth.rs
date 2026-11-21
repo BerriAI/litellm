@@ -3,425 +3,184 @@ use std::sync::Arc;
 use axum::{
     Router,
     body::{Body, to_bytes},
-    http::{Request, StatusCode},
+    http::{Request, StatusCode, request::Parts},
     middleware::from_extractor_with_state,
     routing::get,
 };
-use litellm_config::Config;
-use litellm_gateway_auth::{Auth, RequireMasterKey, hash_token};
+use litellm_gateway_auth::{
+    Auth, AuthFuture, Authenticated, Authenticator, Credential, CredentialExtractor, Error,
+    RequireMasterKey, authenticate,
+};
+use litellm_gateway_auth_core::{
+    Caller, KeyHash, Rows,
+    authn::key::{KeyRecord, Keyed},
+    identity::key::{KeyContext, TeamGrant},
+};
 use litellm_secret_value::SecretValue;
 use rstest::rstest;
 use tower::ServiceExt;
 
-#[rstest]
-#[case::literal("literal-key", Some("Bearer literal-key"), 204)]
-#[case::wrong("literal-key", Some("Bearer other-key"), 401)]
-#[case::missing("literal-key", None, 401)]
-#[case::wrong_scheme("literal-key", Some("Basic literal-key"), 401)]
-#[case::empty_token("literal-key", Some("Bearer "), 401)]
-#[case::empty_key("", Some("Bearer "), 500)]
-#[case::whitespace_key("   ", Some("Bearer "), 500)]
-#[tokio::test]
-async fn enforces_configured_keys_without_exposing_secrets(
-    #[case] key: &str,
-    #[case] authorization: Option<&str>,
-    #[case] status: u16,
-) {
-    let config = Config::from_yaml(&format!(
-        "model_list: []\ngeneral_settings:\n  master_key: '{key}'\n"
-    ))
-    .unwrap();
-    let app = Router::new()
-        .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
-        .layer(from_extractor_with_state::<RequireMasterKey, _>(
-            Auth::from_config(&config),
-        ));
-    let request = Request::get("/protected");
-    let request = match authorization {
-        Some(value) => request.header("authorization", value),
-        None => request,
-    };
-    let response = app
-        .oneshot(request.body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), status);
-    let body = to_bytes(response.into_body(), 4096).await.unwrap();
-    let text = std::str::from_utf8(&body).unwrap();
-    assert!(!text.contains("literal-key"));
+const MASTER_TOKEN: &str = "master-token";
+const KEY_TOKEN: &str = "key-token";
+
+#[derive(Clone, Debug, PartialEq)]
+struct Held;
+
+impl Rows for Held {
+    type Key = ();
+    type User = ();
+    type Team = ();
+    type EndUser = ();
+    type ObjectPermission = ();
+    type Project = ();
+    type Membership = ();
+    type Org = ();
+    type Agent = ();
 }
 
-#[rstest]
-fn hash_token_matches_python_sha256_hexdigest() {
-    assert_eq!(
-        hash_token("sk-9876"),
-        "595b23af2e99cee580245f388d3244a39247a25a3846e898e9c78841f8471a3e"
-    );
+fn stored_key() -> Caller<Held> {
+    Caller::Key(Box::new(KeyContext {
+        hash: KeyHash::new("stored"),
+        key: Keyed {
+            record: KeyRecord::default(),
+            row: (),
+        },
+        end_user: (),
+        owner: None,
+        team: TeamGrant::NoTeam,
+        project: None,
+    }))
 }
 
-use litellm_gateway_auth::{
-    AccessRequest, AuthFuture, AuthenticatedCaller, AuthenticatedRequest, Authentication,
-    AuthenticationMethod, Authenticator, Authorizer, Clock, Error, IdentityResolver, Permissions,
-    Principal, PrincipalKind, ResolvedIdentity, VerifiedIdentity, authenticate,
-};
-use std::{
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
-    time::{Duration, SystemTime},
-};
-
-struct TestClock(AtomicU64);
-
-impl Clock for TestClock {
-    fn now(&self) -> SystemTime {
-        SystemTime::UNIX_EPOCH + Duration::from_secs(self.0.load(Ordering::SeqCst))
-    }
-}
-
+/// Knows [`MASTER_TOKEN`] and [`KEY_TOKEN`], and answers a request that presents no token the way
+/// a server with no master key does.
 struct Verifier {
-    authority: &'static str,
-    restrictions: Permissions,
     failure: Option<u16>,
 }
 
-impl Authenticator for Verifier {
-    fn verify<'a>(
+impl Authenticator<Held> for Verifier {
+    fn authenticate<'a>(
         &'a self,
-        credential: &'a litellm_gateway_auth::Credential,
-        _: &'a axum::http::request::Parts,
-    ) -> AuthFuture<'a, VerifiedIdentity> {
+        credential: &'a Credential,
+        _: &'a Parts,
+    ) -> AuthFuture<'a, Caller<Held>> {
         Box::pin(async move {
-            match self.failure {
-                Some(401) => return Err(Error::InvalidToken),
-                Some(_) => {
-                    return Err(Error::Unavailable(litellm_error::Source::new(
-                        std::io::Error::other("verifier offline"),
-                    )));
-                }
-                None => (),
-            }
-            let litellm_gateway_auth::Credential::Token(credential) = credential else {
-                return Err(Error::InvalidToken);
-            };
-            if credential.expose() != "test-token" {
-                return Err(Error::InvalidToken);
-            }
-            Ok(VerifiedIdentity {
-                principal: Principal::new(
-                    self.authority.into(),
-                    "subject".into(),
-                    PrincipalKind::Service,
-                ),
-                authentication: Authentication {
-                    method: AuthenticationMethod::External("test".into()),
-                    verifier: "test-verifier".into(),
-                    credential_id: "credential".into(),
-                    expires_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(100)),
+            match (self.failure, credential) {
+                (Some(401), _) => Err(Error::InvalidToken),
+                (Some(_), _) => Err(Error::Unavailable(litellm_error::Source::new(
+                    std::io::Error::other("verifier offline"),
+                ))),
+                (None, Credential::Transport) => Err(Error::Unconfigured),
+                (None, Credential::Token(token)) => match token.expose() {
+                    MASTER_TOKEN => Ok(Caller::MasterKey),
+                    KEY_TOKEN => Ok(stored_key()),
+                    _ => Err(Error::InvalidToken),
                 },
-                restrictions: self.restrictions.clone(),
-            })
+            }
         })
     }
 }
 
-struct Identities {
-    mapped_principal: Option<Principal>,
-    calls: AtomicUsize,
-    permissions: Permissions,
+fn auth(failure: Option<u16>) -> Auth<Held> {
+    Auth::new(Arc::new(Verifier { failure }))
 }
 
-impl IdentityResolver for Identities {
-    fn resolve<'a>(&'a self, identity: &'a VerifiedIdentity) -> AuthFuture<'a, ResolvedIdentity> {
-        Box::pin(async move {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ResolvedIdentity {
-                principal: self
-                    .mapped_principal
-                    .clone()
-                    .unwrap_or_else(|| identity.principal.clone()),
-                permissions: self.permissions.clone(),
-            })
-        })
-    }
+/// Answers with the stored hash of the caller the request was authenticated as.
+fn protected(auth: Auth<Held>) -> Router {
+    Router::new()
+        .route(
+            "/protected",
+            get(|caller: Authenticated<Held>| async move {
+                caller
+                    .hash()
+                    .map_or("master".to_owned(), |hash| hash.as_str().to_owned())
+            }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            auth,
+            authenticate::<Held>,
+        ))
 }
 
-struct Policy(AtomicUsize);
-
-impl Authorizer for Policy {
-    fn authorize<'a>(
-        &'a self,
-        _: &'a AuthenticatedCaller,
-        _: &'a AccessRequest,
-    ) -> AuthFuture<'a, ()> {
-        Box::pin(async move {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        })
-    }
-}
-
-struct Pipeline {
-    auth: Auth,
-    identities: Arc<Identities>,
-    policy: Arc<Policy>,
-    clock: Arc<TestClock>,
-}
-
-fn pipeline(
-    authority: &'static str,
-    permissions: Permissions,
-    restrictions: Permissions,
-    failure: Option<u16>,
-) -> Pipeline {
-    let identities = Arc::new(Identities {
-        mapped_principal: None,
-        calls: AtomicUsize::new(0),
-        permissions,
-    });
-    let policy = Arc::new(Policy(AtomicUsize::new(0)));
-    let clock = Arc::new(TestClock(AtomicU64::new(10)));
-    let auth = Auth::new(
-        Arc::new(Verifier {
-            authority,
-            restrictions,
-            failure,
-        }),
-        identities.clone(),
-        policy.clone(),
-        clock.clone(),
-    );
-    Pipeline {
-        auth,
-        identities,
-        policy,
-        clock,
-    }
-}
-
-fn model(name: &str) -> AccessRequest {
-    AccessRequest::Model {
-        name: name.into(),
-        deployment: name.into(),
-    }
+fn bearer(token: &str) -> Request<Body> {
+    Request::get("/protected")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
 }
 
 #[rstest]
 #[case::invalid_token(401)]
-#[case::unavailable_verifier(503)]
+#[case::unavailable_authenticator(503)]
 #[tokio::test]
-async fn failed_verification_never_resolves_identity_or_runs_the_handler(#[case] status: u16) {
-    let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, Some(status));
-    let app = Router::new()
-        .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
-        .layer(axum::middleware::from_fn_with_state(
-            pipeline.auth,
-            authenticate,
-        ));
-    let response = app
-        .oneshot(
-            Request::get("/protected")
-                .header("authorization", "Bearer test-token")
-                .body(Body::empty())
-                .unwrap(),
-        )
+async fn a_failed_authentication_is_answered_in_its_own_status(#[case] status: u16) {
+    let response = protected(auth(Some(status)))
+        .oneshot(bearer(MASTER_TOKEN))
         .await
         .unwrap();
+
     assert_eq!(response.status().as_u16(), status);
-    assert_eq!(pipeline.identities.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(pipeline.policy.0.load(Ordering::SeqCst), 0);
 }
 
 #[rstest]
-#[case::membership_restricts(Permissions::Only(Arc::from([model("allowed")])), Permissions::All)]
-#[case::credential_restricts(Permissions::All, Permissions::Only(Arc::from([model("allowed")])))]
+#[case::the_master_key(MASTER_TOKEN, "master")]
+#[case::a_key(KEY_TOKEN, "stored")]
 #[tokio::test]
-async fn policy_cannot_expand_membership_or_credential_permissions(
-    #[case] permissions: Permissions,
-    #[case] restrictions: Permissions,
+async fn a_handler_reads_the_caller_the_authenticator_answered(
+    #[case] token: &str,
+    #[case] caller: &str,
 ) {
-    let pipeline = pipeline("issuer-a", permissions, restrictions, None);
-    let identity = pipeline
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    assert!(matches!(
-        identity.authorize(model("denied")).await,
-        Err(Error::Forbidden)
-    ));
-    assert_eq!(pipeline.policy.0.load(Ordering::SeqCst), 0);
-    let allowed = model("allowed");
-    identity
-        .authorize(allowed.clone())
-        .await
-        .unwrap()
-        .consume(identity.caller(), &allowed)
-        .unwrap();
-    assert_eq!(pipeline.policy.0.load(Ordering::SeqCst), 1);
+    let response = protected(auth(None)).oneshot(bearer(token)).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert_eq!(body, caller);
 }
 
 #[rstest]
 #[tokio::test]
-async fn authorization_grants_bind_the_exact_caller_and_target() {
-    let first = pipeline("issuer-a", Permissions::All, Permissions::All, None);
-    let second = pipeline("issuer-b", Permissions::All, Permissions::All, None);
-    let caller = first
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    let other = second
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    assert_ne!(caller.caller().principal(), other.caller().principal());
-    let access = model("allowed");
-    assert!(matches!(
-        caller
-            .authorize(access.clone())
-            .await
-            .unwrap()
-            .consume(other.caller(), &access),
-        Err(Error::Forbidden)
-    ));
-    assert!(matches!(
-        caller
-            .authorize(access)
-            .await
-            .unwrap()
-            .consume(caller.caller(), &model("different")),
-        Err(Error::Forbidden)
-    ));
-}
-
-#[rstest]
-#[tokio::test]
-async fn expiry_is_checked_again_for_operations_on_existing_connections() {
-    let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
-    let identity = pipeline
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    assert!(identity.authorize(model("allowed")).await.is_ok());
-    pipeline.clock.0.store(100, Ordering::SeqCst);
-    assert!(matches!(
-        identity.authorize(model("allowed")).await,
-        Err(Error::Expired)
-    ));
-    assert!(matches!(
-        pipeline
-            .auth
-            .authenticate(&SecretValue::new("test-token"))
-            .await,
-        Err(Error::Expired)
-    ));
-    assert_eq!(pipeline.identities.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(pipeline.policy.0.load(Ordering::SeqCst), 1);
-}
-
-#[rstest]
-#[tokio::test]
-async fn bearer_extraction_rejects_duplicates_and_does_not_trust_preexisting_identity() {
-    let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
-    let identity = pipeline
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    let app = Router::new()
-        .route(
-            "/protected",
-            get(|_: AuthenticatedRequest| async { StatusCode::NO_CONTENT }),
-        )
-        .layer(axum::middleware::from_fn_with_state(
-            pipeline.auth,
-            authenticate,
-        ));
+async fn bearer_extraction_rejects_duplicates_and_does_not_trust_a_preexisting_caller() {
+    let app = protected(auth(None));
     let duplicate = Request::get("/protected")
-        .header("authorization", "Bearer test-token")
-        .header("authorization", "Bearer test-token")
+        .header("authorization", format!("Bearer {MASTER_TOKEN}"))
+        .header("authorization", format!("Bearer {MASTER_TOKEN}"))
         .body(Body::empty())
         .unwrap();
     assert_eq!(app.clone().oneshot(duplicate).await.unwrap().status(), 401);
     let forged = Request::get("/protected")
-        .extension(identity)
+        .extension(Authenticated::<Held>::from(Caller::MasterKey))
         .body(Body::empty())
         .unwrap();
     assert_eq!(app.clone().oneshot(forged).await.unwrap().status(), 401);
-    let valid = Request::get("/protected")
-        .header("authorization", "Bearer test-token")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(app.oneshot(valid).await.unwrap().status(), 204);
-}
-
-#[rstest]
-#[tokio::test]
-async fn route_permissions_are_checked_before_parsing_or_dispatch() {
-    let allowed = AccessRequest::Route {
-        method: "GET".into(),
-        path: "/allowed/{id}".into(),
-    };
-    let pipeline = pipeline(
-        "issuer-a",
-        Permissions::Only(Arc::from([allowed])),
-        Permissions::All,
-        None,
+    assert_eq!(
+        app.oneshot(bearer(MASTER_TOKEN)).await.unwrap().status(),
+        200
     );
-    let app = Router::new()
-        .route("/allowed/{id}", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/denied", get(|| async { StatusCode::NO_CONTENT }))
-        .layer(axum::middleware::from_fn_with_state(
-            pipeline.auth,
-            authenticate,
-        ));
-    let allowed = Request::get("/allowed/123")
-        .header("authorization", "Bearer test-token")
-        .body(Body::empty())
-        .unwrap();
-    let denied = Request::get("/denied")
-        .header("authorization", "Bearer test-token")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(app.clone().oneshot(allowed).await.unwrap().status(), 204);
-    assert_eq!(app.oneshot(denied).await.unwrap().status(), 403);
 }
 
 struct CustomHeader;
 
-impl litellm_gateway_auth::CredentialExtractor for CustomHeader {
-    fn extract(
-        &self,
-        parts: &axum::http::request::Parts,
-    ) -> Result<litellm_gateway_auth::Credential, Error> {
+impl CredentialExtractor for CustomHeader {
+    fn extract(&self, parts: &Parts) -> Result<Credential, Error> {
         let value = parts
             .headers
             .get("x-test-key")
             .and_then(|value| value.to_str().ok())
             .ok_or(Error::InvalidToken)?;
-        Ok(litellm_gateway_auth::Credential::Token(SecretValue::new(
-            value,
-        )))
+        Ok(Credential::Token(SecretValue::new(value)))
     }
 }
 
 #[rstest]
-#[case::selected_header("test-token", "wrong-token", 204)]
-#[case::no_fallback("wrong-token", "test-token", 401)]
+#[case::selected_header(MASTER_TOKEN, "wrong-token", 200)]
+#[case::no_fallback("wrong-token", MASTER_TOKEN, 401)]
 #[tokio::test]
 async fn route_profile_uses_only_its_selected_credentials(
     #[case] custom: &str,
     #[case] bearer: &str,
     #[case] status: u16,
 ) {
-    let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
-    let app = Router::new()
-        .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
-        .layer(axum::middleware::from_fn_with_state(
-            pipeline.auth.with_extractor(Arc::new(CustomHeader)),
-            authenticate,
-        ));
+    let app = protected(auth(None).with_extractor(Arc::new(CustomHeader)));
     let response = app
         .oneshot(
             Request::get("/protected")
@@ -436,17 +195,29 @@ async fn route_profile_uses_only_its_selected_credentials(
 }
 
 #[rstest]
+#[case::the_master_key(Some("Bearer master-token"), 204)]
+#[case::a_key(Some("Bearer key-token"), 401)]
+#[case::an_unknown_token(Some("Bearer other-token"), 401)]
+#[case::no_token_is_still_put_to_the_authenticator(None, 500)]
+#[case::a_malformed_header_is_no_token(Some("Basic master-token"), 500)]
 #[tokio::test]
-async fn master_rotation_rejects_the_old_key() {
-    let second =
-        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: second-key\n").unwrap();
-    let rotated = Auth::from_config(&second);
-    rotated
-        .authenticate(&SecretValue::new("second-key"))
+async fn require_master_key_admits_the_master_key_alone(
+    #[case] authorization: Option<&str>,
+    #[case] status: u16,
+) {
+    let app = Router::new()
+        .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
+        .layer(from_extractor_with_state::<RequireMasterKey, _>(auth(None)));
+    let request = Request::get("/protected");
+    let request = match authorization {
+        Some(value) => request.header("authorization", value),
+        None => request,
+    };
+
+    let response = app
+        .oneshot(request.body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert!(matches!(
-        rotated.authenticate(&SecretValue::new("first-key")).await,
-        Err(Error::InvalidToken)
-    ));
+
+    assert_eq!(response.status().as_u16(), status);
 }
