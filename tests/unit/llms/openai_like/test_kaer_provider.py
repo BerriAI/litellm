@@ -152,3 +152,70 @@ def test_kaer_streaming_chat_completion_request():
     assert body["model"] == "janus-1-pro"
     assert body["stream"] is True
     assert text == "Hello from Kaer"
+
+
+@pytest.mark.parametrize("model", ["kaer/janus-1-flash", "kaer/janus-1-pro"])
+def test_kaer_forwards_tools(model: str):
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Current weather for a city",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            },
+        }
+    ]
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.kaer.ai/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl_kaer_tools",
+                "object": "chat.completion",
+                "created": 1_789_550_000,
+                "model": model.split("/", 1)[1],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"city":"London"}'},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 9, "total_tokens": 29},
+            },
+        )
+        response: Final = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Weather in London?"}],
+            tools=tools,
+            tool_choice="auto",
+            api_key="kaer-test-key",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["tools"] == tools
+    assert body["tool_choice"] == "auto"
+    tool_call: Final = response.choices[0].message.tool_calls[0]
+    assert tool_call.function.name == "get_weather"
+    assert json.loads(tool_call.function.arguments) == {"city": "London"}
+
+
+def test_kaer_models_cost_from_model_map():
+    usage: Final = litellm.Usage(prompt_tokens=1_000, completion_tokens=500, total_tokens=1_500)
+    for model in ("kaer/janus-1-flash", "kaer/janus-1-pro"):
+        info: Final = litellm.get_model_info(model)
+        response = litellm.ModelResponse(model=model.split("/", 1)[1], usage=usage)
+        cost = litellm.completion_cost(completion_response=response, model=model, custom_llm_provider="kaer")
+        expected = 1_000 * info["input_cost_per_token"] + 500 * info["output_cost_per_token"]
+        assert cost == pytest.approx(expected)
+        assert info["supports_function_calling"] is True
