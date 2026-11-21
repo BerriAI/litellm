@@ -330,6 +330,7 @@ _FIRST = {"role": "user", "content": [{"type": "text", "text": f"{_REMINDER}run 
 _ASKS_LS = {"role": "assistant", "content": [{"type": "tool_use", "id": "call-ls", "name": "Bash", "input": {}}]}
 _LS_RESULT = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-ls", "content": "a.txt"}]}
 _SECOND = {"role": "user", "content": "what is 9 plus 4?"}
+_SUGGEST = {"role": "user", "content": "[SUGGESTION MODE: Suggest what the user might naturally type next]"}
 
 
 def test_the_call_that_carries_a_typed_message_opens_its_interaction() -> None:
@@ -383,6 +384,11 @@ def test_a_payload_tells_a_subagent_request_and_a_side_request_from_the_agents_t
     subagent = agent_call(payload({"x-claude-code-agent-id": "a995473280eb4a327"}, [{"name": "Bash"}]))
     side = agent_call(payload({}, []))
 
-    assert (thread.subagent, thread.has_tools) == (None, True)
-    assert (subagent.subagent, subagent.has_tools) == ("a995473280eb4a327", True)
-    assert (side.subagent, side.has_tools) == (None, False)
+    suggestion = agent_call(
+        {**payload({}, [{"name": "Bash"}]), "messages": [_FIRST, {"role": "assistant", "content": "2 files"}, _SUGGEST]}
+    )
+
+    assert (thread.subagent, thread.beside_thread) == (None, False)
+    assert (subagent.subagent, subagent.beside_thread) == ("a995473280eb4a327", False)
+    assert (side.subagent, side.beside_thread) == (None, True)
+    assert (suggestion.subagent, suggestion.beside_thread) == (None, True)

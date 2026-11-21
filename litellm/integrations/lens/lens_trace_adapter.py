@@ -385,7 +385,13 @@ class AgentCall:
     subagent: str | None = None
     """The id a subagent's requests carry, absent on the agent's own thread."""
     has_tools: bool = False
-    """False for the requests an agent makes beside its thread, such as naming the session."""
+
+    @property
+    def beside_thread(self) -> bool:
+        """A request the agent makes beside its thread, such as naming the session or suggesting a reply:
+        it declares no tools, or its newest message is one the agent wrote for that purpose."""
+        newest: Final = next((text for item in reversed(_conversation(self.request)) if (text := _typed(item))), "")
+        return not self.has_tools or newest.startswith(_SIDE_REQUEST_PREFIXES)
 
     def attributes(self, session_id: str | None) -> Mapping[str, str]:
         """The facts every span of this call carries; ``session_id`` is the caller's own, which wins."""
@@ -429,6 +435,7 @@ def agent_call(standard_logging_payload: object) -> AgentCall:
 
 
 _SUBAGENT_HEADER: Final = "x-claude-code-agent-id"
+_SIDE_REQUEST_PREFIXES: Final = ("[SUGGESTION MODE:",)
 _AGENT_NAME: Final = "gen_ai.agent.name"
 _INTEGRATION: Final = "langsmith.metadata.ls_integration"
 _TASK: Final = "lens.task"
@@ -526,7 +533,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         if not session_id or not made_by.integration:
             return _Placement(key=session_id)
         remembered: Final = self._open_interactions.get(session_id)
-        if made_by.subagent or not made_by.has_tools:
+        if made_by.subagent or made_by.beside_thread:
             if remembered is None:
                 return _Placement(key=session_id, actor=made_by.subagent)
             turn: Final = remembered.interaction
@@ -639,7 +646,8 @@ class _LensTraceLogger(OpenTelemetryV2):
         for _, step in steps:
             step.end(end_time=at_ns)
         remembered: Final = self._open_interactions.get(session_id)
-        if not steps or placement.actor or remembered is None or remembered.interaction != placement.interaction:
+        placed: Final = placement.interaction.key if placement.interaction else None
+        if not steps or placement.actor or remembered is None or remembered.interaction.key != placed:
             return
         reported: Final = tuple((step.get_span_context().span_id, exchange.result) for exchange, step in steps)
         self._open_interactions[session_id] = _Open(
