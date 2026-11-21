@@ -879,7 +879,7 @@ def list_batches(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: {}.".format(
+                message="LiteLLM doesn't support {} for 'list_batches'. Supported providers: {}.".format(
                     custom_llm_provider,
                     ", ".join(sorted(LIST_BATCHES_SUPPORTED_PROVIDERS)),
                 ),
@@ -888,7 +888,7 @@ def list_batches(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
+                    request=httpx.Request(method="GET", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
