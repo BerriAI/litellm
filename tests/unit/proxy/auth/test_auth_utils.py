@@ -1091,24 +1091,22 @@ class TestGetKeyModelRpmLimit:
             pytest.param({"model_rpm_limit": {"other-model": 10}}, {}, id="key_map_without_the_model"),
         ],
     )
-    def test_rpm_map_without_the_model_falls_through_to_deployment_default(self, key_metadata, team_metadata):
-        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123", metadata=key_metadata, team_metadata=team_metadata)
-        mock_router = MagicMock()
-        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=5)]
-        with patch(_ROUTER_PATCH, mock_router):
-            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+    def test_rpm_map_without_the_model_falls_through_to_deployment_default(
+        self, key_metadata: dict[str, dict[str, int]], team_metadata: dict[str, dict[str, int]]
+    ) -> None:
+        user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-123", metadata=key_metadata, team_metadata=team_metadata)
+        with patch(_ROUTER_PATCH, _router_with_default_limit("model1", "default_api_key_rpm_limit", 5)):
+            result: Final = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 5}
 
-    def test_team_rpm_entry_for_the_model_keeps_deployment_default_off_a_key_with_its_own_map(self):
-        user_api_key_dict = UserAPIKeyAuth(
+    def test_team_rpm_entry_for_the_model_keeps_deployment_default_off_a_key_with_its_own_map(self) -> None:
+        user_api_key_dict: Final = UserAPIKeyAuth(
             api_key="sk-123",
             metadata={"model_rpm_limit": {"other-model": 10}},
             team_metadata={"model_rpm_limit": {"model1": 20}},
         )
-        mock_router = MagicMock()
-        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=5)]
-        with patch(_ROUTER_PATCH, mock_router):
-            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        with patch(_ROUTER_PATCH, _router_with_default_limit("model1", "default_api_key_rpm_limit", 5)):
+            result: Final = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"other-model": 10}
 
     def test_empty_dict_limits_are_returned(self):
@@ -1197,24 +1195,22 @@ class TestGetKeyModelTpmLimit:
             pytest.param({"model_tpm_limit": {"other-model": 10}}, {}, id="key_map_without_the_model"),
         ],
     )
-    def test_tpm_map_without_the_model_falls_through_to_deployment_default(self, key_metadata, team_metadata):
-        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123", metadata=key_metadata, team_metadata=team_metadata)
-        mock_router = MagicMock()
-        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=5)]
-        with patch(_ROUTER_PATCH, mock_router):
-            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+    def test_tpm_map_without_the_model_falls_through_to_deployment_default(
+        self, key_metadata: dict[str, dict[str, int]], team_metadata: dict[str, dict[str, int]]
+    ) -> None:
+        user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-123", metadata=key_metadata, team_metadata=team_metadata)
+        with patch(_ROUTER_PATCH, _router_with_default_limit("model1", "default_api_key_tpm_limit", 5)):
+            result: Final = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 5}
 
-    def test_team_tpm_entry_for_the_model_keeps_deployment_default_off_a_key_with_its_own_map(self):
-        user_api_key_dict = UserAPIKeyAuth(
+    def test_team_tpm_entry_for_the_model_keeps_deployment_default_off_a_key_with_its_own_map(self) -> None:
+        user_api_key_dict: Final = UserAPIKeyAuth(
             api_key="sk-123",
             metadata={"model_tpm_limit": {"other-model": 10}},
             team_metadata={"model_tpm_limit": {"model1": 20}},
         )
-        mock_router = MagicMock()
-        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=5)]
-        with patch(_ROUTER_PATCH, mock_router):
-            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        with patch(_ROUTER_PATCH, _router_with_default_limit("model1", "default_api_key_tpm_limit", 5)):
+            result: Final = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"other-model": 10}
 
     def test_skips_deployments_with_malformed_limit_value(self):
@@ -3165,6 +3161,17 @@ class TestGetEndUserIdDropsMalformedBodyValues:
             result = get_end_user_id_from_request_body(request_body=request_body, request_headers=headers)
 
         assert result == "alice@example.com"
+
+
+def _router_with_default_limit(model_name: str, field: str, limit: int) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-unit", field: limit},
+            }
+        ]
+    )
 
 
 def _make_deployment_dict(model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None) -> dict:
