@@ -354,6 +354,34 @@ def test_drop_params_counts_only_the_image_types_a_deployment_keeps(
     assert host.deployments_called("adecisions") == expected
 
 
+@pytest.mark.parametrize(
+    ("image_url", "expected"),
+    [(_GIF_RECEIPT, ["json"] * 3), (_PNG_RECEIPT, ["openrouter-perplexity"] * 3)],
+    ids=["gif-the-routed-model-drops", "png-the-routed-model-keeps"],
+)
+def test_drop_params_counts_only_the_image_types_the_openrouter_model_keeps(
+    make_core: MakeCore, host: EndpointHost, image_url: str, expected: list[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[
+            deployment("o", "openrouter-perplexity", model="openrouter/perplexity/sonar", weight=1),
+            deployment("o", "json", model="openai/gpt-4o", weight=0),
+        ],
+        num_retries=0,
+    )
+
+    for _ in range(3):
+        _call(
+            core,
+            "adecisions",
+            model="o",
+            drop_params=True,
+            **{**QUESTION, "input": [{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE]}]},
+        )
+
+    assert host.deployments_called("adecisions") == expected
+
+
 @pytest.mark.parametrize("op", ["adecisions", "decisions"])
 def test_a_call_with_only_text_parts_keeps_the_deployment_refusing_json_input(
     make_core: MakeCore, host: EndpointHost, op: str
