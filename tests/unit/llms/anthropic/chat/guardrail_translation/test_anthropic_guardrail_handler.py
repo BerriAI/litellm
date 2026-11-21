@@ -3260,9 +3260,9 @@ class ToolsCopyingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: object | None = None,
     ) -> GenericGuardrailAPIInputs:
         return {**inputs, "tools": json.loads(json.dumps(inputs.get("tools") or []))}
 
@@ -3276,9 +3276,9 @@ class ToolDescriptionMaskingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: object | None = None,
     ) -> GenericGuardrailAPIInputs:
         tools: Final = inputs.get("tools") or []
         target: Final = tools if self._in_place else json.loads(json.dumps(tools))
@@ -3297,12 +3297,12 @@ class ToolDroppingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: object | None = None,
     ) -> GenericGuardrailAPIInputs:
         if self._reverses_request_tools:
-            request_data["tools"].reverse()
+            cast(list[object], request_data["tools"]).reverse()
         kept: Final = [
             tool for tool in inputs.get("tools") or [] if tool.get("function", {}).get("name") != self._tool_name
         ]
@@ -3313,9 +3313,9 @@ class AllToolsRemovingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: object | None = None,
     ) -> GenericGuardrailAPIInputs:
         return {**inputs, "tools": []}
 
@@ -3328,9 +3328,9 @@ class ReturnedToolsRewritingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: object | None = None,
     ) -> GenericGuardrailAPIInputs:
         return {**inputs, "tools": self._rewrite(list(inputs.get("tools") or []))}
 
