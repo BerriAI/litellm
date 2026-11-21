@@ -1,8 +1,8 @@
 from datetime import datetime, time, timezone
+from typing import Final
 from zoneinfo import ZoneInfo
 
 import pytest
-
 
 import litellm
 from litellm.proxy.common_utils.timezone_utils import (
@@ -11,6 +11,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
     get_budget_reset_timezone,
+    get_budget_window_reset_fields,
     parse_budget_reset_time,
 )
 
@@ -153,9 +154,7 @@ def test_get_budget_reset_settings_reads_globals():
 
 
 def test_compute_budget_reset_at_applies_offset():
-    settings = BudgetResetSettings(
-        timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0)
-    )
+    settings = BudgetResetSettings(timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0))
     reset_at = compute_budget_reset_at("1d", settings)
     jerusalem = reset_at.astimezone(ZoneInfo("Asia/Jerusalem"))
     assert jerusalem.hour == 12
@@ -175,3 +174,20 @@ def test_get_budget_reset_time_honors_global_budget_reset_time():
     finally:
         _restore_attr(litellm, "timezone", orig_tz)
         _restore_attr(litellm, "budget_reset_time", orig_rt)
+
+
+@pytest.mark.parametrize("duration", ["2d", "10d", "2w"])
+def test_new_custom_day_window_starts_at_creation_before_reset_time(duration: str) -> None:
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    now: Final = datetime(2025, 6, 10, 3, 0, tzinfo=timezone.utc)
+    fields: Final = get_budget_window_reset_fields(duration, settings=settings, now=now)
+    assert datetime.fromisoformat(fields["window_start"]) == now
+    assert datetime.fromisoformat(fields["reset_at"]) == compute_budget_reset_at(duration, settings, now)
+
+
+@pytest.mark.parametrize("duration", ["1d", "7d", "2d"])
+def test_new_window_keeps_scheduled_start_once_reset_time_passed(duration: str) -> None:
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    now: Final = datetime(2025, 6, 10, 7, 0, tzinfo=timezone.utc)
+    fields: Final = get_budget_window_reset_fields(duration, settings=settings, now=now)
+    assert datetime.fromisoformat(fields["window_start"]) < now

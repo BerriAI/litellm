@@ -8,9 +8,10 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
+from typing import TYPE_CHECKING, Final, Literal, Union, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -21,8 +22,9 @@ from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import map_finish_reason, require_attributes
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
@@ -78,7 +80,12 @@ from ..common_utils import (
     refusal_params,
     stop_reason_provider_specific_fields,
 )
-from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
+from .transformation import (
+    ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY,
+    AnthropicConfig,
+    JsonModeRequest,
+    with_extra_body_fields,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -86,10 +93,12 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+_DECODED_JSON: Final = TypeAdapter(object)
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
-    return json.loads(payload)
+    return require_attributes(_DECODED_JSON.validate_python(json.loads(payload)), dict[str, object], "get")
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -498,7 +507,10 @@ class AnthropicChatCompletion(BaseLLM):
             headers=headers,
             model=model,
             messages=messages,
-            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            optional_params={
+                **with_extra_body_fields(_OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)),
+                "is_vertex_request": is_vertex_request,
+            },
             litellm_params=litellm_params,
             api_base=api_base,
         )
@@ -765,12 +777,12 @@ class ModelResponseIterator:
         self.reasoning_content_chunks: list[str] = []
 
         # Track server tool use inputs and results for code_interpreter_results
-        self._server_tool_inputs: dict[str, object] = {}
-        self.tool_results: list[dict[str, Any]] = []
+        self._server_tool_inputs: dict[object, object] = {}
+        self.tool_results: list[dict[str, object]] = []
         self._current_server_tool_id: str | None = None
         self._current_server_tool_name: str = ""
         self._server_tool_calls: tuple[ChatCompletionToolCallChunk, ...] = ()
-        self._container_id: str | None = None
+        self._container_id: object = None
 
     @property
     def accumulated_json(self) -> str:
@@ -990,15 +1002,17 @@ class ModelResponseIterator:
             content = tr.get("content", {})
             log_outputs = build_code_interpreter_log_outputs(content)
             tool_input = self._server_tool_inputs.get(call_id, {})
-            code = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            code = tool_input.get("command", "") if is_str_keyed_dict(tool_input) else ""
             results.append(
-                OutputCodeInterpreterCall(
-                    type="code_interpreter_call",
-                    id=call_id,
-                    code=code,
-                    container_id=self._container_id,
-                    status="completed",
-                    outputs=log_outputs,
+                OutputCodeInterpreterCall.model_validate(
+                    {
+                        "type": "code_interpreter_call",
+                        "id": call_id,
+                        "code": code,
+                        "container_id": self._container_id,
+                        "status": "completed",
+                        "outputs": log_outputs,
+                    }
                 )
             )
         return results
@@ -1205,7 +1219,7 @@ class ModelResponseIterator:
                     # Store container_id and re-emit code_interpreter_results
                     # so stream_chunk_builder's last-value-wins picks up the
                     # version with container_id populated.
-                    container_id: Final = container.get("id") if isinstance(container, dict) else None
+                    container_id: Final = container.get("id") if is_str_keyed_dict(container) else None
                     if container_id and self.tool_results:
                         self._container_id = container_id
                         provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
@@ -1435,9 +1449,7 @@ class ModelResponseIterator:
             model=self.served_model,
         )
 
-    def _handle_message_delta(
-        self, chunk: dict
-    ) -> tuple[str, Usage | None, dict[str, Any] | None, Mapping[str, object]]:
+    def _handle_message_delta(self, chunk: dict) -> tuple[str, Usage | None, object, Mapping[str, object]]:
         """
         Handle message_delta event for finish_reason, usage, and container.
 

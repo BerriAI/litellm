@@ -27,7 +27,7 @@ import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { ChevronDown, Info } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
@@ -95,6 +95,7 @@ import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import {
   administersTeam,
+  canCreateKeyInTeam,
   anotherUserScope,
   effectiveKeyOwner,
   isTeamMemberOwner,
@@ -279,12 +280,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const { data: tagsData } = useTags();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
   const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
+  const initialTeam = team && canCreateKeyInTeam(team, { userRole, userId: userID }) ? team : null;
   const [formDefaults] = useState<MountedFormValues>(() => ({
-    team_id: team ? team.team_id : null,
+    team_id: initialTeam?.team_id ?? null,
     key_type: "llm_api",
     tpm_limit_type: null,
     rpm_limit_type: null,
@@ -309,7 +310,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
-  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(initialTeam);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
@@ -338,6 +339,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const ownerScope = anotherUserScope(keyOwnerViewer);
   const keyOwner = effectiveKeyOwner(requestedKeyOwner, ownerScope);
   const ownerLimitedToTeamMembers = keyOwner === "another_user" && ownerScope === "team_members";
+  const canCreateInAnyTeam = isProxyAdminRole(userRole ?? "") && !ownerLimitedToTeamMembers;
+  const filterTeam = useCallback(
+    (candidate: Team, owner: string = keyOwner) =>
+      owner === "another_user" && ownerScope === "team_members"
+        ? administersTeam(candidate, userID)
+        : canCreateKeyInTeam(candidate, { userRole, userId: userID }, owner),
+    [keyOwner, ownerScope, userID, userRole],
+  );
+  const eligibleProjects = useMemo(() => {
+    if (canCreateInAnyTeam) return projects;
+    return projects?.filter((project) => {
+      if (project.team_id == null) return true;
+      const projectTeam =
+        selectedCreateKeyTeam?.team_id === project.team_id
+          ? selectedCreateKeyTeam
+          : teams?.find((candidate) => candidate.team_id === project.team_id);
+      return projectTeam != null && filterTeam(projectTeam);
+    });
+  }, [projects, teams, selectedCreateKeyTeam, filterTeam, canCreateInAnyTeam]);
   const memberOwnerOptions = teamMemberOwnerOptions(selectedCreateKeyTeam, userID);
   const createKeyOwner = form.watch("user_id");
   useEffect(() => {
@@ -456,7 +476,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         // Set team - find the team by ID and set it (only if team exists in user's teams)
         if (prefillData.team_id) {
           const selectedTeam = teams?.find((t) => t.team_id === prefillData.team_id) || null;
-          if (selectedTeam) {
+          if (selectedTeam && filterTeam(selectedTeam, prefillData.owned_by)) {
             setSelectedCreateKeyTeam(selectedTeam);
             form.setValue("team_id", prefillData.team_id);
           }
@@ -480,7 +500,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         }
       }
     }
-  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
+  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole, filterTeam]);
 
   // Check if team selection is required
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
@@ -613,17 +633,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
   // Sync team when project is selected but teams loaded later (race condition)
   useEffect(() => {
-    if (!selectedProjectId || !teams) return;
-    const project = projects?.find((p) => p.project_id === selectedProjectId);
+    if (!selectedProjectId || !teams || !eligibleProjects) return;
+    const project = eligibleProjects.find((p) => p.project_id === selectedProjectId);
+    if (!project) {
+      setSelectedProjectId(null);
+      form.setValue("project_id", null);
+      return;
+    }
     if (!project?.team_id) return;
     // If team is already set correctly, skip
     if (selectedCreateKeyTeam?.team_id === project.team_id) return;
     const projectTeam = teams.find((t) => t.team_id === project.team_id) || null;
-    if (projectTeam) {
-      setSelectedCreateKeyTeam(projectTeam);
-      form.setValue("team_id", projectTeam.team_id);
-    }
-  }, [teams, selectedProjectId, projects]);
+    const eligibleProjectTeam = projectTeam && filterTeam(projectTeam) ? projectTeam : null;
+    setSelectedCreateKeyTeam(eligibleProjectTeam);
+    form.setValue("team_id", eligibleProjectTeam?.team_id ?? (canCreateInAnyTeam ? project.team_id : null));
+  }, [
+    teams,
+    selectedProjectId,
+    eligibleProjects,
+    filterTeam,
+    selectedCreateKeyTeam?.team_id,
+    form,
+    canCreateInAnyTeam,
+  ]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
@@ -693,8 +725,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
   const changeKeyOwner = (owner: string) => {
     setKeyOwner(owner);
-    const limitsOwnerToTeamMembers = owner === "another_user" && ownerScope === "team_members";
-    if (limitsOwnerToTeamMembers && selectedCreateKeyTeam && !administersTeam(selectedCreateKeyTeam, userID)) {
+    if (selectedCreateKeyTeam && !filterTeam(selectedCreateKeyTeam, owner)) {
       selectTeam(null);
       form.setValue("team_id", null);
     }
@@ -709,6 +740,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   }, [ownerLimitedToTeamMembers, selectedCreateKeyTeam, userID, form]);
 
   const changeProject = (write: FieldWrite) => (projectId: string | null) => {
+    if (projectId && !eligibleProjects?.some((project) => project.project_id === projectId)) return;
     write(projectId);
     if (!projectId) {
       setSelectedProjectId(null);
@@ -926,36 +958,34 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       disabled={selectedProjectId !== null}
                       organizationId={selectedOrganizationId}
                       onTeamSelect={selectTeam}
-                      filterTeam={ownerLimitedToTeamMembers ? (team) => administersTeam(team, userID) : undefined}
+                      filterTeam={filterTeam}
                     />
                   )}
                 </MountedFormField>
                 {ownerLimitedToTeamMembers && ownerField}
-                {enableProjectsUI && (
-                  <MountedFormField
-                    label={
-                      <span>
-                        {t("createKey.project.label")}{" "}
-                        <SimpleTooltip content={t("createKey.project.tooltip")}>
-                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </SimpleTooltip>
-                      </span>
-                    }
-                    name="project_id"
-                    className="mt-4"
-                  >
-                    {(control) => (
-                      <ProjectDropdown
-                        id={control.id}
-                        value={typeof control.value === "string" ? control.value : null}
-                        projects={projects}
-                        teamId={selectedCreateKeyTeam?.team_id}
-                        loading={isProjectsLoading || !teams}
-                        onChange={changeProject(control.onChange)}
-                      />
-                    )}
-                  </MountedFormField>
-                )}
+                <MountedFormField
+                  label={
+                    <span>
+                      {t("createKey.project.label")}{" "}
+                      <SimpleTooltip content={t("createKey.project.tooltip")}>
+                        <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="project_id"
+                  className="mt-4"
+                >
+                  {(control) => (
+                    <ProjectDropdown
+                      id={control.id}
+                      value={typeof control.value === "string" ? control.value : null}
+                      projects={eligibleProjects}
+                      teamId={selectedCreateKeyTeam?.team_id}
+                      loading={isProjectsLoading || !teams}
+                      onChange={changeProject(control.onChange)}
+                    />
+                  )}
+                </MountedFormField>
               </div>
 
               {/* Show message when team selection is required */}

@@ -31,6 +31,7 @@ import pytest
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.spend_tracking import legacy_spend_counters
 from litellm._internal_context import current_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
@@ -51,6 +52,9 @@ from .conftest import normalize
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 
 def _spend_counters(monkeypatch: pytest.MonkeyPatch, **fake: object) -> FakeSpendCounters:
@@ -753,12 +757,20 @@ def _prisma_with_key_spend(spend: float) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypatch):
+async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypatch, native_budgets_on):
     """The key counter holds the DB spend 10.0, this request's 2.0 reservation and another request's 1.0 hold."""
-    spend: Final = _spend_counters(monkeypatch, redis=None, memory={"spend:key:hashed": 13.0})
+    spend: Final = SpendCounterStore(connect(None).spend_counters())
+    spend.set_local("spend:key:hashed", 11.0)
+    monkeypatch.setattr(ps, "spend_counter_store", spend)
     monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(ps, "prisma_client", _prisma_with_key_spend(10.0))
-    reservation: Final = {"reserved_cost": 2.0, "entries": [{"counter_key": "spend:key:hashed"}], "finalized": False}
+    reservation: Final = await native_reservation(
+        spend,
+        UserAPIKeyAuth(token="hashed"),
+        [{"counter_key": "spend:key:hashed", "entity_type": "Key", "entity_id": "hashed"}],
+        2.0,
+    )
+    assert spend.get_local("spend:key:hashed") == pytest.approx(13.0)
     scope: Final = EntitySpendCounterKeys(key="spend:key:hashed")
 
     await ps.increment_spend_counters(
@@ -773,7 +785,8 @@ async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypat
         token="hashed", team_id=None, user_id=None, response_cost=0.25, committed_spend_scope=scope
     )
 
-    assert spend.memory == pytest.approx({"spend:key:hashed": 11.75, committed_spend_key("spend:key:hashed"): 10.75})
+    assert spend.get_local("spend:key:hashed") == pytest.approx(11.75)
+    assert spend.get_local(committed_spend_key("spend:key:hashed")) == pytest.approx(10.75)
 
 
 @pytest.mark.asyncio
@@ -895,7 +908,7 @@ async def test_increment_spend_counters_pipeline_failure_invalidates_all_counter
 
 @pytest.mark.asyncio
 async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set_when_none():
-    result = await ps._reconcile_budget_reservation_for_counter_update(budget_reservation=None, response_cost=1.0)
+    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(budget_reservation=None, response_cost=1.0)
     assert result.reserved_counter_keys == frozenset()
     assert result.pending == ()
 
@@ -922,7 +935,7 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
     fake_invalidate = AsyncMock()
     monkeypatch.setattr(br, "invalidate_budget_reservation_counters", fake_invalidate)
 
-    result = await ps._reconcile_budget_reservation_for_counter_update(
+    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(
         budget_reservation={"foo": "bar"}, response_cost=1.0
     )
 
@@ -943,7 +956,7 @@ async def test_reconcile_budget_reservation_for_counter_update_finalized_reserva
     fake_reconcile = AsyncMock()
     monkeypatch.setattr(br, "reconcile_budget_reservation", fake_reconcile)
 
-    result = await ps._reconcile_budget_reservation_for_counter_update(
+    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(
         budget_reservation={
             "finalized": True,
             "entries": [{"counter_key": "spend:key:abc"}],
@@ -971,7 +984,7 @@ async def test_prepare_end_user_and_tag_spend_increments_returns_each_unique_tag
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
-    pending = await ps._prepare_end_user_and_tag_spend_increments(
+    pending = await legacy_spend_counters._prepare_end_user_and_tag_spend_increments(
         end_user_id="eu1",
         tags=["a", "b", "a", "", None],
         response_cost=3.0,
@@ -992,7 +1005,7 @@ async def test_prepare_end_user_and_tag_spend_increments_no_end_user_no_tags_inv
 ):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_end_user_and_tag_spend_increments(
+    pending = await legacy_spend_counters._prepare_end_user_and_tag_spend_increments(
         end_user_id=None,
         tags=None,
         response_cost=1.0,
@@ -1016,7 +1029,7 @@ async def test_prepare_org_spend_increment_returns_pending_when_org_present(monk
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
-    pending = await ps._prepare_org_spend_increment(
+    pending = await legacy_spend_counters._prepare_org_spend_increment(
         org_id="org-1",
         response_cost=10.0,
         reserved_counter_keys=set(),
@@ -1031,7 +1044,7 @@ async def test_prepare_org_spend_increment_returns_pending_when_org_present(monk
 async def test_prepare_org_spend_increment_no_org_is_noop_invalid_id(monkeypatch):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_org_spend_increment(
+    pending = await legacy_spend_counters._prepare_org_spend_increment(
         org_id=None,
         response_cost=1.0,
         reserved_counter_keys=set(),
@@ -1052,7 +1065,7 @@ async def test_prepare_unreserved_spend_counter_increment_skips_reserved_keys(
 ):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_unreserved_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_unreserved_spend_counter_increment(
         counter_key="spend:tag:x",
         source_cache_key="tag:x",
         increment=1.0,
@@ -1073,7 +1086,7 @@ async def test_prepare_unreserved_spend_counter_increment_proceeds_when_not_rese
     reseed = AsyncMock(return_value=None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", reseed)
 
-    pending = await ps._prepare_unreserved_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_unreserved_spend_counter_increment(
         counter_key="spend:tag:y",
         source_cache_key="tag:y",
         increment=2.0,
@@ -1100,7 +1113,7 @@ async def test_prepare_spend_counter_increment_warm_cache_skips_reseed(monkeypat
     reseed = AsyncMock(return_value=None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", reseed)
 
-    pending = await ps._prepare_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_spend_counter_increment(
         counter_key="spend:key:k",
         source_cache_key="k",
         increment=3.0,
@@ -1130,7 +1143,7 @@ async def test_prepare_window_spend_counter_increment_returns_pending_when_initi
         AsyncMock(return_value=0.0),
     )
 
-    pending = await ps._prepare_window_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
@@ -1150,7 +1163,7 @@ async def test_prepare_window_spend_counter_increment_missing_window_start_inval
 ):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_window_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",

@@ -3,18 +3,35 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+import os
+import platform
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm._version import version as _LITELLM_VERSION
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes, subscript
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
+_DECODED_JSON: Final = TypeAdapter(object)
+
+_MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
+_STR_ADAPTER: Final = TypeAdapter(str)
+
+_VERSION_PLACEHOLDER: Final = "{version}"
+_PYTHON_PLACEHOLDER: Final = "{python}"
+
+
+class _ProviderEntries(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
 
 
 class SimpleProviderConfig:
@@ -22,10 +39,11 @@ class SimpleProviderConfig:
 
     def __init__(self, slug: str, data: dict):
         self.slug = slug
-        self.base_url = data["base_url"]
+        self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
+        self.user_agent: str | None = _STR_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
@@ -35,9 +53,50 @@ class SimpleProviderConfig:
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
             data.get("model_supported_endpoints", {})
         )
+        self.model_base_urls: Final[Mapping[str, str]] = (
+            _MODEL_BASE_URLS_ADAPTER.validate_python(data["model_base_urls"])
+            if "model_base_urls" in data
+            else MappingProxyType({})
+        )
+        self.model_special_handling: Final[Mapping[str, Mapping[str, bool]]] = (
+            _MODEL_SPECIAL_HANDLING_ADAPTER.validate_python(data["model_special_handling"])
+            if "model_special_handling" in data
+            else MappingProxyType({})
+        )
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+
+    def default_base_url(self, model: str | None) -> str:
+        if model is None:
+            return self.base_url
+        return self.model_base_urls.get(model.removeprefix(f"{self.slug}/"), self.base_url)
+
+    def special_handling_for(self, model: str) -> Mapping[str, bool]:
+        model_overrides: Final = self.model_special_handling.get(model.removeprefix(f"{self.slug}/"))
+        if model_overrides is None:
+            return self.special_handling
+        return MappingProxyType({**self.special_handling, **model_overrides})
+
+    def get_attribution_headers(self) -> Mapping[str, str]:
+        if not self.user_agent:
+            return {}
+        user_agent_override: Final = os.environ.get("LITELLM_USER_AGENT")
+        if user_agent_override is not None:
+            return {"User-Agent": user_agent_override}
+        return {
+            "User-Agent": self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
+                _PYTHON_PLACEHOLDER, platform.python_version()
+            )
+        }
+
+
+def _provider_config(slug: str, config: object) -> SimpleProviderConfig:
+    mapping: Final = as_str_mapping(config)
+    if isinstance(mapping, dict):
+        return SimpleProviderConfig(slug, mapping)
+    subscript(config, "base_url")
+    return SimpleProviderConfig(slug, require_attributes(config, dict[str, object], "__getitem__"))
 
 
 class JSONProviderRegistry:
@@ -61,10 +120,10 @@ class JSONProviderRegistry:
 
         try:
             with open(json_path) as f:
-                data: Final = json.load(f)
+                data: Final = _DECODED_JSON.validate_python(json.load(f))
 
-            for slug, config in data.items():
-                cls._providers[slug] = SimpleProviderConfig(slug, config)
+            for slug, config in require_attributes(data, _ProviderEntries, "items").items():
+                cls._providers[slug] = _provider_config(slug, config)
 
             cls._loaded = True
         except Exception as e:

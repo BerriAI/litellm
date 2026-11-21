@@ -6,6 +6,8 @@
   - `cache-disk`: diskcache's pickled values (`pickle`), falsy-is-miss (`truthy`)
   - Cache-key derivation: sha256 over `str(value)` must match Python byte for byte (`repr::to_str`)
   - Byte-identical writes where Python compares raw values (`json::dumps`, `repr`)
+  - `callbacks-s3-log`: settings parsed as pydantic parses them (`pydantic`), object keys quoted as `urllib.parse.quote` quotes them (`urllib`), UTC key dates (`datetime`)
+  - Crates reading request JSON as Python would: `bool(value)` and `type(value).__name__` straight off a `serde_json` value (`truthy::json_truthy`, `json::type_name`), `str.strip()` (`unicode::isspace`), `int()`/`float()` of header or body text (`number`)
 - Relation to [`py_literal`](https://docs.rs/py_literal/latest/py_literal/): replaced, do not reintroduce
   - Its pest grammar backtracks: parse time doubles per nested `[`/`{` (105 ms at depth 16). Ours is linear (19 µs at depth 128)
   - Its formatter is not `repr` (`2e-1`, always single quotes, escapes non-ASCII). It also lost `-0.0`, `(1+2j)`, `set()`
@@ -14,10 +16,13 @@
   - Never `serde_pickle::Value`: its `BTreeMap` dicts reorder keys
   - Accepted limits: ints beyond i64, `tuple`/`set`/`frozenset` decode as lists, class references (`GLOBAL`/`REDUCE`) fail. Writes protocol 3
 - Every behavior is pinned by CPython output, not by reasoning. Everything under `generated/` is script output, never hand-edited
-  - Regenerate `generated/values.json` with `scripts/generate_fixtures.py`. Add a corpus row before changing behavior
+  - Regenerate `generated/flags.json` (LiteLLM's own `str_to_bool`, `_redis._str_to_bool`, `_redis._coerces_to_true`, `core_helpers.lax_bool`) with `scripts/generate_flag_fixtures.py`, which compiles those helpers from the checked-out sources
+  - Regenerate `generated/values.json` with `scripts/generate_fixtures.py`. Add a corpus row before changing behavior. Its `json_truthy`/`json_type` fields pin the `serde_json` readers
+  - Regenerate `generated/stdlib.json` (`urllib.parse.quote`, UTC `datetime` fields) with `scripts/generate_stdlib_fixtures.py`, and `generated/pydantic.json` (lax `bool`/`int`) with `scripts/generate_pydantic_fixtures.py` at the pydantic version in `uv.lock`
   - Divergences go in `KNOWN` in `tests/fixtures.rs` with a reason. An entry that starts matching fails until deleted
   - Regenerate `generated/nonprintable.rs` with `scripts/generate_nonprintable.py` when the target Python's Unicode version changes
   - `scripts/verify_rust_pickles.py` checks CPython reads Rust pickles, with class resolution disabled. CI does not run Python
 - Decoders recurse, so they reject nesting beyond `MAX_DEPTH` for stack safety: deliberately stricter than CPython, whose parser takes ~200 levels and whose unpickler has no limit (pinned as `nested_150`)
   - Formatters (`repr`, `json`) are unbounded. Values from the decoders are already capped, a hand-built `Value` is the caller's responsibility
   - `literal_eval` must stay linear in depth: `tests/limits.rs` times the deepest parse, `benches/formats.rs` measures the curve but is manual, since CI runs no Rust bench
+- `lenient` holds how Python LiteLLM reads a config or metadata value it never validates, one rule per Python expression (`value is True`, `bool(value)`, a value of the expected shape). A rule never fails, since the Python read never raises. Config types use them as `serde_with` adapters on plain fields, so the gateway's YAML load and python-bridge's `from_py` share one implementation. Each test case takes its expected value from that expression in CPython

@@ -1,19 +1,21 @@
 //! Selection: resolve a name, filter its deployments in the order of
 //! `Router._core_async_get_healthy_deployments` (team, web search, cooldown, blocked, plugins,
 //! pre-call checks, tags, order, retry skips), then pick one with the strategy. Simple-shuffle is
-//! native (`router_strategy/simple_shuffle.py`); other strategies go through `Host::select`.
+//! native (`router_strategy/simple_shuffle.py`); other strategies go through `RouterHost::select`.
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use parking_lot::Mutex;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
+use litellm_router_types::RoutingStrategy;
+
 use crate::{
-    Core, RouterStateSnapshot,
-    config::{Op, RoutingStrategy},
+    Call, RouterStateSnapshot,
+    config::Op,
     error::Error,
     health_routing::WhenAllUnhealthy,
-    host::{RouterRequest, RoutingContext, SelectStage},
+    host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
     registry::{Deployment, Registry, ResolveKind},
     resolve::{Caller, resolve_request},
     strategy::{StrategyScope, request_override, routing_context},
@@ -278,7 +280,7 @@ fn without_batch_only_deployments(
         .collect()
 }
 
-impl Core {
+impl<H: RouterHost> Call<'_, H> {
     fn context<'a>(
         &'a self,
         snapshot: &'a RouterStateSnapshot,
@@ -291,7 +293,6 @@ impl Core {
         RoutingContext {
             registry: &snapshot.registry,
             settings: &snapshot.settings,
-            health: &self.health,
             request,
             op,
             model_group,
@@ -353,6 +354,8 @@ impl Core {
             endpoint,
             requested: inputs.requested.as_deref().unwrap_or(name),
             wildcard_request: wildcard_request.as_deref(),
+            refuse_cross_group_litellm_model: !inputs.count_only
+                && snapshot.settings.enable_cross_model_group_collision_check,
         };
         let resolution = resolve_request(
             registry,
@@ -361,7 +364,7 @@ impl Core {
             caller,
             default_target,
             snapshot.settings.dynamic.default_ref(),
-            self.health.timestamp(),
+            self.health().timestamp(),
         )?
         .ok_or_else(|| Error::UnknownModel {
             // The name `_common_checks_available_deployment` looked for, past the alias.
@@ -440,13 +443,11 @@ impl Core {
         // A deployment named by its id is served even while it cools down
         // (`get_deployment_by_model_id` returns before the cooldown filter).
         let settings = &snapshot.settings;
-        let cooling = if resolution.kind.is_single() {
+        let cooling = if resolution.kind.is_single() || all.is_empty() {
             Vec::new()
         } else {
-            // `async_get_cooldown_deployments` reads every deployment's, as one throttled batch.
-            self.health
-                .active_cooldowns(&snapshot.registry.ids())
-                .await?
+            let ids: Vec<String> = all.iter().map(|d| d.id.clone()).collect();
+            self.health().active_cooldowns(&ids).await?
         };
         // Health-check filtering runs before the cooldown filter, except for a deployment named
         // by its id and the healthy count a retry decision reads.
@@ -458,7 +459,7 @@ impl Core {
             } else {
                 WhenAllUnhealthy::KeepAll
             };
-            self.health
+            self.health()
                 .health_check_filter(settings, all.clone(), when_all_unhealthy)
                 .await
         };
