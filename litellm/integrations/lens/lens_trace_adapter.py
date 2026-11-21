@@ -5,12 +5,17 @@ when the agent sends its provider SDK's user agent. The task is the text the use
 an agent puts in front of it. A tool step is rebuilt from the tool result a model call carries in its prompt, paired
 by call id with the tool call an earlier reply made. A known agent that sends no session id gets one derived from
 its key, system prompt and task, so its model calls are one run.
+
+An agent that traces itself names the span each model call belongs to in the request's ``traceparent``. The gateway
+puts its model-call span under that span, in the agent's own trace, and rebuilds no tool steps there: the agent's
+spans, which it sends through the gateway's ``/v1/traces``, already hold them.
 """
 
 import asyncio
 import hashlib
 import json
 import re
+import time
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -23,7 +28,7 @@ from typing import Final, TypeVar
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Span as RecordingSpan
 from opentelemetry.sdk.trace import SpanProcessor
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, get_current_span
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
@@ -32,8 +37,9 @@ import litellm
 from litellm.integrations.lens.remote import LensConnection
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
-from litellm.integrations.otel.model.metadata import LLMCallEvent
+from litellm.integrations.otel.model.metadata import LLMCallEvent, RequestIdentity
 from litellm.integrations.otel.model.utils import to_ns
+from litellm.integrations.otel.plumbing.context import extract_traceparent
 from litellm.litellm_core_utils.harness_context import (
     CODEX_MARKERS,
     SYSTEM_REMINDER_MARKERS,
@@ -399,6 +405,28 @@ LENS_TRACE_PATH: Final = "/v1/traces"
 LENS_TRACE_CALLBACK: Final = "lens"
 
 
+_AGENT_TRACE: Final[ContextVar[Context | None]] = ContextVar("lens_agent_trace", default=None)
+
+
+class _ProxyRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    headers: Mapping[str, str] | None = None
+
+
+class _CallParams(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    proxy_server_request: _ProxyRequest = _ProxyRequest()
+
+
+def agent_trace_of(kwargs: Mapping[str, object]) -> Context | None:
+    """Where the calling agent's own trace says this model call belongs, when its request said so."""
+    params: Final = _parsed(_CallParams, kwargs.get("litellm_params"))
+    named: Final = extract_traceparent(params.proxy_server_request.headers or {}) if params else None
+    return named if named is not None and get_current_span(named).get_span_context().is_valid else None
+
+
 class _LensTraceConfig(OpenTelemetryV2Config):
     """Built from its arguments alone, so the OTEL_* variables a gateway sets for its own tracing never reach Lens."""
 
@@ -423,6 +451,25 @@ class _LensTraceLogger(OpenTelemetryV2):
         return None
 
     @override
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+        """A call the agent placed in its own trace gets its span at close, under the span the agent named."""
+        call: Final = LLMCallEvent.from_dict(kwargs)
+        if agent_trace_of(kwargs) is None or call.is_no_upstream_call or call.call_id is None:
+            return super().log_pre_api_call(model, messages, kwargs)
+        if call.call_id not in self._open_llm_calls:
+            self._defer_llm_call(call.call_id, to_ns(call.upstream_start_seconds) or time.time_ns())
+        return None
+
+    @override
+    def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
+        return super()._seed_identity_baggage(identity, model, _AGENT_TRACE.get() or context)
+
+    @override
+    def _span_session(self, call: LLMCallEvent) -> str | None:
+        """Lens files a span that names a session under that session; one in the agent's trace must stay there."""
+        return call.session_id if _AGENT_TRACE.get() is None else None
+
+    @override
     def _close_llm_call(
         self,
         kwargs: Mapping[str, object],
@@ -433,16 +480,24 @@ class _LensTraceLogger(OpenTelemetryV2):
         call: Final = LLMCallEvent.from_dict(shown)
         made_by: Final = agent_call(call.payload)
         carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id else None
-        facts: Final = made_by.attributes(call.session_id)
+        agent_trace: Final = agent_trace_of(kwargs)
+        named: Final = made_by.attributes(call.session_id)
+        facts: Final = (
+            named
+            if agent_trace is None
+            else MappingProxyType({key: value for key, value in named.items() if key != _SESSION_ATTRIBUTE})
+        )
         if carrier is not None and carrier.span is not None:
             carrier.span.set_attributes(facts)
         token: Final = _CALL_FACTS.set(facts)
+        placed: Final = _AGENT_TRACE.set(agent_trace)
         try:
             span: Final = super()._close_llm_call(shown, start_time, end_time)
         finally:
+            _AGENT_TRACE.reset(placed)
             _CALL_FACTS.reset(token)
         session_id: Final = call.session_id or made_by.derived_session
-        if span is not None and session_id:
+        if span is not None and session_id and agent_trace is None:
             self._emit_tool_steps(made_by, session_id, to_ns(start_time))
         return span
 

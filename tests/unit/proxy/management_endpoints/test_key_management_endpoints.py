@@ -47,16 +47,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_object,
     get_key_object,
-    jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    app_key_resource_cache_key,
-    project_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     KeyProjectBindingError,
@@ -115,6 +109,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.cache_invalidation import PythonCaches
+from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -126,6 +123,8 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     JWTMappingRow,
 )
 from tests.unit.proxy.rust_auth_stores import FakeTeamStore, JwtMapping, RustAuthStores, install_rust_auth_stores
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+from tests.unit.redis.stores.cache_invalidation_double import FakeChannel, Worker, channel
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -5949,82 +5948,15 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
     )
 
     assert recording_evict.cache_keys == (
-        jwt_key_mapping_cache_key("email", "user@example.com", None),
-        jwt_key_mapping_cache_key("email", "user@example.com", "https://issuer.example"),
+        AuthObject.jwt_key_mapping("email", "user@example.com", None).key,
+        AuthObject.jwt_key_mapping("email", "user@example.com", "https://issuer.example").key,
     )
 
 
-class _ChannelSubscription:
-    """Marks a message done when the subscriber comes back for the next one, so ``messages.join()``
-    returns once every delivered message has been applied"""
-
-    def __init__(self) -> None:
-        self.messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-        self._holding_message = False
-
-    async def subscribe(self, *channels: str) -> None:
-        return None
-
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, object] | None:
-        if self._holding_message:
-            self._holding_message = False
-            self.messages.task_done()
-        try:
-            message: Final = await asyncio.wait_for(self.messages.get(), timeout)
-        except asyncio.TimeoutError:
-            return None
-        self._holding_message = True
-        return message
-
-    async def aclose(self) -> None:
-        return None
-
-
-class _ChannelPipeline:
-    def __init__(self, redis: "_SharedCoordinationRedis") -> None:
-        self._redis = redis
-        self._messages: tuple[str, ...] = ()
-
-    def publish(self, channel: str, message: str) -> "_ChannelPipeline":
-        self._messages = (*self._messages, message)
-        return self
-
-    async def execute(self) -> None:
-        for message in self._messages:
-            self._redis.deliver(message)
-
-
-class _SharedCoordinationRedis:
-    """The coordination Redis two workers share: whatever one worker publishes reaches the other's subscriber"""
-
-    namespace = None
-
-    def __init__(self) -> None:
-        self.published: tuple[str, ...] = ()
-        self._subscriptions: tuple[_ChannelSubscription, ...] = ()
-
-    def init_pubsub_client(self) -> "_SharedCoordinationRedis":
-        return self
-
-    def pubsub(self) -> _ChannelSubscription:
-        subscription: Final = _ChannelSubscription()
-        self._subscriptions = (*self._subscriptions, subscription)
-        return subscription
-
-    def pipeline(self, transaction: bool = True) -> _ChannelPipeline:
-        return _ChannelPipeline(self)
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.deliver(message)
-        return 1
-
-    def deliver(self, message: str) -> None:
-        self.published = (*self.published, message)
-        for subscription in self._subscriptions:
-            subscription.messages.put_nowait({"type": "message", "data": message.encode()})
-
-    async def until_every_subscriber_applied_its_messages(self) -> None:
-        _ = await asyncio.gather(*(subscription.messages.join() for subscription in self._subscriptions))
+def _install_channel(monkeypatch: pytest.MonkeyPatch, *workers: Worker) -> FakeChannel:
+    invalidation, fake = channel(*workers)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.cache_invalidation", invalidation)
+    return fake
 
 
 def _owned_key_row(hashed_token: str) -> LiteLLM_VerificationToken:
@@ -6068,29 +6000,22 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(
     deleting_worker_cache: Final = UserApiKeyCache()
     peer_worker_cache: Final = UserApiKeyCache()
     for cache in (deleting_worker_cache, peer_worker_cache):
-        cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token, user_id="user-123"))
-    coordination_redis: Final = _SharedCoordinationRedis()
-    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=coordination_redis, user_api_key_cache=peer_worker_cache
-    )
-    peer_subscriber.start()
+        cache.set_cache(
+            key=AuthObject.virtual_key(hashed_token), value=UserAPIKeyAuth(token=hashed_token, user_id="user-123")
+        )
+    _ = _install_channel(monkeypatch, Worker(peer_worker_cache))
     prisma_client: Final = _prisma_with_key_row(_owned_key_row(hashed_token))
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
 
-    try:
-        await delete_verification_tokens(
-            tokens=[raw_key],
-            user_api_key_cache=deleting_worker_cache,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
-            ),
-        )
-        await coordination_redis.until_every_subscriber_applied_its_messages()
-    finally:
-        await peer_subscriber.stop()
+    await delete_verification_tokens(
+        tokens=[raw_key],
+        user_api_key_cache=deleting_worker_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        ),
+    )
 
-    assert deleting_worker_cache.get_cache(key=hashed_token) is None
+    assert deleting_worker_cache.get_cache(key=AuthObject.virtual_key(hashed_token)) is None
     with pytest.raises(ProxyException) as denied:
         await get_key_object(
             hashed_token=hashed_token, prisma_client=prisma_client, user_api_key_cache=peer_worker_cache
@@ -6129,25 +6054,17 @@ async def test_delete_verification_tokens_evicts_a_requested_key_whose_row_is_al
     peer_worker_cache: Final = UserApiKeyCache()
     for cache in (deleting_worker_cache, peer_worker_cache):
         for token in (live_token, gone_token):
-            cache.set_cache(key=token, value=UserAPIKeyAuth(token=token, user_id="user-123"))
-    coordination_redis: Final = _SharedCoordinationRedis()
-    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=coordination_redis, user_api_key_cache=peer_worker_cache
-    )
-    peer_subscriber.start()
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+            cache.set_cache(key=AuthObject.virtual_key(token), value=UserAPIKeyAuth(token=token, user_id="user-123"))
+    _ = _install_channel(monkeypatch, Worker(peer_worker_cache))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_key_row(_owned_key_row(live_token)))
 
-    try:
-        await delete_verification_tokens(
-            tokens=[live_key, gone_key], user_api_key_cache=deleting_worker_cache, user_api_key_dict=deleter
-        )
-        await coordination_redis.until_every_subscriber_applied_its_messages()
-    finally:
-        await peer_subscriber.stop()
+    await delete_verification_tokens(
+        tokens=[live_key, gone_key], user_api_key_cache=deleting_worker_cache, user_api_key_dict=deleter
+    )
 
-    assert [deleting_worker_cache.get_cache(key=token) for token in (live_token, gone_token)] == [None, None]
-    assert [peer_worker_cache.get_cache(key=token) for token in (live_token, gone_token)] == [None, None]
+    tokens: Final = (AuthObject.virtual_key(live_token), AuthObject.virtual_key(gone_token))
+    assert [deleting_worker_cache.get_cache(key=token) for token in tokens] == [None, None]
+    assert [peer_worker_cache.get_cache(key=token) for token in tokens] == [None, None]
 
 
 @pytest.mark.asyncio
@@ -6161,47 +6078,36 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
     raw_key: Final = "sk-" + uuid4().hex
     hashed_token: Final = hash_token(raw_key)
     other_team_counter: Final = "spend:team:other-team"
-    resource_key: Final = app_key_resource_cache_key(hashed_token)
-    unrelated_resource_key: Final = app_key_resource_cache_key(hash_token("sk-other-owner"))
+    resource: Final = AuthObject.customer_app_key_resource(hashed_token)
+    unrelated_resource: Final = AuthObject.customer_app_key_resource(hash_token("sk-other-owner"))
     deleting_worker_cache: Final = UserApiKeyCache()
     peer_worker_cache: Final = UserApiKeyCache()
     peer_spend_counters: Final = InMemoryCache()
     peer_spend_counters.set_cache(other_team_counter, 42.0)
     for cache in (deleting_worker_cache, peer_worker_cache):
-        cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token, user_id="user-123"))
-        cache.set_cache(key=resource_key, value={"team_id": "owned-team"})
-        cache.set_cache(key=unrelated_resource_key, value={"team_id": "other-team"})
-    coordination_redis: Final = _SharedCoordinationRedis()
-    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=coordination_redis,
-        user_api_key_cache=peer_worker_cache,
-        additional_in_memory_caches=(peer_spend_counters,),
-    )
-    peer_subscriber.start()
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+        cache.set_cache(
+            key=AuthObject.virtual_key(hashed_token), value=UserAPIKeyAuth(token=hashed_token, user_id="user-123")
+        )
+        cache.set_cache(key=resource, value={"team_id": "owned-team"})
+        cache.set_cache(key=unrelated_resource, value={"team_id": "other-team"})
+    peer: Final = Worker(peer_worker_cache, PythonCaches(copies=(peer_spend_counters,)))
+    fake: Final = _install_channel(monkeypatch, peer)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_key_row(_owned_key_row(hashed_token)))
 
-    try:
-        await delete_verification_tokens(
-            tokens=[other_team_counter, unrelated_resource_key, raw_key],
-            user_api_key_cache=deleting_worker_cache,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value
-            ),
-        )
-        await coordination_redis.until_every_subscriber_applied_its_messages()
-    finally:
-        await peer_subscriber.stop()
+    await delete_verification_tokens(
+        tokens=[other_team_counter, unrelated_resource.key, raw_key],
+        user_api_key_cache=deleting_worker_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value
+        ),
+    )
 
     for cache in (deleting_worker_cache, peer_worker_cache):
-        assert cache.get_cache(key=hashed_token) is None
-        assert cache.get_cache(key=resource_key) is None
-        assert cache.get_cache(key=unrelated_resource_key) == {"team_id": "other-team"}
+        assert cache.get_cache(key=AuthObject.virtual_key(hashed_token)) is None
+        assert cache.get_cache(key=resource) is None
+        assert cache.get_cache(key=unrelated_resource) == {"team_id": "other-team"}
     assert peer_spend_counters.get_cache(other_team_counter) == 42.0
-    assert coordination_redis.published == (
-        json.dumps({"cache_key": hashed_token}),
-        json.dumps({"cache_key": resource_key}),
-    )
+    assert fake.published == [(hashed_token, None, None), (resource.key, None, None)]
 
 
 @pytest.mark.asyncio
@@ -8003,10 +7909,8 @@ async def test_bulk_update_keys_object_permission_is_granted_not_dropped(monkeyp
 
 @pytest.mark.asyncio
 async def test_bulk_update_keys_invalidates_cache_for_new_object_permission(monkeypatch: pytest.MonkeyPatch):
-    from litellm.proxy.common_utils.user_api_key_cache import object_permission_cache_key
-
     permission_id = str(UUID("00000000-0000-0000-0000-000000000001"))
-    permission_cache_key = object_permission_cache_key(permission_id)
+    permission_cache_key = AuthObject.object_permission(permission_id)
     user_api_key_cache = UserApiKeyCache()
     user_api_key_cache.set_cache(
         key=permission_cache_key,
@@ -9257,7 +9161,7 @@ async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
     """
     real_user_api_key_cache = UserApiKeyCache()
     await real_user_api_key_cache.async_set_cache(
-        key="hashed-broadcast-key",
+        key=AuthObject.virtual_key("hashed-broadcast-key"),
         value=UserAPIKeyAuth(api_key="sk-broadcast", spend=100.0),
         model_type=UserAPIKeyAuth,
     )
@@ -9265,7 +9169,7 @@ async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
     with patch(  # test-quality-ok: pub/sub broadcast to other workers has no HTTP boundary to fake
-        "litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation"
+        "litellm.proxy.auth.auth_checks.publish_cache_invalidation"
     ) as mock_publish:
         mock_publish.return_value = None
         await delete_cache_key_object(
@@ -9275,7 +9179,7 @@ async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
         )
 
     # Real, observable state: the cache object itself no longer holds the entry.
-    assert real_user_api_key_cache.get_cache(key="hashed-broadcast-key") is None
+    assert real_user_api_key_cache.get_cache(key=AuthObject.virtual_key("hashed-broadcast-key")) is None
     assert mock_publish.await_args_list == [
         call(cache_key="hashed-broadcast-key"),
         call(cache_key=budget_windows_absent_cache_key("key", "hashed-broadcast-key")),
@@ -14997,7 +14901,7 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
         _execute_virtual_key_regeneration,
     )
 
-    stale_cache_key = jwt_key_mapping_cache_key("sub", "user1", None)
+    stale_cache_key = AuthObject.jwt_key_mapping("sub", "user1", None)
     existing_key = _make_regenerate_existing_key()
     mock_prisma_client = _make_regenerate_mock_prisma()
     mappings = rust_auth_stores.jwt_key_mapping
@@ -15033,7 +14937,7 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
             new_callable=AsyncMock,
         ),
         patch(  # test-quality-ok: captures the cross-worker broadcast without a redis instance
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             publish_mock,
         ),
     ):
@@ -15050,7 +14954,7 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
         )
 
     assert await user_api_key_cache.async_get_cache(stale_cache_key) is None
-    publish_mock.assert_any_await(cache_key=stale_cache_key)
+    publish_mock.assert_any_await(cache_key=stale_cache_key.key)
     assert claim_lookups == [["abc123"]]
     mappings.mappings[:] = [JwtMapping(jwt_claim_name="sub", jwt_claim_value="user1", token="new-hashed-token")]
 
@@ -18555,62 +18459,21 @@ async def test_budget_limits_admin_unrestricted(monkeypatch):
     assert result is not None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_non_admin(monkeypatch, non_finite):
-    """A non-admin caller submitting a non-finite `budget_limits` window
-    gets 400. The finite-number invariant applies before role / ceiling
-    checks."""
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
-        None,
-        raising=False,
-    )
-    caller = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
-        user_id="user-1",
-        max_budget=10.0,
-    )
-    request = GenerateKeyRequest(
-        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await _common_key_generation_helper(
-            data=request,
-            user_api_key_dict=caller,
-            litellm_changed_by=None,
-            team_table=None,
-        )
-    assert exc_info.value.status_code == 400
-    assert "finite" in str(exc_info.value.detail)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_admin(monkeypatch, non_finite):
-    """The finite-number invariant applies to every caller including
-    proxy admin."""
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
-        None,
-        raising=False,
-    )
-    admin = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-        user_id="admin-1",
-    )
-    request = GenerateKeyRequest(
-        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await _common_key_generation_helper(
-            data=request,
-            user_api_key_dict=admin,
-            litellm_changed_by=None,
-            team_table=None,
-        )
-    assert exc_info.value.status_code == 400
-    assert "finite" in str(exc_info.value.detail)
+@pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize(
+    "windows",
+    [
+        [{"budget_duration": "1d", "max_budget": float("nan")}],
+        [{"budget_duration": "1d", "max_budget": float("inf")}],
+        [{"budget_duration": "1d", "max_budget": -1.0}],
+        [{"budget_duration": "5x", "max_budget": 1.0}],
+        [{"budget_duration": "1d", "max_budget": 1.0}, {"budget_duration": "1d", "max_budget": 2.0}],
+    ],
+    ids=["nan", "inf", "negative", "unsupported-duration", "duplicate-duration"],
+)
+def test_key_budget_windows_reject_invalid_windows(request_type, windows):
+    with pytest.raises(ValidationError):
+        request_type(key="sk-test", budget_limits=windows)
 
 
 @pytest.mark.asyncio
@@ -21657,7 +21520,7 @@ async def _cache_with_project(
 ) -> UserApiKeyCache:
     user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key=project_cache_key(project_id),
+        key=AuthObject.project(project_id),
         value=LiteLLM_ProjectTableCachedObj(
             project_id=project_id,
             team_id=team_id,
@@ -22697,7 +22560,7 @@ def _configure_key_endpoints(
 ) -> AsyncMock:
     mock_prisma_client: Final = _make_generate_mock_prisma()
     project_obj: Final = user_api_key_cache.get_cache(
-        key=project_cache_key(_OWNED_PROJECT),
+        key=AuthObject.project(_OWNED_PROJECT),
         model_type=LiteLLM_ProjectTableCachedObj,
     )
     project_row: Final = (
@@ -23050,7 +22913,7 @@ async def test_key_generation_default_budget_does_not_reject_project_budget(monk
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
     await user_api_key_cache.async_set_cache(
-        key=project_cache_key(_OWNED_PROJECT),
+        key=AuthObject.project(_OWNED_PROJECT),
         value=project,
         model_type=LiteLLM_ProjectTableCachedObj,
     )
@@ -23936,7 +23799,6 @@ async def test_key_regeneration_invalidates_cached_object_permission(
     """Regression: regenerating a key with new permissions must not keep serving the old grants."""
     from litellm.proxy._types import LiteLLM_ObjectPermissionBase, RegenerateKeyRequest
     from litellm.proxy.auth.auth_checks import get_object_permission
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
     )
@@ -24016,7 +23878,7 @@ async def test_key_regeneration_invalidates_cached_object_permission(
 
     assert (
         user_api_key_cache.get_cache(
-            key=object_permission_cache_key(permission_id),
+            key=AuthObject.object_permission(permission_id),
             model_type=LiteLLM_ObjectPermissionTable,
         )
         is None
@@ -24035,16 +23897,14 @@ async def test_key_regeneration_invalidates_cached_object_permission(
 @pytest.mark.asyncio
 async def test_invalidate_cached_object_permissions_broadcasts_to_other_workers():
     """Other workers hold their own in-memory copy, so eviction has to be broadcast, not just local."""
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_helpers.object_permission_utils import (
         invalidate_cached_object_permissions,
     )
 
-    user_api_key_cache = UserApiKeyCache()
-    user_api_key_cache.async_delete_cache = AsyncMock(side_effect=Exception("redis down"))
+    user_api_key_cache, _ = shared_cache(FakeAuthCache(fail=NativeRedisStoreError("transport", "redis down")))
 
     with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=AsyncMock,
     ) as mock_publish:
         await invalidate_cached_object_permissions(
@@ -24066,7 +23926,6 @@ async def test_key_update_evicts_object_permission_before_key_object(monkeypatch
     between the two evictions would otherwise re-cache stale grants for a full key TTL.
     """
     from litellm.proxy._types import LiteLLM_ObjectPermissionBase
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
     from litellm.proxy.utils import hash_token_if_needed
 
     deleted: list[str] = []
@@ -24127,7 +23986,7 @@ async def test_key_update_evicts_object_permission_before_key_object(monkeypatch
             existing_key_row=existing_key_row,
         )
 
-    assert deleted.index(object_permission_cache_key(permission_id)) < deleted.index(
+    assert deleted.index(AuthObject.object_permission(permission_id).key) < deleted.index(
         hash_token_if_needed("sk-lit5479")
     ), deleted
 
@@ -24665,7 +24524,9 @@ async def test_key_generate_reads_the_team_from_the_writer_database_not_the_cach
 
     cache: Final = UserApiKeyCache()
     cached_team: Final = LiteLLM_TeamTableCachedObj(team_id="1234", team_alias="cached-team")
-    await cache.async_set_cache(key="team_id:1234", value=cached_team, model_type=LiteLLM_TeamTableCachedObj, ttl=60)
+    await cache.async_set_cache(
+        key=AuthObject.team("1234"), value=cached_team, model_type=LiteLLM_TeamTableCachedObj, ttl=60
+    )
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=cached_team)
     prisma_client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)

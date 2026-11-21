@@ -17,7 +17,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
 from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.lens.lens_trace_adapter import as_user_saw_it
 
 if TYPE_CHECKING:
     from prometheus_client import Counter as PrometheusCounter
@@ -93,6 +92,23 @@ def encode_record(value: Mapping[str, object]) -> bytes | ExportFailure:
             return output.getvalue()
     except (ValueError, TypeError, OverflowError, RecursionError):
         return ExportFailure.INVALID
+
+
+def _encoded(raw: object, kwargs: Mapping[str, object]) -> bytes | ExportFailure | None:
+    """The request record ready to send, why it cannot be sent, or None for a call that is not an LLM request."""
+    checked: Final = _check_size(raw, MAX_EVENT_BYTES)
+    if isinstance(checked, ExportFailure):
+        return checked
+    payload: Final = _PAYLOAD.validate_python(raw)
+    if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
+        return None
+    return encode_record(spend_log_row_from_payload(payload, kwargs))
+
+
+def _without_content(raw: object) -> object:
+    """The logging payload without the conversation: Lens reads that from the trace, and a copy here is what
+    outgrows the export budget and costs a request its cost record."""
+    return {**raw, "messages": None, "response": None} if _is_mapping(raw) else raw
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,23 +202,16 @@ class LensExporter(CustomLogger):
         self._log(kwargs)
 
     def _log(self, kwargs: Mapping[str, object]) -> None:
-        raw: Final = as_user_saw_it(kwargs.get("standard_logging_object"))
+        raw: Final = kwargs.get("standard_logging_object")
         if raw is None or self.closed:
             return
         if self.buffered_events >= MAX_BUFFER_EVENTS or self.buffered_bytes >= MAX_BUFFER_BYTES:
             self._drop(1)
             return
         try:
-            checked: Final = _check_size(raw, MAX_EVENT_BYTES)
-            if isinstance(checked, ExportFailure):
-                self._drop(1)
-                self._log_failure(checked.value)
+            record: Final = _encoded(_without_content(raw), kwargs)
+            if record is None:
                 return
-            payload: Final = _PAYLOAD.validate_python(raw)
-            if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
-                return
-            row: Final = spend_log_row_from_payload(payload, kwargs)
-            record: Final = encode_record(row)
             if isinstance(record, ExportFailure):
                 self._drop(1)
                 self._log_failure(record.value)

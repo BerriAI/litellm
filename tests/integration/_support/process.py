@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
-from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, RUST_RESERVED_CONNECTIONS, ConnectionBudget
+from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, ConnectionBudget, rust_writer_reserve
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
 from tests.integration._support.database import scratch_database
@@ -740,13 +740,15 @@ def private_configuration(config: Path, directory: Path) -> Path:
 
 
 def pool_limit_for_prisma(connections: int) -> int:
-    """The smallest ``database_connection_pool_limit`` that leaves Prisma ``connections`` after the Rust pool's share."""
+    """The smallest ``database_connection_pool_limit`` that leaves Prisma ``connections`` on the writer after the
+    Rust writer pool's share, which includes the spend log writer's reserve since the ledger is on by default."""
     if connections < 1:
         raise ValueError(f"Prisma needs at least one connection, not {connections}")
+    reserved: Final = rust_writer_reserve(rust_spend_log_writer=True)
     return next(
         total
-        for total in range(MIN_CONNECTION_LIMIT, connections + RUST_RESERVED_CONNECTIONS + 1)
-        if ConnectionBudget.split(total).python == connections
+        for total in range(MIN_CONNECTION_LIMIT, connections + reserved + 1)
+        if ConnectionBudget.split(total, reserved).python == connections
     )
 
 
