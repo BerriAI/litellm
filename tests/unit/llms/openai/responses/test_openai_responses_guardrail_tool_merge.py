@@ -85,6 +85,30 @@ def test_edited_mcp_tool_is_rewritten():
     assert list(merged) == edited
 
 
+def test_guardrail_edit_to_a_chat_completions_shaped_tool_keeps_its_nested_name_and_schema():
+    parameters = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+    original = [
+        {
+            "type": "function",
+            "function": {"name": "read_file", "description": "Read a file", "parameters": parameters, "strict": True},
+        }
+    ]
+    groups = _groups(original)
+    edited = {**groups[0][0], "function": {**groups[0][0]["function"], "description": "[REDACTED]"}}
+
+    merged = merge_guardrailed_tools(original, groups, [edited])
+
+    assert list(merged) == [
+        {
+            "type": "function",
+            "name": "read_file",
+            "description": "[REDACTED]",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+            "strict": True,
+        }
+    ]
+
+
 def test_injected_tool_lands_after_the_request_tools_when_request_had_none():
     injected = {"type": "function", "function": {"name": "b", "description": "d", "parameters": {"type": "object"}}}
 

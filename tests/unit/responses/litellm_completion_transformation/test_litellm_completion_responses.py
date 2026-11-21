@@ -3211,6 +3211,85 @@ class TestToolTransformation:
         assert "properties" in result_tool["function"]["parameters"]
         assert result_tool["function"]["parameters"]["properties"]["arg"]["type"] == "string"
 
+    def test_transform_chat_completions_shaped_function_tool_keeps_nested_fields(self) -> None:
+        parameters: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+        function: Final = {"name": "read_file", "description": "Read a file", "parameters": parameters, "strict": True}
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[{"type": "function", "function": function}]
+        )
+
+        assert result_tools == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+                    "strict": True,
+                },
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        ("top_level_fields", "expected_function"),
+        [
+            pytest.param(
+                {"name": "read_file", "description": "Read one file", "parameters": {"type": "object"}},
+                {"name": "read_file", "description": "Read one file", "parameters": {"type": "object"}, "strict": True},
+                id="set_top_level_fields_win",
+            ),
+            pytest.param(
+                {"strict": False},
+                {
+                    "name": "nested_read",
+                    "description": "Nested description",
+                    "parameters": {"type": "object", "required": ["path"]},
+                    "strict": False,
+                },
+                id="explicit_top_level_strict_false_wins",
+            ),
+            pytest.param(
+                {"name": None, "description": None, "parameters": None, "strict": None},
+                {
+                    "name": "nested_read",
+                    "description": "Nested description",
+                    "parameters": {"type": "object", "required": ["path"]},
+                    "strict": True,
+                },
+                id="none_top_level_fields_fall_back_to_nested",
+            ),
+        ],
+    )
+    def test_transform_hybrid_function_tool_prefers_top_level_fields_that_are_set(
+        self, top_level_fields: Mapping[str, object], expected_function: Mapping[str, object]
+    ) -> None:
+        nested_function: Final = {
+            "name": "nested_read",
+            "description": "Nested description",
+            "parameters": {"type": "object", "required": ["path"]},
+            "strict": True,
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[{"type": "function", **top_level_fields, "function": nested_function}]
+        )
+
+        assert result_tools == [{"type": "function", "function": expected_function}]
+
+    @pytest.mark.parametrize("function", ["read_file", ["read_file"], None], ids=["string", "list", "null"])
+    def test_transform_function_tool_ignores_a_nested_function_that_is_not_an_object(self, function: object) -> None:
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[{"type": "function", "name": "read_file", "function": function}]
+        )
+
+        assert result_tools == [
+            {
+                "type": "function",
+                "function": {"name": "read_file", "description": "", "parameters": {"type": "object"}, "strict": False},
+            }
+        ]
+
     def test_bedrock_anthropic_drops_derived_web_search_options(self):
         """
         Regression for LIT-3858: a Responses web_search tool becomes a derived
