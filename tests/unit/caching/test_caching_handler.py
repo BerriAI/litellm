@@ -3421,6 +3421,33 @@ def test_cached_chat_completion_keeps_a_stored_finish_reason_and_derives_a_missi
     assert result.choices[0].finish_reason == replayed_finish_reason
 
 
+
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [(completion, CallTypes.completion.value), (litellm.acompletion, CallTypes.acompletion.value)],
+)
+@pytest.mark.asyncio
+async def test_cached_stream_rejects_a_response_without_choices(
+    original_function: Callable[..., object], call_type: str
+) -> None:
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+    replay: Final = handler._convert_cached_result_to_model_response(
+        cached_result={"id": "chatcmpl-missing-choices", "model": "claude-sonnet-4-5"},
+        call_type=call_type,
+        kwargs={"model": "claude-sonnet-4-5", "stream": True, "messages": _unique_messages()},
+        logging_obj=_completion_logging_obj(call_type),
+        model="claude-sonnet-4-5",
+        args=(),
+    )
+
+    assert isinstance(replay, CustomStreamWrapper)
+    with pytest.raises(litellm.APIError, match="no 'choices'"):
+        if call_type == CallTypes.acompletion.value:
+            await anext(replay)
+        else:
+            next(replay)
+
+
 def test_sync_set_cache_skips_response_without_output():
     setup_cache()
     handler = LLMCachingHandler(original_function=completion, request_kwargs={}, start_time=_FIXED_START)

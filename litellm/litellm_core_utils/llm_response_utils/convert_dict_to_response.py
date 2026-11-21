@@ -941,10 +941,9 @@ def convert_to_model_response_object(
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
-                keeps_stored_finish_reason: Final = (
-                    preserve_stored_finish_reason and choice.get("finish_reason") is not None
-                )
-                if not keeps_stored_finish_reason and finish_reason == "stop" and message.tool_calls:
+                    if finish_reason == "stop" and message.tool_calls:
+                        finish_reason = "tool_calls"
+                elif not preserve_stored_finish_reason and finish_reason == "stop" and message.tool_calls:
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
