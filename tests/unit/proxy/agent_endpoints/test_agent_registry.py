@@ -167,6 +167,30 @@ def test_load_agents_from_db_and_config_retains_previously_loaded_config_agents(
     ]
 
 
+def test_load_agents_from_db_and_config_skips_a_row_this_version_cannot_read():
+    registry = AgentRegistry()
+    registry.load_agents_from_config([{"agent_name": "config-agent", "agent_card_params": _sample_agent_card_params()}])
+    unreadable = {
+        "agent_id": "newer-id",
+        "agent_name": "newer-agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "identity_managed": True,
+        "identity": {
+            "agent_id": "newer-id",
+            "provider": "identity_provider_from_a_newer_release",
+            "issuer": "https://idp.example",
+            "tenant_id": "tenant",
+            "client_id": "client",
+            "revision": "r1",
+        },
+    }
+    readable = {"agent_id": "db-id", "agent_name": "db-agent", "agent_card_params": _sample_agent_card_params()}
+
+    registry.load_agents_from_db_and_config(db_agents=[unreadable, readable])
+
+    assert sorted(agent.agent_name for agent in registry.get_agent_list()) == ["config-agent", "db-agent"]
+
+
 def test_load_agents_from_db_and_config_skips_incomplete_config_entries():
     """Config entries missing agent_card_params are skipped, not registered half-built."""
     registry = AgentRegistry()
