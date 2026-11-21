@@ -479,6 +479,33 @@ def test_virtual_key_mapping_counts_as_configured_when_any_issuer_sets_the_claim
     assert jwt_auth.is_virtual_key_mapping_configured() is is_configured
 
 
+@pytest.mark.parametrize("value", ["", None], ids=["empty", "null"])
+@pytest.mark.parametrize("field", ["audience", "public_key_url"])
+def test_litellm_jwtauth_refuses_an_empty_or_null_global_audience_or_jwks_url(field: str, value: str | None) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    with pytest.raises(ValidationError, match=field):
+        _ = LiteLLM_JWTAuth(**{field: value})
+
+
+@pytest.mark.parametrize("public_key_url", [" ", ",", " , ", ",,", "\t,\n"])
+def test_litellm_jwtauth_refuses_a_jwks_url_list_that_names_no_url(public_key_url: str) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    with pytest.raises(ValidationError, match="public_key_url"):
+        _ = LiteLLM_JWTAuth(public_key_url=public_key_url)
+
+
+@pytest.mark.parametrize(
+    "public_key_url",
+    ["https://a.example/keys", "https://a.example/keys, https://b.example/keys", "https://a.example/keys, ,"],
+)
+def test_litellm_jwtauth_keeps_a_jwks_url_list_that_names_a_url(public_key_url: str) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    assert LiteLLM_JWTAuth(public_key_url=public_key_url).public_key_url == public_key_url
+
+
 def test_new_user_request_loudly_rejects_a_password():
     """
     /user/new has never persisted a password (the field used to be silently

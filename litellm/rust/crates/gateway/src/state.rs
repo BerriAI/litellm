@@ -4,10 +4,9 @@ use axum::extract::FromRef;
 use litellm_config::{Config, Environment};
 use litellm_db::Pools;
 use litellm_env::Lookup;
-use litellm_gateway_inference::Gateway;
 use litellm_license::Entitlements;
 
-use crate::{Error, RedisClients, Resources, db, license::build_license};
+use crate::{Error, Gateway, RedisClients, Resources, db, license::build_license};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,7 +21,7 @@ pub struct AppState {
 impl AppState {
     pub async fn build(config: &Config, environment: &Environment) -> Result<Self, Error> {
         let resources = Resources::build(config)?;
-        let inference = crate::build_inference(config, &resources)?;
+        let inference = crate::build_inference(config, &resources).await?;
         let redis = crate::redis::connect(config, &resources).await?;
         let database = db::connect(config, &resources.secrets).await?;
         let entitlements = Arc::new(build_license(config, environment, &resources).await);

@@ -1,4 +1,5 @@
 import type { components } from "@/lib/http/schema";
+import type { TFunction } from "i18next";
 import { parseAsStringLiteral } from "nuqs";
 import type { CustomerUsageEntity } from "./customerUsageApi";
 import { budgetLimitAmount, budgetPeriod, type BudgetPeriod } from "@/lib/forms/budgetWindows";
@@ -15,27 +16,38 @@ export const CUSTOMER_BUDGET_LABELS = {
 
 export const customerBudgetPeriod = budgetPeriod;
 
+export const customerBudgetWindows = (entity: CustomerUsageEntity): CustomerBudgetUsage[] => [
+  ...(entity.budgetLimit === null
+    ? []
+    : [
+        {
+          source: "scalar" as const,
+          budget_duration: entity.budgetDuration,
+          max_budget: entity.budgetLimit,
+          spend: entity.spend,
+          reset_at: entity.budgetResetAt,
+        },
+      ]),
+  ...entity.budgetLimits.map((limit) => ({
+    source: "window" as const,
+    budget_duration: limit.budget_duration,
+    max_budget: limit.max_budget,
+    spend: null,
+    reset_at: limit.reset_at,
+  })),
+];
+
 export const customerBudgetUsage = (entity: CustomerUsageEntity): CustomerBudgetUsage[] =>
-  entity.budgetUsage ?? [
-    ...(entity.budgetLimit === null
-      ? []
-      : [
-          {
-            source: "scalar" as const,
-            budget_duration: entity.budgetDuration,
-            max_budget: entity.budgetLimit,
-            spend: entity.spend,
-            reset_at: entity.budgetResetAt,
-          },
-        ]),
-    ...entity.budgetLimits.map((limit) => ({
-      source: "window" as const,
-      budget_duration: limit.budget_duration,
-      max_budget: limit.max_budget,
-      spend: null,
-      reset_at: limit.reset_at,
-    })),
-  ];
+  entity.budgetUsage ?? customerBudgetWindows(entity);
+
+export function customerBudgetLimitLabel(amount: string, duration: string | null, t: TFunction): string {
+  const period = customerBudgetPeriod(duration);
+  if (period === "monthly") return t("customerPortal.createDialog.profileMonthlyBudget", { amount });
+  if (period === "yearly") return t("customerPortal.createDialog.profileYearlyBudget", { amount });
+  return duration
+    ? t("customerPortal.createDialog.profilePeriodBudget", { amount, duration })
+    : t("customerPortal.analytics.totalLimitAmount", { amount });
+}
 
 export const customerBudgetLimit = (entity: CustomerUsageEntity): number | null =>
   budgetLimitAmount(entity.budgetLimits, entity.budgetLimit);

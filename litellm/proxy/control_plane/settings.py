@@ -27,12 +27,6 @@ from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME
 DEFAULT_SESSION_TTL_SECONDS: Final = 12 * 60 * 60
 AuditSinkKind: TypeAlias = Literal["log", "otlp", "s3", "splunk_hec", "sentinel"]
 ObjectLockMode: TypeAlias = Literal["COMPLIANCE", "GOVERNANCE"]
-_SINK_URL_FIELDS: Final = (
-    ("audit_s3_endpoint_url", "audit_s3_allow_insecure_http"),
-    ("audit_splunk_url", "audit_splunk_allow_insecure_http"),
-    ("audit_sentinel_endpoint", None),
-    ("audit_sentinel_authority_host", None),
-)
 
 
 def _plain_http(url: object) -> bool:
@@ -289,10 +283,24 @@ class ControlPlaneSettings(BaseSettings):
     def _sink_urls_are_https_unless_opted_out(self) -> "ControlPlaneSettings":
         """Every sink URL carries a credential (SigV4, HEC token, bearer, client secret), so plain http is refused.
         Only the stores that can live in-cluster (S3 compatible, Splunk) have an opt-out."""
+        sink_urls: Final = (
+            (
+                "audit_s3_endpoint_url",
+                self.audit_s3_endpoint_url,
+                "audit_s3_allow_insecure_http",
+                self.audit_s3_allow_insecure_http,
+            ),
+            (
+                "audit_splunk_url",
+                self.audit_splunk_url,
+                "audit_splunk_allow_insecure_http",
+                self.audit_splunk_allow_insecure_http,
+            ),
+            ("audit_sentinel_endpoint", self.audit_sentinel_endpoint, None, False),
+            ("audit_sentinel_authority_host", self.audit_sentinel_authority_host, None, False),
+        )
         insecure: Final = tuple(
-            (name, flag)
-            for name, flag in _SINK_URL_FIELDS
-            if _plain_http(getattr(self, name)) and not (flag is not None and getattr(self, flag))
+            (name, flag) for name, url, flag, opted_out in sink_urls if _plain_http(url) and not opted_out
         )
         if not insecure:
             return self
