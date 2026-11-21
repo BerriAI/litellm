@@ -130,6 +130,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
+    CustomerIdentityHeaderNames,
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
@@ -3214,13 +3215,14 @@ async def _authorize_authenticated_request_checks(
         )
 
         request_headers: Final = _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request))
+        customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(
+            cast("Mapping[str, object]", general_settings),  # cast-ok: proxy settings are a string-keyed dict
+        )
         customer_identity: Final = customer_identity_from_request(
             request_headers,
             user_api_key_auth_obj.jwt_claims,
             litellm_jwtauth,
-            general_settings=cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
-                "Mapping[str, object]", general_settings
-            ),
+            names=customer_header_names,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)
@@ -3253,7 +3255,9 @@ async def _authorize_authenticated_request_checks(
                                 key_metadata=key_metadata,
                                 register=register,
                                 register_organization=register_organization,
+                                header_names=customer_header_names,
                             ),
+                            header_names=customer_header_names,
                         )
                     user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
                 if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):

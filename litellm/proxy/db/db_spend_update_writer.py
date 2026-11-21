@@ -99,6 +99,7 @@ from litellm.proxy.spend_tracking.savings import (
 )
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -891,7 +892,7 @@ class DBSpendUpdateWriter:
         proxy_settings: Final = cast(  # cast-ok: proxy settings use string keys
             Mapping[str, object], general_settings
         )
-        use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
+        use_ledger: Final = spend_logs_ledger_enabled(proxy_settings)
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
         customer_hierarchy: Final = customer_hierarchy_ids_from_request(request_fields)
         if kwargs is not None:
@@ -941,40 +942,46 @@ class DBSpendUpdateWriter:
                 payload["team_id"] = team_id
 
             if use_ledger:
-                from litellm.accounting.snapshot import build_accounting_payload
+                from litellm.proxy.spend_tracking.rust_spend_log_rows import LedgerRowInput, ledger_columns
 
-                if not _is_settle_once_cost_row(payload):
-                    payload["accounting_delivery_id"] = uuid.uuid4().hex
-                payload["accounting_payload"] = build_accounting_payload(
+                columns: Final = ledger_columns(
                     payload,
-                    entities={
-                        "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
-                        "user": user_id,
-                        "end_user": end_user_id,
-                        "team_id": team_id,
-                        "organization_id": org_id,
-                        "project_id": project_id,
-                        **(customer_hierarchy.entities() if customer_hierarchy is not None else {}),
-                        "agent_id": payload["agent_id"],
-                        "proxy_budget_name": litellm_proxy_budget_name if litellm.max_budget > 0 else None,
-                    },
-                    model_access_groups=debitable_model_access_groups(
-                        get_request_model_access_groups(request_fields), payload["model_id"], llm_router
-                    ),
-                    windows=await accounting_window_keys(
-                        hashed_token,
-                        team_id,
-                        customer_counters
-                        if customer_counters is not None
-                        else await customer_accounting_counters(
-                            customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                    LedgerRowInput(
+                        billable_cost=billable_cost,
+                        delivery_id=uuid.uuid4().hex,
+                        entities={
+                            "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
+                            "user": user_id,
+                            "end_user": end_user_id,
+                            "team_id": team_id,
+                            "organization_id": org_id,
+                            "project_id": project_id,
+                            **(customer_hierarchy.entities() if customer_hierarchy is not None else {}),
+                            "agent_id": payload["agent_id"],
+                            "proxy_budget_name": litellm_proxy_budget_name if litellm.max_budget > 0 else None,
+                        },
+                        model_access_groups=debitable_model_access_groups(
+                            get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                         ),
-                        user_id=user_id,
-                    )
-                    if billable_cost
-                    else (),
-                    router=get_llm_router,
+                        windows=await accounting_window_keys(
+                            hashed_token,
+                            team_id,
+                            customer_counters
+                            if customer_counters is not None
+                            else await customer_accounting_counters(
+                                customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                            ),
+                            user_id=user_id,
+                        )
+                        if billable_cost
+                        else (),
+                        router=get_llm_router,
+                    ),
                 )
+                payload["spend"] = columns["spend"]
+                if columns["accounting_delivery_id"] is not None:
+                    payload["accounting_delivery_id"] = columns["accounting_delivery_id"]
+                payload["accounting_payload"] = columns["accounting_payload"]
             keep_spend_logs: Final = disable_spend_logs is False and not (
                 "status" in payload
                 and payload["status"] == "failure"
@@ -1052,6 +1059,36 @@ class DBSpendUpdateWriter:
             )
             return True
 
+    async def record_after_ledger_row(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: "PrismaClient | None",
+        kwargs: Mapping[str, object],
+        completion_response: object,
+        hashed_token: str | None,
+        team_id: str | None,
+        billable_cost: float,
+        spend_logs_kept: bool,
+        claimed: bool,
+    ) -> None:
+        if claimed and prisma_client is not None:
+            await _track_guardrail_usage_of_cost_row(payload, prisma_client, not spend_logs_kept)
+        await self._enqueue_autorouter_turn_transaction(
+            payload=payload, prisma_client=prisma_client, spend_logs_kept=spend_logs_kept
+        )
+        await self._record_session_spend(hashed_token, billable_cost, _SPEND_METADATA_ADAPTER.validate_python(kwargs))
+        if spend_logs_kept:
+            await self._enqueue_tool_usage_transaction(  # pyright: ignore[reportUnknownMemberType]  # the step takes the untyped kwargs dict
+                payload=payload,
+                completion_response=completion_response,
+                prisma_client=prisma_client,
+                kwargs=dict(kwargs),
+            )
+        self._record_request_error_safely(payload=payload, prisma_client=prisma_client)
+        self._enqueue_tool_registry_upsert(  # pyright: ignore[reportUnknownMemberType]  # the step takes the untyped kwargs dict
+            kwargs=dict(kwargs), completion_response=completion_response, hashed_token=hashed_token, team_id=team_id
+        )
+
     async def _record_session_spend(
         self, api_key: str | None, spend: float, request_fields: Mapping[str, object]
     ) -> None:
@@ -1103,7 +1140,7 @@ class DBSpendUpdateWriter:
         is owned by its delivery row, keyed by its cost row id, in every logging mode, and a
         $0 poll records no delivery so it cannot block the poll that carries the cost.
         """
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -1167,7 +1204,7 @@ class DBSpendUpdateWriter:
         made and the row still has to end up carrying it. The row stops matching the moment it carries a charge, so it is one poll that
         takes it over and charges, and every later one reads the charge and charges nothing.
         """
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
         if payload["spend"] <= 0:

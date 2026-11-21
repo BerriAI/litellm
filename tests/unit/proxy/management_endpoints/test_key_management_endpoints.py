@@ -54,7 +54,6 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheI
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    app_key_resource_cache_key,
     project_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
@@ -115,6 +114,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -6161,8 +6161,8 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
     raw_key: Final = "sk-" + uuid4().hex
     hashed_token: Final = hash_token(raw_key)
     other_team_counter: Final = "spend:team:other-team"
-    resource_key: Final = app_key_resource_cache_key(hashed_token)
-    unrelated_resource_key: Final = app_key_resource_cache_key(hash_token("sk-other-owner"))
+    resource_key: Final = AuthObject.customer_app_key_resource(hashed_token).key
+    unrelated_resource_key: Final = AuthObject.customer_app_key_resource(hash_token("sk-other-owner")).key
     deleting_worker_cache: Final = UserApiKeyCache()
     peer_worker_cache: Final = UserApiKeyCache()
     peer_spend_counters: Final = InMemoryCache()
@@ -18555,62 +18555,21 @@ async def test_budget_limits_admin_unrestricted(monkeypatch):
     assert result is not None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_non_admin(monkeypatch, non_finite):
-    """A non-admin caller submitting a non-finite `budget_limits` window
-    gets 400. The finite-number invariant applies before role / ceiling
-    checks."""
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
-        None,
-        raising=False,
-    )
-    caller = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
-        user_id="user-1",
-        max_budget=10.0,
-    )
-    request = GenerateKeyRequest(
-        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await _common_key_generation_helper(
-            data=request,
-            user_api_key_dict=caller,
-            litellm_changed_by=None,
-            team_table=None,
-        )
-    assert exc_info.value.status_code == 400
-    assert "finite" in str(exc_info.value.detail)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_admin(monkeypatch, non_finite):
-    """The finite-number invariant applies to every caller including
-    proxy admin."""
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
-        None,
-        raising=False,
-    )
-    admin = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-        user_id="admin-1",
-    )
-    request = GenerateKeyRequest(
-        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await _common_key_generation_helper(
-            data=request,
-            user_api_key_dict=admin,
-            litellm_changed_by=None,
-            team_table=None,
-        )
-    assert exc_info.value.status_code == 400
-    assert "finite" in str(exc_info.value.detail)
+@pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize(
+    "windows",
+    [
+        [{"budget_duration": "1d", "max_budget": float("nan")}],
+        [{"budget_duration": "1d", "max_budget": float("inf")}],
+        [{"budget_duration": "1d", "max_budget": -1.0}],
+        [{"budget_duration": "5x", "max_budget": 1.0}],
+        [{"budget_duration": "1d", "max_budget": 1.0}, {"budget_duration": "1d", "max_budget": 2.0}],
+    ],
+    ids=["nan", "inf", "negative", "unsupported-duration", "duplicate-duration"],
+)
+def test_key_budget_windows_reject_invalid_windows(request_type, windows):
+    with pytest.raises(ValidationError):
+        request_type(key="sk-test", budget_limits=windows)
 
 
 @pytest.mark.asyncio

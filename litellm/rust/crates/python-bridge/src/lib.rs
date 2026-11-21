@@ -1,4 +1,5 @@
 mod auth;
+mod budget_counters;
 mod budgets;
 mod cache;
 mod callable;
@@ -23,6 +24,9 @@ mod router;
 mod routes;
 mod s3_log;
 mod secrets;
+mod spend_log;
+mod spend_log_rows;
+mod spend_log_writer;
 mod tokenizer;
 
 #[pymodule(gil_used = true)]
@@ -138,6 +142,12 @@ mod _native {
     use crate::routes::traces::trace_encode_error;
     #[pymodule_export]
     use crate::s3_log::NativeS3Log;
+    #[pymodule_export]
+    use crate::spend_log::RustSpendLog;
+    #[pymodule_export]
+    use crate::spend_log_rows::RustSpendLogRowBuilder;
+    #[pymodule_export]
+    use crate::spend_log_writer::RustSpendLogWriter;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -198,6 +208,7 @@ mod tests {
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
                 "NativeTokenRedactor",
+                "RustSpendLogRowBuilder",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
@@ -277,6 +288,8 @@ mod tests {
                 "NativeModelCapacity",
                 "NativeModelCapacityState",
                 "NativeS3Log",
+                "RustSpendLog",
+                "RustSpendLogWriter",
                 "auth_allowed_routes_grant",
                 "auth_first_denied_route",
                 "auth_jwt_team_routes_grant",
