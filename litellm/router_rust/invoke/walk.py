@@ -303,6 +303,20 @@ class WalkMetadata:
             {"previous_models": metadata["previous_models"], "request_retry_count": metadata["request_retry_count"]},
         )
 
+    def log_failed_hop(self, event: Mapping[str, object], error: BaseException | None) -> None:
+        """A ``fallback_done`` event for a hop that failed: the hop's last attempt joins
+        ``failed_fallback_attempts`` on the metadata the request's logging object holds. No retry
+        follows that attempt, so ``previous_models`` never holds it, and it is kept apart so it
+        takes none of the ``RETRY_BREADCRUMB_LIMIT`` slots."""
+        litellm_params: Final = getattr(self._request.get("litellm_logging_obj"), "litellm_params", None)
+        logged: Final = litellm_params.get(self._field) if isinstance(litellm_params, dict) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Logging.litellm_params is untyped
+        if error is None or not isinstance(logged, dict):
+            return
+        metadata: Final = self._scope(event.get("scope")).metadata
+        record: Final = _breadcrumb(metadata, str(metadata.get("model_group")), error, self._params_base_model)
+        earlier: Final = logged.get("failed_fallback_attempts")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # same untyped dict
+        logged["failed_fallback_attempts"] = (*(earlier if isinstance(earlier, tuple) else ()), record)  # pyright: ignore[reportUnknownVariableType]  # same untyped dict
+
     def deployment_that_just_failed(self, step: Mapping[str, object]) -> str | None:
         """``_deployment_that_just_failed``: the deployment the metadata an attempt inherits names,
         before the attempt stamps its own; ``None`` when the walk's level has run none yet."""

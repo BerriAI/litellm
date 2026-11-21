@@ -33,7 +33,7 @@ from tests.unit.test_router.core.fallbacks_helpers import (
     headers,
     show_router_debug,
 )
-from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit, server_error
+from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit, server_error, timeout
 
 GROUP_OF_TWO: Final = [deployment("a", "a1"), deployment("a", "a2")]
 UTC_2030: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
@@ -408,6 +408,26 @@ async def test_a_fallback_hop_works_on_its_own_copy_of_the_metadata(make_core: M
     assert hop["attempted_fallbacks"] == 1
     assert hop["original_model_group"] == "a"
     assert hop["model_group"] == "b"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fallbacks_last_attempt_is_recorded_on_the_logging_objects_metadata(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("*", timeout())
+    core: Final = make_core(
+        model_list=[deployment("a", "a1"), deployment("b", "b1")], num_retries=1, fallbacks=[{"a": ["b"]}]
+    )
+    logging_obj: Final = _RecordingLogging("acompletion")
+    logged_metadata: Final[dict[str, object]] = {}  # mutable-ok: the metadata the SDK call left on the logging object
+    logging_obj.litellm_params["metadata"] = logged_metadata
+
+    _ = await _failed(core, "a", expected_error=litellm.Timeout, litellm_logging_obj=logging_obj, metadata={})
+
+    assert [
+        (record["model_group"], record["deployment_id"], record["exception_type"], record["attempted_retries"])
+        for record in logged_metadata["failed_fallback_attempts"]  # pyright: ignore[reportGeneralTypeIssues]  # a tuple of dicts
+    ] == [("b", "b1", "Timeout", 1)]
 
 
 @pytest.mark.asyncio

@@ -1441,18 +1441,24 @@ def _attempt_number(record: Mapping[str, object], index: int) -> int:
 
 
 def _retry_attempt_records(litellm_params: Mapping[str, object] | None) -> tuple[Mapping[str, object], ...]:
-    """The router's ``RetryAttemptRecord`` breadcrumbs, one per failed attempt, read from the same bucket."""
+    """The router's ``RetryAttemptRecord`` breadcrumbs, one per failed attempt, read from the same bucket:
+    ``previous_models``, then the last attempt of each fallback hop that failed (``failed_fallback_attempts``)."""
     if litellm_params is None:
         return ()
     for metadata_key in ("litellm_metadata", "metadata"):
         metadata = litellm_params.get(metadata_key)
         if not isinstance(metadata, dict):
             continue
-        records = cast("Mapping[str, object]", metadata).get("previous_models")  # cast-ok: untyped router dict
+        bucket = cast("Mapping[str, object]", metadata)  # cast-ok: untyped router dict
+        records = bucket.get("previous_models")
+        failed_hops = bucket.get("failed_fallback_attempts")
         if isinstance(records, (list, tuple)):
             return tuple(
                 cast("Mapping[str, object]", record)  # cast-ok: RetryAttemptRecord TypedDict, read with .get
-                for record in cast("Sequence[object]", records)  # cast-ok: untyped router tuple
+                for record in (
+                    *cast("Sequence[object]", records),  # cast-ok: untyped router tuple
+                    *(cast("Sequence[object]", failed_hops) if isinstance(failed_hops, tuple) else ()),  # cast-ok: untyped router tuple
+                )
                 if isinstance(record, dict)
             )
     return ()
@@ -1520,23 +1526,29 @@ def _billed_earlier_attempt(
     )
 
 
-def _billed_earlier_attempts(
-    model_call_details: Mapping[str, object],
-    litellm_params: Mapping[str, object] | None,
-    estimated_usage: Usage,
-    base_model: str | None,
-    deployment_id: str | None,
-) -> tuple[BilledFailedAttempt, ...]:
-    """Every earlier retry attempt the provider also billed. The router records one
-    ``RetryAttemptRecord`` per failed attempt in ``metadata.previous_models``, the final attempt
-    included, which the failure row itself bills. The final attempt is the record with the
-    request's own deployment and retry count (``attempted_retries`` restarts at 0 after a fallback
-    hop, so the count alone cannot tell the groups apart). An earlier attempt that ended in a
-    ``Timeout`` had the same prompt accepted by its deployment, so it is billed like the final
-    attempt, at that deployment's input rate (else the cost map's rate for the record's own
-    ``base_model`` or model, which a fallback hop can make a different model than the final one).
-    Only the exception class survives on the record, so an earlier connect timeout is billed too;
-    any other failure class is not."""
+def _client_seen_record(litellm_params: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    """The breadcrumb of the attempt whose error the client got, once a fallback hop has moved the
+    logging object's routing metadata to another model group: the last attempt the requested group
+    (``original_model_group``) made, since exhausted fallbacks re-raise that group's error. None
+    without a fallback hop, or when later attempts pushed that breadcrumb out of ``previous_models``."""
+    retry_metadata: Final = _retry_metadata_bucket(litellm_params)
+    requested_group: Final = retry_metadata.get("original_model_group")
+    if not isinstance(requested_group, str) or requested_group == retry_metadata.get("model_group"):
+        return None
+    return next(
+        (
+            record
+            for record in reversed(_retry_attempt_records(litellm_params))
+            if record.get("model_group") == requested_group
+        ),
+        None,
+    )
+
+
+def _routed_attempt_identity(
+    litellm_params: Mapping[str, object] | None, deployment_id: str | None
+) -> tuple[str | None, int | None]:
+    """The identity of the last attempt the router made, as its metadata describes it."""
     retry_metadata: Final = _retry_metadata_bucket(litellm_params)
     final_attempt: Final = retry_metadata.get("attempted_retries")
     routed_model_info: Final = retry_metadata.get("model_info")
@@ -1545,9 +1557,34 @@ def _billed_earlier_attempts(
         if isinstance(routed_model_info, dict)
         else None
     )
-    final_identity: Final = (
+    return (
         routed_id if isinstance(routed_id, str) else deployment_id,
         final_attempt if isinstance(final_attempt, int) else None,
+    )
+
+
+def _billed_earlier_attempts(
+    model_call_details: Mapping[str, object],
+    litellm_params: Mapping[str, object] | None,
+    estimated_usage: Usage,
+    base_model: str | None,
+    deployment_id: str | None,
+) -> tuple[BilledFailedAttempt, ...]:
+    """Every other attempt the provider also billed. The router records one ``RetryAttemptRecord``
+    per failed attempt in ``metadata.previous_models``, including the attempt the failure row itself
+    bills. That attempt is the one whose error the client got: after a fallback hop the requested
+    group's last attempt (``_client_seen_record``), else the record with the request's own deployment
+    and retry count (``attempted_retries`` restarts at 0 after a fallback hop, so the count alone
+    cannot tell the groups apart). Another attempt that ended in a ``Timeout`` had the same prompt
+    accepted by its deployment, so it is billed like the failure row's attempt, at that deployment's
+    input rate (else the cost map's rate for the record's own ``base_model`` or model, which a
+    fallback hop can make a different model). Only the exception class survives on the record, so a
+    connect timeout is billed too; any other failure class is not."""
+    client_seen: Final = _client_seen_record(litellm_params)
+    final_identity: Final = (
+        _attempt_identity(client_seen)
+        if client_seen is not None
+        else _routed_attempt_identity(litellm_params, deployment_id)
     )
     return tuple(
         _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
@@ -1962,13 +1999,19 @@ def _failure_fields_to_lift(
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
     _billed: Final = provider_billed and not _success_already_logged
+    _client_seen: Final = _client_seen_record(_litellm_params)
+    _row_pricing_details, _row_base_model = (
+        (_model_call_details, _base_model)
+        if _client_seen is None
+        else _record_pricing(_model_call_details, _client_seen, _base_model)
+    )
     _usage_to_lift: Final = _failure_usage_to_lift(
-        model_call_details=_model_call_details,
+        model_call_details=_row_pricing_details,
         request_body=request_data,
         dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
         provider_billed=_billed,
-        deployment_id=_deployment_id,
-        base_model=_base_model,
+        deployment_id=_deployment_id if _client_seen is None else _record_deployment_id(_client_seen),
+        base_model=_row_base_model,
         dispatched_call_type=_estimate_call_type,
     )
     _prompt_estimate: Final = (
