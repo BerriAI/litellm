@@ -1,4 +1,3 @@
-import socket
 from typing import Final
 
 import pytest
@@ -6,16 +5,15 @@ import pytest
 import litellm
 from litellm import DualCache, Router
 from litellm.caching.redis_cache import RedisCache
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-    PROXY_DynamicRateLimitHandlerV3,
-    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage]  # the public name is a Final alias, not a type
-)
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RateLimitScope
 from tests._support.rust_parallel_request_limiter import PROXY_MaxParallelRequestsHandler_v3
+from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler, listening
 
 
-def _borrowing_handler(monkeypatch: pytest.MonkeyPatch) -> _PROXY_DynamicRateLimitHandlerV3:
+def _borrowing_handler(monkeypatch: pytest.MonkeyPatch) -> NativeDynamicRateLimitHandler:
     from litellm.types.utils import ModelLimitBorrowingConfig, PriorityReservationSettings
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
@@ -38,15 +36,27 @@ def _borrowing_handler(monkeypatch: pytest.MonkeyPatch) -> _PROXY_DynamicRateLim
         ],
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
+    handler: Final = NativeDynamicRateLimitHandler(internal_usage_cache=DualCache())
     handler.update_variables(llm_router=router)
     return handler
 
 
+async def _model_saturation_at_the_hook(handler: NativeDynamicRateLimitHandler) -> float:
+    with pytest.raises(ProxyRateLimitError) as refused:
+        await handler.async_pre_call_hook(
+            UserAPIKeyAuth(
+                api_key="sk-borrow", team_id="team-a", team_metadata={"model_tpm_limit": {"shared-model": 100}}
+            ),
+            DualCache(),
+            {"model": "shared-model", "messages": [{"role": "user", "content": "word " * 400}], "max_tokens": 10},
+            "acompletion",
+        )
+    return float(str(refused.value.detail).split("Model saturation: ")[1].split("%")[0]) / 100
+
+
 def _unreachable_redis_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    with listening() as (_, port):
+        return port
 
 
 @pytest.mark.asyncio
@@ -59,9 +69,7 @@ async def test_a_worker_whose_redis_read_fails_reads_the_models_saturation_from_
     assert handler.v3_limiter.rate_limits.has_redis
     counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
     handler.v3_limiter.rate_limits.set_local(counter, 700, 60)
-    group: Final = handler.llm_router.registry().group("shared-model")
-    assert group is not None
-    assert await handler._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+    assert await _model_saturation_at_the_hook(handler) == pytest.approx(0.7)
 
 
 @pytest.mark.asyncio
@@ -73,6 +81,4 @@ async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_m
     assert not handler.v3_limiter.rate_limits.has_redis
     counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
     handler.v3_limiter.rate_limits.set_local(counter, 700, 60)
-    group: Final = handler.llm_router.registry().group("shared-model")
-    assert group is not None
-    assert await handler._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+    assert await _model_saturation_at_the_hook(handler) == pytest.approx(0.7)

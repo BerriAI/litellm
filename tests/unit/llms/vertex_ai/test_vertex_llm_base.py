@@ -1548,7 +1548,7 @@ class TestVertexBase:
             assert supplier is not None
             # Trigger the lazy provider — this should call get_credentials
             supplier.get_aws_security_credentials(context=None, request=None)
-            mock_base_aws.get_credentials.assert_called_once_with(**aws_params)
+            mock_base_aws.get_credentials.assert_called_once_with(litellm_params=None, **aws_params)
 
             # Verify scopes were applied
             mock_gcp_creds.with_scopes.assert_called_once_with(scopes)

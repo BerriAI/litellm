@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
-import { customerChildSpendCall, customerHierarchyUsageCall, customerUsageEntity } from "./customerUsageApi";
+import {
+  customerAppSpendCall,
+  customerAppsUsageCall,
+  customerChildSpendCall,
+  customerHierarchyUsageCall,
+  customerUsageEntity,
+} from "./customerUsageApi";
 
 const audit = {
   created_at: "2026-11-01T00:00:00Z",
@@ -183,6 +189,59 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customerHierarchyUsageCall", () => {
+  it.each([true, false])("loads all app usage pages with admin totals enabled %s", async (includeOverall) => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      const page = Number(url.searchParams.get("page"));
+      const row = records[page - 1];
+      return json({ results: [daily(row, row.organization)], metadata: { has_more: page === 1, total_pages: 2 } });
+    });
+    const totals = await customerAppsUsageCall(["app-one"], includeOverall, request);
+    const expected = { spend: 4, tokens: 600, inputTokens: 600, requests: 10 };
+    expect(totals.get("app-one")).toMatchObject(expected);
+    expect(totals.has(null)).toBe(includeOverall);
+    expect(dailyUrls()).toHaveLength(includeOverall ? 4 : 2);
+    expect(
+      dailyUrls().every((url) => {
+        const sameDates =
+          url.searchParams.get("start_date") === request.startDate &&
+          url.searchParams.get("end_date") === request.endDate;
+        return sameDates && (includeOverall || url.searchParams.get("app_id") === "app-one");
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { member: null, resource: "customer_organizations", id: "org-1", spend: 4, tokens: 600 },
+    { member: "member-a", resource: "customer_members", id: "member-a", spend: 3, tokens: 100 },
+  ])(
+    "loads app usage for $resource without mixing scopes or duplicating matching periods",
+    async ({ member, resource, id, spend, tokens }) => {
+      const result = await customerAppSpendCall({ ...request, scope: { ...request.scope, member }, appId: "app-one" });
+      expect(result).toMatchObject({ monthlySpend: spend, yearlySpend: spend, tokenDetails: { tokens } });
+      const calls = dailyUrls();
+      expect(calls.every((url) => url.pathname === `/management/v1/${resource}/daily/activity`)).toBe(true);
+      expect(
+        calls.every(
+          (url) => url.searchParams.get("app_id") === "app-one" && url.searchParams.get(filterFor(resource)) === id,
+        ),
+      ).toBe(true);
+      expect(
+        calls.filter((url) => url.searchParams.get("page") === "1").map((url) => url.searchParams.get("start_date")),
+      ).toEqual([request.startDate, request.yearStartDate]);
+    },
+  );
+
+  it("should pass the app filter to every usage query without changing global budget policy", async () => {
+    const scopedRequest = { ...request, appId: "app-search", startDate: "2026-11-10", endDate: "2026-11-12" };
+    const result = await customerHierarchyUsageCall(scopedRequest);
+    const activityRequests = urls().filter((url) => url.pathname.includes("/daily/activity"));
+    expect(activityRequests.length).toBeGreaterThan(0);
+    expect(activityRequests.every((url) => url.searchParams.get("app_id") === "app-search")).toBe(true);
+    expect(result.organization.budgetLimit).toBe(100);
+    expect(result.organization.spend).toBe(40);
+  });
+
   it("should preserve scalar and concurrent effective caps without treating recorded spend as window spend", async () => {
     const budget = {
       max_budget: 25,

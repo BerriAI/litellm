@@ -7,15 +7,15 @@ use litellm_llms_types::{
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::Recognized,
+    recognized::{Recognized, is_one, python_str},
 };
+use litellm_python_compat::scalar::python_value;
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
     handler::shape_anthropic_messages_request,
-    scalar::{is_one, python_str, python_value},
     thinking::{drop_unsupported_effort, translate_thinking},
 };
 use crate::anthropic::{
@@ -44,7 +44,8 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         messages::transformation::{
-            BaseMessagesConfig, FederatedEnvironment, Headers, ValidatedEnvironment,
+            FederatedEnvironment, Headers, MessagesAuth, MessagesDialect, MessagesEndpoint,
+            MessagesReply, ValidatedEnvironment,
         },
     },
 };
@@ -53,15 +54,7 @@ pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
-impl BaseMessagesConfig for AnthropicMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
-    }
-
+impl MessagesEndpoint for AnthropicMessagesConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -73,20 +66,23 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
-    fn transform_anthropic_messages_request(
-        &self,
-        request: MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, &context.keeping_display_updates())
-    }
-
-    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
-        ToolCustomField::Rewrite {
-            hoist_defer_loading: is_claude_model(model),
+    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
+        if !is_foundry_url(url) {
+            return headers;
         }
+        let betas = existing_betas(&headers);
+        if betas.is_empty() {
+            return headers;
+        }
+        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
+        if kept.is_empty() {
+            return without_headers(headers, &[BETA_HEADER]);
+        }
+        with_header(headers, BETA_HEADER, kept.to_string())
     }
+}
 
+impl MessagesAuth for AnthropicMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[
             ANTHROPIC_API_KEY_ENV,
@@ -124,6 +120,30 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     ) -> Result<FederatedEnvironment, Error> {
         Ok(anthropic_environment(headers, api_key, env_lookup))
     }
+}
+
+impl MessagesDialect for AnthropicMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, options)
+    }
+
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ToolCustomField::Rewrite {
+            hoist_defer_loading: is_claude_model(model),
+        }
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        transform_messages_request(request, &context.keeping_display_updates())
+    }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
@@ -152,7 +172,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         );
         Ok((stripped, headers))
     }
+}
 
+impl MessagesReply for AnthropicMessagesConfig {
     fn retry_after_http_error(
         &self,
         status: u16,
@@ -161,21 +183,6 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
         retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
-        if !is_foundry_url(url) {
-            return headers;
-        }
-        let betas = existing_betas(&headers);
-        if betas.is_empty() {
-            return headers;
-        }
-        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
-        if kept.is_empty() {
-            return without_headers(headers, &[BETA_HEADER]);
-        }
-        with_header(headers, BETA_HEADER, kept.to_string())
     }
 }
 
@@ -364,7 +371,6 @@ pub(crate) fn transform_messages_request(
         messages,
         params: MessagesOptionalParams {
             context_management,
-            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
@@ -449,13 +455,6 @@ fn drop_non_string_tool_result_texts(
         .collect()
 }
 
-fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
-    extra
-        .into_iter()
-        .filter(|(key, value)| key != "safeguards" || !value.is_null())
-        .collect()
-}
-
 pub(crate) fn update_headers_with_anthropic_beta(
     headers: Headers,
     request: &MessagesRequest,
@@ -495,7 +494,7 @@ fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
 }
 
 fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
-    let Some(Value::Object(thread)) = params.extra.get("thread") else {
+    let Some(Value::Object(thread)) = &params.thread else {
         return false;
     };
     thread.get("type").and_then(Value::as_str) == Some("continue")
@@ -505,10 +504,7 @@ fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
 }
 
 fn is_threaded(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("thread")
-        .is_some_and(|thread| !thread.is_null())
+    params.thread.is_some()
 }
 
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
@@ -579,10 +575,7 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
 }
 
 fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("safeguards")
-        .is_some_and(|value| !value.is_null())
+    params.safeguards.is_some()
 }
 
 /// Python's `messages_carry_output_config` reads any mapping, so a message that did not parse,
@@ -1419,6 +1412,7 @@ mod tests {
                         },
                         drop_params: true,
                         keeps_display_updates: false,
+                        warns_dropped_disabled_thinking: false,
                     },
                     drop_params: true,
                     drops_unsupported_params: false,

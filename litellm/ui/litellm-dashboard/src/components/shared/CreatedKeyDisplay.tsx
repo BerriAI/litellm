@@ -17,13 +17,13 @@ export const buildAgentInstructions = (baseUrl: string, apiKey: string): string 
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
   const endpointIntroduction =
     "LiteLLM is a gateway that exposes OpenAI and Anthropic compatible APIs. " +
-    `Send the virtual key as a Bearer token (Authorization: Bearer ${apiKey}) to:`;
+    `Send the Virtual Key as a Bearer token (Authorization: Bearer ${apiKey}) to:`;
 
   return [
     "Use this LiteLLM AI gateway for model inference.",
     "",
     `Gateway URL: ${normalizedBaseUrl}`,
-    `Virtual key: ${apiKey}`,
+    `Virtual Key: ${apiKey}`,
     "",
     endpointIntroduction,
     `- POST ${normalizedBaseUrl}/v1/chat/completions (OpenAI Chat Completions)`,

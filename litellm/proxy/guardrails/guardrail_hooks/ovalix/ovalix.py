@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -24,7 +25,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_str_mapping, require_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -54,6 +55,7 @@ BLOCKED_ACTION_TYPE: Final = "block"
 _MODIFY_ACTION_TYPES: Final = ("anonymize", "sanitize")
 _DEFAULT_FILE_SIZE_LIMIT: Final = 64 * 1024 * 1024
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+_DECODED_JSON: Final = TypeAdapter(object)
 _FILE_BLOCK_ESCALATION_REASON: Final = (
     "This message was blocked by Ovalix because file content anonymization isn't possible via LiteLLM"
 )
@@ -234,7 +236,7 @@ class OvalixGuardrail(CustomGuardrail):
         actor: str,
         session_id: str,
         oversize: bool = False,
-    ) -> Mapping[str, object]:
+    ) -> object:
         """Call the Ovalix Tracker checkpoint API and return the JSON response.
 
         Both routes live on the tracker's /beta litellm router, which accepts the api key this
@@ -262,10 +264,11 @@ class OvalixGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         response.raise_for_status()
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
-    def _verdict(self, resp: Mapping[str, object]) -> tuple[str, str | None]:
-        return (str_or_none(resp.get("action_type")) or "").lower(), self._get_trackers_corrected_message(resp)
+    def _verdict(self, resp: object) -> tuple[str, str | None]:
+        decoded: Final = require_get(resp)
+        return (str_or_none(decoded.get("action_type")) or "").lower(), self._get_trackers_corrected_message(decoded)
 
     async def _block_reason_for_item(
         self,
@@ -334,6 +337,9 @@ class OvalixGuardrail(CustomGuardrail):
             if reason is not None:
                 return reason
         return None
+
+    def scans_each_text_separately(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -485,7 +491,7 @@ class OvalixGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
         )
 
-    def _get_trackers_corrected_message(self, resp: Mapping[str, object]) -> str | None:
+    def _get_trackers_corrected_message(self, resp: SupportsGet) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
         modified: Final = as_str_mapping(resp.get("modified_data"))
         if modified is None:

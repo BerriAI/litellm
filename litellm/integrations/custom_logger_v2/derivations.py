@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
 from litellm.integrations.custom_logger_v2.enums import Field
@@ -10,6 +10,7 @@ from litellm.integrations.custom_logger_v2.field_sources import FieldSource, Hoo
 from litellm.types.integrations.custom_logger_v2 import (
     AgentPolicy,
     AttemptTiming,
+    BilledRetryAttempt,
     BudgetPlan,
     BudgetReservation,
     Cost,
@@ -34,6 +35,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     RateLimitStatuses,
     ReservationEntry,
     ScalarItem,
+    SpendLogId,
     Stringified,
     Usage,
     UsageRecord,
@@ -42,6 +44,7 @@ from litellm.types.integrations.custom_logger_v2 import (
 )
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import BilledFailedAttempt
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 
 _ABSENT: Final = object()
@@ -49,6 +52,7 @@ _TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ..
     tuple[ScalarItem, ...]
 )
 _DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list", "not_a_mapping"})
+_HELD_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
 
 
@@ -149,14 +153,15 @@ _LOGGED_KEY_MEMBERS: Final = MappingProxyType(
 )
 
 
-def _cost_tracking_end_user_id(params: Mapping[str, object]) -> object:
+def spend_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
     litellm_bucket: Final = mapping(params.get("litellm_metadata")) or {}
     metadata_bucket: Final = mapping(params.get("metadata")) or {}
     spend_keys: Final = {key: value for key, value in metadata_bucket.items() if "user_api_key" in key}
-    bucket: Final = (
-        {**litellm_bucket, **spend_keys} if litellm_bucket and metadata_bucket else litellm_bucket or metadata_bucket
-    )
-    return params.get("user_api_key_end_user_id") or bucket.get("user_api_key_end_user_id")
+    return {**litellm_bucket, **spend_keys} if litellm_bucket and metadata_bucket else litellm_bucket or metadata_bucket
+
+
+def _cost_tracking_end_user_id(params: Mapping[str, object]) -> object:
+    return params.get("user_api_key_end_user_id") or spend_metadata(params).get("user_api_key_end_user_id")
 
 
 _STAMPED_KEYS: Final = (
@@ -348,14 +353,23 @@ def _entries_members(entries: object) -> Mapping[str, object]:
     return {"entries": tuple(map(_reservation_entry, iterated)), "entries_is_list": isinstance(entries, list)}
 
 
-def budget_reservation(args: HookArgs) -> BudgetReservation | None:
-    raw: Final[object] = getattr(args.auth, "budget_reservation", None)
+def _reservation(raw: object) -> BudgetReservation | None:
     if raw is None:
         return None
     members: Final = mapping(raw)
     if members is None:
         return coerce_record(BudgetReservation, {"not_a_mapping": raw})
     return coerce_record(BudgetReservation, {**members, **_entries_members(members.get("entries"))})
+
+
+def budget_reservation(args: HookArgs) -> BudgetReservation | None:
+    return _reservation(getattr(args.auth, "budget_reservation", None))
+
+
+def logged_budget_reservation(args: HookArgs) -> BudgetReservation | None:
+    from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
+
+    return _reservation(budget_reservation_from_metadata(spend_metadata(litellm_params(args))))
 
 
 def _written_entry(entry: object) -> object:
@@ -391,6 +405,34 @@ def write_budget_reservation(args: HookArgs, value: object) -> None:
         current.update(members)  # pyright: ignore[reportUnknownMemberType]  # the shared reservation dict
         return
     setattr(args.auth, "budget_reservation", dict(members))  # noqa: B010  # the auth model types it as a dict
+
+
+def _settle_reservation(current: object, value: object) -> None:
+    if not isinstance(current, dict):
+        return
+    members: Final = _record_members(value)
+    held: Final[dict[str, object]] = current  # pyright: ignore[reportUnknownVariableType]  # mutable-ok: the shared reservation dict settles in place
+    finalized: Final = members.get("finalized")
+    if finalized is not None:
+        held["finalized"] = finalized
+    if not isinstance(members.get("entries"), list) or not isinstance(held.get("entries"), list | tuple):
+        return
+    for entry, settled in zip(
+        _HELD_ENTRIES.validate_python(held.get("entries")), _HELD_ENTRIES.validate_python(members.get("entries"))
+    ):
+        adjustment = member(settled, "applied_adjustment")
+        if isinstance(entry, dict) and adjustment is not None:
+            entry["applied_adjustment"] = adjustment
+
+
+def write_settled_budget_reservation(args: HookArgs, value: object) -> None:
+    _settle_reservation(getattr(args.auth, "budget_reservation", None), value)
+
+
+def write_logged_budget_reservation(args: HookArgs, value: object) -> None:
+    from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
+
+    _settle_reservation(budget_reservation_from_metadata(spend_metadata(litellm_params(args))), value)
 
 
 def usage_record(source: object) -> UsageRecord | None:
@@ -443,13 +485,26 @@ def _socket_session(args: HookArgs) -> UsageRecord | None:
     return usage_record(socket_session_usage(mapping(args.request) or {}, args.result))
 
 
+def _response_usage(result: object) -> object:
+    reported: Final = member(result, "usage")
+    if member(reported, "prompt_tokens") is not None or None in (
+        member(reported, "input_tokens"),
+        member(reported, "output_tokens"),
+    ):
+        return reported
+    from litellm.cost_calculator import get_usage_object
+
+    converted: Final = get_usage_object(result)
+    return reported if converted is None else converted
+
+
 def usage(args: HookArgs) -> Usage | None:
     request: Final = args.request
     streamed: Final = member(request, "async_complete_streaming_response")
     return coerce_record(
         Usage,
         {
-            "response": usage_record(member(args.result, "usage")),
+            "response": usage_record(_response_usage(args.result)),
             "streamed": usage_record(member(streamed, "usage")),
             "combined": usage_record(member(request, "combined_usage_object")),
             "upstream": usage_record(member(request, "_litellm_upstream_reported_usage")),
@@ -473,16 +528,176 @@ def _zero_cost(diagnostic: object) -> object:
     return diagnostic if members is None else {"reason": members.get("reason"), "reason_present": "reason" in members}
 
 
+def _cost_failure_error(payload: Mapping[str, object]) -> str | None:
+    return _text(member(payload.get("response_cost_failure_debug_info"), "error_str"))
+
+
+def _cost_members(payload: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "response_cost": payload.get("response_cost"),
+        "zero_cost": _zero_cost(payload.get("zero_cost_diagnostic")),
+        "cost_finalized": payload.get("cost_finalized") is True,
+        "response_cost_failure_debug_info": _cost_failure_error(payload),
+    }
+
+
 def cost(args: HookArgs) -> Cost | None:
     payload: Final = payload_of(args)
-    if payload is None:
+    return None if payload is None else coerce_record(Cost, _cost_members(payload))
+
+
+def _failure_guardrail_information(request: Mapping[str, object]) -> object:
+    metadata: Final = mapping(request.get("metadata")) or {}
+    if "standard_logging_guardrail_information" in metadata:
+        return metadata["standard_logging_guardrail_information"]
+    return (mapping(request.get("litellm_metadata")) or {}).get("standard_logging_guardrail_information")
+
+
+def _failure_row_response_cost(request: Mapping[str, object]) -> float:
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+    from litellm.types.utils import Usage as LoggedUsage
+
+    stashed: Final = request.get("response_cost")
+    recovered: Final = (
+        max(float(stashed), 0.0)
+        if isinstance(request.get("combined_usage_object"), LoggedUsage) and isinstance(stashed, int | float)
+        else 0.0
+    )
+    finalized: Final = mapping(request.get("standard_logging_object")) or {}
+    amount: Final = finalized.get("response_cost")
+    if finalized.get("cost_finalized") is True and isinstance(amount, int | float):
+        return float(amount)
+    return recovered + guardrail_information_cost(_failure_guardrail_information(request))
+
+
+def failure_cost(args: HookArgs) -> Cost | None:
+    request: Final = mapping(args.request)
+    if request is None:
         return None
+    payload: Final = payload_of(args)
     return coerce_record(
         Cost,
         {
-            "response_cost": payload.get("response_cost"),
-            "zero_cost": _zero_cost(payload.get("zero_cost_diagnostic")),
+            **({} if payload is None else _cost_members(payload)),
+            "failure_row_response_cost": _failure_row_response_cost(request),
         },
+    )
+
+
+def _response_ids(response: object) -> Mapping[str, object]:
+    if isinstance(response, dict):
+        return response  # pyright: ignore[reportUnknownVariableType]  # the response dict the spend writer reads
+    if isinstance(response, BaseModel):
+        return response.model_dump(include={"id"})
+    return {}
+
+
+def _spend_log_id(row: Mapping[str, object], response: object) -> SpendLogId:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+
+    call_type: Final = row.get("call_type") or "acompletion"
+    return coerce_record(
+        SpendLogId,
+        {
+            "id": get_spend_logs_id(
+                call_type,  # pyright: ignore[reportArgumentType]  # the writer passes the logged call type unchecked
+                _response_ids(response),
+                row,
+                spend_metadata(mapping(row.get("litellm_params")) or {}),
+            ),
+        },
+    )
+
+
+def _logged_response(args: HookArgs, request: Mapping[str, object]) -> object:
+    if getattr(args.logging_obj, "stream", None) is True:
+        return request.get("async_complete_streaming_response")
+    return args.result
+
+
+def spend_log_id(args: HookArgs) -> SpendLogId | None:
+    request: Final = mapping(args.request)
+    return None if request is None else _spend_log_id(request, _logged_response(args, request))
+
+
+def _failure_row(request: Mapping[str, object]) -> Mapping[str, object]:
+    params: Final = mapping(request.get("litellm_params")) or {}
+    return {**request, "litellm_params": {**params, "metadata": mapping(request.get("metadata")) or {}}}
+
+
+def _with_late_guardrails(row: Mapping[str, object]) -> Mapping[str, object]:
+    payload: Final = mapping(row.get("standard_logging_object"))
+    recorded: Final = _failure_guardrail_information(row)
+    if not recorded or payload is None or payload.get("guardrail_information"):
+        return row
+    return {**row, "standard_logging_object": {**payload, "guardrail_information": recorded}}
+
+
+def failure_spend_log_id(args: HookArgs) -> SpendLogId | None:
+    request: Final = mapping(args.request)
+    return None if request is None else _spend_log_id(_with_late_guardrails(_failure_row(request)), None)
+
+
+def _billed_attempts(request: Mapping[str, object]) -> "tuple[BilledFailedAttempt, ...]":
+    from litellm.proxy.utils import BilledFailedAttempt
+
+    attempts: Final = request.get("billed_failed_attempts")
+    if not isinstance(attempts, tuple):
+        return ()
+    return tuple(attempt for attempt in attempts if isinstance(attempt, BilledFailedAttempt))  # pyright: ignore[reportUnknownVariableType]  # the failure lift stashes a tuple of attempts
+
+
+def _attempt_row(
+    row: Mapping[str, object], call_id: str | None, attempt: "BilledFailedAttempt", position: int
+) -> Mapping[str, object]:
+    suffix: Final = f"-attempt-{position}"
+    payload: Final = mapping(row.get("standard_logging_object"))
+    payload_id: Final = None if payload is None else payload.get("id")
+    return {
+        **row,
+        "response_cost": attempt.response_cost,
+        **({} if call_id is None else {"litellm_call_id": f"{call_id}{suffix}", "parent_request_id": call_id}),
+        **(
+            {"standard_logging_object": {**payload, "id": f"{payload_id}{suffix}"}}
+            if isinstance(payload_id, str) and payload is not None
+            else {}
+        ),
+    }
+
+
+def _billed_retry_attempt(
+    row: Mapping[str, object], call_id: str | None, attempt: "BilledFailedAttempt", position: int
+) -> BilledRetryAttempt:
+    attempt_row: Final = _attempt_row(row, call_id, attempt, position)
+    return coerce_record(
+        BilledRetryAttempt,
+        {
+            "position": position,
+            "spend_log_id": _spend_log_id(attempt_row, None),
+            "litellm_call_id": _text(attempt_row.get("litellm_call_id")),
+            "parent_request_id": _text(attempt_row.get("parent_request_id")),
+            "attempted_retries": attempt.attempted_retries,
+            "deployment_id": attempt.deployment_id,
+            "response_cost": attempt.response_cost,
+            "usage": usage_record(attempt.usage),  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # Usage resolves through a cyclic import
+        },
+    )
+
+
+def billed_retry_attempts(args: HookArgs) -> tuple[BilledRetryAttempt, ...] | None:
+    request: Final = mapping(args.request)
+    if request is None:
+        return None
+    row: Final = _failure_row(request)
+    call_id: Final = _text(
+        request.get("litellm_call_id") or (mapping(row.get("litellm_params")) or {}).get("litellm_call_id")
+    )
+    return (
+        tuple(
+            _billed_retry_attempt(row, call_id, attempt, position)
+            for position, attempt in enumerate(_billed_attempts(request))
+        )
+        or None
     )
 
 
@@ -698,6 +913,18 @@ def input_sequence_length(args: HookArgs) -> InputSequenceLength | None:
     return InputSequenceLength(bucket=bucket)
 
 
+def spend_log_success_input(args: HookArgs) -> object:
+    from litellm.proxy.spend_tracking.rust_spend_log_inputs import spend_log_success_input as success_input
+
+    return success_input(args)
+
+
+def spend_log_failure_input(args: HookArgs) -> object:
+    from litellm.proxy.spend_tracking.rust_spend_log_inputs import spend_log_failure_input as failure_input
+
+    return failure_input(args)
+
+
 def payload_copy(
     args: HookArgs,
 ) -> dict[str, object] | None:  # mutable-ok: the shallow copy handed to Rust by reference
@@ -730,6 +957,8 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.metadata_labels: tuple[MetadataLabel, ...],
         Field.input_sequence_length: InputSequenceLength,
         Field.limiter_request: LimiterRequest,
+        Field.spend_log_id: SpendLogId,
+        Field.billed_retry_attempts: tuple[BilledRetryAttempt, ...],
     }
 )
 
@@ -749,6 +978,7 @@ DERIVED_LOGGING_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
         Field.mcp_tool_call: derived(mcp_tool_call),
         Field.log_id: derived(log_id),
         Field.cold_storage_object_key: derived(cold_storage_object_key),
+        Field.spend_log_id: derived(spend_log_id),
     }
 )
 DERIVED_ATTEMPT_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
@@ -757,11 +987,21 @@ DERIVED_ATTEMPT_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
         Field.outcome: derived(outcome),
         Field.standard_logging_payload_ref: derived(payload_copy),
         Field.input_sequence_length: derived(input_sequence_length),
+        Field.budget_reservation: mapped(logged_budget_reservation, write_logged_budget_reservation),
+        Field.spend_log_input: derived(spend_log_success_input),
     }
 )
 DERIVED_AUTH_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType({Field.key_identity: derived(key_identity)})
 DERIVED_POST_CALL_FAILURE_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
-    {**DERIVED_AUTH_FIELDS, Field.usage: derived(combined_usage)}
+    {
+        **DERIVED_AUTH_FIELDS,
+        Field.usage: derived(combined_usage),
+        Field.cost: derived(failure_cost),
+        Field.spend_log_id: derived(failure_spend_log_id),
+        Field.billed_retry_attempts: derived(billed_retry_attempts),
+        Field.budget_reservation: mapped(budget_reservation, write_settled_budget_reservation),
+        Field.spend_log_input: derived(spend_log_failure_input),
+    }
 )
 PRE_CALL_AUTH_SOURCES: Final[Mapping[Field, FieldSource]] = MappingProxyType(
     {
@@ -794,6 +1034,7 @@ __all__ = [
     "RECORD_TYPES",
     "attempt_timing",
     "auth_of",
+    "billed_retry_attempts",
     "budget_reservation",
     "call_connection_id",
     "call_internal_origin",
@@ -801,11 +1042,14 @@ __all__ = [
     "combined_usage",
     "cost",
     "deployment",
+    "failure_cost",
+    "failure_spend_log_id",
     "guardrail_info",
     "input_sequence_length",
     "key_identity",
     "key_limits",
     "log_id",
+    "logged_budget_reservation",
     "logged_key_identity",
     "logged_model_group",
     "logged_request",
@@ -818,7 +1062,11 @@ __all__ = [
     "payload_of",
     "rate_limit_state",
     "request_tags",
+    "spend_log_id",
+    "spend_metadata",
     "usage",
     "usage_record",
     "write_budget_reservation",
+    "write_logged_budget_reservation",
+    "write_settled_budget_reservation",
 ]
