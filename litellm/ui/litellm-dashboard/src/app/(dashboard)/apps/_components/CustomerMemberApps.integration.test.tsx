@@ -142,7 +142,7 @@ describe("customer member apps", () => {
       screen.getByRole("combobox", { name: "Budget source" }),
       "Enter custom limits instead",
     );
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "50" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "50" } });
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Reset period" }), "/ year");
     await user.click(screen.getByRole("button", { name: "Save member app budget" }));
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
@@ -201,8 +201,8 @@ describe("customer member apps", () => {
         { ...app, default_customer_member_budget: { rpm_limit: 99, allowed_models: ["inherited-model"] } },
       ]);
       const user = await openBudget();
-      expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(5);
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "7" } });
+      expect(screen.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(5);
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "7" } });
       expect(await saveBudget(user)).toEqual(expectedPatch);
     },
   );
@@ -304,11 +304,11 @@ describe("customer member apps", () => {
     const user = await openBudget();
     await user.click(await screen.findByRole("combobox", { name: "Budget source" }));
     await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
-    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(500);
-    expect(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveValue(5000);
+    expect(screen.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(500);
+    expect(screen.getByRole("spinbutton", { name: "Additional Max Budget (USD)" })).toHaveValue(5000);
     expect(screen.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(10000);
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "750" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "750" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional Max Budget (USD)" }), {
       target: { value: "6000" },
     });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "" } });

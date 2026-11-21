@@ -32,6 +32,18 @@ pub enum AuthObject {
     CustomerOrgAlias(String),
     /// The one customer app definition every app shares.
     CustomerAppDefinition,
+    CustomerApp {
+        resource_type: String,
+        resource_id: String,
+    },
+    CustomerAppAssociation {
+        scope: String,
+        app_id: String,
+        customer_id: String,
+    },
+    CustomerAppBudget(String),
+    CustomerAppKeyResource(String),
+    CustomerAppSharedProfiles,
     DefaultEndUserBudget(String),
     TeamMemberDefaultBudget(String),
     Tag(String),
@@ -78,6 +90,26 @@ impl AuthObject {
             Self::CustomerMember(id) => format!("customer_member_id:{id}"),
             Self::CustomerOrgAlias(alias) => format!("customer_org_alias:{alias}"),
             Self::CustomerAppDefinition => "customer_app_definition:global".to_owned(),
+            Self::CustomerApp {
+                resource_type,
+                resource_id,
+            } => format!(
+                "customer_app:{}",
+                json_strings(&[resource_type, resource_id])
+            ),
+            Self::CustomerAppAssociation {
+                scope,
+                app_id,
+                customer_id,
+            } => format!(
+                "customer_app_association:{}",
+                json_strings(&[scope, app_id, customer_id])
+            ),
+            Self::CustomerAppBudget(id) => format!("customer_app_budget:{id}"),
+            Self::CustomerAppKeyResource(hashed_token) => {
+                format!("customer_app_key_resource:{hashed_token}")
+            }
+            Self::CustomerAppSharedProfiles => "customer_app_shared_profiles".to_owned(),
             Self::DefaultEndUserBudget(id) => format!("default_end_user_budget:{id}"),
             Self::TeamMemberDefaultBudget(id) => format!("team_member_default_budget:{id}"),
             Self::Tag(name) => format!("tag:{name}"),
@@ -103,7 +135,7 @@ impl AuthObject {
             Self::AgentIdentity {
                 tenant_id,
                 client_id,
-            } => format!("agent_identity:{}", json_pair(tenant_id, client_id)),
+            } => format!("agent_identity:{}", json_strings(&[tenant_id, client_id])),
             Self::GlobalProxySpend => "default_user_id:spend".to_owned(),
         }
     }
@@ -115,10 +147,15 @@ impl AuthObject {
     }
 }
 
-/// `json.dumps((first, second))`.
-fn json_pair(first: &str, second: &str) -> String {
-    let pair = Value::List(vec![Value::from(first), Value::from(second)]);
-    json::dumps(&pair).expect("json.dumps never refuses a pair of strings")
+/// `json.dumps(tuple(items))`.
+fn json_strings(items: &[&String]) -> String {
+    let list = Value::List(
+        items
+            .iter()
+            .map(|item| Value::from(item.as_str()))
+            .collect(),
+    );
+    json::dumps(&list).expect("json.dumps never refuses a list of strings")
 }
 
 /// `is_user_key_cache_key`: user-key objects are cached under a bare `hash_token` digest, every
