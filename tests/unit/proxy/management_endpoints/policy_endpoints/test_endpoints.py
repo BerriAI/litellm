@@ -445,13 +445,11 @@ class TestEnrichPolicyTemplateOnAModelThatRefusesCustomTemperature:
         respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=handler)
 
     @staticmethod
-    async def _enrich(monkeypatch: pytest.MonkeyPatch, model: str | None, stream: bool) -> dict[str, object]:
+    async def _enrich(monkeypatch: pytest.MonkeyPatch, model: str, stream: bool) -> dict[str, object]:
         router: Final = litellm.Router(
             model_list=[
-                {
-                    "model_name": "gpt-6-luna",
-                    "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "sk-test"},
-                }
+                {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "sk-test"}}
+                for name in ("gpt-6-luna", "gpt-4o-mini")
             ]
         )
         monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -478,11 +476,16 @@ class TestEnrichPolicyTemplateOnAModelThatRefusesCustomTemperature:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("stream", [False, True], ids=["enrich", "enrich_stream"])
-    @pytest.mark.parametrize("model", [None, "gpt-6-luna"], ids=["no_model", "explicit_gpt_6_luna"])
+    @pytest.mark.parametrize(
+        ("model", "sent_temperature"),
+        [("gpt-6-luna", None), ("gpt-4o-mini", 0.3)],
+        ids=["refused_temperature_is_dropped", "accepted_temperature_is_kept"],
+    )
     async def test_competitors_and_variations_are_discovered(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        model: str | None,
+        model: str,
+        sent_temperature: float | None,
         stream: bool,
         local_model_cost_map: None,
         httpx_transport: None,
@@ -494,5 +497,5 @@ class TestEnrichPolicyTemplateOnAModelThatRefusesCustomTemperature:
 
         assert result["competitors"] == ["Rival Air", "Other Air"]
         assert result["competitor_variations"] == {"Rival Air": ["Rivalair", "Rival Airways"]}
-        assert [body["model"] for body in seen_bodies] == ["gpt-6-luna", "gpt-6-luna"]
-        assert not any("temperature" in body for body in seen_bodies)
+        assert [body["model"] for body in seen_bodies] == [model, model]
+        assert [body.get("temperature") for body in seen_bodies] == [sent_temperature, sent_temperature]

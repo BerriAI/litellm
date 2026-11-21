@@ -26,18 +26,16 @@ from tests.integration._support.wire import Reply, Request, Wire, wire_server
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
 
 SUFFIX: Final = uuid.uuid4().hex[:10]
-CONFIGURED_DEFAULT: Final = "gpt-6-luna"
+REFUSING: Final = "gpt-6-luna"
 EXPLICIT_WIRE_MODEL: Final = f"policy-enricher-{SUFFIX}"
 EXPLICIT: Final = f"openai/{EXPLICIT_WIRE_MODEL}"
 OUTAGE: Final = "outage"
 ENRICH: Final = "/policy/templates/enrich"
 ENRICH_STREAM: Final = "/policy/templates/enrich/stream"
-SUGGEST: Final = "/policy/templates/suggest"
 ENDPOINTS: Final = (ENRICH, ENRICH_STREAM)
 ENDPOINT_IDS: Final = ("enrich", "stream")
 TEMPLATES: Final = ("competitor-mention-detection", "aviation-operations-security")
 COMPETITOR_TEMPERATURE: Final = 0.3
-SUGGEST_TEMPERATURE: Final = 0.2
 BRAND_PATTERN: Final = re.compile(r"brand[0-9a-f]{12}")
 VARIATIONS_MARKER: Final = "common misspellings"
 TEMPERATURE_REJECTION: Final[dict[str, JsonValue]] = {
@@ -97,59 +95,16 @@ def _variation_text(prompt: str) -> str:
     return "\n".join(f"{name}: {', '.join(_variations(name))}" for name in names)
 
 
-def _suggestion_reply(model: str) -> Reply:
-    arguments: Final = {
-        "selected_templates": [
-            {"template_id": "competitor-mention-detection", "reason": "blocks rival brands"},
-            {"template_id": f"not-a-template-{SUFFIX}", "reason": "unknown"},
-        ],
-        "explanation": "competitor mentions",
-    }
-    return Reply(
-        body=json.dumps(
-            {
-                "id": f"chatcmpl-suggest-{SUFFIX}",
-                "object": "chat.completion",
-                "created": 1,
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "call_select",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "select_policy_templates",
-                                        "arguments": json.dumps(arguments),
-                                    },
-                                }
-                            ],
-                        },
-                        "finish_reason": "tool_calls",
-                    }
-                ],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-            }
-        ).encode()
-    )
-
-
 def _respond(request: Request) -> Reply:
     assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request.target
     body: Final = JSON_OBJECT.validate_json(request.body)
     model: Final = body.get("model")
-    if model not in (CONFIGURED_DEFAULT, EXPLICIT_WIRE_MODEL):
+    if model not in (REFUSING, EXPLICIT_WIRE_MODEL):
         return _unknown_model(model)
-    if model == CONFIGURED_DEFAULT and _rejects_temperature(body):
+    if model == REFUSING and _rejects_temperature(body):
         return _error(400, TEMPERATURE_REJECTION)
     prompt: Final = _prompt(body)
-    if "tools" in body:
-        return _suggestion_reply(str(model))
-    if model == CONFIGURED_DEFAULT and OUTAGE in prompt:
+    if model == REFUSING and OUTAGE in prompt:
         return _error(500, {"error": {"message": "scripted outage", "type": "server_error", "code": None}})
     brand: Final = BRAND_PATTERN.search(prompt)
     assert brand is not None, prompt
@@ -180,9 +135,9 @@ def _config(directory: Path, upstream_url: str) -> Path:
         "router_settings": {},
         "model_list": [
             {
-                "model_name": CONFIGURED_DEFAULT,
+                "model_name": REFUSING,
                 "litellm_params": {
-                    "model": f"openai/{CONFIGURED_DEFAULT}",
+                    "model": f"openai/{REFUSING}",
                     "api_base": f"{upstream_url}/v1",
                     "api_key": "synthetic-openai-key",
                 },
@@ -197,14 +152,14 @@ def _config(directory: Path, upstream_url: str) -> Path:
             },
         ],
     }
-    path: Final = directory / "policy_template_default_model.yaml"
+    path: Final = directory / "policy_template_refused_temperature.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
 
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    directory: Final = tmp_path_factory.mktemp("policy-template-default-model")
+    directory: Final = tmp_path_factory.mktemp("policy-template-refused-temperature")
     with (
         wire_server(answering_model_discovery(_respond)) as wire,
         gateway_from_environment() as shared,
@@ -260,16 +215,16 @@ def _expected_variations(brand: str) -> dict[str, list[str]]:
 
 @pytest.mark.parametrize("template", TEMPLATES)
 @pytest.mark.parametrize("path", ENDPOINTS, ids=ENDPOINT_IDS)
-def test_enrich_without_a_model_discovers_competitors_through_the_configured_deployment_regression(
+def test_enrich_on_a_model_that_refuses_custom_temperature_discovers_competitors_regression(
     rig: Rig, path: str, template: str
 ) -> None:
     brand: Final = _brand()
-    result: Final = _enrich(rig, path, _enrich_body(template, brand))
+    result: Final = _enrich(rig, path, _enrich_body(template, brand, REFUSING))
     assert result["competitors"] == list(_rivals(brand)), result
     assert result["competitor_variations"] == _expected_variations(brand), result
     assert set(_rivals(brand)) <= _blocked_keywords(result), result
     sent: Final = rig.bodies_mentioning(brand)
-    assert [body["model"] for body in sent] == [CONFIGURED_DEFAULT, CONFIGURED_DEFAULT], sent
+    assert [body["model"] for body in sent] == [REFUSING, REFUSING], sent
     assert not any(_rejects_temperature(body) for body in sent), sent
 
 
@@ -287,54 +242,18 @@ def test_enrich_with_an_explicit_model_keeps_sending_the_competitor_temperature_
     assert [body.get("stream") is True for body in sent] == [path == ENRICH_STREAM, False], sent
 
 
-def test_enrich_returns_no_competitors_when_the_default_model_call_fails_guard(rig: Rig) -> None:
+def test_enrich_returns_no_competitors_when_the_model_call_fails_guard(rig: Rig) -> None:
     brand: Final = f"{_brand()} {OUTAGE}"
-    response: Final = rig.gateway.request("POST", ENRICH, _enrich_body(TEMPLATES[0], brand))
+    response: Final = rig.gateway.request("POST", ENRICH, _enrich_body(TEMPLATES[0], brand, REFUSING))
     assert response.status_code == 200, response.text
     result: Final = JSON_OBJECT.validate_json(response.content)
     assert result["competitors"] == [], result
     assert result["competitor_variations"] == {}, result
 
 
-def test_enrich_stream_reports_an_error_event_when_the_default_model_call_fails_guard(rig: Rig) -> None:
+def test_enrich_stream_reports_an_error_event_when_the_model_call_fails_guard(rig: Rig) -> None:
     brand: Final = f"{_brand()} {OUTAGE}"
-    response: Final = rig.gateway.request("POST", ENRICH_STREAM, _enrich_body(TEMPLATES[0], brand))
+    response: Final = rig.gateway.request("POST", ENRICH_STREAM, _enrich_body(TEMPLATES[0], brand, REFUSING))
     assert response.status_code == 200, response.text
     types: Final = [event.get("type") for event in _events(response.text)]
     assert types == ["error"], response.text
-
-
-def _suggest(rig: Rig, model: str | None) -> tuple[dict[str, JsonValue], tuple[dict[str, JsonValue], ...]]:
-    token: Final = f"suggest{uuid.uuid4().hex[:12]}"
-    response: Final = rig.gateway.request(
-        "POST",
-        SUGGEST,
-        {"description": f"stop answers that recommend rival brands {token}", **({"model": model} if model else {})},
-    )
-    assert response.status_code == 200, response.text
-    return JSON_OBJECT.validate_json(response.content), rig.bodies_mentioning(token)
-
-
-def _assert_forced_suggestion(result: dict[str, JsonValue], sent: tuple[dict[str, JsonValue], ...]) -> None:
-    assert result == {
-        "selected_templates": [{"template_id": "competitor-mention-detection", "reason": "blocks rival brands"}],
-        "explanation": "competitor mentions",
-    }, result
-    assert len(sent) == 1, sent
-    assert sent[0]["tool_choice"] == {"type": "function", "function": {"name": "select_policy_templates"}}, sent
-    assert [object_value(object_value(tool)["function"])["name"] for tool in list_value(sent[0]["tools"])] == [
-        "select_policy_templates"
-    ], sent
-
-
-def test_suggest_without_a_model_selects_templates_with_the_default_model_regression(rig: Rig) -> None:
-    result, sent = _suggest(rig, None)
-    _assert_forced_suggestion(result, sent)
-    assert sent[0]["model"] == CONFIGURED_DEFAULT, sent
-    assert not _rejects_temperature(sent[0]), sent
-
-
-def test_suggest_with_an_explicit_model_keeps_sending_its_temperature_guard(rig: Rig) -> None:
-    result, sent = _suggest(rig, EXPLICIT)
-    _assert_forced_suggestion(result, sent)
-    assert (sent[0]["model"], sent[0].get("temperature")) == (EXPLICIT_WIRE_MODEL, SUGGEST_TEMPERATURE), sent
