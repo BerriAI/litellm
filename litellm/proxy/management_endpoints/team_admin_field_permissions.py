@@ -359,6 +359,11 @@ def _column_changed(
     existing_row: LiteLLM_TeamTable,
     member_defaults: Mapping[str, object],
 ) -> bool:
+    if field == "budget_limits":
+        sent: Final = _budget_windows(submitted.get(field))
+        stored: Final = _budget_windows(existing.get(field))
+        if sent is not None and stored is not None:
+            return sent != stored
     if field == "model_aliases":
         return _as_object(submitted.get(field)) != _stored_model_aliases(existing_row)
     if field in member_defaults:

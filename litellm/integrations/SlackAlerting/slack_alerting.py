@@ -8,7 +8,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 from openai import APIError
 from pydantic import TypeAdapter
@@ -30,6 +30,7 @@ from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_ale
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes, subscript
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     add_key_name_and_team_to_alert,
@@ -78,6 +79,10 @@ if TYPE_CHECKING:
     Router = _Router
 else:
     Router = Any
+
+
+class _SupportsLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
 
 
 def _proxy_llm_router() -> Router | None:
@@ -442,7 +447,9 @@ class SlackAlerting(CustomBatchLogger):
             key = failed_request_keys[top_5_failed[i]].split(":")[0]
             _deployment = router.registry().deployment_dict(key)
             if isinstance(_deployment, dict):
-                deployment_name = _deployment["litellm_params"].get("model", "")
+                deployment_name = require_attributes(
+                    subscript(_deployment, "litellm_params"), _SupportsLookup, "get"
+                ).get("model", "")
             else:
                 return False
 
@@ -464,7 +471,9 @@ class SlackAlerting(CustomBatchLogger):
             key = latency_keys[top_5_slowest[i]].split(":")[0]
             _deployment = router.registry().deployment_dict(key)
             if _deployment is not None:
-                deployment_name = _deployment["litellm_params"].get("model", "")
+                deployment_name = require_attributes(
+                    subscript(_deployment, "litellm_params"), _SupportsLookup, "get"
+                ).get("model", "")
             else:
                 deployment_name = ""
             api_base = litellm.get_api_base(
@@ -1052,7 +1061,7 @@ class SlackAlerting(CustomBatchLogger):
             pass
 
     async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
-        base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
+        base_model_from_user: Final = attribute_or_none(passed_model_info, "base_model")
         model_info = {}
         base_model = ""
         if base_model_from_user is not None:

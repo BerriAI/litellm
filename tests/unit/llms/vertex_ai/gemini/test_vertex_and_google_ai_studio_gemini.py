@@ -2675,6 +2675,73 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     ]
 
 
+_GEMINI_CUT_STREAM_PARTS: Final[Mapping[str, dict[str, object]]] = {
+    "text": {"text": "One, two,"},
+    "thought": {"text": "Thinking about the request", "thought": True},
+    "tool_call": {"functionCall": {"name": "get_weather", "args": {"location": "Lima, Peru"}}},
+}
+_GEMINI_STREAM_USAGE: Final = {"promptTokenCount": 8, "candidatesTokenCount": 4, "totalTokenCount": 12}
+
+
+def _gemini_stream_chunk(part: Mapping[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    candidate: Final = {"content": {"role": "model", "parts": [part]}, "index": 0}
+    if finish_reason is None:
+        return {"candidates": [candidate]}
+    return {"candidates": [{**candidate, "finishReason": finish_reason}], "usageMetadata": _GEMINI_STREAM_USAGE}
+
+
+def _gemini_stream_finish_reasons(respx_mock: respx.MockRouter, *events: dict[str, object]) -> list[str]:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(*events)
+    )
+    response: Final = litellm.completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Count to three"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    return [chunk.choices[0].finish_reason for chunk in response if chunk.choices and chunk.choices[0].finish_reason]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("part", _GEMINI_CUT_STREAM_PARTS.values(), ids=_GEMINI_CUT_STREAM_PARTS.keys())
+def test_gemini_stream_cut_before_any_finish_reason_raises(
+    respx_mock: respx.MockRouter, part: Mapping[str, object]
+) -> None:
+    with pytest.raises(
+        litellm.exceptions.MidStreamFallbackError, match="Stream ended before a finish_reason was received"
+    ):
+        _gemini_stream_finish_reasons(respx_mock, _gemini_stream_chunk(part))
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_stream_that_ends_on_an_unspecified_finish_reason_still_completes(respx_mock: respx.MockRouter) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk({"text": "One, two,"}, finish_reason="FINISH_REASON_UNSPECIFIED")
+    )
+
+    assert finish_reasons == ["stop"]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("first_part", "expected"),
+    [(_GEMINI_CUT_STREAM_PARTS["text"], "stop"), (_GEMINI_CUT_STREAM_PARTS["tool_call"], "tool_calls")],
+    ids=["text", "tool_call"],
+)
+def test_gemini_stream_that_names_its_finish_after_earlier_chunks_completes(
+    respx_mock: respx.MockRouter, first_part: Mapping[str, object], expected: str
+) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk(first_part), _gemini_stream_chunk({"text": ""}, finish_reason="STOP")
+    )
+
+    assert finish_reasons == [expected]
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_system_message_with_no_user_message(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(

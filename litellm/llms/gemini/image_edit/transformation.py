@@ -1,5 +1,5 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -105,7 +105,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -182,8 +182,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             raise empty_image_response_error(payload, model, "gemini", raw_response, model_response)
         return model_response
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
-        images: list[FileTypes]
+    def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[dict[str, object]]:
+        images: Sequence[object]
         if isinstance(image, list):
             images = image
         else:
@@ -207,7 +207,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         return inline_parts
 
-    def _read_all_bytes(self, image: FileTypes) -> bytes:
+    def _read_all_bytes(self, image: object) -> bytes:
         if isinstance(image, bytes):
             return image
         if isinstance(image, BytesIO):

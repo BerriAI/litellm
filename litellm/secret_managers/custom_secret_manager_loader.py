@@ -8,10 +8,14 @@ import importlib.util
 import os
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.types.secret_managers.main import KeyManagementSystem
+
+_LOADED_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 def load_custom_secret_manager(config_file_path: str | None = None) -> None:
@@ -66,10 +70,13 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
 
     module: Final = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    _secret_manager_class: Final = getattr(module, _class_name)
+    _secret_manager_class: Final = _LOADED_ATTRIBUTE.validate_python(getattr(module, _class_name))
 
     # Validate that it's a CustomSecretManager subclass
-    if not issubclass(_secret_manager_class, CustomSecretManager):
+    if not issubclass(
+        _secret_manager_class,  # pyright: ignore[reportArgumentType]  # issubclass raises its own TypeError
+        CustomSecretManager,
+    ):
         raise TypeError(f"CustomSecretManagerException - {_class_name} must be a subclass of CustomSecretManager")
 
     # Instantiate the custom secret manager
