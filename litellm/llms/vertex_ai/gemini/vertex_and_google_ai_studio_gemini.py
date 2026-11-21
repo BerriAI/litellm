@@ -294,15 +294,11 @@ def _is_malformed_without_output(choice: object) -> bool:
     )
 
 
-def _fail_malformed_without_output(
-    response: ModelResponse, logging_obj: LoggingClass, headers: httpx.Headers
-) -> ModelResponse:
+def _malformed_without_output_error(response: ModelResponse, headers: httpx.Headers) -> VertexAIError | None:
     if not response.choices or not all(_is_malformed_without_output(choice) for choice in response.choices):
-        return response
-    failed_attempt: Final = logging_obj.served_round(response)
-    logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
+        return None
     usage: Final = getattr(response, "usage", None)
-    raise VertexAIError(
+    return VertexAIError(
         status_code=500,
         message=f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output "
         f"(completion_tokens={usage.completion_tokens if isinstance(usage, Usage) else 0})",
@@ -4280,11 +4276,13 @@ def _transform_long_decode_hops(
         if isinstance(merged_usage, Usage)
         else merged_usage
     )
-    return _fail_malformed_without_output(
-        merged if marked is merged_usage else merged.model_copy(update={"usage": marked}),
-        logging_obj,
-        first_response.headers,
-    )
+    response: Final = merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
+    failure: Final = _malformed_without_output_error(response, first_response.headers)
+    if failure is None:
+        return response
+    failed_attempt: Final = logging_obj.served_round(response)
+    logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
+    raise failure
 
 
 def _provider_finish_reasons(
