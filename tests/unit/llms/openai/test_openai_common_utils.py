@@ -1,6 +1,14 @@
 import asyncio
+import datetime
+import ipaddress
 import json
 import logging
+import ssl
+import threading
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -713,3 +721,235 @@ def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCapt
     assert len(drop_warnings) == 1
     assert len(drop_warnings[0]) < 300
     assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))
+
+
+class _OkTlsHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+
+    def do_GET(self) -> None:
+        body: Final = b"ok"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+def _write_self_signed_cert(directory: Path) -> tuple[Path, Path]:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path: Final = directory / "ca.pem"
+    key_path: Final = directory / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    return cert_path, key_path
+
+
+@contextmanager
+def _self_signed_https_server(directory: Path) -> Iterator[tuple[str, str]]:
+    cert_path, key_path = _write_self_signed_cert(directory)
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _OkTlsHandler)
+    server.daemon_threads = True
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"https://{host}:{port}/", str(cert_path)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _clear_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _request_outcome(http_client: httpx.Client, url: str) -> str:
+    try:
+        response: Final = http_client.get(url, timeout=5)
+    except httpx.HTTPError:
+        return "tls-error"
+    if response.status_code == 200 and response.text == "ok":
+        return "ok"
+    return f"status-{response.status_code}"
+
+
+async def _async_request_outcome(http_client: httpx.AsyncClient, url: str) -> str:
+    try:
+        response: Final = await http_client.get(url, timeout=5)
+    except httpx.HTTPError:
+        return "tls-error"
+    if response.status_code == 200 and response.text == "ok":
+        return "ok"
+    return f"status-{response.status_code}"
+
+
+def _require_sdk_client(client: object, kind: str) -> openai.OpenAI | openai.AsyncOpenAI:
+    if isinstance(client, openai.OpenAI | openai.AsyncOpenAI):
+        return client
+    raise AssertionError(f"{kind} did not build an OpenAI client")
+
+
+def _openai_sdk_client(kind: str, is_async: bool, ssl_verify: bool | str) -> openai.OpenAI | openai.AsyncOpenAI:
+    from litellm.llms.azure.common_utils import BaseAzureLLM
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+    from litellm.llms.openai.workload_identity import build_async_openai_client, build_openai_client
+
+    litellm_params: Final[Mapping[str, object]] = {"ssl_verify": ssl_verify}
+    api_key: Final = f"sk-per-call-ssl-{kind}"
+    if kind == "chat":
+        return _require_sdk_client(
+            OpenAIChatCompletion().get_openai_client(
+                is_async=is_async,
+                api_key=api_key,
+                api_base="https://onprem.invalid/v1",
+                litellm_params=litellm_params,
+            ),
+            kind,
+        )
+    if kind == "azure":
+        return _require_sdk_client(
+            BaseAzureLLM().get_azure_openai_client(
+                api_key=api_key,
+                api_base="https://onprem.invalid",
+                api_version="2024-10-21",
+                litellm_params=dict(litellm_params),
+                _is_async=is_async,
+            ),
+            kind,
+        )
+    if is_async:
+        return build_async_openai_client(
+            api_key=api_key,
+            api_base="https://onprem.invalid/v1",
+            timeout=5,
+            max_retries=0,
+            organization=None,
+            litellm_params=litellm_params,
+            static_key_http_client_factory=lambda: litellm.aclient_session,
+        )
+    return build_openai_client(
+        api_key=api_key,
+        api_base="https://onprem.invalid/v1",
+        timeout=5,
+        max_retries=0,
+        organization=None,
+        litellm_params=litellm_params,
+        static_key_http_client_factory=lambda: litellm.client_session,
+    )
+
+
+def _trust_outcomes(kind: str, url: str, ca_path: str) -> Mapping[str, str]:
+    disabled: Final = _openai_sdk_client(kind, False, False)
+    custom_ca: Final = _openai_sdk_client(kind, False, ca_path)
+    default_verify: Final = _openai_sdk_client(kind, False, True)
+    try:
+        return {
+            "disabled": _request_outcome(disabled._client, url),
+            "custom_ca": _request_outcome(custom_ca._client, url),
+            "default_verify": _request_outcome(default_verify._client, url),
+        }
+    finally:
+        disabled.close()
+        custom_ca.close()
+        default_verify.close()
+
+
+async def _async_trust_outcomes(kind: str, url: str, ca_path: str) -> Mapping[str, str]:
+    disabled: Final = _openai_sdk_client(kind, True, False)
+    custom_ca: Final = _openai_sdk_client(kind, True, ca_path)
+    default_verify: Final = _openai_sdk_client(kind, True, True)
+    if not isinstance(disabled._client, httpx.AsyncClient):
+        raise AssertionError("async client did not wrap an httpx.AsyncClient")
+    if not isinstance(custom_ca._client, httpx.AsyncClient):
+        raise AssertionError("async client did not wrap an httpx.AsyncClient")
+    if not isinstance(default_verify._client, httpx.AsyncClient):
+        raise AssertionError("async client did not wrap an httpx.AsyncClient")
+    try:
+        return {
+            "disabled": await _async_request_outcome(disabled._client, url),
+            "custom_ca": await _async_request_outcome(custom_ca._client, url),
+            "default_verify": await _async_request_outcome(default_verify._client, url),
+        }
+    finally:
+        await disabled.close()
+        await custom_ca.close()
+        await default_verify.close()
+
+
+@pytest.mark.parametrize("kind", ["chat", "azure", "static"])
+@pytest.mark.parametrize("is_async", [False, True])
+def test_per_call_ssl_verify_selects_the_provider_http_client_trust_store(
+    kind: str,
+    is_async: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shared session and the global SSL default must not hide a per-call CA or ssl_verify=False."""
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    _clear_proxy_env(monkeypatch)
+    rejecting: Final = httpx.MockTransport(lambda request: httpx.Response(599))
+    with _self_signed_https_server(tmp_path) as (url, ca_path):
+        outcomes: Final = _trust_store_outcomes(kind, is_async, url, ca_path, rejecting, monkeypatch)
+    assert outcomes == {"disabled": "ok", "custom_ca": "ok", "default_verify": "tls-error"}
+
+
+def _trust_store_outcomes(
+    kind: str,
+    is_async: bool,
+    url: str,
+    ca_path: str,
+    rejecting: httpx.MockTransport,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Mapping[str, str]:
+    if is_async:
+        shared: Final = httpx.AsyncClient(transport=rejecting)
+        monkeypatch.setattr(litellm, "aclient_session", shared)
+        monkeypatch.setattr(litellm, "client_session", None)
+        try:
+            return asyncio.run(_async_trust_outcomes(kind, url, ca_path))
+        finally:
+            asyncio.run(shared.aclose())
+    shared_sync: Final = httpx.Client(transport=rejecting)
+    monkeypatch.setattr(litellm, "client_session", shared_sync)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    try:
+        return _trust_outcomes(kind, url, ca_path)
+    finally:
+        shared_sync.close()
