@@ -174,15 +174,9 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         return callback
 
     input_callback: Final = _make_presidio_callback() if run_input else None
-    unmask_output_callback: Final = (
-        _make_presidio_callback(
-            output_parse_pii=True,
-            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=True),
-            _callback_role="restore",
-        )
-        if run_input and litellm_params.output_parse_pii
-        else None
-    )
+    # Registered before the restore callback on purpose: post-call dispatch
+    # runs in registration order, so the masker analyzes the still-tokenised
+    # response and the restore callback inserts the originals afterwards.
     mask_output_callback: Final = (
         _make_presidio_callback(
             apply_to_output=True,
@@ -193,8 +187,17 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         if run_output
         else None
     )
+    unmask_output_callback: Final = (
+        _make_presidio_callback(
+            output_parse_pii=True,
+            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=True),
+            _callback_role="restore",
+        )
+        if run_input and litellm_params.output_parse_pii
+        else None
+    )
     return tuple(
-        callback for callback in (input_callback, unmask_output_callback, mask_output_callback) if callback is not None
+        callback for callback in (input_callback, mask_output_callback, unmask_output_callback) if callback is not None
     )
 
 
