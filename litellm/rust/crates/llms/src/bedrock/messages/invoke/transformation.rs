@@ -30,7 +30,10 @@ use crate::{
         auth::AuthScheme,
         messages::{
             streaming::StreamDecoder,
-            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{
+                Headers, MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply,
+                ValidatedEnvironment,
+            },
         },
     },
 };
@@ -260,15 +263,20 @@ pub(crate) fn should_retry_anthropic_messages_without_native_output(
     retries
 }
 
-impl BaseMessagesConfig for BedrockInvokeMessagesConfig {
-    fn clamp_requested_effort(
+impl MessagesEndpoint for BedrockInvokeMessagesConfig {
+    fn get_complete_url(
         &self,
-        request: MessagesRequest,
-        capabilities: &MessagesModelCapabilities,
-    ) -> Result<MessagesRequest, Error> {
-        request::clamp_adaptive_reasoning_effort_for_bedrock(request, capabilities)
+        api_base: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        invoke_url(api_base, model, litellm_params, stream, env_lookup)
     }
+}
 
+impl MessagesAuth for BedrockInvokeMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         SECRET_NAMES
     }
@@ -317,28 +325,35 @@ impl BaseMessagesConfig for BedrockInvokeMessagesConfig {
             },
         })
     }
+}
 
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[("content-type", "application/json")]
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        litellm_params: &LitellmParams,
-        stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        invoke_url(api_base, model, litellm_params, stream, env_lookup)
-    }
-
+impl MessagesDialect for BedrockInvokeMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, options)
+    }
+
+    fn clamp_requested_effort(
+        &self,
+        request: MessagesRequest,
+        capabilities: &MessagesModelCapabilities,
+    ) -> Result<MessagesRequest, Error> {
+        request::clamp_adaptive_reasoning_effort_for_bedrock(request, capabilities)
+    }
+
+    fn native_output_fallback(
+        &self,
+        request: &MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        native_output_fallback_litellm_params(request, context)
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[("content-type", "application/json")]
     }
 
     /// Python's `transform_anthropic_messages_request`, which picks the betas from the caller's
@@ -367,18 +382,12 @@ impl BaseMessagesConfig for BedrockInvokeMessagesConfig {
             other => other,
         }
     }
+}
 
+impl MessagesReply for BedrockInvokeMessagesConfig {
     /// Port of Python's `get_async_streaming_response_iterator`.
     fn stream_decoder(&self) -> Option<StreamDecoder> {
         Some(stream::get_async_streaming_response_iterator)
-    }
-
-    fn native_output_fallback(
-        &self,
-        request: &MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Option<MessagesTransformContext> {
-        native_output_fallback_litellm_params(request, context)
     }
 
     fn retries_without_native_output(

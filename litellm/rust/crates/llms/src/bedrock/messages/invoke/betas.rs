@@ -429,7 +429,7 @@ mod tests {
     use crate::{
         base_llm::messages::{
             context::{BedrockCapabilities, MessagesTransformContext},
-            transformation::BaseMessagesConfig,
+            transformation::MessagesDialect,
         },
         bedrock::messages::invoke::transformation::BedrockInvokeMessagesConfig,
     };

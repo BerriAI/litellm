@@ -34,7 +34,10 @@ use crate::{
         auth::AuthScheme,
         messages::{
             context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
-            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{
+                Headers, MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply,
+                ValidatedEnvironment,
+            },
         },
     },
     bedrock::common_utils::is_valid_region,
@@ -429,15 +432,29 @@ pub(crate) fn mantle_secret_names(names: &'static [&'static str]) -> Box<[&'stat
         .collect()
 }
 
-impl BaseMessagesConfig for BedrockMantleRouteMessagesConfig {
-    fn clamp_requested_effort(
+impl MessagesEndpoint for BedrockMantleRouteMessagesConfig {
+    fn get_complete_url(
         &self,
-        request: MessagesRequest,
-        capabilities: &MessagesModelCapabilities,
-    ) -> Result<MessagesRequest, Error> {
-        clamp_adaptive_reasoning_effort_for_bedrock(request, capabilities)
+        api_base: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        _stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let region = validated_mantle_region(
+            bedrock_region(model, litellm_params, env_lookup),
+            MantleRegionCheck::Request,
+        )?;
+        build_mantle_messages_url(
+            api_base.or(litellm_params.api_base.as_deref()),
+            litellm_params.aws.aws_bedrock_runtime_endpoint.as_deref(),
+            &region,
+            env_lookup,
+        )
     }
+}
 
+impl MessagesAuth for BedrockMantleRouteMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         static NAMES: LazyLock<Box<[&'static str]>> =
             LazyLock::new(|| mantle_secret_names(&SECRET_NAMES));
@@ -465,37 +482,43 @@ impl BaseMessagesConfig for BedrockMantleRouteMessagesConfig {
             ),
         })
     }
+}
 
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[]
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        litellm_params: &LitellmParams,
-        _stream: bool,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        let region = validated_mantle_region(
-            bedrock_region(model, litellm_params, env_lookup),
-            MantleRegionCheck::Request,
-        )?;
-        build_mantle_messages_url(
-            api_base.or(litellm_params.api_base.as_deref()),
-            litellm_params.aws.aws_bedrock_runtime_endpoint.as_deref(),
-            &region,
-            env_lookup,
-        )
-    }
-
+impl MessagesDialect for BedrockMantleRouteMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, options)
+    }
+
+    fn clamp_requested_effort(
+        &self,
+        request: MessagesRequest,
+        capabilities: &MessagesModelCapabilities,
+    ) -> Result<MessagesRequest, Error> {
+        clamp_adaptive_reasoning_effort_for_bedrock(request, capabilities)
+    }
+
+    fn logged_params(
+        &self,
+        params: MessagesOptionalParams,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesOptionalParams, Error> {
+        with_logged_tools(params, context)
+    }
+
+    fn native_output_fallback(
+        &self,
+        request: &MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        native_output_fallback_litellm_params(request, context)
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
     }
 
     fn finalize_request(
@@ -517,7 +540,9 @@ impl BaseMessagesConfig for BedrockMantleRouteMessagesConfig {
     fn wire_body(&self, body: Value) -> Value {
         mantle_wire_body(body, amazon_mantle_model_id)
     }
+}
 
+impl MessagesReply for BedrockMantleRouteMessagesConfig {
     fn transform_anthropic_messages_response(
         &self,
         _model: &str,
@@ -531,22 +556,6 @@ impl BaseMessagesConfig for BedrockMantleRouteMessagesConfig {
         body: Map<String, Value>,
     ) -> Result<Map<String, Value>, Error> {
         unchecked_with_zero_usage(body)
-    }
-
-    fn logged_params(
-        &self,
-        params: MessagesOptionalParams,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesOptionalParams, Error> {
-        with_logged_tools(params, context)
-    }
-
-    fn native_output_fallback(
-        &self,
-        request: &MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Option<MessagesTransformContext> {
-        native_output_fallback_litellm_params(request, context)
     }
 
     fn retries_without_native_output(

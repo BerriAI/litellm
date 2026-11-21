@@ -24,7 +24,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
-            transformation::BaseMessagesConfig,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
 };
@@ -37,13 +37,30 @@ const DEFAULT_BASE: &str = "https://tokenhub-intl.tencentcloudmaas.com";
 pub struct TencentMessagesConfig;
 pub const TENCENT_MESSAGES_CONFIG: TencentMessagesConfig = TencentMessagesConfig;
 
-impl BaseMessagesConfig for TencentMessagesConfig {
-    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: false,
+impl MessagesEndpoint for TencentMessagesConfig {
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        _params: &LitellmParams,
+        _stream: bool,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let base = resolve_non_empty(api_base, env, &[ANTHROPIC_API_BASE_ENV, API_BASE_ENV])
+            .unwrap_or_else(|| DEFAULT_BASE.into());
+        let base = base.trim_end_matches('/');
+        if base.ends_with(MESSAGES_PATH) {
+            return Ok(base.into());
         }
+        let base = base
+            .strip_suffix("/v1/chat/completions")
+            .or_else(|| base.strip_suffix("/v1"))
+            .unwrap_or(base);
+        Ok(format!("{base}{MESSAGES_PATH}"))
     }
+}
 
+impl MessagesAuth for TencentMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[API_KEY_ENV, ANTHROPIC_API_BASE_ENV, API_BASE_ENV]
     }
@@ -77,38 +94,21 @@ impl BaseMessagesConfig for TencentMessagesConfig {
             },
         })
     }
+}
 
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
-    }
-
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        _params: &LitellmParams,
-        _stream: bool,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        let base = resolve_non_empty(api_base, env, &[ANTHROPIC_API_BASE_ENV, API_BASE_ENV])
-            .unwrap_or_else(|| DEFAULT_BASE.into());
-        let base = base.trim_end_matches('/');
-        if base.ends_with(MESSAGES_PATH) {
-            return Ok(base.into());
-        }
-        let base = base
-            .strip_suffix("/v1/chat/completions")
-            .or_else(|| base.strip_suffix("/v1"))
-            .unwrap_or(base);
-        Ok(format!("{base}{MESSAGES_PATH}"))
-    }
-
+impl MessagesDialect for TencentMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, options)
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
     }
 
     fn transform_anthropic_messages_request(
@@ -129,10 +129,16 @@ impl BaseMessagesConfig for TencentMessagesConfig {
         })
     }
 
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
+    }
+
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
     }
+}
 
+impl MessagesReply for TencentMessagesConfig {
     fn retry_after_http_error(
         &self,
         status: u16,

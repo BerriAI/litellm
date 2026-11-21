@@ -10,6 +10,9 @@ use bytes::BytesMut;
 use futures_util::TryStreamExt;
 use litellm_framer::aws_event_stream::{AwsEventStreamCodec, Header, HeaderValue, Message};
 use litellm_inference_messages::MessagesCallResponse;
+use litellm_llms::base_llm::messages::context::{
+    BedrockCapabilities, MessagesModelCapabilities, NativeOutputSupport,
+};
 use regex::Regex;
 use rstest::rstest;
 use tokio_util::codec::Encoder;
@@ -395,29 +398,86 @@ async fn every_provider_sends_and_decodes_each_case_as_main_does(
         call,
         streams_aws_events,
     } = provider(provider_name, &server);
-    respond_in_order(&server, [upstream_response(stream, streams_aws_events)]).await;
-    let normaliser = Normaliser::new(&server);
+    let recorded = exchange(
+        &server,
+        route,
+        MessagesCall {
+            extra_headers,
+            ..with_fields(call, fields)
+        },
+        [upstream_response(stream, streams_aws_events)],
+    )
+    .await;
 
-    let result = route
-        .execute(
-            MessagesCall {
-                extra_headers,
-                ..with_fields(call, fields)
+    compare_with_golden(provider_name, case, &recorded);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_native_output_is_sent_again_without_it_as_main_does(
+    #[values("bedrock_invoke", "bedrock_mantle_route", "bedrock_mantle")] provider_name: &str,
+    #[values("native_output_retry", "native_output_retry_stream")] case: &str,
+) {
+    let stream = case == "native_output_retry_stream";
+    let server = MockServer::start().await;
+    let Provider {
+        route,
+        call,
+        streams_aws_events,
+    } = provider(provider_name, &server);
+    let output_format = json!({
+        "output_format": {"type": "json_schema", "schema": {"type": "object", "properties": {"answer": {"type": "string"}}}}
+    });
+    let requested = match stream {
+        true => with_fields(with_fields(call, output_format), json!({"stream": true})),
+        false => with_fields(call, output_format),
+    };
+    let recorded = exchange(
+        &server,
+        route,
+        MessagesCall {
+            shaping: MessagesShaping {
+                capabilities: MessagesModelCapabilities {
+                    bedrock: BedrockCapabilities {
+                        native_output: NativeOutputSupport {
+                            enabled: true,
+                            ..NativeOutputSupport::default()
+                        },
+                        ..BedrockCapabilities::default()
+                    },
+                    ..MessagesModelCapabilities::default()
+                },
+                ..requested.shaping
             },
-            &(),
-            None,
-        )
-        .await;
+            ..requested
+        },
+        [
+            status_response(
+                400,
+                json!({"message": "output_config.format: Extra inputs are not permitted"}),
+            ),
+            upstream_response(stream, streams_aws_events),
+        ],
+    )
+    .await;
+
+    compare_with_golden(provider_name, case, &recorded);
+}
+
+async fn exchange(
+    server: &MockServer,
+    route: litellm_inference_messages::MessagesRoute,
+    call: MessagesCall,
+    responses: impl IntoIterator<Item = ResponseTemplate>,
+) -> Value {
+    respond_in_order(server, responses).await;
+    let normaliser = Normaliser::new(server);
+    let result = route.execute(call, &(), None).await;
     let outcome = outcome(result, &normaliser).await;
-    let requests: Vec<Value> = received(&server)
+    let requests: Vec<Value> = received(server)
         .await
         .iter()
         .map(|request| normaliser.request(request))
         .collect();
-
-    compare_with_golden(
-        provider_name,
-        case,
-        &json!({"requests": requests, "outcome": outcome}),
-    );
+    json!({"requests": requests, "outcome": outcome})
 }

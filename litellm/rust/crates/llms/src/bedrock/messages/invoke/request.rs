@@ -625,7 +625,7 @@ mod tests {
         anthropic::model_capabilities::with_invoke_flags,
         base_llm::messages::{
             context::{BedrockCapabilities, NativeOutputSupport, SupportedEffortTiers},
-            transformation::BaseMessagesConfig,
+            transformation::MessagesDialect,
         },
         bedrock::messages::invoke::transformation::BedrockInvokeMessagesConfig,
     };
