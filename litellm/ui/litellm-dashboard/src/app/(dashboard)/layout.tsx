@@ -30,6 +30,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
 import { sidebarProviderClassName, sidebarWidthStyle } from "@/components/shared/sidebarStyles";
 import { cn } from "@/lib/cva.config";
+import { Page } from "@/components/shared/Page";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
@@ -116,6 +117,10 @@ export function AgentControlPlaneView() {
 
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
+const PAGE_FRAME_CLASS_NAMES = { default: "" } as const;
+
+const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([["caching", "default"]]);
+
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
   useCloseMobileSidebarOn(navigationKey);
   return null;
@@ -140,6 +145,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
+  const pageFrame = FRAMED_SEGMENTS.get(routeSegment);
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
   const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
@@ -202,7 +208,11 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
               }
             >
               <TelemetryEnvBanner />
-              {children}
+              {pageFrame === undefined ? (
+                children
+              ) : (
+                <Page className={PAGE_FRAME_CLASS_NAMES[pageFrame]}>{children}</Page>
+              )}
             </div>
           </SidebarInset>
         </CommandPaletteProvider>
