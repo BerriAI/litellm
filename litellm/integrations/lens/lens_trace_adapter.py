@@ -20,7 +20,7 @@ from collections import OrderedDict
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
@@ -448,7 +448,9 @@ _TRACE_KEY: Final = "lens.trace.key"
 _ACTOR: Final = "agent_id"
 _INTERACTION_SPAN: Final[Mapping[str, str]] = MappingProxyType({"claude-code": "claude_code.interaction"})
 _REMEMBERED_SESSIONS: Final = 2048
-_REMEMBERED_STEPS: Final = 64
+_REMEMBERED_STEPS: Final = 16
+_REMEMBERED_RESULT_CHARS: Final = 1024
+"""A launch names its subagent near the start of its result, so that much is kept to place the subagent."""
 _TOOL_STEP_TRACER: Final = "litellm.lens.tool_steps"
 _CALL_FACTS: Final[ContextVar[Mapping[str, str]]] = ContextVar("lens_call_facts", default=MappingProxyType({}))
 _CALL_PARENT: Final[ContextVar[SpanContext | None]] = ContextVar("lens_call_parent", default=None)
@@ -621,7 +623,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         if answered is None:
             return _Placement(key=session_id)
         if remembered is None or remembered.interaction.key != answered.key:
-            self._open_interactions[session_id] = _Open(interaction=answered)
+            self._open_interactions[session_id] = _Open(interaction=replace(answered, prompt=""))
         self._open_interactions.move_to_end(session_id)
         if len(self._open_interactions) > _REMEMBERED_SESSIONS:
             self._open_interactions.popitem(last=False)
@@ -722,7 +724,9 @@ class _LensTraceLogger(OpenTelemetryV2):
             return
         if remembered is None or remembered.interaction.key != placed:
             return
-        reported: Final = tuple((step.get_span_context().span_id, exchange.result) for exchange, step in steps)
+        reported: Final = tuple(
+            (step.get_span_context().span_id, exchange.result[:_REMEMBERED_RESULT_CHARS]) for exchange, step in steps
+        )
         self._open_interactions[session_id] = _Open(
             interaction=remembered.interaction, steps=(*remembered.steps, *reported)[-_REMEMBERED_STEPS:]
         )
