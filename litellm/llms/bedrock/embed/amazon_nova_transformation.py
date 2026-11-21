@@ -19,6 +19,8 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+import litellm
+from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.types.utils import (
     Embedding,
@@ -58,6 +60,24 @@ class _InlineMedia(BaseModel):
     source: _InlineSource
 
 
+class _ClipPrices(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    input_cost_per_token: float = 0.0
+    input_cost_per_audio_per_second: float = 0.0
+    input_cost_per_video_per_second: float = 0.0
+
+
+def _clip_prices(model: str) -> _ClipPrices:
+    try:
+        return _ClipPrices.model_validate(litellm.get_model_info(model=model, custom_llm_provider="bedrock"))
+    except (ModelNotMappedError, ValidationError):
+        return _ClipPrices()
+
+
+def _seconds_costing_at_least(seconds: float | None, per_second: float, floor_cost: float) -> float | None:
+    return seconds if seconds is not None and seconds * per_second >= floor_cost else None
+
+
 def _embedding_params(request_data: Mapping[str, object]) -> Mapping[str, object]:
     params: Final = request_data.get("singleEmbeddingParams") or request_data.get("segmentedEmbeddingParams")
     try:
@@ -83,7 +103,7 @@ def _inline_media_bytes(media: object) -> bytes | None:
 
 
 def _mp4_box(content: bytes, box_type: bytes, start: int, end: int) -> tuple[int, int] | None:
-    offset = start
+    offset = start  # rebind-ok: walks boxes whose sizes are only known as each one is read
     while offset + 8 <= end:
         size = int.from_bytes(content[offset : offset + 4], "big")
         header = 16 if size == 1 else 8
@@ -398,8 +418,18 @@ class AmazonNovaEmbeddingConfig:
                 embeddings.append(embedding)
 
         requests: Final[Sequence[Mapping[str, object]]] = batch_data or ()
-        audio_seconds: Final = tuple(_audio_seconds(request_data) for request_data in requests)
-        video_seconds: Final = tuple(_video_seconds(request_data) for request_data in requests)
+        prices: Final = _clip_prices(model)
+        estimate_costs: Final = tuple(
+            _estimated_input_tokens(response) * prices.input_cost_per_token for response in response_list
+        )
+        audio_seconds: Final = tuple(
+            _seconds_costing_at_least(_audio_seconds(request_data), prices.input_cost_per_audio_per_second, estimate)
+            for request_data, estimate in zip(requests, estimate_costs)
+        )
+        video_seconds: Final = tuple(
+            _seconds_costing_at_least(_video_seconds(request_data), prices.input_cost_per_video_per_second, estimate)
+            for request_data, estimate in zip(requests, estimate_costs)
+        )
         billed_tokens: Final = tuple(
             0
             if audio is not None or video is not None

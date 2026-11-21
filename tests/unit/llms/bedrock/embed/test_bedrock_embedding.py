@@ -2388,6 +2388,8 @@ def test_bedrock_nova_embedding_bills_inline_video_by_its_length(
         {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=6000)[:40]}}},
         {"video": {"format": "mp4", "source": {"bytes": "not base64"}}},
         {"video": {"format": "mp4", "source": {"s3Location": {"uri": "s3://bucket/clip.mp4"}}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=0xFFFFFFFF, duration=1)}}},
+        {"audio": {"format": "wav", "source": {"bytes": _wav_base64(0.5)}}},
     ],
     ids=[
         "unreadable-audio",
@@ -2398,6 +2400,8 @@ def test_bedrock_nova_embedding_bills_inline_video_by_its_length(
         "mp4-truncated",
         "mp4-invalid-base64",
         "s3-video",
+        "video-shorter-than-the-estimate-is-worth",
+        "audio-shorter-than-the-estimate-is-worth",
     ],
 )
 def test_bedrock_nova_embedding_estimates_a_clip_it_cannot_measure(
