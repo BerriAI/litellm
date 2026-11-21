@@ -304,7 +304,7 @@ def _rust_responses_websocket_enabled(
     return decision(context) is not Decision.PYTHON
 
 
-from .http_handler import get_shared_realtime_ssl_context, realtime_ssl_for_url
+from .http_handler import realtime_ssl_for_url
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -7491,26 +7491,23 @@ class BaseLLMHTTPHandler:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        ws_url = responses_api_provider_config.get_websocket_url(
+        provider_ws_url: Final[str] = responses_api_provider_config.get_websocket_url(
             api_base=api_base,
             litellm_params=dict(litellm_params),
         )
         # Some providers (e.g. OpenAI) require ?model= in the WebSocket URL.
         # Providers that send the model in the request body (e.g. Azure) set
         # model_in_websocket_url() to False to suppress this append.
-        if responses_api_provider_config.model_in_websocket_url():
-            _parsed: Final = urlparse(ws_url)
-            _qs: Final = parse_qs(_parsed.query)
-            if "model" not in _qs:
-                _qs["model"] = [model]
-                ws_url = urlunparse(_parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()})))
+        _parsed: Final = urlparse(provider_ws_url)
+        _qs: Final = parse_qs(_parsed.query)
+        ws_url: Final = (
+            urlunparse(_parsed._replace(query=urlencode({k: v[0] for k, v in {**_qs, "model": [model]}.items()})))
+            if responses_api_provider_config.model_in_websocket_url() and "model" not in _qs
+            else provider_ws_url
+        )
 
         try:
-            ssl_context = get_shared_realtime_ssl_context()
-            if ws_url.startswith("wss://") and ssl_context is False:
-                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context: Final = realtime_ssl_for_url(ws_url)
 
             logging_obj.pre_call(
                 input=None,

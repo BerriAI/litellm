@@ -533,8 +533,10 @@ class CustomStreamWrapper:
         count_prompt_tokens: Callable[[], int] | None = None,
         is_mock: bool = False,
         response_cost: float | None = None,
+        stored_finish_reason_indices: frozenset[int] = frozenset(),
     ):
         self.model = model
+        self.stored_finish_reason_indices: Final = stored_finish_reason_indices
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
@@ -1546,7 +1548,7 @@ class CustomStreamWrapper:
                 model_response.choices[0].delta = Delta(content=self._close_open_think_block())
                 # get any function call arguments
                 model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
-                    map_finish_reason(finish_reason=self.received_finish_reason)
+                    map_finish_reason(finish_reason=self.received_finish_reason), model_response.choices[0].index
                 )  # ensure consistent output to openai
                 self._apply_finish_choice_fields(model_response.choices[0])
                 if (
@@ -2278,8 +2280,8 @@ class CustomStreamWrapper:
             }
         )
 
-    def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
-        if finish_reason == "stop" and self.tool_call:
+    def _normalize_tool_call_finish_reason(self, finish_reason: str, index: int) -> str:
+        if finish_reason == "stop" and self.tool_call and index not in self.stored_finish_reason_indices:
             return "tool_calls"
         return finish_reason
 
@@ -2365,7 +2367,7 @@ class CustomStreamWrapper:
             or self.intermittent_finish_reason
         )
         model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
-            _finish_reason if _finish_reason is not None else "stop"
+            _finish_reason if _finish_reason is not None else "stop", model_response.choices[0].index
         )
         self._apply_finish_choice_fields(model_response.choices[0])
         close_tag: Final = self._close_open_think_block()

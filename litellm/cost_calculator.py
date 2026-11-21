@@ -967,6 +967,8 @@ _NON_TOKEN_RATE_FIELDS: Final = frozenset(
         "output_cost_per_second",
         "input_cost_per_query",
         "input_cost_per_text_message",
+        "input_cost_per_character",
+        "output_cost_per_character",
         "tiered_pricing",
     }
 )

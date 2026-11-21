@@ -406,6 +406,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     dict_from_pairs,
     drop_params_flag,
+    finite_cost,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     has_attributes,
@@ -13878,7 +13879,8 @@ async def audio_speech(
             model_id: Final = hidden_params.get("model_id", None) or ""
             cache_key: Final = hidden_params.get("cache_key", None) or ""
             api_base: Final = hidden_params.get("api_base", None) or ""
-            response_cost: Final = hidden_params.get("response_cost", None) or ""
+            speech_cost: Final = finite_cost(hidden_params.get("response_cost"))
+            response_cost: Final = "" if speech_cost is None else speech_cost
             response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
             custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
