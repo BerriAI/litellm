@@ -113,6 +113,8 @@ def create_app(container: Container, license_check: License) -> FastAPI:
         raise LicenseRequired()
 
     api_prefix: Final = container.settings.api_prefix
+    docs_url: Final = f"{api_prefix}/docs"
+    swagger_url: Final = f"{api_prefix}/swagger"
     app: Final = FastAPI(
         title=TITLE,
         version="1",
@@ -121,10 +123,10 @@ def create_app(container: Container, license_check: License) -> FastAPI:
         redoc_url=None,
         openapi_url=f"{api_prefix}/openapi.json",
     )
-    mount_scalar_reference(app, f"{api_prefix}/docs")
-    mount_swagger_ui(app, f"{api_prefix}/swagger")
+    mount_scalar_reference(app, docs_url)
+    mount_swagger_ui(app, swagger_url)
     app.add_middleware(ControlPlaneRequestSizeLimitMiddleware)
-    container.telemetry.instrument(app)
+    container.telemetry.instrument(app, documentation_paths=(docs_url, swagger_url))
     app.dependency_overrides[get_token_verifier] = lambda: container.token_verifier
     app.dependency_overrides[get_telemetry] = lambda: container.telemetry
     app.dependency_overrides[get_login_service] = lambda: container.login_service
