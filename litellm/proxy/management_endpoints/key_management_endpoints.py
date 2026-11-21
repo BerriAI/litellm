@@ -487,7 +487,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_ROLLOVER_CAP_VALUE: Final = TypeAdapter(BudgetRolloverCap)
+_ROLLOVER_CAP_VALUE: Final[TypeAdapter[BudgetRolloverCap]] = TypeAdapter(BudgetRolloverCap)
 
 
 def _decode_json_string_column(column: str, value: object) -> object:

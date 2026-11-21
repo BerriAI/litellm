@@ -841,6 +841,7 @@ class TeamMemberBudgetHandler:
         budget_duration: str | None = None,
         model_max_budget: GenericBudgetConfigType | None = None,
     ) -> TeamMemberBudgetWrite:
+        empty_model_budget: Final[Mapping[str, BudgetConfig]] = MappingProxyType({})
         candidates: Final[tuple[tuple[str, object, bool], ...]] = (
             ("budget_id", budget_id, True),
             ("max_budget", max_budget, max_budget is not None or "team_member_budget" in fields),
@@ -855,7 +856,7 @@ class TeamMemberBudgetHandler:
             ("budget_reset_at", None, budget_duration is None and "team_member_budget_duration" in fields),
             (
                 "model_max_budget",
-                MappingProxyType({}) if model_max_budget is None else model_max_budget,
+                empty_model_budget if model_max_budget is None else model_max_budget,
                 model_max_budget is not None or "team_member_model_max_budget" in fields,
             ),
         )

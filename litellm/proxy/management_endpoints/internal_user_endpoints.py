@@ -147,8 +147,8 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
-_USER_ROLLOVER_BASE: Final = TypeAdapter(float | None)
-_USER_ROLLOVER_PERIOD: Final = TypeAdapter(str | None)
+_USER_ROLLOVER_BASE: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
+_USER_ROLLOVER_PERIOD: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
