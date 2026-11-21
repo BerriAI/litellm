@@ -211,12 +211,17 @@ class SSOConfig(LiteLLMPydanticObjectBase):
 class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     """
     Default parameters applied to every /team/new call for fields not explicitly provided in the request.
-    `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups.
+    `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups, SCIM,
+    or `team_id_upsert` (a JWT request or a UI SSO login).
     """
 
     models: list[str] = Field(
         default=[],
-        description="Default list of models for teams automatically created via SSO Groups",
+        description=(
+            "Default list of models for teams automatically created via SSO Groups, SCIM, or `team_id_upsert` "
+            "(a JWT request or a UI SSO login). When `organization_id` points at an organization with a model "
+            "allowlist, that organization must allow these models or the `team_id_upsert` team is not created"
+        ),
     )
     max_budget: float | None = Field(
         default=None,

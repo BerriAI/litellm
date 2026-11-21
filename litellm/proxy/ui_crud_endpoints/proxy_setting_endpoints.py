@@ -1220,7 +1220,8 @@ async def update_default_team_settings(
     """
     Update the default team parameters (litellm_settings.default_team_params).
     Applied to every new team for fields not explicitly provided in the create request;
-    `models` only applies to teams automatically created via SSO Groups.
+    `models` only applies to teams automatically created via SSO Groups, SCIM, or `team_id_upsert`
+    (a JWT request or a UI SSO login). An organization with a model allowlist must allow them.
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
