@@ -43,7 +43,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [editVectorStore, setEditVectorStore] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const canCreateVectorStores = isProxyAdminRole(userRole || "") && !isViewOnly;
-  const defaultTab = canCreateVectorStores ? "create" : "manage";
+  const defaultTab = "manage";
   const [activeTab, setActiveTab] = useState(defaultTab);
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTab);
 
@@ -179,14 +179,14 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         className="gap-6"
       >
         <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none p-0">
+          <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
+            {t("vectorStores.page.tabs.manage")}
+          </TabsTrigger>
           {canCreateVectorStores && (
             <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
               {t("vectorStores.page.tabs.create")}
             </TabsTrigger>
           )}
-          <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
-            {t("vectorStores.page.tabs.manage")}
-          </TabsTrigger>
           <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
             {t("vectorStores.page.tabs.test")}
           </TabsTrigger>
