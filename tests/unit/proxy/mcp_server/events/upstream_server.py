@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import Final
 
 import anyio
 import httpx2
@@ -36,15 +37,17 @@ class EventsUpstream:
     )  # mutable-ok: records requests
 
     def record(self, ctx: ServerRequestContext[object, object], params: _Params) -> None:
-        request = getattr(ctx, "request", None)
-        headers = {key: value for key, value in request.headers.items() if key.startswith("mcp-")} if request else {}
+        request: Final = getattr(ctx, "request", None)
+        headers: Final = (
+            {key: value for key, value in request.headers.items() if key.startswith("mcp-")} if request else {}
+        )
         self.seen.append((ctx.method, headers, params.model_dump(by_alias=True)))
 
     async def list_events(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
         self.record(ctx, params)
-        cursor = int((params.model_extra or {}).get("cursor") or 0)
-        names = self.pages[cursor]
-        page = {"events": [{"name": name, "delivery": ["poll", "push"]} for name in names]}
+        cursor: Final = int((params.model_extra or {}).get("cursor") or 0)
+        names: Final = self.pages[cursor]
+        page: Final = {"events": [{"name": name, "delivery": ["poll", "push"]} for name in names]}
         return {**page, "nextCursor": str(cursor + 1)} if cursor + 1 < len(self.pages) else page
 
     async def poll(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
@@ -57,7 +60,7 @@ class EventsUpstream:
 
     async def stream(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
         self.record(ctx, params)
-        meta = {SUBSCRIPTION_ID: ctx.request_id}
+        meta: Final = {SUBSCRIPTION_ID: ctx.request_id}
         for method, payload in (
             ("notifications/events/active", {"cursor": "a", "truncated": False, "heartbeatMs": 5000}),
             (

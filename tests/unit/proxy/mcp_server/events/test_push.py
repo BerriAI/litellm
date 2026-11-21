@@ -235,3 +235,37 @@ async def test_a_stream_is_refused_before_any_upstream_work_when_cursors_cannot_
     with pytest.raises(MCPError):
         await _push_with(runtime((server(),), upstream=upstream))
     assert upstream.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_open_stream_ends_when_an_operator_turns_events_off() -> None:
+    sent: Final[list[tuple[str, JsonObject]]] = []  # mutable-ok: collects downstream notifications
+    ticks: Final[list[float]] = [1_800_000_000.0]  # mutable-ok: a clock the test advances
+
+    async def send(method: str, params: JsonObject) -> None:
+        sent.append((method, params))
+
+    prepared: Final = await prepare_event(context(), "ci-build.failed", runtime((server(),)))
+    assert isinstance(prepared, Ok)
+    relay: Final = PushRelay(
+        send,
+        SUBSCRIPTION,
+        prepared.ok,
+        BINDING,
+        SETTINGS,
+        _authorized,
+        30_000,
+        False,
+        runtime((server(),), clock=lambda: ticks[0]),
+        CALLER,
+        enabled=lambda: False,
+    )
+    send_stream, receive_stream = anyio.create_memory_object_stream[StreamFrame | Overflow](4)
+    send_stream.send_nowait(_active("1"))
+    ticks[0] += 3600
+    send_stream.send_nowait(_event("evt_1", "2"))
+    send_stream.close()
+    await relay.consume(receive_stream)
+    methods: Final = [method for method, _ in sent]
+    assert methods[0] == "notifications/events/active" and methods[-1] == "notifications/events/terminated"
+    assert sent[-1][1]["error"]["data"] == {"feature": "push"}

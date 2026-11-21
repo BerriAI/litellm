@@ -8,9 +8,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.admission import admit, binding_for, caller_key, screen_all, still_authorized
 from litellm.proxy.mcp_server.events.catalog import PreparedEvent
-from litellm.proxy.mcp_server.events.config import EventsSettings
+from litellm.proxy.mcp_server.events.config import EventsSettings, events_settings
 from litellm.proxy.mcp_server.events.cursors import CursorBinding, ensure_sealable, open_cursor, seal_cursor
-from litellm.proxy.mcp_server.events.errors import EventsFailure, forbidden
+from litellm.proxy.mcp_server.events.errors import EventsFailure, forbidden, unsupported
 from litellm.proxy.mcp_server.events.observability import EventActivity, EventOutcome
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime, Frames
 from litellm.proxy.mcp_server.events.upstream import Overflow, StreamFrame, routing_headers
@@ -59,8 +59,10 @@ class PushRelay:
         expired: bool,
         runtime: EventsRuntime,
         caller: UserAPIKeyAuth | None,
+        enabled: Callable[[], bool] = lambda: events_settings().enabled,
     ) -> None:
         self._caller = caller
+        self._enabled = enabled
         self._send = send
         self._subscription_id = subscription_id
         self._prepared = prepared
@@ -198,7 +200,9 @@ class PushRelay:
             await self._heartbeat(None)
         if not self._ended and self._runtime.clock() >= self._next_check:
             self._next_check = self._runtime.clock() + RECHECK_SECONDS
-            if await self._authorized() is None:
+            if not self._enabled():
+                await self._terminate(unsupported("push"))
+            elif await self._authorized() is None:
                 await self._terminate(forbidden("Access revoked"))
         return True
 

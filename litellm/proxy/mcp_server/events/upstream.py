@@ -262,19 +262,24 @@ async def call(
     return await _run(client, lambda session: session.events_request(method, params, headers, timeout=timeout))
 
 
-async def _pages(session: EventsClientSession, max_pages: int, timeout: float) -> Mapping[str, object]:
-    cursor: str | None = None  # rebind-ok: advances through upstream pages
-    collected: tuple[EventType, ...] = ()  # rebind-ok: accumulates pages within one session
-    for _ in range(max_pages):
-        raw = await session.events_request(
-            "events/list", {"cursor": cursor} if cursor is not None else {}, {}, timeout=timeout
-        )
-        page = ListEventsResult.model_validate(raw)
-        collected = collected + page.events
-        cursor = page.next_cursor
-        if not cursor:
-            return {"events": [item.model_dump(by_alias=True, mode="json") for item in collected]}
-    raise MCPError(code=-32603, message="Upstream events/list exceeds the pagination limit")
+async def _pages(
+    session: EventsClientSession,
+    max_pages: int,
+    timeout: float,
+    cursor: str | None = None,
+    collected: tuple[EventType, ...] = (),
+) -> Mapping[str, object]:
+    """Every upstream page within one session, following nextCursor up to ``max_pages``."""
+    if max_pages <= 0:
+        raise MCPError(code=-32603, message="Upstream events/list exceeds the pagination limit")
+    raw: Final = await session.events_request(
+        "events/list", {"cursor": cursor} if cursor is not None else {}, {}, timeout=timeout
+    )
+    page: Final = ListEventsResult.model_validate(raw)
+    events: Final = collected + page.events
+    if not page.next_cursor:
+        return {"events": [item.model_dump(by_alias=True, mode="json") for item in events]}
+    return await _pages(session, max_pages - 1, timeout, page.next_cursor, events)
 
 
 async def list_all(client: MCPClient, max_pages: int, timeout: float) -> tuple[EventType, ...]:
