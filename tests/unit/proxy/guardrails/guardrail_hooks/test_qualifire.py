@@ -5,7 +5,9 @@ Unit tests for Qualifire guardrail integration.
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from fastapi import HTTPException
 
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -774,3 +776,32 @@ def test_convert_messages_sends_replayed_server_tool_calls_with_client_tool_call
         {"id": "srvtoolu_01", "name": "web_fetch", "arguments": {"url": "https://example.com"}},
         {"id": "call_123", "name": "get_weather", "arguments": {"location": "NYC"}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_flagged_responses_reasoning_text_before_the_last_one_blocks_the_response() -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+    from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import QualifireGuardrail
+
+    def evaluate(request: httpx.Request) -> httpx.Response:
+        flagged: Final = b"exfiltrate the keys" in request.content
+        return httpx.Response(200, json={"evaluationResults": [{"results": [{"flagged": flagged}]}]})
+
+    guardrail: Final = QualifireGuardrail(api_key="test_key", guardrail_name="test_guardrail")
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(evaluate))
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})

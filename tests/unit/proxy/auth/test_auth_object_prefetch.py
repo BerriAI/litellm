@@ -27,6 +27,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
 )
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 USER_ID = "prefetch-user"
@@ -248,9 +249,11 @@ async def test_deleted_team_cache_entry_is_refetched_and_the_update_is_visible()
 
 
 @pytest.mark.asyncio
-async def test_row_missing_a_required_column_is_not_cached_so_the_getter_still_fails_closed():
+async def test_row_missing_a_required_column_is_not_cached_so_the_getter_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    stores = install_rust_auth_stores(monkeypatch)
     prisma = _prisma({**ALL_ROWS, "team_row": {"max_budget": 1.0}})
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     cache = _cache(FakeAuthCache())
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
@@ -258,7 +261,7 @@ async def test_row_missing_a_required_column_is_not_cached_so_the_getter_still_f
     with pytest.raises(HTTPException) as exc:
         await get_team_object(team_id=TEAM_ID, prisma_client=prisma, user_api_key_cache=cache)
     assert exc.value.status_code == 404
-    assert prisma.db.litellm_teamtable.find_unique.await_count == 1
+    assert stores.team.lookups == [(TEAM_ID, False)]
     assert cache.get_local(USER_ID) is not None
 
 

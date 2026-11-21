@@ -5,8 +5,10 @@ import {
   budgetAlertEmailsRowsCanShow,
   budgetAlertRowsFromMetadata,
   isValidThreshold,
+  legacySoftBudgetRecipientsText,
   KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
   TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
+  teamBudgetAlertSummary,
   teamMemberBudgetAlertSummary,
 } from "./budgetAlertEmails";
 
@@ -224,5 +226,27 @@ describe("teamMemberBudgetAlertSummary", () => {
         team_member_max_budget_alert_emails: { "100": ["finance@example.com"], "50": [] },
       }),
     ).toEqual(["50%: member", "100%: member, finance@example.com"]);
+  });
+});
+
+describe("teamBudgetAlertSummary", () => {
+  it("lists each team threshold with its explicit recipients, ignoring the member alert key", () => {
+    expect(
+      teamBudgetAlertSummary({
+        max_budget_alert_emails: { "90": ["lead@example.com"], "50": "a@example.com, b@example.com" },
+        team_member_max_budget_alert_emails: { "10": ["member@example.com"] },
+      }),
+    ).toEqual(["50%: a@example.com, b@example.com", "90%: lead@example.com"]);
+  });
+});
+
+describe("legacySoftBudgetRecipientsText", () => {
+  it.each([
+    ["a list", ["a@x.com", 7, "b@x.com"], "a@x.com, b@x.com"],
+    ["a comma separated string", " a@x.com, b@x.com ", "a@x.com, b@x.com"],
+    ["nothing", undefined, ""],
+    ["an unexpected shape", { a: 1 }, ""],
+  ])("reads recipients stored as %s", (_label, stored, expected) => {
+    expect(legacySoftBudgetRecipientsText(stored)).toBe(expected);
   });
 });

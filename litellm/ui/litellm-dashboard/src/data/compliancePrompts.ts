@@ -635,24 +635,6 @@ export const airlineCompliancePrompts: CompliancePrompt[] = [
 
 const allCompliancePrompts: CompliancePrompt[] = [...compliancePrompts, ...airlineCompliancePrompts];
 
-export function getCategories(): ComplianceCategory[] {
-  const categoryMap = new Map<string, ComplianceCategory>();
-
-  for (const prompt of allCompliancePrompts) {
-    if (!categoryMap.has(prompt.category)) {
-      categoryMap.set(prompt.category, {
-        name: prompt.category,
-        icon: prompt.categoryIcon,
-        description: prompt.categoryDescription,
-        prompts: [],
-      });
-    }
-    categoryMap.get(prompt.category)!.prompts.push(prompt);
-  }
-
-  return Array.from(categoryMap.values());
-}
-
 const frameworkMeta: Record<string, { icon: string; description: string }> = {
   "EU AI Act": {
     icon: "shield",

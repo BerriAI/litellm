@@ -28,7 +28,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, joined, json_contains
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     tool_calls_with_server_tool_calls,
@@ -348,14 +348,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return ""
 
-    def _extract_text_from_content_list(self, content_list: list[dict[str, Any]]) -> str:
+    def _extract_text_from_content_list(self, content_list: Sequence[object]) -> str:
         """Extract text from content list format."""
         text_parts: Final = [
             part.get("text", "")
-            for part in content_list
+            for part in map(as_str_mapping, content_list)
             if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
         ]
-        return " ".join(text_parts) if text_parts else ""
+        return joined(" ", text_parts) if text_parts else ""
 
     def _extract_response_text(self, response: ModelResponse) -> str:
         """
@@ -1816,6 +1816,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     def supports_scan_only_tool_results(self) -> bool:
         return False
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
 
     def supports_structured_messages(self) -> bool:
         return False

@@ -217,18 +217,20 @@ def codex_base_instructions() -> str:
     return CODEX_BASE_INSTRUCTIONS_PATH.read_text(encoding="utf-8")
 
 
+def generic_service_tier(tier_id: str) -> CodexServiceTier:
+    """The tier a configured id gets when Codex ships no tier of that id for the model: the command `/<id>`."""
+    return CodexServiceTier(id=tier_id, name=tier_id.capitalize(), description=f"Sends service_tier={tier_id} upstream")
+
+
 def _tier(item: str | _ConfiguredTier, known: Mapping[str, CodexServiceTier]) -> CodexServiceTier:
     if isinstance(item, str) and item in known:
         return known[item]
     configured: Final = _ConfiguredTier(id=item) if isinstance(item, str) else item
+    generic: Final = generic_service_tier(configured.id)
     return CodexServiceTier(
         id=configured.id,
-        name=configured.name if configured.name is not None else configured.id.capitalize(),
-        description=(
-            configured.description
-            if configured.description is not None
-            else f"Sends service_tier={configured.id} upstream"
-        ),
+        name=configured.name if configured.name is not None else generic.name,
+        description=configured.description if configured.description is not None else generic.description,
     )
 
 

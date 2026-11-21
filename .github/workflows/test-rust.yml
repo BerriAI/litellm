@@ -1,42 +1,18 @@
 name: LiteLLM Rust
 
 on:
-  push:
-    paths:
-      - "litellm/rust/**"
-      - "model_prices_and_context_window.json"
-      - "litellm/rust_bridge/**"
-      - "litellm/scripts/generate_trace_types.py"
-      - "litellm/scripts/trace_codegen/**"
-      - "litellm/scripts/lens_assets/**"
-      - "litellm/tracing/**"
-      - "tests/test_litellm_rust/**"
-      - "litellm/integrations/custom_logger.py"
-      - "litellm/litellm_core_utils/litellm_logging.py"
-      - "litellm/litellm_core_utils/logging_worker.py"
-      - "litellm/proxy/guardrails/**"
-      - "litellm/utils.py"
-      - "litellm/ocr/**"
-      - "litellm/chat_completions/dispatch.py"
-      - "litellm/embeddings/dispatch.py"
-      - "litellm/messages/dispatch.py"
-      - "litellm/responses/dispatch.py"
-      - "litellm/llms/base_llm/ocr/**"
-      - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "Makefile"
-      - "litellm/rust/.cargo/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "litellm/rust/rust-toolchain.toml"
-      - ".github/actions/setup-uv-with-retries/**"
-      - ".github/scripts/smoke_test_native_wheel.py"
-      - ".github/scripts/verify_linux_native_wheel.py"
-      - "tests/unit/rust_bridge/native_route_wheel_test.py"
-      - ".github/workflows/test-rust.yml"
+  schedule:
+    - cron: "5 8-20/3 * * 1-6"
+      timezone: America/Los_Angeles
+  workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     branches:
       - main
       - "litellm_**"
+      - "rc/**"
+      - "stable/**"
+      - "lts/**"
     paths:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"
@@ -44,7 +20,7 @@ on:
       - "litellm/scripts/generate_trace_types.py"
       - "litellm/scripts/trace_codegen/**"
       - "litellm/scripts/lens_assets/**"
-      - "litellm/tracing/**"
+      - "litellm/integrations/lens/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -73,7 +49,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name || 'code' }}
   cancel-in-progress: true
 
 env:
@@ -82,6 +58,7 @@ env:
 
 jobs:
   rust-lint:
+    if: github.event.action != 'labeled' || github.event.label.name == 'rust-tests'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -107,6 +84,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   rust-test:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'rust-tests')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Trim debuginfo to keep the job's target dir within the runner's disk
@@ -169,6 +147,7 @@ jobs:
           done
 
   rust-wheel:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'rust-tests')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

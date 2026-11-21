@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -11850,8 +11851,8 @@ class _StoredConfigRow:
 class _InMemoryConfigTable:
     def __init__(self, rows: Mapping[str, Mapping[str, object]]) -> None:
         self.rows: dict[str, Mapping[str, object]] = dict(rows)
-        self.db: Final = SimpleNamespace(litellm_config=self)
-        self.writer_db: Final = SimpleNamespace(litellm_config=self)
+        self.db: Final = MagicMock(litellm_config=self)
+        self.writer_db: Final = MagicMock(litellm_config=self)
 
     def _row(self, param_name: str) -> _StoredConfigRow | None:
         value: Final = self.rows.get(param_name)
@@ -13388,6 +13389,191 @@ async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
     metadata = _update_metadata_with_tags_in_header(request, {})
     assert metadata["tags"] == ["existing", "usecase:a"]
     assert await read_request_body(request) == {"model": "qa-model"}
+
+
+def _client_request(method: str, headers: Mapping[str, str], body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/azure/openai/v1/responses/resp_1",
+            "query_string": b"",
+            "headers": [(name.encode(), value.encode()) for name, value in headers.items()],
+        },
+        receive,
+    )
+
+
+async def _forward_through_pass_through(
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    stream: bool,
+    callbacks: list[CustomLogger],
+    body_parsed_by_auth: bool = False,
+) -> httpx.Request:
+    received: Final[list[httpx.Request]] = []
+    client_request: Final = _client_request(method, client_headers, client_body)
+    if body_parsed_by_auth:
+        safe_set_request_parsed_body(request=client_request, parsed_body={})
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        received.append(upstream_request)
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with (
+            pytest.MonkeyPatch.context() as litellm_patch,
+            patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
+                "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            ),
+        ):
+            litellm_patch.setattr(litellm, "callbacks", callbacks)
+            response = await pass_through_request(
+                request=client_request,
+                target="https://upstream.test/openai/v1/responses/resp_1",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                stream=stream,
+            )
+            if isinstance(response, StreamingResponse):
+                _ = [chunk async for chunk in response.body_iterator]
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 200
+    assert len(received) == 1
+    return received[0]
+
+
+def _upstream_json(upstream_request: httpx.Request) -> object:
+    return json.loads(upstream_request.content) if upstream_request.content else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("method", "client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param("DELETE", {}, b"", None, id="delete-without-body"),
+        pytest.param(
+            "DELETE", {"content-type": "application/json", "content-length": "0"}, b"", None, id="delete-length-zero"
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/json", "transfer-encoding": "chunked"},
+            b"",
+            None,
+            id="delete-chunked-without-body",
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/x-www-form-urlencoded", "transfer-encoding": "chunked"},
+            b"",
+            None,
+            id="delete-chunked-empty-form",
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/json", "content-length": "2"},
+            b"{}",
+            {},
+            id="delete-explicit-empty-object",
+        ),
+        pytest.param(
+            "DELETE", {"content-type": "application/json"}, b"{}", {}, id="delete-empty-object-without-length-headers"
+        ),
+        pytest.param("GET", {}, b"", None, id="get-without-body"),
+        pytest.param(
+            "GET", {"content-type": "application/json", "content-length": "0"}, b"", None, id="get-length-zero"
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "0"}, b"", {}, id="sdk-post-without-body"
+        ),
+        pytest.param(
+            "POST",
+            {"content-type": "application/x-www-form-urlencoded", "content-length": "0"},
+            b"",
+            {},
+            id="curl-empty-form",
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="explicit-empty-object"
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "8"}, b'{"a": 1}', {"a": 1}, id="json-object"
+        ),
+        pytest.param(
+            "POST",
+            {"content-type": "application/json", "transfer-encoding": "chunked"},
+            b"{}",
+            {},
+            id="chunked-empty-object",
+        ),
+    ],
+)
+async def test_pass_through_request_sends_no_body_on_a_get_or_delete_sent_without_one(
+    stream: bool,
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    expected_upstream_json: object,
+):
+    upstream_request: Final = await _forward_through_pass_through(
+        method, client_headers, client_body, stream, callbacks=[]
+    )
+
+    assert _upstream_json(upstream_request) == expected_upstream_json
+    assert upstream_request.headers.get("content-type") == (
+        None if expected_upstream_json is None else "application/json"
+    )
+
+
+class _FillsBodyOnPreCall(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
+    ) -> dict[str, object]:
+        return {**data, "reason": "filled by hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+async def test_pass_through_request_forwards_a_body_a_pre_call_hook_adds_to_a_delete_sent_without_one(stream: bool):
+    upstream_request: Final = await _forward_through_pass_through(
+        "DELETE", {}, b"", stream, callbacks=[_FillsBodyOnPreCall()]
+    )
+
+    assert _upstream_json(upstream_request) == {"reason": "filled by hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param({}, b"", None, id="no-length-headers"),
+        pytest.param({"content-type": "application/json", "content-length": "0"}, b"", None, id="length-zero"),
+        pytest.param({"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="length-two"),
+        pytest.param({"content-type": "application/json", "transfer-encoding": "chunked"}, b"{}", {}, id="chunked"),
+    ],
+)
+async def test_pass_through_request_goes_by_the_declared_body_on_a_delete_whose_body_auth_parsed_without_reading(
+    stream: bool, client_headers: Mapping[str, str], client_body: bytes, expected_upstream_json: object
+):
+    upstream_request: Final = await _forward_through_pass_through(
+        "DELETE", client_headers, client_body, stream, callbacks=[], body_parsed_by_auth=True
+    )
+
+    assert _upstream_json(upstream_request) == expected_upstream_json
 
 
 @pytest.mark.parametrize(

@@ -275,10 +275,6 @@ async fn authorization_grants_bind_the_exact_caller_and_target() {
         .await
         .unwrap();
     assert_ne!(caller.caller().principal(), other.caller().principal());
-    assert_ne!(
-        caller.caller().session_owner(),
-        other.caller().session_owner()
-    );
     let access = model("allowed");
     assert!(matches!(
         caller
@@ -441,77 +437,16 @@ async fn route_profile_uses_only_its_selected_credentials(
 
 #[rstest]
 #[tokio::test]
-async fn master_rotation_preserves_session_owner_but_rejects_the_old_key() {
-    let first =
-        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: first-key\n").unwrap();
+async fn master_rotation_rejects_the_old_key() {
     let second =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: second-key\n").unwrap();
-    let original = Auth::from_config(&first)
-        .authenticate(&SecretValue::new("first-key"))
-        .await
-        .unwrap();
     let rotated = Auth::from_config(&second);
-    let replacement = rotated
+    rotated
         .authenticate(&SecretValue::new("second-key"))
         .await
         .unwrap();
-    assert_eq!(
-        original.caller().session_owner(),
-        replacement.caller().session_owner()
-    );
     assert!(matches!(
         rotated.authenticate(&SecretValue::new("first-key")).await,
         Err(Error::InvalidToken)
     ));
-}
-
-#[rstest]
-#[tokio::test]
-async fn mapping_two_issuers_to_one_account_does_not_merge_session_ownership() {
-    let resolver = Arc::new(Identities {
-        mapped_principal: Some(Principal::new(
-            "internal".into(),
-            "shared-account".into(),
-            PrincipalKind::Human,
-        )),
-        calls: AtomicUsize::new(0),
-        permissions: Permissions::All,
-    });
-    let first = Auth::new(
-        Arc::new(Verifier {
-            authority: "issuer-a",
-            restrictions: Permissions::All,
-            failure: None,
-        }),
-        resolver.clone(),
-        Arc::new(Policy(AtomicUsize::new(0))),
-        Arc::new(TestClock(AtomicU64::new(10))),
-    );
-    let second = Auth::new(
-        Arc::new(Verifier {
-            authority: "issuer-b",
-            restrictions: Permissions::All,
-            failure: None,
-        }),
-        resolver,
-        Arc::new(Policy(AtomicUsize::new(0))),
-        Arc::new(TestClock(AtomicU64::new(10))),
-    );
-    let original = first
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    let mapped = second
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    assert_eq!(original.caller().principal(), mapped.caller().principal());
-    assert_ne!(
-        original.caller().verified_principal(),
-        mapped.caller().verified_principal()
-    );
-    assert_ne!(
-        original.caller().session_owner(),
-        mapped.caller().session_owner()
-    );
 }

@@ -7,6 +7,7 @@ mod audio_transcription;
 mod caching;
 mod chat_completions;
 mod error;
+mod headers;
 pub mod messages;
 mod ocr;
 mod request;
@@ -26,11 +27,13 @@ use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
 pub use error::{BodyError, Error};
+pub use headers::ExposedHeader;
 pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    client_side_credentials: bool,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -50,6 +53,13 @@ impl Gateway {
         }
     }
 
+    pub fn with_client_side_credentials(self, allowed: bool) -> Self {
+        Self {
+            client_side_credentials: allowed,
+            ..self
+        }
+    }
+
     pub fn new(
         resources: CoreResources,
         http: HttpClientConfig,
@@ -60,6 +70,7 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            client_side_credentials: false,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),

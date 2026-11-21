@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import httpx
@@ -41,6 +42,7 @@ from litellm.types.guardrails import (
 )
 
 GUARDRAIL_NAME: Final = "lakera_prompt_injection"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 INPUT_POSITIONING_MAP: Final = {
     Role.SYSTEM.value: 0,
@@ -88,7 +90,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
-    def _check_response_flagged(self, response: dict) -> None:
+    def _check_response_flagged(self, response: Mapping) -> None:
         _results: Final = response.get("results", [])
         if len(_results) <= 0:
             return
@@ -308,7 +310,8 @@ class lakeraAI_Moderation(CustomGuardrail):
                 }
             }
             """
-            self._check_response_flagged(response=response.json())
+            body: Final = _DECODED_JSON.validate_python(response.json())
+            self._check_response_flagged(body)  # pyright: ignore[reportArgumentType]  # main passed the raw JSON
 
     @log_guardrail_information
     async def async_pre_call_hook(
