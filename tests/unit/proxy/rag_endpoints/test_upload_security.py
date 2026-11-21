@@ -6,7 +6,10 @@ rejection, server-generated filenames, safe download headers, and a
 dependency-injected malware scanner validated with the EICAR test file.
 """
 
+import io
+import zipfile
 from dataclasses import dataclass
+from typing import Final
 
 import pytest
 
@@ -51,6 +54,20 @@ def _tar_bytes() -> bytes:
     header = bytearray(512)
     header[257:262] = b"ustar"
     return bytes(header)
+
+
+def _office_bytes(document_part: str) -> bytes:
+    return _office_bytes_with_extra_entries(document_part, ())
+
+
+def _office_bytes_with_extra_entries(document_part: str, extra_entries: tuple[str, ...]) -> bytes:
+    buffer: Final = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types/>')
+        archive.writestr(document_part, "<root/>")
+        for entry in extra_entries:
+            archive.writestr(entry, b"")
+    return buffer.getvalue()
 
 
 def _expect_rejected(content: bytes, reason: RejectionReason, *, max_size_bytes: int = 512 * 1024 * 1024) -> None:
@@ -112,6 +129,72 @@ def test_utf8_text_accepted():
     assert result.safe_filename.endswith(".txt")
 
 
+def test_docx_accepted_with_server_filename_and_content_type():
+    result = validate_upload(content=_office_bytes("word/document.xml"), scanner=_CLEAN_SCANNER)
+    assert isinstance(result, SecuredUpload)
+    assert result.detected_format is DetectedFormat.DOCX
+    assert result.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    assert result.safe_filename.endswith(".docx")
+    assert result.size_bytes == len(_office_bytes("word/document.xml"))
+
+
+def test_pptx_accepted_with_server_filename_and_content_type():
+    result = validate_upload(content=_office_bytes("ppt/presentation.xml"), scanner=_CLEAN_SCANNER)
+    assert isinstance(result, SecuredUpload)
+    assert result.detected_format is DetectedFormat.PPTX
+    assert result.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    assert result.safe_filename.endswith(".pptx")
+    assert result.size_bytes == len(_office_bytes("ppt/presentation.xml"))
+
+
+def test_office_document_with_vba_project_rejected() -> None:
+    content: Final = _office_bytes_with_extra_entries("word/document.xml", ("word/vbaProject.bin",))
+    _expect_rejected(content, RejectionReason.ARCHIVE_NOT_ALLOWED)
+
+
+def test_office_document_with_executable_rejected() -> None:
+    content: Final = _office_bytes_with_extra_entries("word/document.xml", ("evil.exe",))
+    _expect_rejected(content, RejectionReason.ARCHIVE_NOT_ALLOWED)
+
+
+def test_office_document_with_path_traversal_rejected() -> None:
+    content: Final = _office_bytes_with_extra_entries("word/document.xml", ("../../evil.txt",))
+    _expect_rejected(content, RejectionReason.ARCHIVE_NOT_ALLOWED)
+
+
+def test_office_document_with_too_many_entries_rejected() -> None:
+    entries: Final = tuple(f"filler/{index}.txt" for index in range(1100))
+    content: Final = _office_bytes_with_extra_entries("word/document.xml", entries)
+    _expect_rejected(content, RejectionReason.ARCHIVE_NOT_ALLOWED)
+
+
+def test_docx_with_embedded_ole_object_accepted() -> None:
+    content: Final = _office_bytes_with_extra_entries("word/document.xml", ("word/embeddings/oleObject1.bin",))
+    result: Final = validate_upload(content=content, scanner=_CLEAN_SCANNER)
+    assert isinstance(result, SecuredUpload)
+    assert result.detected_format is DetectedFormat.DOCX
+
+
+def test_zip_with_content_types_but_no_document_part_rejected():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types/>')
+    _expect_rejected(buffer.getvalue(), RejectionReason.ARCHIVE_NOT_ALLOWED)
+
+
+def test_zip_with_document_part_but_no_content_types_rejected():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", "<root/>")
+    _expect_rejected(buffer.getvalue(), RejectionReason.ARCHIVE_NOT_ALLOWED)
+
+
+def test_malware_hook_blocks_infected_office_document():
+    result = validate_upload(content=_office_bytes("word/document.xml"), scanner=_INFECTED_SCANNER)
+    assert isinstance(result, RejectedUpload)
+    assert result.reason is RejectionReason.MALWARE_DETECTED
+
+
 def test_inspect_content_classifies_directly():
     from litellm.proxy.rag_endpoints.upload_security import AllowedContent, DisallowedContent, DisallowedKind
 
@@ -119,6 +202,14 @@ def test_inspect_content_classifies_directly():
     assert inspect_content(_TEXT_BYTES) == AllowedContent(DetectedFormat.TEXT)
     assert inspect_content(_ZIP_BYTES) == DisallowedContent(DisallowedKind.ARCHIVE)
     assert inspect_content(_ELF_BYTES) == DisallowedContent(DisallowedKind.EXECUTABLE)
+
+
+def test_inspect_content_classifies_office_documents_directly():
+    from litellm.proxy.rag_endpoints.upload_security import AllowedContent, DisallowedContent, DisallowedKind
+
+    assert inspect_content(_office_bytes("word/document.xml")) == AllowedContent(DetectedFormat.DOCX)
+    assert inspect_content(_office_bytes("ppt/presentation.xml")) == AllowedContent(DetectedFormat.PPTX)
+    assert inspect_content(_office_bytes("xl/workbook.xml")) == DisallowedContent(DisallowedKind.ARCHIVE)
 
 
 def test_server_generated_filenames_are_unique_and_ignore_client_name():
