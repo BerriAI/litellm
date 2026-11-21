@@ -11,7 +11,14 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from tests.integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, list_value, object_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    gateway_from_environment,
+    list_value,
+    object_value,
+    string_value,
+)
 from tests.integration._support.openai_wire import answering_model_discovery, chat_reply
 from tests.integration._support.process import graceful_stop_seconds, owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
@@ -33,7 +40,7 @@ COMPETITOR_TEMPERATURE: Final = 0.3
 SUGGEST_TEMPERATURE: Final = 0.2
 BRAND_PATTERN: Final = re.compile(r"brand[0-9a-f]{12}")
 VARIATIONS_MARKER: Final = "common misspellings"
-TEMPERATURE_REJECTION: Final = {
+TEMPERATURE_REJECTION: Final[dict[str, JsonValue]] = {
     "error": {
         "message": (
             "Unsupported value: 'temperature' does not support 0.3 with this model. "
@@ -162,11 +169,13 @@ class Rig:
 
 
 def _config(directory: Path, upstream_url: str) -> Path:
-    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = {
         **base,
         "litellm_settings": {
-            name: value for name, value in base["litellm_settings"].items() if name not in ("cache", "cache_params")
+            name: value
+            for name, value in object_value(base["litellm_settings"]).items()
+            if name not in ("cache", "cache_params")
         },
         "router_settings": {},
         "model_list": [
@@ -242,7 +251,7 @@ def _blocked_keywords(result: dict[str, JsonValue]) -> set[str]:
         for definition in definitions
         if definition.get("guardrail_name") in ("competitor-input-blocker", "competitor-name-input-blocker")
     )
-    return {object_value(word)["keyword"] for word in list_value(blocker["blocked_words"])}
+    return {string_value(object_value(word)["keyword"]) for word in list_value(blocker["blocked_words"])}
 
 
 def _expected_variations(brand: str) -> dict[str, list[str]]:
