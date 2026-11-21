@@ -11,6 +11,7 @@ import {
   ResponsePayload,
   ToolCall,
 } from "./prettyMessagesTypes";
+import i18n from "@/i18n/i18n";
 
 const MESSAGE_ROLE_LABELS = new Map<string, ParseKeys>([
   ["system", "logs.detail.messageRoles.system"],
@@ -23,7 +24,6 @@ export const messageRoleLabel = (role: string, t: TFunction): string => {
   const key = MESSAGE_ROLE_LABELS.get(role);
   return key ? t(key) : role.toUpperCase();
 };
-import i18n from "@/i18n/i18n";
 
 type UnknownRecord = Record<string, unknown>;
 
