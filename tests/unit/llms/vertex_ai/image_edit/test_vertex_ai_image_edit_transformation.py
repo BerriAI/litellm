@@ -546,19 +546,30 @@ class TestVertexAIImagenImageEditTransformation:
         assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
         assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
 
-    def test_transform_image_edit_request_without_image_raises(self) -> None:
-        """Test that missing image raises ValueError"""
-        optional_params = {}
-
-        with pytest.raises(ValueError, match="requires at least one reference image"):
+    @pytest.mark.parametrize(
+        ("has_prompt", "image", "message"),
+        [
+            (True, None, "requires at least one reference image"),
+            (True, [], "requires at least one reference image"),
+            (False, b"fake-image-bytes", "requires a prompt"),
+        ],
+        ids=["no_image", "empty_image_list", "no_prompt"],
+    )
+    def test_transform_image_edit_request_with_missing_input_is_a_bad_request(
+        self, has_prompt: bool, image: bytes | list[object] | None, message: str
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match=message) as raised:
             self.config.transform_image_edit_request(
                 model=self.model,
-                prompt=self.prompt,
-                image=[],
-                image_edit_optional_request_params=optional_params,
+                prompt=self.prompt if has_prompt else None,
+                image=image,
+                image_edit_optional_request_params={},
                 litellm_params=MagicMock(),
                 headers={},
             )
+
+        assert raised.value.status_code == 400
+        assert raised.value.llm_provider == "vertex_ai"
 
     def test_read_all_bytes_handles_various_types(self) -> None:
         """Test that _read_all_bytes handles different file types"""
