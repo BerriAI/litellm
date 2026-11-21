@@ -944,6 +944,17 @@ async def invoke_agent_a2a(
             }
         )
 
+        # Reject unknown agent guardrails before pre-call hooks reserve rate limits.
+        _agent_guardrails = litellm_params.get("guardrails")
+        if _agent_guardrails:
+            from litellm.proxy.guardrails.guardrail_helpers import (
+                reject_unregistered_guardrails_enabled,
+                reject_unregistered_request_guardrails,
+            )
+
+            if reject_unregistered_guardrails_enabled(current_general_settings()):
+                reject_unregistered_request_guardrails({"guardrails": _agent_guardrails})
+
         # Add litellm data (user_api_key, user_id, team_id, etc.)
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
@@ -961,16 +972,6 @@ async def invoke_agent_a2a(
             version=version,
         )
         request_data = data
-
-        _agent_guardrails = litellm_params.get("guardrails")
-        if _agent_guardrails:
-            from litellm.proxy.guardrails.guardrail_helpers import (
-                reject_unregistered_guardrails_enabled,
-                reject_unregistered_request_guardrails,
-            )
-
-            if reject_unregistered_guardrails_enabled(current_general_settings()):
-                reject_unregistered_request_guardrails({"guardrails": _agent_guardrails})
 
         # Build merged headers for the backend agent
         static_headers: Final[Mapping[str, str]] = dict(agent.static_headers or {})

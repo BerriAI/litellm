@@ -3347,7 +3347,7 @@ def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseab
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ("message/send", "message/stream", "tasks/resubscribe"))
-async def test_invoke_agent_a2a_rejects_unregistered_agent_guardrail_before_backend_auth(method: str) -> None:
+async def test_invoke_agent_a2a_rejects_unregistered_agent_guardrail_before_pre_call(method: str) -> None:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
     from litellm.proxy.utils import ProxyLogging
@@ -3356,10 +3356,7 @@ async def test_invoke_agent_a2a_rejects_unregistered_agent_guardrail_before_back
     agent.litellm_params = {"guardrails": ["missing-agent-guardrail"]}
     proxy_logging = MagicMock(spec=ProxyLogging)
 
-    async def passthrough_pre_call(**kwargs: object) -> object:
-        return kwargs["data"]
-
-    proxy_logging.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call)
+    proxy_logging.pre_call_hook = AsyncMock()
 
     with ExitStack() as stack:
         for base_patch in _base_patches(agent):
@@ -3378,4 +3375,5 @@ async def test_invoke_agent_a2a_rejects_unregistered_agent_guardrail_before_back
             )
 
     assert exc.value.status_code == 400
+    proxy_logging.pre_call_hook.assert_not_awaited()
     backend_auth.assert_not_awaited()
