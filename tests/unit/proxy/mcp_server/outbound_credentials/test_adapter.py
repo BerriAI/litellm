@@ -75,6 +75,35 @@ def test_static_credential_counts_api_key_static_headers_only(
     result: Final = validate_static_credential(auth_type, headers, static_header_names=static_header_names)
     assert isinstance(result, expected)
 
+@pytest.mark.parametrize("auth_type,headers,allow_absent,expected", [
+    (MCPAuth.authorization, {"Authorization": "Bearer"}, True, Ok),
+    (MCPAuth.authorization, {"Authorization": "Bearer"}, False, Error),
+    (MCPAuth.authorization, {"Authorization": "Basic"}, True, Ok),
+    (MCPAuth.authorization, {"Authorization": "Basic"}, False, Error),
+    (MCPAuth.authorization, {"Authorization": "token"}, True, Ok),
+    (MCPAuth.authorization, {"Authorization": "token"}, False, Error),
+    (MCPAuth.authorization, {}, True, Ok),
+    (MCPAuth.authorization, {}, False, Error),
+])
+def test_static_credential_allow_absent_for_tool_listing(
+    auth_type: MCPAuthType, headers: dict[str, str], allow_absent: bool, expected: type,
+) -> None:
+    result: Final = validate_static_credential(auth_type, headers, allow_absent=allow_absent)
+    assert isinstance(result, expected)
+
+
+@pytest.mark.asyncio
+async def test_prepare_mcp_client_drops_unusable_header_on_tool_listing() -> None:
+    from litellm.proxy.mcp_server.outbound_credentials.adapter import prepare_mcp_client
+
+    server = _server(auth_type=MCPAuth.authorization)
+    client = MCPClient(server_url="https://example.com/mcp", auth_type=MCPAuth.authorization, auth_value="Bearer")
+
+    prepared = await prepare_mcp_client(server, client, for_tool_listing=True)
+    req = await prepared.prepare_request_auth()
+    assert "Authorization" not in req.headers
+
+
 
 def _server(**kwargs) -> MCPServer:
     return MCPServer(server_id="s", name="n", transport=MCPTransport.http, **kwargs)
