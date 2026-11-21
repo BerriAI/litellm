@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_router_logger
 from litellm.router_deprecated import renamed_router_param
-from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import PromptTokensDetailsWrapper, StandardLoggingRoutingDecision, Usage
 
 if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
@@ -145,12 +145,10 @@ def _most_expensive(ctx: "RoutingContext", candidates: Iterable[Baseline]) -> Ba
 
 @renamed_router_param("router")
 def resolve_baseline(ctx: "RoutingContext", group_names: Iterable[str]) -> Baseline | None:
-    """The derived baseline for a router whose hardest tier offers ``group_names``.
+    """Select a baseline from the router's candidate model groups.
 
-    Holds no cache of its own; each pricing pass walks the pool, so the caller is
-    expected to bound how often it runs. The complexity router caches the result with a
-    TTL, which keeps a deployment added or removed at runtime able to change the
-    baseline while keeping this walk off the per-request hot path.
+    Pricing walks the pool. Router instances resolve this after their model registry
+    is ready and keep the result off the per-request hot path.
 
     Never raises. This is read on the routing path to decorate a request that is about
     to be served, and a dashboard's counterfactual is not worth failing a live request
@@ -161,3 +159,17 @@ def resolve_baseline(ctx: "RoutingContext", group_names: Iterable[str]) -> Basel
     except Exception as e:  # noqa: BLE001  # see docstring: routing must not fail for a metric
         verbose_router_logger.warning("savings baseline: could not resolve, savings will read zero (%s)", e)
         return None
+
+
+def resolve_baseline_routing_fields(
+    ctx: "RoutingContext", group_names: Iterable[str]
+) -> StandardLoggingRoutingDecision:
+    baseline: Final = resolve_baseline(ctx, group_names)
+    if baseline is None:
+        return {}
+    if baseline.deployment_id is None:
+        return {"savings_baseline_model": baseline.model}
+    return {
+        "savings_baseline_model": baseline.model,
+        "savings_baseline_deployment_id": baseline.deployment_id,
+    }
