@@ -105,7 +105,9 @@ async def test_cold_seed_whose_reply_is_lost_leaves_no_counter_in_redis(monkeypa
 
     with rust_redis_store(monkeypatch, redis, socket_timeout=0.5):
         with pytest.raises(Exception, match="timeout"):
-            await ps._ensure_spend_counter_initialized(counter_key="spend:end_user:eu", source_cache_key=AuthObject.end_user("eu"))
+            await ps._ensure_spend_counter_initialized(
+                counter_key="spend:end_user:eu", source_cache_key=AuthObject.end_user("eu")
+            )
 
     assert redis.count("EVAL") == 1
     assert "spend:end_user:eu" not in redis.values
@@ -127,3 +129,41 @@ async def test_post_call_cold_seed_whose_reply_is_lost_leaves_no_counter_in_redi
 
     assert redis.count("EVAL") == 1
     assert "spend:end_user:eu" not in redis.values
+
+
+def _refuses_the_seed_increment(command: tuple[str, ...]) -> bool:
+    """The seed's own INCRBYFLOAT, of nothing, as a Redis Cluster slot mid-migration refuses a pipelined command."""
+    return command[0] == "INCRBYFLOAT" and command[1] == "spend:end_user:eu" and float(command[2]) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_cold_seed_the_increment_cannot_follow_drops_that_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis: Final = RespRedis(values={}, fail_once=[_refuses_the_seed_increment])
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "user_api_key_cache", _CachedSpend(6.0))
+
+    with rust_redis_store(monkeypatch, redis):
+        with pytest.raises(Exception, match="rejected"):
+            await ps._ensure_spend_counter_initialized(
+                counter_key="spend:end_user:eu", source_cache_key=AuthObject.end_user("eu")
+            )
+
+    assert redis.count("EVAL") == 1
+    assert "spend:end_user:eu" not in redis.values
+
+
+@pytest.mark.asyncio
+async def test_post_call_cold_seed_the_increment_cannot_follow_still_charges_the_other_counters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis: Final = RespRedis(values={"spend:key:hashed": 1.0}, fail_once=[_refuses_the_seed_increment])
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "user_api_key_cache", _CachedSpend(6.0))
+
+    with rust_redis_store(monkeypatch, redis):
+        with pytest.raises(Exception, match="rejected"):
+            await ps.increment_spend_counters(
+                token="hashed", team_id=None, user_id=None, end_user_id="eu", response_cost=0.5
+            )
+
+    assert redis.values == {"spend:key:hashed": 1.5}

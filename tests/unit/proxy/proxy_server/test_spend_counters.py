@@ -1274,7 +1274,7 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
     )
 
     assert fake_user_cache.async_get_cache.called is True
-    assert spend.commands == ["GET spend:user:u", "SETMAX spend:user:u 7.0"]
+    assert spend.commands == ["GET spend:user:u", "SETMAX spend:user:u 7.0", "INCRBYFLOAT spend:user:u 0.0"]
     assert spend.redis == {"spend:user:u": 7.0}
 
 
