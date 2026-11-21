@@ -122,6 +122,11 @@
     "api_key_env": "AIHUBMIX_API_KEY",
     "api_base_env": "AIHUBMIX_API_BASE"
   },
+  "321ai": {
+    "base_url": "https://321ai.cc/v1",
+    "api_key_env": "AI321_API_KEY",
+    "api_base_env": "AI321_API_BASE"
+  },
   "aiand": {
     "base_url": "https://api.aiand.com/v1",
     "api_key_env": "AIAND_API_KEY",
