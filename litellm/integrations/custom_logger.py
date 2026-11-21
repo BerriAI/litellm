@@ -76,6 +76,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     runs_on_no_log_requests: ClassVar[bool] = False
     """Proxy accounting hooks that must see every request, ``no-log`` ones included. A class named ``_PROXY_*``
     counts as one without setting this."""
+    records_response_ownership: ClassVar[bool] = False
+    """Hooks whose ``async_post_call_success_hook`` records which caller may use a response later, such as the key
+    that started a message thread. They run on a relayed response's guardrail-only post-call pass too."""
 
     enforces_request_content: bool = False
     """
