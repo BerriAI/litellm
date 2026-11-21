@@ -24,18 +24,40 @@ def client_continuation_token(interaction: JsonMapping) -> str | None:
     return _token_of(interaction) if interaction.get("status") in CUT_OFF_STATUSES else None
 
 
+def resends_input_on_resume(custom_llm_provider: str) -> bool:
+    return custom_llm_provider == "gemini"
+
+
+def resumable_body(
+    request_body: Mapping[str, object], *, resends_input: bool
+) -> dict[str, object]:  # mutable-ok: JSON request body passed to HTTPHandler.post
+    resumes_stored_turn: Final = bool(request_body.get("continuation_token")) and bool(
+        request_body.get("previous_interaction_id")
+    )
+    if resends_input or not resumes_stored_turn:
+        return dict(request_body)
+    return {key: value for key, value in request_body.items() if key != "input"}
+
+
 def next_hop_body(
-    request_body: Mapping[str, object], interaction: JsonMapping, hops_so_far: int
+    request_body: Mapping[str, object], interaction: JsonMapping, hops_so_far: int, *, resends_input: bool
 ) -> dict[str, object] | None:  # mutable-ok: JSON request body passed to HTTPHandler.post
     token: Final = _token_of(interaction)
     if interaction.get("status") != HOP_END_STATUS or token is None or hops_so_far >= MAX_CONTINUATION_HOPS:
         return None
     interaction_id: Final = interaction.get("id")
-    return {
-        **request_body,
-        "continuation_token": token,
-        **({"previous_interaction_id": interaction_id} if isinstance(interaction_id, str) and interaction_id else {}),
-    }
+    return resumable_body(
+        {
+            **request_body,
+            "continuation_token": token,
+            **(
+                {"previous_interaction_id": interaction_id}
+                if isinstance(interaction_id, str) and interaction_id
+                else {}
+            ),
+        },
+        resends_input=resends_input,
+    )
 
 
 def _summed(values: Sequence[JsonValue]) -> JsonValue:

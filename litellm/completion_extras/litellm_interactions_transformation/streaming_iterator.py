@@ -33,7 +33,13 @@ from litellm.types.utils import (
     Usage,
 )
 
-from .continuation import client_continuation_token, log_failed_hop, merge_hop_usage, next_hop_body
+from .continuation import (
+    client_continuation_token,
+    log_failed_hop,
+    merge_hop_usage,
+    next_hop_body,
+    resends_input_on_resume,
+)
 from .response_transformation import (
     FinishReason,
     map_interactions_status_to_finish_reason,
@@ -495,7 +501,12 @@ class InteractionsChatStreamingIterator:
         hop_usage: Final = interaction_map.get("usage") or event.get("usage")
         self._hop_usages = (*self._hop_usages, hop_usage)
         if self._request_body is not None and (self._open_sync_hop or self._open_async_hop) is not None:
-            hop_body: Final = next_hop_body(self._request_body, interaction_map, len(self._hop_usages) - 1)
+            hop_body: Final = next_hop_body(
+                self._request_body,
+                interaction_map,
+                len(self._hop_usages) - 1,
+                resends_input=resends_input_on_resume(self._custom_llm_provider),
+            )
             if hop_body is not None:
                 self._pending_hop_body = hop_body
                 self._pending_hop_token = str(hop_body["continuation_token"])

@@ -34,7 +34,14 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ModelResponse
 
-from .continuation import JsonMapping, log_failed_hop, merge_hops, next_hop_body
+from .continuation import (
+    JsonMapping,
+    log_failed_hop,
+    merge_hops,
+    next_hop_body,
+    resends_input_on_resume,
+    resumable_body,
+)
 from .request_transformation import MediaFetcher, transform_chat_to_interactions_request
 from .response_transformation import transform_interactions_response_to_chat_response
 from .streaming_iterator import InteractionsChatStreamingIterator
@@ -523,7 +530,10 @@ class InteractionsToCompletionBridgeHandler:
         return _PreparedWireCall(
             url=complete_url,
             headers=validated_headers,
-            body={str(k): v for k, v in raw_body.items()},
+            body=resumable_body(
+                {str(k): v for k, v in raw_body.items()},
+                resends_input=resends_input_on_resume(custom_llm_provider),
+            ),
             is_stream=is_stream,
             stream_options=_extract_stream_options(optional_params),
         )
@@ -679,7 +689,11 @@ class InteractionsToCompletionBridgeHandler:
             additional_args={"complete_input_dict": wire.body},
         )
         hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
-        while (hop_body := next_hop_body(wire.body, hops[-1], len(hops) - 1)) is not None:
+        while (
+            hop_body := next_hop_body(
+                wire.body, hops[-1], len(hops) - 1, resends_input=resends_input_on_resume(custom_llm_provider)
+            )
+        ) is not None:
             try:
                 hop_response = _checked_hop_response(
                     _send_sync_request(
@@ -840,7 +854,11 @@ class InteractionsToCompletionBridgeHandler:
             additional_args={"complete_input_dict": wire.body},
         )
         hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
-        while (hop_body := next_hop_body(wire.body, hops[-1], len(hops) - 1)) is not None:
+        while (
+            hop_body := next_hop_body(
+                wire.body, hops[-1], len(hops) - 1, resends_input=resends_input_on_resume(custom_llm_provider)
+            )
+        ) is not None:
             try:
                 hop_response = await _checked_async_hop_response(
                     await _send_async_request(

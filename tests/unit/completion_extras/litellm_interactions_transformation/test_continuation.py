@@ -6,7 +6,10 @@ import httpx
 import pytest
 
 import litellm
+import litellm.completion_extras
+from litellm.completion_extras.litellm_interactions_transformation import InteractionsToCompletionBridgeHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteractionsConfig
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices
 
 MESSAGES: Final = ({"role": "user", "content": "Write a long story"},)
@@ -210,3 +213,37 @@ def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_fails() -> N
     assert text == "Once "
     assert finish_reasons == ["length"]
     assert tokens == ["tok-1"]
+
+
+def test_vertex_resume_of_a_stored_turn_sends_no_input_because_the_previous_interaction_holds_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.completion_extras,
+        "interactions_api_bridge",
+        InteractionsToCompletionBridgeHandler(
+            provider_config=VertexAIInteractionsConfig(
+                mint_access_token=lambda _creds, project: ("unit-token", project or "")
+            )
+        ),
+    )
+    bodies, responder = _scripted(
+        (
+            httpx.Response(200, json=_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(200, json=_interaction("upon a time.", "completed", interaction_id="v1_second")),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        response: Final = litellm.completion(
+            model="vertex_ai/gemini-4-neon",
+            messages=list(MESSAGES),
+            vertex_project="unit-project",
+            vertex_location="global",
+            client=HTTPHandler(client=raw_client),
+        )
+
+    choice, _ = _message_of(response)
+    assert choice.message.content == "Once upon a time."
+    assert "input" in bodies[0]
+    assert "input" not in bodies[1]
+    assert (bodies[1]["continuation_token"], bodies[1]["previous_interaction_id"]) == ("tok-1", "v1_first")
