@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from uuid import uuid4
 
 import httpx
@@ -767,6 +767,54 @@ _MODEL_LESS_VECTOR_STORE_FILE_ROUTES: Final[frozenset[str]] = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class TeamModelRoute:
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class RouterModelRoute:
+    kind: Literal[
+        "recognized", "model_group", "pass_through", "default_or_wildcard", "specific_deployment", "unmatched"
+    ]
+
+
+ModelRoute: TypeAlias = TeamModelRoute | RouterModelRoute
+
+
+def model_route(
+    model: str | None,
+    llm_router: LitellmRouter,
+    team_id: str | None,
+    *,
+    proxy_admin_without_team: bool = False,
+    team_model_provider: str | None = None,
+) -> ModelRoute:
+    registry: Final = llm_router.registry()
+    team_model_name: Final = (
+        registry.resolve(model, kind="team_model", team_id=team_id, custom_llm_provider=team_model_provider)
+        if team_id is not None
+        else None
+    )
+    if team_model_name is not None:
+        return TeamModelRoute(team_model_name)
+    group_names: Final = registry.names(kind="group_set")
+    if (proxy_admin_without_team and model not in group_names and model in registry.names(kind="team_public")) or (
+        model is not None and registry.resolve(model, kind="recognized")
+    ):
+        return RouterModelRoute("recognized")
+    if model in group_names:
+        return RouterModelRoute("model_group")
+    settings: Final = llm_router.settings()
+    if settings.router_general_settings.pass_through_all_models:
+        return RouterModelRoute("pass_through")
+    if settings.default_deployment is not None or len(registry.patterns().patterns) > 0:
+        return RouterModelRoute("default_or_wildcard")
+    if model in registry.names(kind="deployment_names"):
+        return RouterModelRoute("specific_deployment")
+    return RouterModelRoute("unmatched")
+
+
+@dataclass(frozen=True, slots=True)
 class _ModelLessTeamFileCall:
     caller: UserAPIKeyAuth
     custom_llm_provider: str
@@ -935,7 +983,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         return without_global_fallbacks_around(getattr(litellm, f"{route_type}"))
 
     team_id: Final = get_team_id_from_data(data)
-    router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
@@ -1091,36 +1138,26 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             else None
         )
         team_model_provider: Final[str | None] = custom_llm_provider if isinstance(custom_llm_provider, str) else None
-        team_model_name: Final = (
-            llm_router.registry().resolve(
-                data["model"], kind="team_model", team_id=team_id, custom_llm_provider=team_model_provider
-            )
-            if team_id is not None
-            else None
+        route: Final = model_route(
+            data["model"],
+            llm_router,
+            team_id,
+            proxy_admin_without_team=is_proxy_admin_without_team,
+            team_model_provider=team_model_provider,
         )
-        if team_model_name is not None:
-            data["model"] = team_model_name
+        if isinstance(route, TeamModelRoute):
+            data["model"] = route.name
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif (
-            is_proxy_admin_without_team
-            and data["model"] not in router_model_names
-            and data["model"] in llm_router.registry().names(kind="team_public")
-        ) or (data["model"] is not None and llm_router.registry().resolve(data["model"], kind="recognized")):
+        elif route.kind == "recognized":
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif data["model"] not in router_model_names:
-            # Check wildcards before checking deployment_names
-            # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
-            if llm_router.settings().router_general_settings.pass_through_all_models:
+        elif route.kind != "model_group":
+            if route.kind == "pass_through":
                 return direct_litellm_endpoint()(**direct_litellm_kwargs())
-            elif (
-                llm_router.settings().default_deployment is not None
-                or len(llm_router.registry().patterns().patterns) > 0
-            ):
+            elif route.kind == "default_or_wildcard":
                 return getattr(llm_router, f"{route_type}")(**data)
-            elif data["model"] in llm_router.registry().names(kind="deployment_names"):
-                # Only match deployment_names if no wildcard matched
+            elif route.kind == "specific_deployment":
                 return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
             elif route_type in [
                 "amoderation",

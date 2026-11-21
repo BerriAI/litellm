@@ -4966,15 +4966,10 @@ def _owning_team_names_for_team_deployment(
 
 
 def _routes_to_deployments_by_litellm_model(model: str, llm_router: Router, team_id: str | None) -> bool:
-    registry: Final = llm_router.registry()
-    settings: Final = llm_router.settings()
-    return not (
-        model in litellm.model_alias_map
-        or settings.router_general_settings.pass_through_all_models
-        or settings.default_deployment is not None
-        or registry.patterns().patterns  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
-        or registry.resolve(model, kind="recognized")
-        or (team_id is not None and registry.resolve(model, kind="team_model", team_id=team_id) is not None)
+    from litellm.proxy.route_llm_request import RouterModelRoute, model_route
+
+    return model not in litellm.model_alias_map and model_route(model, llm_router, team_id) == RouterModelRoute(
+        "specific_deployment"
     )
 
 
