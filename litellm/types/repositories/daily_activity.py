@@ -104,6 +104,7 @@ class KeyMetadataRow:
     user_email: str | None
     key_exists: bool
     tags: tuple[str, ...]
+    key_info_available: bool | None = None
 
 
 class ExportType(str, Enum):

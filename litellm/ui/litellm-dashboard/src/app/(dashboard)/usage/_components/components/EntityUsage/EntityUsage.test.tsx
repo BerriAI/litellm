@@ -559,6 +559,23 @@ describe("EntityUsage", () => {
       expect(existsByKey(getGlobalTopKeys(results, 5))).toEqual({ "stored-key": true, "session-key": false });
       expect(existsByKey(getTopAPIKeys(results, 5))).toEqual({ "stored-key": true, "session-key": false });
     });
+
+    it("keeps deleted keys resolvable in global and entity top keys", () => {
+      const metadata: KeyMetadata = {
+        key_alias: "Deleted",
+        team_id: null,
+        key_exists: false,
+        key_info_available: true,
+      };
+      const results = [
+        createDailyData("2025-01-01", {
+          "deleted-key": createKeyMetrics(20, metadata),
+        }),
+      ];
+
+      expect(getGlobalTopKeys(results, 5)[0]).toMatchObject({ key_exists: false, key_info_available: true });
+      expect(getTopAPIKeys(results, 5)[0]).toMatchObject({ key_exists: false, key_info_available: true });
+    });
   });
 
   it("should render with tag entity type and display spend metrics", async () => {

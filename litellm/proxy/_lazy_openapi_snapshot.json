@@ -4339,6 +4339,17 @@
               ],
               "title": "Key Exists"
             },
+            "key_info_available": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Info Available"
+            },
             "team_id": {
               "anyOf": [
                 {
