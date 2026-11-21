@@ -290,8 +290,7 @@
     },
     "identityFields": {
       "providers": {
-        "none": "No explicit identity binding",
-        "microsoftEntra": "Microsoft Entra ID"
+        "none": "No explicit identity binding"
       },
       "executionModes": {
         "autonomous": "Autonomous",
@@ -5302,11 +5301,7 @@
         "proxyAdmin": "Proxy Admin"
       },
       "providers": {
-        "google": "Google SSO",
-        "microsoft": "Microsoft SSO",
-        "okta": "Okta / Auth0 SSO",
         "generic": "Generic SSO",
-        "saml": "SAML SSO",
         "fallback": "{{name}} SSO"
       },
       "form": {
@@ -5674,7 +5669,6 @@
             "subtitle": "Use AppRole credentials to authenticate. Only one auth method is required."
           },
           "tls": {
-            "title": "TLS",
             "subtitle": "Optional client certificate for mTLS."
           }
         },
@@ -8310,7 +8304,6 @@
       },
       "mcpAuth": {
         "none": "None",
-        "oauth2": "OAuth",
         "bearerToken": "Bearer token",
         "apiKey": "API key"
       }
@@ -8510,7 +8503,6 @@
       "items": {
         "home": "Home",
         "virtualKeys": "Virtual Keys",
-        "playground": "Playground",
         "modelsAndEndpoints": "Models + Endpoints",
         "agentic": "Agentic",
         "agents": "Agents",
@@ -8528,7 +8520,6 @@
         "alerts": "Alerts",
         "costOptimization": "Cost Optimization",
         "logs": "Logs",
-        "lens": "Lens",
         "guardrailsMonitor": "Guardrails Monitor",
         "teams": "Teams",
         "projects": "Projects",
@@ -8540,7 +8531,6 @@
         "responseCache": "Response Cache",
         "experimental": "Experimental",
         "prompts": "Prompts",
-        "apiPlayground": "API Playground",
         "tagManagement": "Tag Management",
         "settings": "Settings",
         "routerSettings": "Router Settings",
@@ -10011,7 +10001,6 @@
         "title": "Access Denied",
         "description": "Your role does not have access to the Playground. Ask your proxy admin for access to test models."
       },
-      "title": "Playground",
       "description": "Send test requests through the gateway with any model, key, guardrail or tool",
       "tabs": {
         "chat": "Chat",
@@ -10072,9 +10061,6 @@
           "description": "Each reply shows here with the deployment that served it, fallbacks, guardrails, timing and cost"
         },
         "code": {
-          "sdk": "SDK",
-          "openai": "OpenAI SDK",
-          "azure": "Azure SDK",
           "copyLabel": "code",
           "description": "Send this request from your own app. Replace YOUR_LITELLM_API_KEY with a Virtual Key"
         },
@@ -10222,7 +10208,6 @@
         "noTools": "This server has no tools",
         "searchTools": "Search {{name}} tools",
         "allowAll": "Allow all",
-        "trigger": "MCP",
         "title": "MCP servers",
         "description": "Pick the servers the model can use, then limit their tools. A server allows every tool until you uncheck some.",
         "noServers": {
@@ -10346,7 +10331,6 @@
         "selectAll": "Select All",
         "clear": "Clear",
         "add": "Add",
-        "csv": "CSV",
         "promptCount": "{{total}} prompts",
         "clearFramework": "Clear",
         "selectFramework": "All",
@@ -14571,7 +14555,6 @@
       "token": "Token",
       "basic": "Basic Auth",
       "authorization": "Authorization (raw header)",
-      "oauth2": "OAuth",
       "oauth2TokenExchange": "OAuth Token Exchange (OBO)",
       "oauth2IdJag": "ID-JAG (Okta Cross App Access)",
       "awsSigv4": "AWS SigV4 (Bedrock AgentCore MCPs)",
@@ -14728,9 +14711,7 @@
         "overloaded": "529 - Overloaded"
       },
       "spanTypes": {
-        "llm": "LLM",
         "agent": "Agent",
-        "mcp": "MCP",
         "batch": "Batch"
       },
       "credentials": {
@@ -14864,7 +14845,6 @@
       "requestResponse": {
         "title": "Request & Response",
         "pretty": "Pretty",
-        "json": "JSON",
         "request": "Request",
         "response": "Response",
         "copyJson": "Copy JSON",
@@ -14918,7 +14898,6 @@
           "heuristicV2": "Heuristic v2",
           "capabilityClassifier": "Capability",
           "capabilityClassifierFallback": "Capable tier, Capability classifier failed",
-          "llmV2Classifier": "FUSE v2",
           "llmV2Fallback": "Capable tier, FUSE v2 classifier failed",
           "heuristicFirstShortCircuit": "Heuristic scorer, classifier skipped",
           "hybridShortCircuit": "Heuristic scorer, score clear of every boundary",
@@ -15191,7 +15170,6 @@
         "notCalled": "not called",
         "description": "Description",
         "formatted": "Formatted",
-        "json": "JSON",
         "parameters": "Parameters",
         "columns": {
           "parameter": "Parameter",
@@ -16371,7 +16349,6 @@
       },
       "format": {
         "label": "Format",
-        "csv": "CSV (Excel, Google Sheets)",
         "json": "JSON (includes metadata)"
       },
       "summary": {
@@ -17947,7 +17924,6 @@
         "description": "Sends one pre-acquired delegated Microsoft Graph token for every caller."
       },
       "githubApp": {
-        "label": "GitHub App",
         "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically.",
         "uploadHelp": "Upload your GitHub App PEM below. LiteLLM encrypts it in its credential database and only shows a saved-key status. Use HTTPS and protect your proxy encryption key. No Enterprise license is required.",
         "invalidFile": "Choose a .pem file no larger than 16 KiB.",
@@ -18096,7 +18072,6 @@
         "capability": "Capability",
         "capabilityDescription": "Use the efficient model when it is likely to succeed; otherwise use the capable model",
         "capabilityHelp": "Use the efficient model when it is likely to succeed",
-        "fuseV2": "Fuse v2",
         "fuseV2Description": "Use the efficient model when its predicted quality is close enough to the capable model",
         "fuseV2Help": "Use the efficient model when its predicted quality is close enough to the capable model"
       },
@@ -19460,7 +19435,6 @@
         "llm": "LLM Classifier",
         "oss": "OSS Classifier",
         "capability": "Capability",
-        "fuseV2": "Fuse v2",
         "heuristicFirst": "Heuristic first",
         "hybrid": "Hybrid",
         "custom": "Custom classifier",
@@ -20419,7 +20393,6 @@
   },
   "transformRequest": {
     "transformRequestPanel": {
-      "title": "Playground",
       "description": "See how LiteLLM transforms your request for the specified provider.",
       "original": {
         "title": "Original Request",

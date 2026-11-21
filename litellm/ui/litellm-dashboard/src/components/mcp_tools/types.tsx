@@ -1,4 +1,4 @@
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 
 /** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
 export interface MCPEvent {
@@ -49,19 +49,19 @@ export const AUTH_TYPE = {
   OAUTH_DELEGATE: "oauth_delegate",
 };
 
-export const AUTH_TYPE_ITEMS: { value: string; label: ParseKeys }[] = [
-  { value: AUTH_TYPE.NONE, label: "mcpTools.authTypes.none" },
-  { value: AUTH_TYPE.API_KEY, label: "mcpTools.authTypes.apiKey" },
-  { value: AUTH_TYPE.BEARER_TOKEN, label: "mcpTools.authTypes.bearerToken" },
-  { value: AUTH_TYPE.TOKEN, label: "mcpTools.authTypes.token" },
-  { value: AUTH_TYPE.BASIC, label: "mcpTools.authTypes.basic" },
-  { value: AUTH_TYPE.AUTHORIZATION, label: "mcpTools.authTypes.authorization" },
-  { value: AUTH_TYPE.OAUTH2, label: "mcpTools.authTypes.oauth2" },
-  { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "mcpTools.authTypes.oauth2TokenExchange" },
-  { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "mcpTools.authTypes.oauth2IdJag" },
-  { value: AUTH_TYPE.AWS_SIGV4, label: "mcpTools.authTypes.awsSigv4" },
-  { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "mcpTools.authTypes.truePassthrough" },
-  { value: AUTH_TYPE.OAUTH_DELEGATE, label: "mcpTools.authTypes.oauthDelegate" },
+export const mcpAuthTypeItems = (t: TFunction): { value: string; label: string }[] => [
+  { value: AUTH_TYPE.NONE, label: t("mcpTools.authTypes.none") },
+  { value: AUTH_TYPE.API_KEY, label: t("mcpTools.authTypes.apiKey") },
+  { value: AUTH_TYPE.BEARER_TOKEN, label: t("mcpTools.authTypes.bearerToken") },
+  { value: AUTH_TYPE.TOKEN, label: t("mcpTools.authTypes.token") },
+  { value: AUTH_TYPE.BASIC, label: t("mcpTools.authTypes.basic") },
+  { value: AUTH_TYPE.AUTHORIZATION, label: t("mcpTools.authTypes.authorization") },
+  { value: AUTH_TYPE.OAUTH2, label: "OAuth" },
+  { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: t("mcpTools.authTypes.oauth2TokenExchange") },
+  { value: AUTH_TYPE.OAUTH2_ID_JAG, label: t("mcpTools.authTypes.oauth2IdJag") },
+  { value: AUTH_TYPE.AWS_SIGV4, label: t("mcpTools.authTypes.awsSigv4") },
+  { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: t("mcpTools.authTypes.truePassthrough") },
+  { value: AUTH_TYPE.OAUTH_DELEGATE, label: t("mcpTools.authTypes.oauthDelegate") },
 ];
 
 // The two client-forwarded token modes: the caller supplies the upstream Authorization (forwarded
