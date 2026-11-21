@@ -23,7 +23,7 @@ A supervised Python server differs from Python alone in exactly two ways, and no
 
 ## Entry points
 
-Entry points (`litellm/proxy/proxy_cli.py`, `gateway/launch.py`, `litellm_cli/main.py`) only translate between their own flags and this package
+Entry points (`litellm/proxy/proxy_cli.py`, `gateway/launch.py`, `litellm/cli/main.py`) only translate between their own flags and this package
 
 - In the supervisor they describe what they would serve with as a `server.PythonServer` and hand it to `supervisor.supervise`, which decides whether forwarding can start and what Rust and the Python child receive. A refusal (no gateway binary, or a server or listener Rust cannot front) is reported and returned, and the entry point then serves from Python alone exactly as with `LITELLM_RUST_FIRST` off
 - In the supervised child they merge `mode.uvicorn_options` or `mode.uvicorn_flags` into their server settings, or hand `mode.private_listener` to `run_gunicorn_server`, and wrap the app with `peer.wrap` in their worker factory. These are identities when forwarding is off, so entry points never branch on it
