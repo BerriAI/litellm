@@ -5,7 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal, cast, get_args
+from typing import Final, Literal, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -86,10 +86,14 @@ _GEMINI_LIVE_RESPONSE_MODALITIES: Final = frozenset({"TEXT", "AUDIO"})
 
 # Gemini accepts only its enum spellings; anything else is dropped, not forwarded
 _START_OF_SPEECH_SENSITIVITIES: Final[Mapping[object, StartOfSpeechSensitivityEnum]] = {
-    value: value for value in get_args(StartOfSpeechSensitivityEnum)
+    "START_SENSITIVITY_UNSPECIFIED": "START_SENSITIVITY_UNSPECIFIED",
+    "START_SENSITIVITY_HIGH": "START_SENSITIVITY_HIGH",
+    "START_SENSITIVITY_LOW": "START_SENSITIVITY_LOW",
 }
 _END_OF_SPEECH_SENSITIVITIES: Final[Mapping[object, EndOfSpeechSensitivityEnum]] = {
-    value: value for value in get_args(EndOfSpeechSensitivityEnum)
+    "END_SENSITIVITY_UNSPECIFIED": "END_SENSITIVITY_UNSPECIFIED",
+    "END_SENSITIVITY_HIGH": "END_SENSITIVITY_HIGH",
+    "END_SENSITIVITY_LOW": "END_SENSITIVITY_LOW",
 }
 
 OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
@@ -153,22 +157,23 @@ def _gemini_live_speech_config(
     The language reaches speechConfig.languageCode on its own: without it
     Gemini Live picks the spoken language itself and drifts mid-conversation.
     """
-    dropped_voice = voice is None
-    if isinstance(voice, str) and voice.lower() in OPENAI_STOCK_REALTIME_VOICES:
+    stock_voice: Final = isinstance(voice, str) and voice.lower() in OPENAI_STOCK_REALTIME_VOICES
+    undocumented_voice: Final = not stock_voice and drop_undocumented and _is_undocumented_live_voice(voice)
+    if stock_voice:
         verbose_logger.warning(
             "Gemini Realtime: voice %s is an OpenAI voice with no Gemini equivalent; "
             "dropping it so the session keeps the model's default voice.",
             voice,
         )
-        dropped_voice = True
-    elif drop_undocumented and _is_undocumented_live_voice(voice):
+    if undocumented_voice:
         verbose_logger.warning(
             "Gemini Realtime: voice %s is not a documented Gemini Live voice; "
             "drop_params is set, so it is dropped and the session keeps the model's default voice.",
             voice,
         )
-        dropped_voice = True
-    voice_params: Final[Mapping[str, object]] = {} if dropped_voice else {"voice": voice}
+    voice_params: Final[Mapping[str, object]] = (
+        {} if voice is None or stock_voice or undocumented_voice else {"voice": voice}
+    )
     language_params: Final[Mapping[str, object]] = {"language_code": language_code} if language_code else {}
     audio_params: Final[Mapping[str, object]] = {**voice_params, **language_params}
     if not audio_params:

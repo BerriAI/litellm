@@ -26,7 +26,6 @@ from litellm.litellm_core_utils.realtime_streaming import (
     _merge_session_fields,
     client_sent_openai_beta_realtime_header,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
