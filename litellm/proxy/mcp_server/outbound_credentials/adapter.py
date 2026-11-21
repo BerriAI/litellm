@@ -43,7 +43,7 @@ from litellm.proxy.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPAuthType, MCPTransport
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPAuthType, MCPTransport, without_header
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -463,7 +463,7 @@ def validate_static_credential(
     *,
     allow_absent: bool = False,
 ) -> Result[None, CredError]:
-    if auth_type not in _STATIC_MODES:
+    if auth_type not in _STATIC_MODES or allow_absent:
         return Ok(None)
     default_slot: Final = "X-API-Key" if auth_type == MCPAuth.api_key else "Authorization"
     admin_chosen_slots: Final = tuple(static_header_names) if auth_type == MCPAuth.api_key else ()
@@ -477,11 +477,7 @@ def validate_static_credential(
         )
     )
     values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
-    if allow_absent and not values:
-        return Ok(None)
     if any(_usable_credential_value(auth_type, name, value) for name, value in values):
-        return Ok(None)
-    if allow_absent:
         return Ok(None)
     return Error(CredError.of_misconfigured(f"{auth_type} requires a usable upstream credential"))
 
@@ -500,4 +496,14 @@ async def prepare_mcp_client(server: MCPServer, client: MCPClient, *, for_tool_l
         case Error(error):
             raise_public(error)
         case Ok():
+            if for_tool_listing and server.auth_type == MCPAuth.authorization:
+                # If the header was only a placeholder/scheme word (e.g. 'Bearer' without a token),
+                # drop it so upstream doesn't receive a malformed Authorization header and 401.
+                default_slot: Final = "Authorization"
+                slot: Final = (server.upstream_token_header or default_slot).lower()
+                raw_val = next((v for k, v in request.headers.items() if k.lower() == slot), "")
+                if not _usable_credential_value(server.auth_type, slot, raw_val):
+                    client._mcp_auth_value = None
+                    if client.extra_headers:
+                        client.extra_headers = without_header(client.extra_headers, server.upstream_token_header or default_slot)
             return client
