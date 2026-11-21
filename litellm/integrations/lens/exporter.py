@@ -94,6 +94,22 @@ def encode_record(value: Mapping[str, object]) -> bytes | ExportFailure:
         return ExportFailure.INVALID
 
 
+def _encoded(raw: object, kwargs: Mapping[str, object]) -> bytes | ExportFailure | None:
+    """The request record ready to send, why it cannot be sent, or None for a call that is not an LLM request."""
+    checked: Final = _check_size(raw, MAX_EVENT_BYTES)
+    if isinstance(checked, ExportFailure):
+        return checked
+    payload: Final = _PAYLOAD.validate_python(raw)
+    if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
+        return None
+    return encode_record(spend_log_row_from_payload(payload, kwargs))
+
+
+def _without_content(raw: object) -> object:
+    """The logging payload without the conversation, which is what outgrows the budget and Lens reads from the trace."""
+    return {**raw, "messages": None, "response": None} if _is_mapping(raw) else raw
+
+
 @dataclass(frozen=True, slots=True)
 class ExportCounters:
     written: "PrometheusCounter | None"
@@ -145,6 +161,7 @@ class LensExporter(CustomLogger):
         self.rows_written = 0
         self.rows_dropped = 0
         self.last_error = ""
+        self.trim_reported = False
         self.task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -192,21 +209,17 @@ class LensExporter(CustomLogger):
             self._drop(1)
             return
         try:
-            checked: Final = _check_size(raw, MAX_EVENT_BYTES)
-            if isinstance(checked, ExportFailure):
-                self._drop(1)
-                self._log_failure(checked.value)
+            whole: Final = _encoded(raw, kwargs)
+            trimmed: Final = whole is ExportFailure.TOO_LARGE
+            record: Final = _encoded(_without_content(raw), kwargs) if trimmed else whole
+            if record is None:
                 return
-            payload: Final = _PAYLOAD.validate_python(raw)
-            if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
-                return
-            row: Final = spend_log_row_from_payload(payload, kwargs)
-            record: Final = encode_record(row)
             if isinstance(record, ExportFailure):
                 self._drop(1)
                 self._log_failure(record.value)
                 return
-            self.enqueue(record)
+            if self.enqueue(record) and trimmed:
+                self._log_trimmed()
         except ValidationError as error:
             self._drop(1)
             fields: Final = tuple(
@@ -217,6 +230,15 @@ class LensExporter(CustomLogger):
         except (ValueError, TypeError, OverflowError, RecursionError) as error:
             self._drop(1)
             self._log_failure(type(error).__name__)
+
+    def _log_trimmed(self) -> None:
+        if not self.trim_reported:
+            verbose_proxy_logger.warning(
+                "Agent tracing store lens received request records without their messages and responses (%s); "
+                "their cost is still recorded",
+                ExportFailure.TOO_LARGE.value,
+            )
+            self.trim_reported = True
 
     def _log_failure(self, reason: str) -> None:
         if reason != self.last_error:
