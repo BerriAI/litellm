@@ -61,19 +61,28 @@ def test_vertex_imagen_generation_size_reaches_request(size: str, expected_ratio
 
 @pytest.mark.parametrize("size", ("auto", "unknown", "0x1024", "-1x1024", "1024x", "3:2"))
 @pytest.mark.parametrize(
-    "config_type, model, config_key, expected",
+    "config_type, model, config_key, expected, drop_params",
     (
         (
             VertexAIGeminiImageGenerationConfig,
             "gemini-3.1-flash-image",
             "generationConfig",
             {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "1:1"}},
+            True,
         ),
         (
             VertexAIImagenImageGenerationConfig,
             "imagen-4.0-generate-001",
             "parameters",
             {"sampleCount": 1, "aspectRatio": "1:1"},
+            False,
+        ),
+        (
+            VertexAIImagenImageGenerationConfig,
+            "imagen-4.0-generate-001",
+            "parameters",
+            {"sampleCount": 1, "aspectRatio": "1:1"},
+            True,
         ),
     ),
 )
@@ -83,12 +92,32 @@ def test_vertex_generation_preserves_legacy_size_fallback(
     model: str,
     config_key: str,
     expected: dict[str, object],
+    drop_params: bool,
 ) -> None:
     config: Final = config_type()
     request: Final = config.transform_image_generation_request(
-        model, "mountains", config.map_openai_params({"size": size}, {}, model, False), {}, {}
+        model, "mountains", config.map_openai_params({"size": size}, {}, model, drop_params), {}, {}
     )
     assert request[config_key] == expected
+
+
+@pytest.mark.parametrize("size", ("auto", "unknown", "0x1024", "-1x1024", "1024x", "3:2"))
+def test_vertex_gemini_generation_rejects_unmappable_size_when_not_dropping(size: str) -> None:
+    config: Final = VertexAIGeminiImageGenerationConfig()
+    with pytest.raises(litellm.BadRequestError):
+        config.map_openai_params({"size": size}, {}, "gemini-3.1-flash-image", False)
+
+
+def test_vertex_gemini_generation_rejects_non_string_size_when_not_dropping() -> None:
+    config: Final = VertexAIGeminiImageGenerationConfig()
+    with pytest.raises(litellm.BadRequestError):
+        config.map_openai_params({"size": 1024}, {}, "gemini-3.1-flash-image", False)
+
+
+def test_vertex_gemini_generation_rejects_non_dict_image_config_when_not_dropping() -> None:
+    config: Final = VertexAIGeminiImageGenerationConfig()
+    with pytest.raises(litellm.BadRequestError):
+        config.map_openai_params({"imageConfig": "banana"}, {}, "gemini-3.1-flash-image", False)
 
 
 @pytest.mark.parametrize("config_type", (VertexAIGeminiImageGenerationConfig, VertexAIImagenImageGenerationConfig))
@@ -214,10 +243,10 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert result["imageConfig"] == payload["imageConfig"]
 
     def test_map_openai_params_image_config_non_dict_warns_and_drops(self):
-        """Non-dict imageConfig is dropped with a warning, not silently discarded"""
+        """Non-dict imageConfig is dropped with a warning when drop_params=True"""
         with patch("litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation.verbose_logger") as mock_log:
             result = self.config.map_openai_params(
-                {"imageConfig": "bad-string-value"}, {}, "gemini-3.1-flash-image", False
+                {"imageConfig": "bad-string-value"}, {}, "gemini-3.1-flash-image", True
             )
         assert "imageConfig" not in result
         mock_log.warning.assert_called_once()
