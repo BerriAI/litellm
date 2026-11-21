@@ -346,6 +346,42 @@ async def test_arealtime_live_session_on_azure_connects_to_the_resource_live_rou
 
 
 @pytest.mark.asyncio
+async def test_arealtime_live_session_on_azure_falls_back_to_the_azure_openai_api_key_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: Final = _CallCapture()
+
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return "gpt-live-1", "azure", None, "https://my-resource.openai.azure.com"
+
+    class FakeLiveHandler:
+        async def async_live_session(self, **kwargs: object) -> None:
+            captured.values = kwargs
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", FakeLiveHandler())
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
+
+    await realtime_main._arealtime.__wrapped__(
+        model="live-alias",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        live_session_start={"type": "session.start", "session": {"model": "live-alias"}},
+    )
+
+    assert captured.values is not None
+    upstream: Final = captured.values["upstream"]
+    assert isinstance(upstream, LiveUpstream)
+    assert dict(upstream.headers) == {"api-key": "env-azure-key"}
+
+
+@pytest.mark.asyncio
 async def test_arealtime_live_session_on_azure_without_a_key_authenticates_with_the_entra_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

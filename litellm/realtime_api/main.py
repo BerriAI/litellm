@@ -56,8 +56,8 @@ from ..litellm_core_utils.realtime_streaming import (
     client_websocket_scope,
     translation_guardrails_apply,
 )
-from ..llms.azure.common_utils import get_azure_ad_token
-from ..llms.azure.live.handler import azure_live_upstream
+from ..llms.azure.common_utils import get_azure_ad_token, get_azure_credentials
+from ..llms.azure.live.handler import AzureLiveApiBaseMissing, azure_live_upstream
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
@@ -801,18 +801,21 @@ def _raise_live_session_rejection(rejection: _LiveSessionRejection) -> NoReturn:
 async def _azure_live_upstream(
     api_base: str | None, api_key: str | None, azure_ad_token: str | None, litellm_params: Mapping[str, object]
 ) -> LiveUpstream:
-    resolved_api_key: Final = api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
-    return azure_live_upstream(
-        api_base=api_base or litellm.api_base or get_secret_str("AZURE_API_BASE") or "",
-        api_key=resolved_api_key,
+    credentials: Final = get_azure_credentials(api_base=api_base, api_key=api_key)
+    upstream: Final = azure_live_upstream(
+        api_base=credentials.api_base or "",
+        api_key=credentials.api_key,
         azure_ad_token=(
             None
-            if resolved_api_key
+            if credentials.api_key
             else await asyncio.to_thread(
                 get_azure_ad_token, GenericLiteLLMParams(**{**litellm_params, "azure_ad_token": azure_ad_token})
             )
         ),
     )
+    if isinstance(upstream, AzureLiveApiBaseMissing):
+        raise ValueError("api_base is required for Azure Live session calls")
+    return upstream
 
 
 async def _alive_session(

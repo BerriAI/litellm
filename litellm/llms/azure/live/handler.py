@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
@@ -7,10 +8,17 @@ from litellm.llms.openai.live.handler import LIVE_WEBSOCKET_SCHEMES, LiveUpstrea
 _AZURE_LIVE_PATH: Final = "/openai/v1/live/sessions"
 
 
-def azure_live_upstream(api_base: str, api_key: str | None, azure_ad_token: str | None) -> LiveUpstream:
+@dataclass(frozen=True, slots=True)
+class AzureLiveApiBaseMissing:
+    pass
+
+
+def azure_live_upstream(
+    api_base: str, api_key: str | None, azure_ad_token: str | None
+) -> LiveUpstream | AzureLiveApiBaseMissing:
     parsed_url: Final = urlsplit(api_base)
     if not parsed_url.netloc:
-        raise ValueError("api_base is required for Azure Live session calls")
+        return AzureLiveApiBaseMissing()
     websocket_scheme: Final = LIVE_WEBSOCKET_SCHEMES.get(parsed_url.scheme, parsed_url.scheme)
     return LiveUpstream(
         url=urlunsplit((websocket_scheme, parsed_url.netloc, _AZURE_LIVE_PATH, "", "")),
