@@ -314,8 +314,19 @@ class TestBatchRowServiceTier:
             (_chat_batch_row(service_tier="priority"), {"drop_params": True}),
             (_responses_batch_row(service_tier="priority", drop_params=True), {}),
             (_responses_batch_row(service_tier="priority", drop_params=None), {"drop_params": True}),
+            (_chat_batch_row(service_tier="scale", drop_params=True), {}),
+            (_chat_batch_row(service_tier="scale"), {"drop_params": True}),
+            (_responses_batch_row(service_tier="scale", drop_params=True), {}),
         ],
-        ids=["row", "deployment", "responses-row", "responses-row-null"],
+        ids=[
+            "row",
+            "deployment",
+            "responses-row",
+            "responses-row-null",
+            "unknown-tier-row",
+            "unknown-tier-deployment",
+            "unknown-tier-responses-row",
+        ],
     )
     def test_drop_params_on_the_row_or_deployment_uploads_the_row_without_a_tier(
         self, row: bytes, litellm_params: dict[str, object]

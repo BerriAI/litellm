@@ -1500,7 +1500,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             model=_model,
             non_default_params=openai_request_body,
             optional_params={},
-            drop_params=False,
+            drop_params=drop_params,
         )
         if (
             "service_tier" in vertex_params
