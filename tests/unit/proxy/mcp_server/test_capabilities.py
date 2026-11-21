@@ -260,3 +260,30 @@ def test_enabled_gateway_operations_only_drop_the_disabled_capability() -> None:
     remaining: Final = enabled_gateway_operations(frozenset({"resources"}))
     assert {"tools/list", "tools/call", "prompts/list", "prompts/get"} <= remaining
     assert not any(operation.startswith("resources/") for operation in remaining)
+
+
+@pytest.mark.parametrize(
+    ("revision", "client", "upstream", "advertised"),
+    (
+        ("2026-07-28", True, True, True),
+        ("2026-07-28", False, True, False),
+        ("2026-07-28", True, False, False),
+        ("2025-11-25", True, True, False),
+    ),
+)
+def test_the_events_extension_is_advertised_only_on_the_modern_revision_when_both_sides_offer_it(
+    revision: str, client: bool, upstream: bool, advertised: bool
+) -> None:
+    events: Final = "io.modelcontextprotocol/events"
+    result: Final = build_discovery(
+        configured=("2025-11-25", "2026-07-28"),
+        revision=revision,
+        transport=MCPTransport.http,
+        authorized_operations=frozenset({"tools/list", "tools/call"}),
+        upstream_versions=frozenset({"2025-11-25", "2026-07-28"}),
+        capabilities=ServerCapabilities(tools=ToolsCapability(), extensions={events: {}}),
+        client_extensions=frozenset({events}) if client else frozenset(),
+        upstream_extensions=frozenset({events}) if upstream else frozenset(),
+    )
+    assert (result.capabilities.extensions == {events: {}}) is advertised
+    assert REVISION_SUPPORT["2026-07-28"].extensions == frozenset({events})

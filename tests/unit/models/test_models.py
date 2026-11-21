@@ -546,6 +546,18 @@ class TestMCPServerTable:
         with pytest.raises(ValidationError):
             LiteLLM_MCPServerTable(server_id="s1")
 
+    @pytest.mark.parametrize(
+        "stored",
+        ('{"enabled": true, "allowed_events": ["build.*"]}', {"enabled": True, "allowed_events": ["build.*"]}),
+    )
+    def test_mcp_server_events_decode_from_the_json_column(self, stored):
+        server = LiteLLM_MCPServerTable(server_id="s1", transport="http", events=stored)
+        assert server.events is not None
+        assert (server.events.enabled, server.events.allowed_events) == (True, ("build.*",))
+
+    def test_mcp_server_events_default_to_none(self):
+        assert LiteLLM_MCPServerTable(server_id="s1", transport="http").events is None
+
 
 class TestSpendLogs:
     def test_spend_logs_creation(self):
