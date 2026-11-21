@@ -3,12 +3,14 @@
 OpenAI Moderation Guardrail Integration for LiteLLM
 """
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Optional, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -38,10 +40,30 @@ from litellm.types.utils import (
 from .base import OpenAIGuardrailBase
 
 if TYPE_CHECKING:
-    from litellm.types.llms.openai import OpenAIModerationResponse
+    from litellm.types.llms.openai import OpenAIModerationResponse, OpenAIModerationResult
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_CATEGORY_SCORE_THRESHOLDS: Final = TypeAdapter(Mapping[str, Annotated[float, Field(ge=0, le=1)]])
+_CATEGORY_VALUES: Final = TypeAdapter(Mapping[str, object])
+_IMAGE_MODERATION_MODEL: Final = "omni-moderation-latest"
+
+ModerationInput: TypeAlias = str | Sequence[Mapping[str, object]]
+
+
+def _image_part(image_url: str) -> Mapping[str, object]:
+    return {"type": "image_url", "image_url": {"url": image_url}}
+
+
+def _moderation_inputs(text: str | None, images: Sequence[str]) -> tuple[ModerationInput, ...]:
+    """One moderation input per request, since the moderation API takes at most one image per request."""
+    if not images:
+        return (text,) if text else ()
+    text_parts: Final = ({"type": "text", "text": text},) if text else ()
+    return (
+        [*text_parts, _image_part(images[0])],
+        *([_image_part(image)] for image in images[1:]),
+    )
 
 
 def _config_secret(value: object) -> object:
@@ -83,6 +105,8 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         workload_identity_params: Mapping[str, object] | None = None,
+        category_score_thresholds: object = None,
+        moderate_images: object = None,
         **kwargs,
     ):
         """Initialize OpenAI Moderation guardrail handler."""
@@ -110,6 +134,22 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             {key: _config_secret(value) for key, value in (workload_identity_params or {}).items()}
         )
 
+        try:
+            self.category_score_thresholds: Mapping[str, float] | None = (
+                None
+                if category_score_thresholds is None
+                else MappingProxyType(_CATEGORY_SCORE_THRESHOLDS.validate_python(category_score_thresholds))
+            )
+        except ValidationError as invalid_thresholds:
+            raise ValueError(
+                "OpenAI Moderation: category_score_thresholds must map category names to scores between 0 and 1. "
+                f"{invalid_thresholds}"
+            ) from invalid_thresholds
+
+        self.moderate_images: bool = bool(moderate_images)
+        if self.moderate_images and self.model != _IMAGE_MODERATION_MODEL:
+            raise ValueError(f"OpenAI Moderation: moderate_images requires model '{_IMAGE_MODERATION_MODEL}'.")
+
         if not self.api_key and _guardrail_workload_identity(self.api_base, self.workload_identity_params) is None:
             raise ValueError(
                 "OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration."
@@ -133,7 +173,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             or get_secret_str("OPENAI_API_KEY")
         )
 
-    async def async_make_request(self, input_text: str) -> "OpenAIModerationResponse":
+    async def async_make_request(self, input_text: ModerationInput) -> "OpenAIModerationResponse":
         """
         Make a request to the OpenAI Moderation API.
         """
@@ -171,39 +211,57 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         return OpenAIModerationResponse.model_validate(response.json())
 
+    def _blocked_categories(self, result: "OpenAIModerationResult") -> tuple[str, ...] | None:
+        """The categories that block this result, or None when it passes."""
+        if self.category_score_thresholds is None:
+            if not result.flagged:
+                return None
+            flags: Final = _CATEGORY_VALUES.validate_python(result.categories or {})
+            return tuple(category for category, is_violated in flags.items() if is_violated)
+
+        scores: Final = _CATEGORY_VALUES.validate_python(result.category_scores or {})
+        unscored: Final = tuple(category for category in self.category_score_thresholds if category not in scores)
+        if unscored:
+            verbose_proxy_logger.warning(
+                "OpenAI Moderation: category_score_thresholds names categories the model did not score: %s", unscored
+            )
+        over_threshold: Final = tuple(
+            category
+            for category, threshold in self.category_score_thresholds.items()
+            if isinstance(score := scores.get(category), (int, float)) and score >= threshold
+        )
+        return over_threshold or None
+
     def _check_moderation_result(self, moderation_response: "OpenAIModerationResponse") -> None:
         """
         Check if the moderation response indicates harmful content and raise exception if needed.
         """
-        if not moderation_response.results:
+        violation_details: Final = next(
+            (
+                {
+                    "violated_categories": list(blocked),
+                    "category_scores": dict(_CATEGORY_VALUES.validate_python(result.category_scores or {})),
+                }
+                for result in moderation_response.results or ()
+                if (blocked := self._blocked_categories(result)) is not None
+            ),
+            None,
+        )
+        if violation_details is None:
             return
 
-        result: Final = moderation_response.results[0]
-        if result.flagged:
-            # Build detailed violation information
-            violated_categories: Final = []
-            if result.categories:
-                for category, is_violated in result.categories.items():
-                    if is_violated:
-                        violated_categories.append(category)
+        verbose_proxy_logger.warning(
+            "OpenAI Moderation: Content flagged for violations: %s",
+            violation_details,
+        )
 
-            violation_details: Final = {
-                "violated_categories": violated_categories,
-                "category_scores": result.category_scores or {},
-            }
-
-            verbose_proxy_logger.warning(
-                "OpenAI Moderation: Content flagged for violations: %s",
-                violation_details,
-            )
-
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Violated OpenAI moderation policy",
-                    "moderation_result": violation_details,
-                },
-            )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated OpenAI moderation policy",
+                "moderation_result": violation_details,
+            },
+        )
 
     def supports_structured_messages(self) -> bool:
         return False
@@ -247,12 +305,22 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 # Join all texts for moderation
                 text_to_moderate = "\n".join(texts)
 
-        if not text_to_moderate:
-            verbose_proxy_logger.debug("OpenAI Moderation: No text content to moderate in inputs")
+        images_to_moderate: Final = (inputs.get("images") or []) if self.moderate_images else []
+        moderation_inputs: Final = _moderation_inputs(text_to_moderate, images_to_moderate)
+        if not moderation_inputs:
+            verbose_proxy_logger.debug("OpenAI Moderation: No content to moderate in inputs")
             return inputs
 
-        # Make moderation request
-        moderation_response: Final = await self.async_make_request(input_text=text_to_moderate)
+        moderation_responses: Final = await asyncio.gather(
+            *(self.async_make_request(input_text=moderation_input) for moderation_input in moderation_inputs)
+        )
+        moderation_response: Final = (
+            moderation_responses[0]
+            if len(moderation_responses) == 1
+            else moderation_responses[0].model_copy(
+                update={"results": list(chain.from_iterable(response.results for response in moderation_responses))}
+            )
+        )
 
         # Stash full moderation response in request_data for logging
         # (Model Armor pattern — per-request dict avoids race conditions)
