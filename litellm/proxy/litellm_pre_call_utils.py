@@ -652,6 +652,8 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
+        "client_seen_attempt",
+        "failed_fallback_attempts",
         "original_model_group",
         "previous_models",
         "rate_limit_fallback",

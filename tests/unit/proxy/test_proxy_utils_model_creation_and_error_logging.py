@@ -2822,8 +2822,8 @@ def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(mo
 
 def _failed_fallback_metadata() -> dict[str, object]:  # mutable-ok: the router's metadata dict
     """What the router leaves when group ``lit45-primary`` timed out twice and its fallback
-    ``lit45-fallback`` then timed out twice: the client gets the primary's last error, while the
-    routing fields describe the fallback's last call."""
+    ``lit45-fallback`` then timed out twice: the client gets the primary's last error, which the
+    router names as ``client_seen_attempt``, while the routing fields describe the fallback's last call."""
     return {
         "original_model_group": "lit45-primary",
         "model_group": "lit45-fallback",
@@ -2861,6 +2861,13 @@ def _failed_fallback_metadata() -> dict[str, object]:  # mutable-ok: the router'
                 "attempted_retries": 1,
             },
         ),
+        "client_seen_attempt": {
+            "model_group": "lit45-primary",
+            "deployment_id": "dep-lit45-primary",
+            "model": "lit45-primary-model",
+            "exception_type": "Timeout",
+            "attempted_retries": 1,
+        },
     }
 
 
@@ -2931,6 +2938,52 @@ def test_the_failure_row_after_a_failed_fallback_is_priced_at_the_deployment_the
         pytest.approx(prompt_tokens * 0.5),
         pytest.approx(prompt_tokens * 0.5),
     ]
+
+
+def _failure_row_and_attempt_rows(monkeypatch, metadata):
+    """``(main row cost per prompt token, [(deployment, attempt) of each attempt row])`` for a failed
+    request whose router metadata is ``metadata``, with the primary priced at 0.02 and the fallback at 0.5."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    for deployment_id, input_rate in (("dep-lit45-primary", 0.02), ("dep-lit45-fallback", 0.5)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": input_rate},
+        )
+    logging_obj = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params(metadata=metadata))
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+    return (
+        lifted["response_cost"] / lifted["combined_usage_object"].prompt_tokens,
+        [(a.deployment_id, a.attempted_retries) for a in lifted["billed_failed_attempts"]],
+    )
+
+
+def test_a_failure_no_attempt_raised_keeps_the_failure_row_on_the_call_that_was_running(monkeypatch):
+    """A deadline that cuts a fallback call short reaches the client as no attempt's own error, so
+    the router names no ``client_seen_attempt`` and the running fallback call stays the failure row."""
+    metadata = {
+        key: value
+        for key, value in _failed_fallback_metadata().items()
+        if key not in ("client_seen_attempt", "failed_fallback_attempts")
+    }
+
+    rate, attempt_rows = _failure_row_and_attempt_rows(monkeypatch, metadata)
+
+    assert rate == pytest.approx(0.5)
+    assert attempt_rows == [("dep-lit45-primary", 0), ("dep-lit45-primary", 1), ("dep-lit45-fallback", 0)]
+
+
+def test_a_fallbacks_error_that_reached_the_client_makes_the_fallbacks_call_the_failure_row(monkeypatch):
+    """Ordered deployments can hand the client the fallback's last error instead of the requested group's."""
+    metadata = _failed_fallback_metadata()
+    (fallback_last,) = metadata["failed_fallback_attempts"]
+
+    rate, attempt_rows = _failure_row_and_attempt_rows(monkeypatch, {**metadata, "client_seen_attempt": fallback_last})
+
+    assert rate == pytest.approx(0.5)
+    assert attempt_rows == [("dep-lit45-primary", 0), ("dep-lit45-primary", 1), ("dep-lit45-fallback", 0)]
 
 
 def test_a_forwarded_credential_clone_does_not_bill_its_final_timed_out_attempt_as_an_earlier_one():

@@ -5790,7 +5790,9 @@ class _Driver:
 
     def failed(self, step: Mapping[str, object]) -> BaseException:
         try:
-            return self._failure(step)
+            failure: Final = self._failure(step)
+            self._walk.log_client_seen(failure)
+            return failure
         finally:
             self.clear_errors()
 

@@ -1527,22 +1527,12 @@ def _billed_earlier_attempt(
 
 
 def _client_seen_record(litellm_params: Mapping[str, object] | None) -> Mapping[str, object] | None:
-    """The breadcrumb of the attempt whose error the client got, once a fallback hop has moved the
-    logging object's routing metadata to another model group: the last attempt the requested group
-    (``original_model_group``) made, since exhausted fallbacks re-raise that group's error. None
-    without a fallback hop, or when later attempts pushed that breadcrumb out of ``previous_models``."""
-    retry_metadata: Final = _retry_metadata_bucket(litellm_params)
-    requested_group: Final = retry_metadata.get("original_model_group")
-    if not isinstance(requested_group, str) or requested_group == retry_metadata.get("model_group"):
+    """The breadcrumb of the attempt whose error the client got, which the router stamps as
+    ``client_seen_attempt`` when the request fails. None when the error was no attempt's own."""
+    seen: Final = _retry_metadata_bucket(litellm_params).get("client_seen_attempt")
+    if not isinstance(seen, dict):
         return None
-    return next(
-        (
-            record
-            for record in reversed(_retry_attempt_records(litellm_params))
-            if record.get("model_group") == requested_group
-        ),
-        None,
-    )
+    return cast("Mapping[str, object]", seen)  # cast-ok: RetryAttemptRecord TypedDict, read with .get
 
 
 def _routed_attempt_identity(
@@ -1572,8 +1562,8 @@ def _billed_earlier_attempts(
 ) -> tuple[BilledFailedAttempt, ...]:
     """Every other attempt the provider also billed. The router records one ``RetryAttemptRecord``
     per failed attempt in ``metadata.previous_models``, including the attempt the failure row itself
-    bills. That attempt is the one whose error the client got: after a fallback hop the requested
-    group's last attempt (``_client_seen_record``), else the record with the request's own deployment
+    bills. That attempt is the one whose error the client got (``_client_seen_record``), else,
+    when the error was no attempt's own, the record with the request's own deployment
     and retry count (``attempted_retries`` restarts at 0 after a fallback hop, so the count alone
     cannot tell the groups apart). Another attempt that ended in a ``Timeout`` had the same prompt
     accepted by its deployment, so it is billed like the failure row's attempt, at that deployment's
