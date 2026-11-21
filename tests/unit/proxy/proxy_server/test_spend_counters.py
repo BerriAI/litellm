@@ -24,13 +24,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.spend_tracking import legacy_spend_counters
 from litellm._internal_context import current_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
@@ -43,17 +44,17 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_loca
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
-from litellm.proxy.spend_tracking import legacy_spend_counters
+from litellm.redis.stores.spend_counters import user_window_counter
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
-from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
-from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
-from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
-from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
-from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 from .conftest import normalize
+from litellm.rust_bridge._native import NativeRedisStoreError
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 
 def _spend_counters(monkeypatch: pytest.MonkeyPatch, **fake: object) -> FakeSpendCounters:
