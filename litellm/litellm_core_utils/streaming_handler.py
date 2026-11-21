@@ -163,9 +163,8 @@ def _prepend_upstream_choice_extras(
 ) -> None:
     if not extra_keys:
         return
-    stored_extras: Final = {
-        key: value for key, value in (upstream_choice.__pydantic_extra__ or {}).items() if key in extra_keys
-    }
+    upstream_pydantic_extras: Final[Mapping[str, object]] = upstream_choice.__pydantic_extra__ or {}
+    stored_extras: Final = {key: value for key, value in upstream_pydantic_extras.items() if key in extra_keys}
     upstream_extras: Final[Mapping[str, object]] = (
         stored_extras
         if _holds_only_scalars(stored_extras.items())
@@ -534,8 +533,10 @@ class CustomStreamWrapper:
         count_prompt_tokens: Callable[[], int] | None = None,
         is_mock: bool = False,
         response_cost: float | None = None,
+        stored_finish_reason_indices: frozenset[int] = frozenset(),
     ):
         self.model = model
+        self.stored_finish_reason_indices: Final = stored_finish_reason_indices
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
@@ -1376,6 +1377,7 @@ class CustomStreamWrapper:
             preserve_upstream_non_openai_attributes,
         )
 
+        response_fields: Final[Mapping[str, object]] = response_obj
         is_chunk_non_empty: Final = self.is_chunk_non_empty(completion_obj, model_response, response_obj)
         upstream_chunk_choice_fields: Final[Mapping[str, object]] = (
             _NO_UPSTREAM_CHOICE_FIELDS
@@ -1394,7 +1396,7 @@ class CustomStreamWrapper:
 
             if hold is False:
                 ## check if openai/azure chunk
-                original_chunk: Final[object] = response_obj.get("original_chunk", None)
+                original_chunk: Final[object] = response_fields.get("original_chunk", None)
                 if original_chunk:
                     upstream_chunk: Final = require_attributes(original_chunk, _UpstreamChunkLike, "choices")
                     if len(upstream_chunk.choices) > 0:
@@ -1535,7 +1537,7 @@ class CustomStreamWrapper:
 
             # Preserve custom attributes from original chunk (applies to both
             # empty and non-empty delta final chunks).
-            _original_chunk: Final[object] = response_obj.get("original_chunk", None)
+            _original_chunk: Final[object] = response_fields.get("original_chunk", None)
             if _original_chunk is not None:
                 preserve_upstream_non_openai_attributes(
                     model_response=model_response,
@@ -1546,7 +1548,7 @@ class CustomStreamWrapper:
                 model_response.choices[0].delta = Delta(content=self._close_open_think_block())
                 # get any function call arguments
                 model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
-                    map_finish_reason(finish_reason=self.received_finish_reason)
+                    map_finish_reason(finish_reason=self.received_finish_reason), model_response.choices[0].index
                 )  # ensure consistent output to openai
                 self._apply_finish_choice_fields(model_response.choices[0])
                 if (
@@ -1886,9 +1888,9 @@ class CustomStreamWrapper:
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
             ]:
-                if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
-                    # for azure, we need to pass the model from the original chunk
-                    self.model = getattr(chunk, "model", self.model)
+                upstream_model: Final = getattr(chunk, "model", None) if isinstance(chunk, BaseModel) else None
+                if upstream_model is not None:
+                    self.model = upstream_model
             response_obj = self.handle_openai_chat_completion_chunk(chunk)
             if response_obj is None:
                 return _ProviderChunkEarlyReturn(None)
@@ -2278,8 +2280,8 @@ class CustomStreamWrapper:
             }
         )
 
-    def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
-        if finish_reason == "stop" and self.tool_call:
+    def _normalize_tool_call_finish_reason(self, finish_reason: str, index: int) -> str:
+        if finish_reason == "stop" and self.tool_call and index not in self.stored_finish_reason_indices:
             return "tool_calls"
         return finish_reason
 
@@ -2365,7 +2367,7 @@ class CustomStreamWrapper:
             or self.intermittent_finish_reason
         )
         model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
-            _finish_reason if _finish_reason is not None else "stop"
+            _finish_reason if _finish_reason is not None else "stop", model_response.choices[0].index
         )
         self._apply_finish_choice_fields(model_response.choices[0])
         close_tag: Final = self._close_open_think_block()

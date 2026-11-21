@@ -17,6 +17,14 @@ class JWTClaimScope(NamedTuple):
     jwt_claim_value: str
 
 
+class InsertedMapping(NamedTuple):
+    """The hashed key now mapped to the claim, None when the mapping holding it is inactive or gone, and whether
+    this insert wrote the mapping."""
+
+    token: str | None
+    created: bool
+
+
 class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKeyMapping"]):
     table_name = "litellm_jwtkeymapping"
 
@@ -32,3 +40,13 @@ class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKe
             list(hashed_tokens)
         )
         return tuple(JWTClaimScope(*claim) for claim in claims)
+
+    async def insert(
+        self, jwt_claim_name: str, jwt_claim_value: str, token: str, *, jwt_issuer: str | None, written_by: str
+    ) -> InsertedMapping:
+        """Maps the claim to ``token`` in exactly ``jwt_issuer``'s scope (global when falsy), leaving a mapping
+        that already holds the claim as it is."""
+        created, mapped = await rust_database.required_repository(RustJwtKeyMappingRepository).insert(
+            jwt_claim_name, jwt_claim_value, token, jwt_issuer=jwt_issuer or None, written_by=written_by
+        )
+        return InsertedMapping(mapped, created)

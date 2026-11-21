@@ -2965,3 +2965,101 @@ async def test_a_v2_callback_between_pre_request_hooks_sees_the_first_rewrite(mo
     await _pre_request_hooks()
 
     assert journal == ["first", ("v2", [{"name": "rewritten"}]), "second"]
+
+
+_DIAGNOSTICS: Final = {"previous_message_id": "msg_01previous"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test"},
+        {
+            "model": "azure_ai/claude-opus-5-5",
+            "api_key": "test-key",
+            "api_base": "https://foundry-test.services.ai.azure.com/anthropic",
+        },
+    ),
+    ids=("anthropic", "azure_ai"),
+)
+@pytest.mark.parametrize("drop_params", (False, True), ids=("default", "drop_params"))
+async def test_messages_forwards_diagnostics_to_providers_that_take_it(
+    deployment: dict[str, str], drop_params: bool
+) -> None:
+    bodies: Final[list[dict[str, object]]] = []
+
+    await python_messages.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        client=_bedrock_invoke_recording(bodies),
+        diagnostics=_DIAGNOSTICS,
+        drop_params=drop_params,
+        **deployment,
+    )
+
+    assert bodies[0]["diagnostics"] == _DIAGNOSTICS
+
+
+_AWS_TEST_CREDENTIALS: Final = {
+    "aws_access_key_id": "test-access-key",
+    "aws_secret_access_key": "test-secret-key",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {"model": "vertex_ai/claude-opus-5-5", "api_key": "ya29.test-token", "vertex_project": "test-project"},
+        {"model": _OPUS_4_8_ON_BEDROCK_INVOKE, **_AWS_TEST_CREDENTIALS},
+        {"model": "bedrock/mantle/anthropic.claude-mythos-preview", **_AWS_TEST_CREDENTIALS},
+    ),
+    ids=("vertex", "bedrock_invoke", "bedrock_mantle"),
+)
+async def test_messages_rejects_diagnostics_before_calling_a_provider_that_rejects_it(
+    deployment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        await python_messages.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            client=_bedrock_invoke_recording(bodies),
+            diagnostics=_DIAGNOSTICS,
+            **deployment,
+        )
+
+    assert raised.value.status_code == 400
+    assert "drop_params" in raised.value.message
+    assert bodies == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop",
+    ({"drop_params": True}, {"additional_drop_params": ["diagnostics"]}),
+    ids=("drop_params", "additional_drop_params"),
+)
+async def test_messages_drops_diagnostics_for_a_rejecting_provider_when_asked(
+    drop: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []
+
+    response: Final = await python_messages.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="vertex_ai/claude-opus-5-5",
+        api_key="ya29.test-token",
+        vertex_project="test-project",
+        client=_bedrock_invoke_recording(bodies),
+        diagnostics=_DIAGNOSTICS,
+        **drop,
+    )
+
+    assert response["content"] == [{"type": "text", "text": "ok"}]
+    assert "diagnostics" not in bodies[0]

@@ -1,6 +1,7 @@
 mod jwt;
 mod key;
 
+pub(crate) use jwt::InvalidCredentials;
 pub use jwt::{
     AgentIdentityFailure, AssertionRejection, ClaimDenial, JwtDenial, KeyError, KeyFailure,
     ModelAccessDenied, RbacDenial, Searched, TeamDenial, TokenError, VerifyDenial,

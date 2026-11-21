@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from re import Pattern
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, TypedDict, TypeVar, cast
 
 import yaml
 from fastapi import HTTPException
@@ -2239,9 +2239,9 @@ class ContentFilterGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks and check for blocked content.
 
