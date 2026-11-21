@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -10957,6 +10958,53 @@ class TestMCPServerResolutionCharacterization:
         assert result.alias == "Private DB", "DB detail response retains its alias"
         add_server.assert_awaited_once()
         health_check.assert_awaited_once_with(server_id)
+
+    @pytest.mark.asyncio
+    async def test_fetch_mcp_server_by_alias_reports_the_servers_own_health(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        respx_mock.get("https://learn.example.com/mcp").mock(return_value=httpx.Response(200))
+        effects: Final = _ResolutionEffects()
+        canonical_id: Final = "lit3974_server_uuid"
+        alias: Final = "ms"
+        prisma: Final = _mock_mcp_resolution_prisma_client(
+            generate_mock_mcp_server_db_record(server_id=canonical_id, alias=alias),
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_perm", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_team"),
+        )
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "microsoft_learn": {
+                    "server_id": canonical_id,
+                    "alias": alias,
+                    "url": "https://learn.example.com/mcp",
+                    "transport": "http",
+                    "auth_type": "api_key",
+                }
+            },
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_admin",
+            user_id="lit3974_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            effects.patch(manager),
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        ):
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=alias,
+                user_api_key_dict=auth,
+                include_reachability=True,
+            )
+
+        assert (result.server_id, result.status, result.health_check_error) == (canonical_id, "reachable", None)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
