@@ -287,3 +287,50 @@ class TestMultilingualTranscription:
         assert result.text == "Bonjour le monde [GUARDRAILED]"
         # Language metadata should be preserved
         assert result.language == "fr"
+
+
+def _multichannel_response() -> TranscriptionResponse:
+    """ElevenLabs use_multi_channel: an empty top-level text, one transcript per channel."""
+    response = TranscriptionResponse(text="")
+    response["transcripts"] = [
+        {"channel_index": 0, "text": "Hello, how can I help?", "words": [{"text": "Hello,"}]},
+        {"channel_index": 1, "text": "Reach me at john@example.com", "words": [{"text": "john@example.com"}]},
+    ]
+    return response
+
+
+class _EmailGuardrail(CustomGuardrail):
+    """Masks e-mail addresses, or refuses them when ``block`` is set."""
+
+    def __init__(self, block: bool) -> None:
+        super().__init__(guardrail_name="emails")
+        self.block = block
+
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
+        texts = inputs.get("texts", [])
+        if self.block and any("@" in text for text in texts):
+            raise ValueError("e-mail address in the transcript")
+        return {"texts": [text.replace("john@example.com", "[EMAIL_REDACTED]") for text in texts]}
+
+
+class TestMultichannelTranscripts:
+    """use_multi_channel leaves the top-level text empty: the channel texts must be screened too."""
+
+    @pytest.mark.asyncio
+    async def test_a_blocking_guardrail_sees_the_channel_texts(self):
+        with pytest.raises(ValueError, match="e-mail address"):
+            await OpenAIAudioTranscriptionHandler().process_output_response(
+                _multichannel_response(), _EmailGuardrail(block=True)
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_masked_channel_loses_its_words_and_the_others_keep_theirs(self):
+        result = await OpenAIAudioTranscriptionHandler().process_output_response(
+            _multichannel_response(), _EmailGuardrail(block=False)
+        )
+
+        caller, callee = result["transcripts"]
+        assert callee["text"] == "Reach me at [EMAIL_REDACTED]"
+        assert "words" not in callee, "the words would still spell out the masked address"
+        assert caller == {"channel_index": 0, "text": "Hello, how can I help?", "words": [{"text": "Hello,"}]}
+        assert result.text == ""
