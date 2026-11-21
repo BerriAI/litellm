@@ -2116,7 +2116,7 @@ def gemini_image_response(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 async def test_bridged_messages_response_leaves_its_image_priced_cost_on_the_logging_object(
     gemini_image_response, is_async
 ):
-    from litellm.llms.anthropic.pass_through.adapters.handler import (
+    from litellm.llms.anthropic.messages.adapters.handler import (
         LiteLLMMessagesToCompletionTransformationHandler,
     )
 
