@@ -2669,7 +2669,7 @@ async def test_gemini_image_generation_cut_off_before_final_image_returns_last_t
 
 
 @pytest.mark.parametrize(
-    "events",
+    ("events", "finish_reason"),
     [
         pytest.param(
             (
@@ -2688,6 +2688,7 @@ async def test_gemini_image_generation_cut_off_before_final_image_returns_last_t
                     "usageMetadata": GEMINI_TRUNCATED_USAGE,
                 },
             ),
+            "length",
             id="finish-in-its-own-chunk",
         ),
         pytest.param(
@@ -2707,7 +2708,16 @@ async def test_gemini_image_generation_cut_off_before_final_image_returns_last_t
                     "usageMetadata": GEMINI_TRUNCATED_USAGE,
                 },
             ),
+            "length",
             id="finish-with-the-last-thought-image",
+        ),
+        pytest.param(
+            tuple(
+                {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+            ),
+            "stop",
+            id="stream-ends-without-a-finish-reason",
         ),
     ],
 )
@@ -2716,6 +2726,7 @@ async def test_gemini_image_generation_cut_off_before_final_image_returns_last_t
 async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_last_thought_image(
     respx_mock: respx.MockRouter,
     events: tuple[dict[str, object], ...],
+    finish_reason: str,
 ) -> None:
     respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
         return_value=_gemini_sse(*events)
@@ -2730,7 +2741,7 @@ async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_l
     )
     chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
 
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["length"]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [finish_reason]
     assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
         [GEMINI_LAST_THOUGHT_IMAGE]
     ]
