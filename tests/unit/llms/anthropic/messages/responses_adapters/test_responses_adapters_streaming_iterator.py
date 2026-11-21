@@ -12,6 +12,7 @@ import sys
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Final
 
@@ -1268,10 +1269,22 @@ _PARALLEL_CALLS: Final = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _ToolCallStreamShape:
+    argument_deltas: tuple[str, ...] = ()
+    deltas_carry_item_id: bool = True
+    sends_arguments_done: bool = True
+    output_item_done_carries_arguments: bool = True
+
+
+def _halves(arguments: str) -> tuple[str, ...]:
+    return (arguments[: len(arguments) // 2], arguments[len(arguments) // 2 :])
+
+
 class _ToolCallProviderStream(httpx.AsyncByteStream):
-    def __init__(self, sends_argument_deltas: bool, sends_arguments_done: bool) -> None:
-        self._sends_argument_deltas: Final = sends_argument_deltas
-        self._sends_arguments_done: Final = sends_arguments_done
+    def __init__(self, shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]) -> None:
+        self._shape: Final = shape
+        self._split_arguments: Final = split_arguments
 
     def _call_events(self, output_index: int, item_id: str, call_id: str, name: str, arguments: str) -> Iterator[dict]:
         item: Final = {"type": "function_call", "id": item_id, "call_id": call_id, "name": name}
@@ -1280,16 +1293,14 @@ class _ToolCallProviderStream(httpx.AsyncByteStream):
             "output_index": output_index,
             "item": {**item, "arguments": "", "status": "in_progress"},
         }
-        if self._sends_argument_deltas:
-            midpoint: Final = len(arguments) // 2
-            for piece in (arguments[:midpoint], arguments[midpoint:]):
-                yield {
-                    "type": "response.function_call_arguments.delta",
-                    "output_index": output_index,
-                    "item_id": item_id,
-                    "delta": piece,
-                }
-        if self._sends_arguments_done:
+        for piece in self._split_arguments(arguments):
+            yield {
+                "type": "response.function_call_arguments.delta",
+                "output_index": output_index,
+                "delta": piece,
+                **({"item_id": item_id} if self._shape.deltas_carry_item_id else {}),
+            }
+        if self._shape.sends_arguments_done:
             yield {
                 "type": "response.function_call_arguments.done",
                 "output_index": output_index,
@@ -1299,7 +1310,11 @@ class _ToolCallProviderStream(httpx.AsyncByteStream):
         yield {
             "type": "response.output_item.done",
             "output_index": output_index,
-            "item": {**item, "arguments": arguments, "status": "completed"},
+            "item": {
+                **item,
+                "arguments": arguments if self._shape.output_item_done_carries_arguments else "",
+                "status": "completed",
+            },
         }
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
@@ -1332,13 +1347,29 @@ def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple
 
 
 @pytest.mark.parametrize(
-    ("sends_argument_deltas", "sends_arguments_done"),
-    [(False, True), (False, False), (True, True), (True, False)],
-    ids=["done_only", "output_item_done_only", "deltas_then_done", "deltas_without_done"],
+    ("shape", "split_arguments"),
+    [
+        (_ToolCallStreamShape(), lambda arguments: ()),
+        (_ToolCallStreamShape(sends_arguments_done=False), lambda arguments: ()),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), lambda arguments: ()),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), lambda arguments: ("",)),
+        (_ToolCallStreamShape(), _halves),
+        (_ToolCallStreamShape(sends_arguments_done=False), _halves),
+        (_ToolCallStreamShape(deltas_carry_item_id=False), _halves),
+    ],
+    ids=[
+        "done_events_only",
+        "output_item_done_only",
+        "arguments_done_only",
+        "empty_delta_then_arguments_done",
+        "deltas_then_done_events",
+        "deltas_then_output_item_done",
+        "deltas_without_item_id",
+    ],
 )
 def test_each_parallel_tool_use_streams_its_arguments_exactly_once(
-    sends_argument_deltas: bool, sends_arguments_done: bool
+    shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]
 ):
-    tool_uses: Final = _streamed_tool_uses(_ToolCallProviderStream(sends_argument_deltas, sends_arguments_done))
+    tool_uses: Final = _streamed_tool_uses(_ToolCallProviderStream(shape, split_arguments))
 
     assert tool_uses == tuple((call_id, name, arguments) for _, call_id, name, arguments in _PARALLEL_CALLS)

@@ -158,7 +158,7 @@ class AnthropicResponsesStreamWrapper:
         self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
-        self._tool_input_streamed_items: frozenset[str] = frozenset()
+        self._tool_input_settled_blocks: frozenset[int] = frozenset()
         self._sent_message_start = False
         self._sent_message_stop = False
         self._stream_failed = False
@@ -260,15 +260,16 @@ class AnthropicResponsesStreamWrapper:
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def _stream_unstreamed_tool_input(self, item_id: object, arguments: object) -> None:
-        if not isinstance(item_id, str) or item_id in self._tool_input_streamed_items:
+        if not isinstance(item_id, str) or item_id not in self._pending_tool_ids:
             return
-        if item_id not in self._pending_tool_ids or not isinstance(arguments, str) or not arguments:
+        block_idx: Final = self._item_id_to_block_index[item_id]
+        if block_idx in self._tool_input_settled_blocks or not isinstance(arguments, str) or not arguments:
             return
-        self._tool_input_streamed_items = self._tool_input_streamed_items | {item_id}
+        self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
         self._chunk_queue.append(
             {
                 "type": "content_block_delta",
-                "index": self._item_id_to_block_index[item_id],
+                "index": block_idx,
                 "delta": {"type": "input_json_delta", "partial_json": arguments},
             }
         )
@@ -403,8 +404,8 @@ class AnthropicResponsesStreamWrapper:
                 if item_id
                 else self._current_block_index
             )
-            if item_id and delta:
-                self._tool_input_streamed_items = self._tool_input_streamed_items | {item_id}
+            if delta:
+                self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -432,6 +433,7 @@ class AnthropicResponsesStreamWrapper:
                 return
             if self._field(item, "type") == "function_call":
                 self._stream_unstreamed_tool_input(item_id, self._field(item, "arguments"))
+            self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",
