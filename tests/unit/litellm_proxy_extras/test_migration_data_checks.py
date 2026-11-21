@@ -1,4 +1,4 @@
-from pathlib import Path
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -12,9 +12,11 @@ from litellm_proxy_extras.migration_data_checks import (
     _count_query,
     btree_max_entry_bytes,
     checks_for_index,
+    find_blockers,
     migration_data_check_timeout_seconds,
     report,
 )
+from psycopg import sql
 
 
 def _shape(checks: tuple[Check, ...]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
@@ -91,3 +93,66 @@ def test_the_scan_timeout_comes_from_the_environment_and_falls_back_on_garbage(
     else:
         monkeypatch.setenv(MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR, raw)
     assert migration_data_check_timeout_seconds() == expected
+
+
+class _Result:
+    def __init__(self, row: tuple[object, ...] | None) -> None:
+        self.row = row
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.row
+
+
+class _SpendLogsWithOneLongKey:
+    """Answers find_blockers the way Postgres does for a spend-log table holding 2 rows whose
+    api_key is too long to index, with `wire` turning every text value into what psycopg returns."""
+
+    def __init__(self, wire: Callable[[str], object]) -> None:
+        self.wire = wire
+        self.statements: tuple[str, ...] = ()
+
+    def execute(self, query: object, params: tuple[object, ...] = ()) -> _Result:
+        statement: Final = query.as_string(None) if isinstance(query, sql.Composable) else str(query)
+        self.statements = (*self.statements, statement)
+        answers: Final = {
+            "SHOW statement_timeout": ("0",),
+            "SHOW default_transaction_read_only": ("off",),
+            "SHOW block_size": ("8192",),
+        }
+        if statement in answers:
+            return _Result(tuple(self.wire(value) for value in answers[statement]))
+        if statement.startswith("SELECT t.typname"):
+            column: Final = params[2]
+            text_column: Final = (self.wire("text"), -1, self.wire("i"), -1)
+            timestamp_column: Final = (self.wire("timestamp"), 8, self.wire("d"), -1)
+            return _Result(text_column if column == "api_key" else timestamp_column)
+        if statement.startswith("SELECT 1 FROM information_schema.tables"):
+            return _Result((1,))
+        if statement.startswith("SELECT count(*)"):
+            return _Result((2, 3232, 3207))
+        return _Result(None)
+
+
+@pytest.mark.parametrize(
+    "wire",
+    (pytest.param(str, id="utf8-database"), pytest.param(lambda value: value.encode(), id="sql-ascii-database")),
+)
+def test_a_sql_ascii_database_gets_the_same_findings_and_settings_back_as_a_utf8_one(
+    wire: Callable[[str], object],
+) -> None:
+    """On a SQL_ASCII database psycopg hands back bytes for every text value (#52247)."""
+    checks: Final = checks_for_index(
+        "LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", ("api_key", "startTime")
+    )
+    connection: Final = _SpendLogsWithOneLongKey(wire)
+    findings: Final = find_blockers(connection, "public", checks)  # pyright: ignore[reportArgumentType]  # fake connection
+    assert findings == (
+        BlockedChange(
+            checks[0], 2, "with an index entry over 2704 bytes, largest 3232 bytes (api_key up to 3207 bytes)"
+        ),
+    )
+    assert 'least(octet_length("api_key"), pg_column_size("api_key"))' in connection.statements[-3]
+    assert connection.statements[-2:] == (
+        "SET statement_timeout = '0'",
+        "SET default_transaction_read_only = 'off'",
+    )
