@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { useTranslation } from "react-i18next";
-import { RefreshCw } from "lucide-react";
+import { Database, RefreshCw } from "lucide-react";
 import {
   vectorStoreListCall,
   vectorStoreDeleteCall,
@@ -42,6 +44,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [isDeleting, setIsDeleting] = useState(false);
   const canCreateVectorStores = isProxyAdminRole(userRole || "") && !isViewOnly;
   const defaultTab = canCreateVectorStores ? "create" : "manage";
+  const [activeTab, setActiveTab] = useState(defaultTab);
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTab);
 
   const fetchVectorStores = async () => {
@@ -142,11 +145,18 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       />
     </div>
   ) : (
-    <div className="mx-4">
-      <div className="gap-2 p-8 w-full mt-2">
-        <div className="flex justify-between mt-2 w-full items-center mb-4">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">{t("vectorStores.page.title")}</h1>
-          <div className="flex items-center space-x-2">
+    <Page>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Database />
+            {t("vectorStores.page.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("vectorStores.page.description")}</PageHeaderDescription>
+          <PageHeaderControls className="flex-wrap">
+            {activeTab === "manage" && canCreateVectorStores && (
+              <Button onClick={() => setIsCreateModalVisible(true)}>{t("vectorStores.page.addVectorStore")}</Button>
+            )}
             {lastRefreshed && (
               <p className="text-sm text-muted-foreground">
                 {t("vectorStores.page.lastRefreshed", { time: lastRefreshed })}
@@ -160,13 +170,18 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
             >
               <RefreshCw className="size-4" />
             </Button>
-          </div>
-        </div>
+          </PageHeaderControls>
+        </PageHeader>
 
-        <p className="mb-4 text-sm text-muted-foreground">{t("vectorStores.page.description")}</p>
-
-        <Tabs defaultValue={defaultTab} onValueChange={onTabChange}>
-          <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
+        <Tabs
+          defaultValue={defaultTab}
+          onValueChange={(value) => {
+            setActiveTab(value);
+            onTabChange(value);
+          }}
+          className="gap-6"
+        >
+          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none p-0">
             {canCreateVectorStores && (
               <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
                 {t("vectorStores.page.tabs.create")}
@@ -192,21 +207,13 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           )}
 
           <TabsContent keepMounted={hasVisited("manage")} value="manage">
-            {canCreateVectorStores && (
-              <Button className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
-                {t("vectorStores.page.addVectorStore")}
-              </Button>
-            )}
-
-            <div className="grid grid-cols-1 gap-2 pt-2 pb-2 w-full mt-2">
-              <VectorStoreTable
-                data={vectorStores}
-                isLoading={isLoadingVectorStores}
-                onView={handleView}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
-              />
-            </div>
+            <VectorStoreTable
+              data={vectorStores}
+              isLoading={isLoadingVectorStores}
+              onView={handleView}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+            />
           </TabsContent>
 
           <TabsContent keepMounted={hasVisited("test")} value="test">
@@ -242,8 +249,8 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           onOk={confirmDelete}
           confirmLoading={isDeleting}
         />
-      </div>
-    </div>
+      </PageContent>
+    </Page>
   );
 };
 

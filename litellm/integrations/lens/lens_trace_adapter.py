@@ -40,6 +40,12 @@ from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2
 from litellm.integrations.otel.model.metadata import LLMCallEvent, RequestIdentity
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import extract_traceparent
+from litellm.litellm_core_utils.harness_context import (
+    CODEX_MARKERS,
+    SYSTEM_REMINDER_MARKERS,
+    MarkerPairs,
+    without_harness_context,
+)
 from litellm.types.utils import CaptureMessageContent
 
 
@@ -49,17 +55,28 @@ class _Harness:
 
     name: str
     integration: str
+    context_markers: MarkerPairs
     user_agent_markers: tuple[str, ...] = ()
 
 
 _HARNESSES: Final = (
-    _Harness(name="claude-code", integration="claude-code", user_agent_markers=("claude-cli", "claude-code")),
-    _Harness(name="codex-cli", integration="openai-codex", user_agent_markers=("codex",)),
-    _Harness(name="opencode", integration="opencode"),
-    _Harness(name="pi", integration="pi"),
+    _Harness(
+        name="claude-code",
+        integration="claude-code",
+        context_markers=SYSTEM_REMINDER_MARKERS,
+        user_agent_markers=("claude-cli", "claude-code"),
+    ),
+    _Harness(
+        name="codex-cli", integration="openai-codex", context_markers=CODEX_MARKERS, user_agent_markers=("codex",)
+    ),
+    _Harness(name="opencode", integration="opencode", context_markers=SYSTEM_REMINDER_MARKERS),
+    _Harness(name="pi", integration="pi", context_markers=SYSTEM_REMINDER_MARKERS),
 )
 _INTEGRATIONS: Final[Mapping[str, str]] = MappingProxyType(
     {harness.name: harness.integration for harness in _HARNESSES}
+)
+_CONTEXT_MARKERS: Final[Mapping[str, MarkerPairs]] = MappingProxyType(
+    {harness.name: harness.context_markers for harness in _HARNESSES}
 )
 _PI_SYSTEM_PROMPT: Final = "operating inside pi, a coding agent harness"
 _LEADING_SETUP_BLOCKS: Final = re.compile(r"(?:\s*<([A-Za-z][\w-]*)>.*?</\1>)*", re.DOTALL)
@@ -128,6 +145,7 @@ class _Item(BaseModel):
 _Model: Final = TypeVar("_Model", bound=BaseModel)
 _ITEMS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _BLOCKS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +380,19 @@ def agent_call(standard_logging_payload: object) -> AgentCall:
     )
 
 
+def as_user_saw_it(standard_logging_payload: object) -> object:
+    """The logging payload with the messages its agent added for the model, and never showed its user, removed."""
+    payload: Final = _parsed(_Payload, standard_logging_payload)
+    if payload is None or payload.messages is None:
+        return standard_logging_payload
+    try:
+        fields: Final = _FIELDS.validate_python(standard_logging_payload)
+    except ValidationError:
+        return standard_logging_payload
+    markers: Final = _CONTEXT_MARKERS.get(agent_name(payload.metadata.user_agent) or "", SYSTEM_REMINDER_MARKERS)
+    return {**fields, "messages": without_harness_context(payload.messages, markers)}
+
+
 _AGENT_NAME: Final = "gen_ai.agent.name"
 _INTEGRATION: Final = "langsmith.metadata.ls_integration"
 _TASK: Final = "lens.task"
@@ -445,7 +476,8 @@ class _LensTraceLogger(OpenTelemetryV2):
         start_time: datetime | float | None,
         end_time: datetime | float | None,
     ) -> Span | None:
-        call: Final = LLMCallEvent.from_dict(kwargs)
+        shown: Final = {**kwargs, "standard_logging_object": as_user_saw_it(kwargs.get("standard_logging_object"))}
+        call: Final = LLMCallEvent.from_dict(shown)
         made_by: Final = agent_call(call.payload)
         carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id else None
         agent_trace: Final = agent_trace_of(kwargs)
@@ -460,7 +492,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         token: Final = _CALL_FACTS.set(facts)
         placed: Final = _AGENT_TRACE.set(agent_trace)
         try:
-            span: Final = super()._close_llm_call(kwargs, start_time, end_time)
+            span: Final = super()._close_llm_call(shown, start_time, end_time)
         finally:
             _AGENT_TRACE.reset(placed)
             _CALL_FACTS.reset(token)

@@ -22,6 +22,7 @@ use crate::{
     Error, Gateway,
     error::{Ended, NoDeployments},
     headers::Routing,
+    hooks::{CallHooks, CallType},
     stream_event::Read,
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
@@ -30,12 +31,17 @@ use crate::{
 /// The chunks of a route's stream.
 pub type RouteChunks = Chunks<litellm_host_http::Error<InferenceError>>;
 
-/// The host the routes are served through. It answers router-core's hostcalls for one call, and
-/// the gateway crate attaches the native one.
+/// The host the routes are served through. It answers router-core's hostcalls and the callback
+/// hooks for one call, and the gateway crate attaches the native one.
 pub trait Host: Send + Sync + Sized + 'static {
     type RouterHost<'a, A: RouteAttempt + 'a>: RouterHost<Response = A::Outcome, Failure = Error>
     where
         Self: 'a;
+
+    type Hooks: CallHooks;
+
+    /// The callback hooks of one call `identity` makes on the `call_type` route.
+    fn hooks(&self, identity: &AuthenticatedRequest, call_type: CallType) -> Self::Hooks;
 
     /// router-core's host for one call that runs `route` on each attempt for `identity`.
     fn router_host<'a, A: RouteAttempt>(
@@ -47,22 +53,49 @@ pub trait Host: Send + Sync + Sized + 'static {
 }
 
 /// What one route does for one attempt: build its call for the picked deployment, run it, and
-/// return its typed outcome with the tokens it used.
+/// return its typed outcome. [`attempt`] tells the router what that outcome used.
 pub trait RouteAttempt: Send + Sync {
     type Outcome: Send;
 
-    fn run(
-        &self,
-        attempt: &Attempt,
-    ) -> impl Future<Output = Result<Served<Self::Outcome>, Error>> + Send;
+    fn run(&self, attempt: &Attempt) -> impl Future<Output = Result<Self::Outcome, Error>> + Send;
 
-    /// The stream of a served outcome and the reader of its format, for a route whose stream
-    /// another attempt may answer in place of while it has sent no content. `None` for a
-    /// complete answer, and for a route whose streams are never taken over.
+    /// The tokens a complete outcome used. A stream's are counted as it is read.
+    fn total_tokens(outcome: &Self::Outcome) -> u64;
+
+    /// The stream of an outcome and the reader of its format: its outcome is reported to the
+    /// router as it is read, and another attempt may answer in its place while it has sent no
+    /// content. `None` for a complete answer.
     fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
         let _ = outcome;
         None
     }
+}
+
+/// One attempt of `route` as router-core hears it. A complete outcome is served with the tokens
+/// it used. A stream is served deferred, and reports how it went once that is known.
+#[expect(
+    clippy::result_large_err,
+    reason = "the type router-core's RouterHost::attempt returns"
+)]
+pub async fn attempt<H: Host, A: RouteAttempt>(
+    gateway: &Gateway<H>,
+    route: &A,
+    attempt: &Attempt,
+) -> Result<Served<A::Outcome>, AttemptFailure<Error>> {
+    let mut outcome = route
+        .run(attempt)
+        .await
+        .map_err(|error| attempt_failure(attempt, error))?;
+    let Some((chunks, read)) = A::held(&mut outcome) else {
+        let total_tokens = A::total_tokens(&outcome);
+        return Ok(Served::new(outcome, total_tokens));
+    };
+    let unreported = std::mem::replace(chunks, stream::empty().boxed());
+    *chunks = stream_outcome::reporting_outcome(gateway, &attempt.deployment, unreported, read);
+    Ok(Served {
+        deferred: true,
+        ..Served::new(outcome, 0)
+    })
 }
 
 /// The litellm model of the first deployment the request's name resolves to for its caller,
@@ -502,7 +535,7 @@ mod tests {
     impl RouteAttempt for Failing {
         type Outcome = RouteChunks;
 
-        async fn run(&self, _attempt: &Attempt) -> Result<Served<RouteChunks>, Error> {
+        async fn run(&self, _attempt: &Attempt) -> Result<RouteChunks, Error> {
             self.open_at_each_run
                 .lock()
                 .push(Arc::strong_count(&self.open) - 1);
@@ -516,10 +549,11 @@ mod tests {
                 let _open = &open;
                 event.map(|event| bytes::Bytes::from_static(event.as_bytes()))
             });
-            Ok(Served {
-                deferred: true,
-                ..Served::new(litellm_framer::sse::blocks(sent).boxed(), 0)
-            })
+            Ok(litellm_framer::sse::blocks(sent).boxed())
+        }
+
+        fn total_tokens(_outcome: &RouteChunks) -> u64 {
+            0
         }
 
         fn held(outcome: &mut RouteChunks) -> Option<(&mut RouteChunks, Read)> {
@@ -541,10 +575,15 @@ mod tests {
             &self,
             attempt: &Attempt,
         ) -> Result<Served<RouteChunks>, AttemptFailure<Error>> {
-            self.route
+            let sent = self
+                .route
                 .run(attempt)
                 .await
-                .map_err(|error| attempt_failure(attempt, error))
+                .map_err(|error| attempt_failure(attempt, error))?;
+            Ok(Served {
+                deferred: true,
+                ..Served::new(sent, 0)
+            })
         }
 
         async fn select(

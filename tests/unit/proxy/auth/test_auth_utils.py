@@ -6802,6 +6802,7 @@ async def test_auth_rejects_query_credentials_on_a_pass_through_whose_body_was_n
     assert not await _auth_admits(request, request_data, _OAUTH_AUTHORIZE_PATH)
 
 
+@pytest.mark.parametrize("metadata_key", ["allowed_s3_buckets", "required_customer_headers"])
 @pytest.mark.parametrize(
     "role,stored,sent,refused",
     [
@@ -6812,15 +6813,15 @@ async def test_auth_rejects_query_credentials_on_a_pass_through_whose_body_was_n
         (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket"], False),
     ],
 )
-def test_only_proxy_admins_change_a_teams_s3_bucket_list(
-    role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
+def test_only_proxy_admins_change_protected_team_metadata(
+    metadata_key: str, role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
 ) -> None:
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 
-    existing: Final = None if stored is None else {"allowed_s3_buckets": stored, "project": "x"}
+    existing: Final = None if stored is None else {metadata_key: stored, "project": "x"}
     request: Final = UpdateTeamRequest(
-        team_id="t1", metadata={"project": "x"} if sent is None else {"allowed_s3_buckets": sent, "project": "x"}
+        team_id="t1", metadata={"project": "x"} if sent is None else {metadata_key: sent, "project": "x"}
     )
     caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
 
@@ -6834,7 +6835,7 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
             data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
         )
     assert rejection.value.status_code == 403
-    assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
+    assert f"Only proxy admins can set {metadata_key} on a team." in str(rejection.value.detail)
 
 
 @pytest.mark.parametrize(
