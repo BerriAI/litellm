@@ -1326,3 +1326,18 @@ async def test_a_mantle_call_without_usable_aws_credentials_answers_401(call: Ca
 
     assert excinfo.value.status_code == 401
     assert type(excinfo.value.__context__) is BedrockMantleAuthError
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("mantle_without_usable_credentials")
+async def test_a_mantle_credential_source_outage_stays_a_retryable_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://127.0.0.1:9/credentials")
+
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        await litellm.acompletion(
+            model="bedrock_mantle/openai.gpt-6-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            aws_region_name="us-east-1",
+        )
+
+    assert excinfo.value.status_code == 500

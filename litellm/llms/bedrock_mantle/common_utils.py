@@ -128,13 +128,10 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
             return sign(headers=headers, optional_params=optional_params)
-        except (
-            NoCredentialsError,
-            PartialCredentialsError,
-            ProfileNotFound,
-            CredentialRetrievalError,
-        ) as e:
+        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as e:
             raise BedrockMantleAuthError() from e
+        except CredentialRetrievalError as e:
+            raise ValueError(MANTLE_AUTH_FAILED) from e
 
 
 def is_mantle_claude_model(model: str) -> bool:
