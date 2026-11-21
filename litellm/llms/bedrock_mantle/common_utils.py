@@ -56,6 +56,12 @@ def mantle_catalog_id(model: str) -> str:
     return profiled_id if sep and geo in BEDROCK_GEO_PROFILES else model_id
 
 
+def mantle_routing_id(model: str, model_cost: Mapping[str, object]) -> str:
+    """The id whose ``bedrock_mantle/`` row decides routing: an exactly registered geo id first, else the bare id."""
+    model_id: Final = split_mantle_region_prefix(model)[1]
+    return model_id if f"bedrock_mantle/{model_id}" in model_cost else mantle_catalog_id(model_id)
+
+
 def is_bedrock_runtime_host(api_base: str | None) -> bool:
     """bedrock-runtime, a VPC endpoint for it included, accepts fewer Responses tools and params than Mantle."""
     host: Final = urlparse(api_base).hostname if api_base else None
@@ -180,7 +186,7 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_catalog_id(model)}", {}) if model else {}
+    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_routing_id(model, model_cost)}", {}) if model else {}
     if "/v1/responses" in (entry.get("supported_endpoints") or []):
         return True
     return entry.get("mode") == "responses"
@@ -197,5 +203,5 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     the base for the model's whole OpenAI-compatible surface, so both the chat and
     responses configs derive from it -- there is no separate model-name rule.
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_catalog_id(model)}", {}) if model else {}
+    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_routing_id(model, model_cost)}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"

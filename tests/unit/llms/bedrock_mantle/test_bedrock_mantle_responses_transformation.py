@@ -1459,6 +1459,15 @@ class TestMantleGeoInferenceProfile:
         assert mantle_supports_responses(model, model_cost) is True
         assert mantle_base_segment(model, model_cost) == "openai/v1"
 
+    def test_an_exactly_registered_geo_id_wins_over_the_bare_row(self):
+        model_cost = {
+            "bedrock_mantle/openai.gpt-x": {"mode": "chat"},
+            "bedrock_mantle/us.openai.gpt-x": {"mode": "responses", "use_openai_responses_path": True},
+        }
+        assert mantle_supports_responses("us.openai.gpt-x", model_cost) is True
+        assert mantle_base_segment("us.openai.gpt-x", model_cost) == "openai/v1"
+        assert mantle_supports_responses("eu.openai.gpt-x", model_cost) is False
+
     def test_every_catalogued_model_gets_the_same_responses_url_under_a_us_profile(self, local_cost_map):
         bare_ids = [
             key.removeprefix("bedrock_mantle/")
