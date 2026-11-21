@@ -16,7 +16,7 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.types.mcp_server.events import EventsErrorCode, EventType
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
-from .fakes import JWT, admitted_subject, BUILD_FAILED, CALLER, SETTINGS, context, runtime, server
+from .fakes import BUILD_FAILED, CALLER, JWT, SETTINGS, admitted_subject, context, runtime, server
 
 DEPLOY: Final = EventType(name="deploy.done", delivery=("poll",))
 BAD_HEADER: Final = EventType(

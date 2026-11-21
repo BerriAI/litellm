@@ -6,7 +6,7 @@ from litellm.mcp_client.client import MCPClient
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import EventGrant
-from litellm.proxy.mcp_server.events.guardrails import Blocked, ScreenOutcome, Screened
+from litellm.proxy.mcp_server.events.guardrails import Blocked, Screened, ScreenOutcome
 from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime, Frames
 from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget

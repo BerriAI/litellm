@@ -2,7 +2,6 @@ from typing import Final
 
 import anyio
 import pytest
-from mcp.shared.exceptions import MCPError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import principal_of

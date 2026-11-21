@@ -8,6 +8,7 @@ import pytest
 from mcp.shared.exceptions import MCPError
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
@@ -20,7 +21,6 @@ from litellm.proxy.mcp_server.events.webhooks.subscribe import (
     subscribe,
     unsubscribe,
 )
-from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import (
     CallbackFailure,

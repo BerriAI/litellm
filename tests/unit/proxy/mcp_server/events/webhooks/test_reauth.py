@@ -10,12 +10,12 @@ from litellm.proxy.mcp_server.events.webhooks.reauth import (
     Authorized,
     Reauthorization,
     Revoked,
+    TeamFacts,
     Unavailable,
     _key_revoked,  # pyright: ignore[reportPrivateUsage]  # the key-state rule is the unit under test
     admitted_user,
-    TeamFacts,
-    with_team,
     authorize_row,
+    with_team,
 )
 from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig

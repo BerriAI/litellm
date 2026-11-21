@@ -10,15 +10,13 @@ from fastapi import FastAPI
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.mcp_server.events.access import principal_of
+from litellm.proxy.mcp_server.events.access import EventGrant, principal_of
 from litellm.proxy.mcp_server.events.admin import AdminServices, admin_services, router, terminate_key_subscriptions
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, parse_secret, verify
 from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow, SubscriptionStatus
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
-from litellm.types.mcp_server.events import CallbackFailure
-from litellm.proxy.mcp_server.events.access import EventGrant
-from litellm.types.mcp_server.events import EventType
+from litellm.types.mcp_server.events import CallbackFailure, EventType
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
 DEPLOY_DONE: Final = EventType(name="deploy.done", delivery=("poll",))

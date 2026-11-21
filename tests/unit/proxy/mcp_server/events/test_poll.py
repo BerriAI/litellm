@@ -2,11 +2,11 @@ from typing import Final
 
 import pytest
 
+from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import CursorBinding, arguments_digest, open_cursor, seal_cursor
 from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.poll import poll
-from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.types.mcp_server.events import EventsErrorCode, PollEventsParams
 from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
