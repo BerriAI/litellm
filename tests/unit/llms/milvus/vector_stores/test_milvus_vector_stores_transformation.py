@@ -475,23 +475,23 @@ def test_transform_search_request_resolves_vector_field_by_precedence():
         "embedding_executor": executor,
     }
 
-        _, stored_body = config.transform_search_vector_store_request(
+    _, stored_body = config.transform_search_vector_store_request(
         **base_kwargs, vector_store_search_optional_params={}
-        )
-        assert stored_body == {
+    )
+    assert stored_body == {
         "collectionName": "docs_collection",
         "data": [ALIAS_QUERY_VECTOR],
         "annsField": "dense_vector",
-        }
+    }
 
     _, override_body = config.transform_search_vector_store_request(
         **base_kwargs, vector_store_search_optional_params={"annsField": "per_request_vector"}
     )
-        assert override_body == {
+    assert override_body == {
         "collectionName": "docs_collection",
         "data": [ALIAS_QUERY_VECTOR],
         "annsField": "per_request_vector",
-        }
+    }
 
 
 def test_transform_falls_back_to_sdk_embedding_without_executor_or_config(
@@ -504,8 +504,7 @@ def test_transform_falls_back_to_sdk_embedding_without_executor_or_config(
 
     _, body = MilvusVectorStoreConfig().transform_search_vector_store_request(
         vector_store_id="book_2",
-        query="q",
-        vector_store_search_optional_params={},
+    )
         api_base="https://milvus.example",
         litellm_logging_obj=logging_obj,
         litellm_params={"litellm_embedding_model": "openai/text-embedding-3-small"},
