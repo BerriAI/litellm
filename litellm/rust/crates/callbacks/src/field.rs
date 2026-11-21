@@ -108,6 +108,8 @@ fields! {
     MetadataLabels = 44, SmallRecord, std::vec::Vec<crate::record::MetadataLabel>;
     InputSequenceLength = 45, SmallRecord, crate::record::InputSequenceLength;
     LimiterRequest = 46, SmallRecord, crate::record::LimiterRequest;
+    SpendLogId = 47, SmallRecord, crate::record::SpendLogId;
+    BilledRetryAttempts = 48, SmallRecord, std::vec::Vec<crate::record::BilledRetryAttempt>;
 }
 
 impl Field {
@@ -146,6 +148,8 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::MetadataLabels,
     Field::InputSequenceLength,
     Field::LimiterRequest,
+    Field::SpendLogId,
+    Field::BilledRetryAttempts,
 ]);
 
 pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
@@ -237,7 +241,8 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::LimiterRequest, 46, "limiter_request")]
+    #[case::spend_log_id(Field::SpendLogId, 47, "spend_log_id")]
+    #[case::last(Field::BilledRetryAttempts, 48, "billed_retry_attempts")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

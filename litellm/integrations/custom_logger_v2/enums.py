@@ -92,6 +92,8 @@ class Field(str, Enum):
     metadata_labels = ("metadata_labels", 44, FieldTier.small_record)
     input_sequence_length = ("input_sequence_length", 45, FieldTier.small_record)
     limiter_request = ("limiter_request", 46, FieldTier.small_record)
+    spend_log_id = ("spend_log_id", 47, FieldTier.small_record)
+    billed_retry_attempts = ("billed_retry_attempts", 48, FieldTier.small_record)
 
 
 class Activation(str, Enum):
@@ -128,6 +130,8 @@ DERIVED_ONLY: Final = frozenset(
         Field.metadata_labels,
         Field.input_sequence_length,
         Field.limiter_request,
+        Field.spend_log_id,
+        Field.billed_retry_attempts,
     }
 )
 BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})
