@@ -36,6 +36,15 @@ def test_maps_openai_voice_names_to_gradium_voice_ids():
     assert voice == "YTpq7expH9539ERJ"
 
 
+@pytest.mark.parametrize("voice", ["Alloy", " alloy ", "ALLOY"])
+def test_maps_openai_voice_names_regardless_of_case_and_surrounding_spaces(voice: str):
+    config: Final = GradiumTextToSpeechConfig()
+
+    mapped, _ = config.map_openai_params(model="default", optional_params={}, voice=voice)
+
+    assert mapped == "YTpq7expH9539ERJ"
+
+
 def test_maps_every_current_openai_voice_name_to_its_own_gradium_voice():
     config: Final = GradiumTextToSpeechConfig()
     openai_voices: Final = tuple("alloy ash ballad coral echo fable nova onyx sage shimmer verse marin cedar".split())
@@ -324,6 +333,23 @@ def test_speech_forwards_json_config_sent_in_extra_body(gradium_env: None):
         assert _sent_body(route)["only_audio"] is True
 
 
+def test_speech_sends_the_extra_body_json_config_when_both_are_set(gradium_env: None):
+    with respx.mock:
+        route: Final = respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        litellm.speech(
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base=_API_BASE,
+            api_key=_API_KEY,
+            json_config={"padding_bonus": -1.0},
+            extra_body={"json_config": {"padding_bonus": 2.0}},
+        )
+
+        assert _sent_body(route)["json_config"] == {"padding_bonus": 2.0}
+
+
 @pytest.mark.parametrize("extra_body", ["oops", ["json_config"], 5])
 def test_speech_ignores_an_extra_body_that_is_not_an_object(gradium_env: None, extra_body: object):
     with respx.mock:
@@ -431,6 +457,7 @@ def test_speech_rejects_a_missing_voice_with_a_400(gradium_env: None, voice: str
         ("ulaw_8000", "application/octet-stream", "audio/basic"),
         ("alaw_8000", "application/octet-stream", "audio/x-alaw-basic"),
         ("pcm_16000", "application/octet-stream", "audio/pcm"),
+        ("pcm_16000", "Application/Octet-Stream; charset=binary", "audio/pcm"),
         ("wav", "audio/wav", "audio/wav"),
     ],
 )
@@ -453,6 +480,28 @@ def test_speech_labels_raw_audio_with_its_media_type(
 
         assert _sent_body(route)["output_format"] == response_format
         assert response.content_type == expected_content_type
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "text/html; charset=utf-8"])
+@pytest.mark.asyncio
+async def test_aspeech_rejects_a_success_response_that_is_not_audio(gradium_env: None, content_type: str):
+    with respx.mock:
+        respx.post(_URL).mock(
+            return_value=httpx.Response(200, content=b'{"text": "Bonjour"}', headers={"content-type": content_type})
+        )
+
+        with pytest.raises(litellm.BadGatewayError) as raised:
+            await litellm.aspeech(
+                model="gradium/default",
+                input="Bonjour",
+                voice="alloy",
+                response_format="pcm",
+                api_base=_API_BASE,
+                api_key=_API_KEY,
+            )
+
+        assert raised.value.status_code == 502
+        assert content_type.split(";")[0] in str(raised.value)
 
 
 def test_speech_honors_an_explicit_api_base_and_api_key(gradium_env: None):
