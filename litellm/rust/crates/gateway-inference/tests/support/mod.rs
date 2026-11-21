@@ -11,7 +11,7 @@ use axum::{
 };
 use futures_util::future::BoxFuture;
 use litellm_gateway::{Gateway, host::NativeHost};
-use litellm_gateway_inference::router;
+use litellm_gateway_inference::{RouterTiers, RoutingCache, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
 use litellm_secret_value::SecretValue;
@@ -158,6 +158,7 @@ fn deployment_app(
         secrets,
         models,
         HashMap::from([(id, serde_json::from_value(shaping).unwrap())]),
+        RoutingCache::new(None, RouterTiers::default()),
         NativeHost,
     )
     .unwrap();

@@ -12,6 +12,7 @@ mod model_restamp;
 mod ocr;
 mod request;
 pub mod routing;
+mod routing_cache;
 mod stream_event;
 mod stream_hold;
 mod stream_outcome;
@@ -28,14 +29,15 @@ use litellm_secrets::source::SecretSource;
 
 pub use error::{BodyError, Ended, Error};
 pub use headers::ExposedHeader;
+pub use litellm_redis_store::RouterTiers;
 pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 pub use routing::Host;
+pub use routing_cache::RoutingCache;
 
 pub struct Gateway<H> {
     host: H,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
-    /// Cooldowns, allowed-fails counters and per-minute usage of the deployments, in this process.
-    routing: Arc<litellm_router_core::InMemoryRouterCache>,
+    routing: Arc<RoutingCache>,
     /// How the messages route shapes a call to each deployment, by deployment id.
     shaping: HashMap<String, MessagesShaping>,
     pub messages: MessagesRoute,
@@ -54,9 +56,8 @@ impl<H: Host> Gateway<H> {
         }
     }
 
-    /// Cooldowns, allowed-fails counters and per-minute usage of the deployments, which the host
-    /// hands router-core.
-    pub fn routing(&self) -> &litellm_router_core::InMemoryRouterCache {
+    /// The deployments' routing state, which the host hands router-core.
+    pub fn routing(&self) -> &RoutingCache {
         &self.routing
     }
 
@@ -71,6 +72,7 @@ impl<H: Host> Gateway<H> {
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
         shaping: HashMap<String, MessagesShaping>,
+        routing: RoutingCache,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
@@ -78,7 +80,7 @@ impl<H: Host> Gateway<H> {
         Ok(Self {
             host,
             cache: None,
-            routing: Arc::default(),
+            routing: Arc::new(routing),
             shaping,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
