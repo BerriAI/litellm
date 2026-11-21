@@ -41,4 +41,4 @@ def mount_scalar_reference(app: FastAPI, docs_url: str | None) -> None:
 </html>"""
         )
 
-    app.add_api_route(docs_url, scalar_reference, methods=["GET"], include_in_schema=False)
+    app.add_route(docs_url, scalar_reference, methods=["GET"], include_in_schema=False)

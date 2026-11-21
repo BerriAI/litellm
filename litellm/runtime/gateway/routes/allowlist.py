@@ -137,6 +137,8 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/routes",
         "/openapi.json",
         "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
         "/test",
         "/debug/memory/summary",
         "/api/event_logging/batch",
@@ -148,5 +150,6 @@ GATEWAY_MOUNT_PATHS: frozenset[str] = frozenset(
     {
         "/metrics",
         "/scalar",
+        "/swagger",
     }
 )

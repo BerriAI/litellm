@@ -93,7 +93,7 @@ _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
 from gateway.main import _gateway_lifespan, _is_gateway_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
-from litellm.runtime.backend.main import _backend_lifespan
+from litellm.runtime.backend.main import _backend_lifespan, _is_backend_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
@@ -231,21 +231,21 @@ def test_backend_mount_paths_defined():
         "BACKEND_MOUNT_PATHS must contain at least one Mount path"
 
 
-def test_scalar_mount_in_backend_allowlist():
-    """The /scalar Mount must be in BACKEND_MOUNT_PATHS."""
-    assert "/scalar" in BACKEND_MOUNT_PATHS, \
-        "/scalar Mount path must be in BACKEND_MOUNT_PATHS"
+def test_swagger_mount_in_backend_allowlist():
+    """The /swagger Mount must be in BACKEND_MOUNT_PATHS."""
+    assert "/swagger" in BACKEND_MOUNT_PATHS, \
+        "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
 
 
-def test_backend_keeps_scalar_mount():
+def test_backend_keeps_swagger_mount():
     """Verify that Mounts in BACKEND_MOUNT_PATHS are kept on the backend."""
     backend_mounts = {
         getattr(r, "path")
         for r in app.router.routes
         if isinstance(r, Mount) and getattr(r, "path", None) in BACKEND_MOUNT_PATHS
     }
-    assert "/scalar" in backend_mounts, \
-        "/scalar Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
+    assert "/swagger" in backend_mounts, \
+        "/swagger Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
 
 
 def test_backend_drops_non_allowlisted_mounts():
@@ -314,8 +314,23 @@ def test_gateway_drops_admin_ui_mounts():
             f"Mount {path} must not be served by the gateway"
 
 
-def test_gateway_keeps_scalar_assets_for_its_api_reference():
-    assert _is_gateway_route(Mount("/scalar", app=make_asgi_app()))
+@pytest.mark.parametrize("keep_route", (_is_backend_route, _is_gateway_route))
+def test_component_keeps_both_documentation_asset_mounts(keep_route):
+    docs_mounts = {route.path: route for route in app.router.routes if isinstance(route, Mount)}
+    for path in ("/scalar", "/swagger"):
+        assert keep_route(docs_mounts[path])
+
+
+@pytest.mark.parametrize("keep_route", (_is_backend_route, _is_gateway_route))
+def test_component_keeps_custom_documentation_paths(keep_route):
+    from litellm.proxy.proxy_server import mount_swagger_ui
+    from litellm.proxy.scalar_reference import mount_scalar_reference
+
+    docs_app = FastAPI(docs_url=None, redoc_url="/custom-redoc", openapi_url="/custom-schema.json")
+    mount_scalar_reference(docs_app, "/custom-scalar")
+    mount_swagger_ui(docs_app, "/custom-swagger")
+    kept_paths = {route.path for route in docs_app.routes if keep_route(route)}
+    assert {"/custom-schema.json", "/custom-redoc", "/custom-scalar", "/custom-swagger"} <= kept_paths
 
 
 def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():

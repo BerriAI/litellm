@@ -7,6 +7,7 @@ Pins covered:
 - ``_inject_websocket_stubs_into_openapi_schema``
 - ``get_openapi_schema``
 - ``custom_openapi``
+- ``mount_swagger_ui``
 - ``_get_cors_config``
 """
 
@@ -33,6 +34,7 @@ from litellm.proxy.proxy_server import (
     custom_openapi,
     ensure_unique_openapi_operation_ids,
     get_openapi_schema,
+    mount_swagger_ui,
 )
 from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
@@ -392,6 +394,45 @@ def test_custom_openapi_missing_app_attribute_raises_error(monkeypatch):
     monkeypatch.setattr(ps, "app", SimpleNamespace(), raising=True)
     with pytest.raises(AttributeError):
         custom_openapi()
+
+
+# ---------------------------------------------------------------------------
+# mount_swagger_ui
+# ---------------------------------------------------------------------------
+
+
+def test_mount_swagger_ui_mounts_static_route():
+    from fastapi import applications as fa_applications
+
+    fresh_app = FastAPI(docs_url=None)
+    original_get_swagger = fa_applications.get_swagger_ui_html
+
+    mount_swagger_ui(fresh_app, "/swagger")
+
+    mount_names = [getattr(r, "name", None) for r in fresh_app.routes]
+    observed = {
+        "swagger_mounted": "swagger" in mount_names,
+        "fastapi_renderer_unchanged": fa_applications.get_swagger_ui_html is original_get_swagger,
+        "route_count_positive": len(fresh_app.routes) > 0,
+    }
+    assert normalize(observed) == {
+        "swagger_mounted": True,
+        "fastapi_renderer_unchanged": True,
+        "route_count_positive": True,
+    }
+
+
+def test_mount_swagger_ui_missing_directory_raises_error(monkeypatch, tmp_path):
+    """If the swagger directory is missing, StaticFiles raises RuntimeError."""
+    import litellm.proxy.proxy_server as ps
+
+    fresh_app = FastAPI()
+    monkeypatch.setattr(ps, "app", fresh_app, raising=True)
+    monkeypatch.setattr(
+        ps, "current_dir", str(tmp_path / "does_not_exist"), raising=True
+    )
+    with pytest.raises(RuntimeError):
+        mount_swagger_ui(FastAPI(docs_url=None), "/swagger")
 
 
 # ---------------------------------------------------------------------------

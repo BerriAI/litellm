@@ -33,6 +33,7 @@ from gateway.routes.allowlist import (
     GATEWAY_MOUNT_PATHS,
     GATEWAY_PATH_PREFIXES,
 )
+from litellm.proxy.common_utils.openapi_route import is_proxy_documentation_route
 from litellm.proxy.proxy_server import app
 
 
@@ -48,7 +49,7 @@ def _is_gateway_route(route) -> bool:
         return False
     if isinstance(route, Mount):
         return path in GATEWAY_MOUNT_PATHS
-    if path in GATEWAY_EXACT_PATHS:
+    if path in GATEWAY_EXACT_PATHS or is_proxy_documentation_route(route):
         return True
     return any(path.startswith(prefix) for prefix in GATEWAY_PATH_PREFIXES)
 

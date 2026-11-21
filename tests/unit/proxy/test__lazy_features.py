@@ -15,6 +15,7 @@ from litellm.proxy._lazy_features import (
     LazyFeature,
     LazyFeatureMiddleware,
     attach_lazy_features,
+    lazy_tag_to_prefix,
     loaded_lazy_modules,
     reserve_lazy_slot,
 )
@@ -388,6 +389,16 @@ def test_flag_keeps_registering_after_one_feature_fails_to_import(monkeypatch: p
         assert loaded_lazy_modules(app) == {broken.module_path, healthy.module_path}
         assert client.get("/delta/list").json() == {"feature": "delta"}
         assert client.get("/broken").status_code == 404
+
+
+def test_flag_hides_the_swagger_warmup_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy._lazy_openapi_snapshot as snapshot
+
+    monkeypatch.setattr(snapshot, "SNAPSHOT_FILE", snapshot.SNAPSHOT_FILE.with_name("missing-snapshot.json"))
+    monkeypatch.setenv(FLAG, "false")
+    assert lazy_tag_to_prefix() != {}, "control: without the flag and without a snapshot the plugin has tags"
+    monkeypatch.setenv(FLAG, "true")
+    assert lazy_tag_to_prefix() == {}
 
 
 def test_without_the_flag_the_warmup_route_registers_a_feature_and_returns_its_paths(
