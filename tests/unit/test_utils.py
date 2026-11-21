@@ -1342,6 +1342,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
                         "/v1/realtime/translations",
                         "/v1/realtime/translations/client_secrets",
                         "/v1/realtime/translations/calls",
+                        "/v1/live/sessions",
                         "/v1/images/variations",
                         "/v1/images/edits",
                         "/v1/batch",
