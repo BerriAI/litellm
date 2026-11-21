@@ -725,7 +725,7 @@ _AVATAR_SESSION: Final = {"output_modalities": ["video"], "avatar": "Ben", "avat
 @pytest.mark.parametrize("audio_only", [False, True])
 def test_vertex_avatar_session_update_sends_video_modality_and_avatar_config(
     monkeypatch: pytest.MonkeyPatch, audio_only: bool
-):
+) -> None:
     if audio_only:
         monkeypatch.setattr(
             litellm, "model_cost", {"gemini-3.8-live": {"mode": "realtime", "gemini_audio_only_live": True}}
@@ -744,7 +744,7 @@ def test_vertex_avatar_session_update_sends_video_modality_and_avatar_config(
     assert cfg.setup_must_complete_before_content(json.loads(messages[0])) is True
 
 
-def test_vertex_rejects_video_output_without_an_avatar():
+def test_vertex_rejects_video_output_without_an_avatar() -> None:
     cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
     rejection: Final = cfg.setup_session_update_rejection(

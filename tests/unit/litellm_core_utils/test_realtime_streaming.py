@@ -6321,7 +6321,7 @@ def _audio_append(audio: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatch):
+async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatch: pytest.MonkeyPatch) -> None:
     """Vertex answers content sent before an avatar setupComplete with
     "Session is not set up yet" and never replies to it."""
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
@@ -6337,7 +6337,9 @@ async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_avatar_setup_holds_the_commit_that_triggered_it_behind_its_audio(monkeypatch):
+async def test_avatar_setup_holds_the_commit_that_triggered_it_behind_its_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
     commit: Final = json.dumps({"type": "input_audio_buffer.commit"})
     streaming, backend_ws = _avatar_streaming([_AVATAR_UPDATE, _audio_append("AAAA"), commit])
@@ -6358,7 +6360,7 @@ async def test_avatar_setup_holds_the_commit_that_triggered_it_behind_its_audio(
 
 
 @pytest.mark.asyncio
-async def test_avatar_setup_drops_audio_the_client_cleared_while_waiting(monkeypatch):
+async def test_avatar_setup_drops_audio_the_client_cleared_while_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
     clear: Final = json.dumps({"type": "input_audio_buffer.clear"})
     streaming, backend_ws = _avatar_streaming(
@@ -6377,7 +6379,9 @@ async def test_avatar_setup_drops_audio_the_client_cleared_while_waiting(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_frame_arriving_while_held_content_is_released_stays_behind_it(monkeypatch):
+async def test_frame_arriving_while_held_content_is_released_stays_behind_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
     streaming, backend_ws = _avatar_streaming(
         [_AVATAR_UPDATE, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, _audio_append("FIRST"), _audio_append("SECOND")]

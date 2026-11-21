@@ -367,7 +367,7 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens == 25
         assert result.total_tokens == 40  # 15 + 25
 
-    def test_video_output_tokens_keep_their_own_detail_instead_of_counting_as_text(self):
+    def test_video_output_tokens_keep_their_own_detail_instead_of_counting_as_text(self) -> None:
         """Gemini Live Avatar bills video output at its own rate, so the tokens must not fold into text."""
         usage: Final = {
             "input_tokens": 10,

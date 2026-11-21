@@ -2531,7 +2531,7 @@ def _transform_input(**overrides: object) -> RealtimeResponseTransformInput:
 _AVATAR_SESSION: Final = {"output_modalities": ["video"], "avatar": "Ben", "avatar_video_bitrate_bps": 1_500_000}
 
 
-def test_ai_studio_rejects_avatar_because_only_vertex_serves_it():
+def test_ai_studio_rejects_avatar_because_only_vertex_serves_it() -> None:
     rejection: Final = GeminiRealtimeConfig().setup_session_update_rejection(
         "gemini-3.8-live", _AVATAR_SESSION, setup_sent=False
     )
@@ -2540,7 +2540,7 @@ def test_ai_studio_rejects_avatar_because_only_vertex_serves_it():
     assert "vertex_ai/" in rejection.message
 
 
-def test_ai_studio_drops_avatar_and_video_under_drop_params():
+def test_ai_studio_drops_avatar_and_video_under_drop_params() -> None:
     config: Final = GeminiRealtimeConfig(drop_params=True)
     assert config.setup_session_update_rejection("gemini-3.8-live", _AVATAR_SESSION, setup_sent=False) is None
     messages: Final = config.transform_realtime_request(
@@ -2553,7 +2553,7 @@ def test_ai_studio_drops_avatar_and_video_under_drop_params():
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
-def test_gemini_session_update_without_avatar_has_no_avatar_config():
+def test_gemini_session_update_without_avatar_has_no_avatar_config() -> None:
     config: Final = GeminiRealtimeConfig()
     messages: Final = config.transform_realtime_request(
         json.dumps({"type": "session.update", "session": {"modalities": ["audio"]}}),
@@ -2563,7 +2563,7 @@ def test_gemini_session_update_without_avatar_has_no_avatar_config():
     assert "avatarConfig" not in json.loads(messages[0])["setup"]
 
 
-def test_gemini_video_inline_data_becomes_output_video_delta():
+def test_gemini_video_inline_data_becomes_output_video_delta() -> None:
     """A model turn carrying [video/mp4, audio/pcm] parts -> one output_video.delta
     with the mp4 bytes and one output_audio.delta with ONLY the pcm bytes."""
     config: Final = GeminiRealtimeConfig()
@@ -2593,7 +2593,7 @@ def test_gemini_video_inline_data_becomes_output_video_delta():
     assert sum(1 for e in events if e["type"] == "response.created") == 1
 
 
-def test_gemini_video_only_frame_emits_no_audio_delta():
+def test_gemini_video_only_frame_emits_no_audio_delta() -> None:
     config: Final = GeminiRealtimeConfig()
     frame: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
     result: Final = config.transform_realtime_response(
@@ -2612,7 +2612,7 @@ def test_gemini_video_only_frame_emits_no_audio_delta():
     assert result["current_response_id"] == "resp_1"
 
 
-def test_gemini_video_output_tokens_survive_response_done():
+def test_gemini_video_output_tokens_survive_response_done() -> None:
     config: Final = GeminiRealtimeConfig()
     frame: Final = {
         "serverContent": {"turnComplete": True},
@@ -2639,7 +2639,7 @@ def test_gemini_video_output_tokens_survive_response_done():
     assert otd["video_tokens"] == 42
 
 
-def test_gemini_video_only_frame_never_opens_a_response():
+def test_gemini_video_only_frame_never_opens_a_response() -> None:
     """Avatar video flows continuously, outside any turn: a video-only frame opens no
     response and leaves the delta state untouched; the transcript opens the spoken turn."""
     config: Final = GeminiRealtimeConfig()
@@ -2655,7 +2655,7 @@ def test_gemini_video_only_frame_never_opens_a_response():
     assert result["current_delta_type"] is None
 
 
-def test_gemini_transcript_opened_response_is_closed_by_generation_complete():
+def test_gemini_transcript_opened_response_is_closed_by_generation_complete() -> None:
     """With avatar video no audio part ever arrives: the spoken turn is opened by its
     transcript and generationComplete must still close the item (audio.done + item.done)."""
     config: Final = GeminiRealtimeConfig()
@@ -2668,7 +2668,7 @@ def test_gemini_transcript_opened_response_is_closed_by_generation_complete():
     )
     assert [e["type"] for e in first["response"]][0] == "response.created"
     assert first["current_delta_type"] == "audio"
-    state = _transform_input(
+    state: Final = _transform_input(
         current_output_item_id=first["current_output_item_id"],
         current_response_id=first["current_response_id"],
         current_conversation_id=first["current_conversation_id"],
