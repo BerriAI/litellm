@@ -199,7 +199,11 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=response_input_param,
-                    responses_api_request={},
+                    responses_api_request={
+                        "tools": LiteLLMCompletionResponsesConfig.request_tools(
+                            _stored_request_tools(proxy_server_request_dict)
+                        )
+                    },
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     replay_tool_search=True,

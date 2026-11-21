@@ -873,7 +873,9 @@ SENT_TOOL_PLACEMENTS: Final = pytest.mark.parametrize(
 
 
 def _stored_long_member_call_turn(
-    response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+    response_id: str,
+    placement: Callable[[Mapping[str, object]], SentTools],
+    earlier_input: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     tools, input_items = placement(LONG_NAMESPACE_TOOL)
     return {
@@ -881,7 +883,7 @@ def _stored_long_member_call_turn(
         "call_type": "aresponses",
         "session_id": "long-member-session",
         "proxy_server_request": {
-            "input": [*input_items, {"role": "user", "content": "Fetch document N-42"}],
+            "input": [*input_items, *earlier_input, {"role": "user", "content": "Fetch document N-42"}],
             "model": "gemini-flash",
             "tools": tools,
         },
@@ -915,9 +917,9 @@ def _long_member_response_id() -> str:
     )
 
 
-async def _answer_the_long_member_call(
+async def _sent_tool_names(
     stored_turn: Mapping[str, object], response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
-) -> None:
+) -> tuple[list[str], list[str], list[str]]:
     fake_prisma_client: Final = _FakePrismaClient(results=[[stored_turn]])
     tools, input_items = placement(LONG_NAMESPACE_TOOL)
 
@@ -942,6 +944,13 @@ async def _answer_the_long_member_call(
     parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
     called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
     answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
+    return declared, called, answered
+
+
+async def _answer_the_long_member_call(
+    stored_turn: Mapping[str, object], response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+) -> None:
+    declared, called, answered = await _sent_tool_names(stored_turn, response_id, placement)
     assert declared == called == answered == [truncate_tool_name(LONG_MEMBER_FULL_NAME)]
 
 
@@ -953,6 +962,27 @@ async def test_previous_response_replays_a_long_member_call_under_the_name_the_p
     response_id: Final = _long_member_response_id()
 
     await _answer_the_long_member_call(_stored_long_member_call_turn(response_id, placement), response_id, placement)
+
+
+JOINED_MEMBER_CALL_REPLAY: Final = (
+    {"type": "function_call", "call_id": "call_0", "name": LONG_MEMBER_FULL_NAME, "arguments": '{"doc_id": "N-41"}'},
+    {"type": "function_call_output", "call_id": "call_0", "output": "schema for N-41"},
+)
+
+
+@SENT_TOOL_PLACEMENTS
+async def test_previous_response_replays_a_stored_input_call_under_the_name_the_provider_was_sent(
+    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
+    stored_turn: Final = _stored_long_member_call_turn(response_id, placement, JOINED_MEMBER_CALL_REPLAY)
+
+    declared, called, answered = await _sent_tool_names(stored_turn, response_id, placement)
+
+    sent_name: Final = truncate_tool_name(LONG_MEMBER_FULL_NAME)
+    assert declared == [sent_name]
+    assert called == answered == [sent_name, sent_name]
 
 
 def _kept_in_cold_storage(stored_turn: Mapping[str, object]) -> dict[str, object]:
