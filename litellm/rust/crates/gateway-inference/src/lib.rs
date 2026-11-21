@@ -13,6 +13,7 @@ mod ocr;
 mod request;
 pub mod routing;
 mod routing_cache;
+mod serve;
 mod stream_event;
 mod stream_hold;
 mod stream_outcome;
