@@ -1075,15 +1075,25 @@ class TestDashScopeVideoContentDownload:
 
 
 class TestDashScopeVideoEnvironment:
-    def test_async_header_is_always_sent(self):
-        """DashScope rejects video-synthesis calls without X-DashScope-Async,
-        with 'current user api does not support synchronous calls'."""
-        headers = DashScopeVideoConfig().validate_environment(
+    def test_async_header_is_added_only_when_creating(self):
+        """DashScope rejects video creation without X-DashScope-Async, and status
+        requests use the shared auth headers, which must not carry it."""
+        shared = DashScopeVideoConfig().validate_environment(
             headers={}, model="wan3.0-video", api_key="sk-test", litellm_params=GenericLiteLLMParams()
         )
+        create_headers = dict(shared)
+        DashScopeVideoConfig().transform_video_create_request(
+            model="wan3.0-video",
+            prompt="a clip",
+            api_base="https://dashscope.aliyuncs.com/api/v1",
+            video_create_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers=create_headers,
+        )
 
-        assert headers["X-DashScope-Async"] == "enable"
-        assert headers["Authorization"] == "Bearer sk-test"
+        assert "X-DashScope-Async" not in shared
+        assert create_headers["X-DashScope-Async"] == "enable"
+        assert shared["Authorization"] == "Bearer sk-test"
 
     def test_api_key_from_litellm_params(self):
         headers = DashScopeVideoConfig().validate_environment(
