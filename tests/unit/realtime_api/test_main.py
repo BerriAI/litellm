@@ -2840,5 +2840,29 @@ async def test_live_session_upstream_resolves_an_azure_deployment() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_session_upstream_uses_the_deployment_stored_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="azure-live",
+                credential_values={"api_key": "key-from-credential", "api_base": "https://stored.openai.azure.com"},
+                credential_info={},
+            )
+        ],
+    )
+
+    resolved: Final = await realtime_main.live_session_upstream(
+        {"model": "azure/gpt-live-1", "litellm_credential_name": "azure-live"}
+    )
+
+    assert resolved is not None
+    _, upstream = resolved
+    assert upstream.url == "wss://stored.openai.azure.com/openai/v1/live/sessions"
+    assert dict(upstream.headers) == {"api-key": "key-from-credential"}
+
+
+@pytest.mark.asyncio
 async def test_live_session_upstream_is_none_for_a_provider_without_a_live_api() -> None:
     assert await realtime_main.live_session_upstream({"model": "xai/grok-voice", "api_key": "xai-key"}) is None

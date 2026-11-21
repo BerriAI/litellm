@@ -41,6 +41,7 @@ from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import (
     ModelInfoLookupMiss,
     ProviderConfigManager,
+    acredential_updates,
     aresolve_api_key_secret_reference,
     get_base_model_from_metadata,
     lookup_model_info_for_registration,
@@ -870,8 +871,9 @@ async def _alive_session(
     )
 
 
-async def live_session_upstream(litellm_params: Mapping[str, object]) -> tuple[str, LiveUpstream] | None:
+async def live_session_upstream(deployment_params: Mapping[str, object]) -> tuple[str, LiveUpstream] | None:
     """Resolve a deployment to its provider model and Live endpoint, or None when the provider has no Live API."""
+    litellm_params: Final = {**deployment_params, **await acredential_updates(deployment_params)}
     params: Final = GenericLiteLLMParams.model_validate(litellm_params)
     model, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=str(litellm_params.get("model") or ""),
