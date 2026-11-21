@@ -207,6 +207,13 @@ def _actions(node: JsonValue) -> Iterator[str]:
     yield from chain.from_iterable(map(_actions, node.values()))
 
 
+def guardrail_trace_actions(trace: Mapping[str, object]) -> frozenset[str] | None:
+    try:
+        return frozenset(_actions(_JSON_OBJECT.validate_python(trace.get("guardrail"))))
+    except ValidationError:
+        return None
+
+
 def native_bedrock_guardrail_information(
     trace: Mapping[str, object], aws_region_name: str | None, guardrail_identifier: str | None
 ) -> StandardLoggingGuardrailInformation | None:

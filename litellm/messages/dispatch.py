@@ -6,6 +6,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
+from litellm.llms.anthropic.pass_through.utils import litellm_logging_obj_from_kwargs
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages.entrypoints import (
@@ -106,10 +107,17 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+def _forget_earlier_attempt_bridge(kwargs: Mapping[str, object]) -> None:
+    logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
+    if logging_obj is not None:
+        logging_obj.clear_bridged_model_response()
+
+
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
+    _forget_earlier_attempt_bridge(kwargs)
     python: Final = _PYTHON_MESSAGES
     return _DISPATCH.run(
         args,
@@ -121,6 +129,7 @@ def anthropic_messages_handler(
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
+    _forget_earlier_attempt_bridge(kwargs)
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,

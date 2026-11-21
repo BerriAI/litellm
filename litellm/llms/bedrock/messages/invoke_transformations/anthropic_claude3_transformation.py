@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 import httpx
 from pydantic import TypeAdapter
@@ -14,6 +14,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
@@ -37,7 +38,9 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
+    BedrockInvokeStreamGuardrail,
     apply_bedrock_invoke_structured_output,
+    bedrock_invoke_guardrail_blocked,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
@@ -63,6 +66,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -849,6 +853,21 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         return anthropic_messages_request
 
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
+        response: Final = super().transform_anthropic_messages_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+        if not bedrock_invoke_guardrail_blocked(response, raw_response.headers):
+            return response
+        return {**response, "stop_reason": "refusal"}
+
     def get_async_streaming_response_iterator(
         self,
         model: str,
@@ -1011,7 +1030,42 @@ class AmazonAnthropicClaudeMessagesConfig(
             await aclose_if_supported(completion_stream)
 
 
+_MessagesStreamChunk: TypeAlias = GChunk | ModelResponseStream | dict[str, object]
+
+
+def _is_message_delta(chunk: _MessagesStreamChunk) -> bool:
+    return isinstance(chunk, dict) and chunk.get("type") == "message_delta"
+
+
+def _refused(chunk: _MessagesStreamChunk) -> _MessagesStreamChunk:
+    if not isinstance(chunk, dict) or chunk.get("type") != "message_delta":
+        return chunk
+    delta: Final = object_mapping(chunk.get("delta"))
+    return {**chunk, "delta": {**(delta or {}), "stop_reason": "refusal"}}
+
+
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
+    def __init__(self, model: str, json_mode: bool | None = False) -> None:
+        super().__init__(model=model, json_mode=json_mode)
+        self._guardrail: BedrockInvokeStreamGuardrail = BedrockInvokeStreamGuardrail()
+        self._tail: tuple[_MessagesStreamChunk, ...] = ()
+
+    def _chunks_for_event(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
+    ) -> tuple[_MessagesStreamChunk, ...]:
+        self._guardrail = self._guardrail.with_event(chunk_data)
+        parsed: Final = self.chunk_parser(chunk_data=chunk_data)
+        if not self._tail and not _is_message_delta(parsed):
+            return (parsed,)
+        self._tail = (*self._tail, parsed)
+        return ()
+
+    def _held_chunks(self) -> tuple[_MessagesStreamChunk, ...]:
+        tail: Final = self._tail
+        self._tail = ()
+        return tuple(map(_refused, tail)) if self._guardrail.blocked else tail
+
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
         Parse the chunk data into anthropic /messages format
