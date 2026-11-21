@@ -11,7 +11,13 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_attributes,
+)
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -311,6 +317,20 @@ def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> s
     return instructions if isinstance(instructions, str) and instructions else None
 
 
+def _stored_turn_kept_no_content(
+    spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
+) -> bool:
+    response: Final = _stored_response(spend_log)
+    return not proxy_server_request and (not response or response == "{}")
+
+
+def _holds_redacted_content(message: object) -> bool:
+    content: Final = message_field(message, "content")
+    if content == REDACTED_BY_LITELLM:
+        return True
+    return any(message_field(part, "text") == REDACTED_BY_LITELLM for part in as_object_list(content) or ())
+
+
 def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str, object] | None]) -> str | None:
     latest: Final = next(
         (instructions for instructions in map(_stored_instructions, reversed(proxy_server_requests)) if instructions),
@@ -386,6 +406,14 @@ class ResponsesSessionHandler:
             if history_before_replay
             else replayed_history
         )
+        history_unavailable: Final = any(
+            _stored_turn_kept_no_content(spend_log, proxy_server_request)
+            for spend_log, proxy_server_request in zip(
+                all_spend_logs[start.index : replayed_turns],
+                proxy_server_requests[start.index : replayed_turns],
+                strict=True,
+            )
+        ) or any(map(_holds_redacted_content, chat_completion_message_history))
 
         verbose_proxy_logger.debug(
             "chat_completion_message_history %s",
@@ -395,6 +423,7 @@ class ResponsesSessionHandler:
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
             instructions=_latest_replayable_instructions(proxy_server_requests),
+            history_unavailable=history_unavailable,
         )
 
     @staticmethod

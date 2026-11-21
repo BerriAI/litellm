@@ -26,14 +26,6 @@ const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
 type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "mcpEvents">;
 
-function getPreviousMessages(
-  override: ReplayMessage[] | undefined,
-  previousResponseId: string | null,
-  conversation: { messages: ReplayMessage[] } | undefined | null,
-): ReplayMessage[] {
-  return override ?? (previousResponseId ? [] : conversation?.messages ?? []);
-}
-
 function hasMessageContent(text: string, images: ChatAttachment[], mode: ChatMode): boolean {
   return Boolean(text.trim()) || (mode === "chat" && images.length > 0);
 }
@@ -111,10 +103,7 @@ export default function ChatConversationPage() {
   const draftVersionRef = useRef(0);
   const [isLoadingModels, setIsLoadingModels] = useState(true);
 
-  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
-  const responsesSessionGenerationRef = useRef(0);
-  const previousResponsesConversationRef = useRef(activeConversationId);
-  const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
+  const [prevConversationId, setPrevConversationId] = useState(activeConversationId);
   const [isRequestInFlight, setIsStreaming] = useState(false);
   const [cancelOnAcceptance, setCancelOnAcceptance] = useState<string | null>(null);
   const backgroundRequestRef = useRef(false);
@@ -188,21 +177,8 @@ export default function ChatConversationPage() {
       .finally(() => setIsLoadingModels(false));
   }, [accessToken, t]);
 
-  useLayoutEffect(() => {
-    if (
-      previousResponsesConversationRef.current !== null &&
-      previousResponsesConversationRef.current !== activeConversationId
-    ) {
-      responsesSessionGenerationRef.current += 1;
-    }
-    previousResponsesConversationRef.current = activeConversationId;
-  }, [activeConversationId]);
-
-  // Reset the responses session when switching between conversations so that
-  // previous_response_id from conversation A is never sent for conversation B.
-  if (activeConversationId !== prevConversationIdForSessionReset) {
-    setPrevConversationIdForSessionReset(activeConversationId);
-    setResponsesSessionId(null);
+  if (activeConversationId !== prevConversationId) {
+    setPrevConversationId(activeConversationId);
     setAttachments([]);
     setAttachmentError(null);
     setInputText("");
@@ -221,11 +197,9 @@ export default function ChatConversationPage() {
         setAttachmentError(t("chat.page.errors.removeAttachmentsForImage"));
         return;
       }
-      responsesSessionGenerationRef.current += 1;
       setResearch(false);
       setSelectedModel(model.model_group);
       setMode(modelChatMode(model));
-      setResponsesSessionId(null);
       setAttachmentError(null);
       try {
         localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model.model_group);
@@ -298,13 +272,11 @@ export default function ChatConversationPage() {
       }
       if (!hasMessageContent(trimmed, images, requestMode) || !model) return;
       if (isStreaming || abortControllerRef.current || readAttachmentsRef.current) return;
-      const sessionGeneration = responsesSessionGenerationRef.current;
       setInputText("");
 
       let convId = activeConversationId;
       if (!convId) {
         convId = createConversation(model);
-        setResponsesSessionId(null); // new conversation starts a fresh session
         setConversationIdInUrl(convId);
       }
 
@@ -327,26 +299,8 @@ export default function ChatConversationPage() {
       abortControllerRef.current = new AbortController();
       requestConversationRef.current = convId;
 
-      // When historyOverride is set (edit / retry), the existing server-side
-      // session chain covers messages that were just truncated and is no longer
-      // valid for the rewritten history.  Eagerly clear the session so that a
-      // failed/aborted edit does not leave a stale session ID that contaminates
-      // the next regular send.
-      if (historyOverride) {
-        setResponsesSessionId(null);
-      }
-
-      // On a normal continuation turn with an active session, the Responses API
-      // already holds the prior context server-side, so we only pass the new
-      // user message (sending the full history would double-count it).
-      //
-      // On the very first turn (no session yet), we send the full history.
-      const previousResponseId = historyOverride ? null : responsesSessionId;
-
-      const history: ReplayMessage[] = [
-        ...getPreviousMessages(historyOverride, previousResponseId, activeConversation),
-        userMessage,
-      ];
+      // The browser owns the transcript, so it never depends on the proxy keeping prompts in its logs.
+      const history: ReplayMessage[] = [...(historyOverride ?? activeConversation?.messages ?? []), userMessage];
       const requestController = abortControllerRef.current;
 
       const request = {
@@ -356,13 +310,9 @@ export default function ChatConversationPage() {
         accessToken,
         signal: requestController.signal,
         messages: history,
-        previousResponseId,
         background: requestMode === "chat" && useBackground,
         research: doResearch,
         mcpServers: selectedMCPServers,
-        onResponseId: (id: string | null) => {
-          if (responsesSessionGenerationRef.current === sessionGeneration) setResponsesSessionId(id);
-        },
         onUpdate: (updates: AssistantMessageUpdate) => updateLastAssistantMessage(convId, updates),
       };
       backgroundRequestRef.current = request.background;
@@ -389,7 +339,6 @@ export default function ChatConversationPage() {
       appendMessage,
       updateLastAssistantMessage,
       isStreaming,
-      responsesSessionId,
       useBackground,
       setConversationIdInUrl,
       t,

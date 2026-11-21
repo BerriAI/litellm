@@ -1133,6 +1133,7 @@ class ChatCompletionSession(TypedDict, total=False):
     messages: list[SessionMessage]
     litellm_session_id: object
     instructions: ReadOnly[str | None]
+    history_unavailable: ReadOnly[bool]
 
 
 ########### End of Initialize Classes used for Responses API  ###########
@@ -1746,6 +1747,16 @@ class LiteLLMCompletionResponsesConfig:
             if previous_response_id
             else ChatCompletionSession(messages=[], litellm_session_id=None)
         )
+        if chat_completion_session.get("history_unavailable"):
+            raise litellm.BadRequestError(
+                message=(
+                    "previous_response_id cannot be continued because this proxy does not keep conversation "
+                    "content in its logs (store_prompts_in_spend_logs is off or turn_off_message_logging redacts "
+                    "it). Send the whole conversation in `input` instead."
+                ),
+                model=model,
+                llm_provider=provider or "",
+            )
         _messages: Final = litellm_completion_request.get("messages") or []
         route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
         session_history: Final = chat_completion_session.get("messages") or []

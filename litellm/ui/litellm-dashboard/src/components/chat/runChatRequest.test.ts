@@ -23,9 +23,7 @@ function requestOptions(overrides: Partial<Parameters<typeof runChatRequest>[0]>
     accessToken: "test-token",
     signal: new AbortController().signal,
     messages: [{ role: "user" as const, content: "Hello" }],
-    previousResponseId: "previous-response",
     mcpServers: ["search"],
-    onResponseId: vi.fn(),
     onUpdate: vi.fn(),
     ...overrides,
   };
@@ -52,7 +50,6 @@ describe("runChatRequest", () => {
       args[6]?.(" thought");
       args[7]?.(120);
       args[8]?.(usage);
-      args[15]?.("new-response");
       args[16]?.(event);
       args[24]?.(350);
       expect(options.onUpdate).not.toHaveBeenCalledWith({ mcpEvents: [event] });
@@ -65,31 +62,29 @@ describe("runChatRequest", () => {
     expect(options.onUpdate).toHaveBeenCalledWith({ totalLatency: 350 });
     expect(options.onUpdate).toHaveBeenCalledWith({ usage });
     expect(options.onUpdate).toHaveBeenLastCalledWith({ mcpEvents: [event] });
-    expect(options.onResponseId).toHaveBeenCalledWith("new-response");
     const args = vi.mocked(makeOpenAIResponsesRequest).mock.calls[0];
+    expect(args[0]).toEqual(options.messages);
     expect(args[5]).toBe(options.signal);
     expect(args[13]).toEqual(["search"]);
-    expect(args[14]).toBe("previous-response");
+    expect(args[14]).toBeUndefined();
   });
 
-  it("should preserve completed tool results and partial text on abort without retaining late response ids", async () => {
+  it("should preserve completed tool results and partial text on abort", async () => {
     const controller = new AbortController();
     const options = requestOptions({ signal: controller.signal });
     vi.mocked(makeOpenAIResponsesRequest).mockImplementation(async (...args) => {
       args[1]("assistant", "Partial answer");
       args[16]?.(event);
       controller.abort();
-      args[15]?.("late-response");
       throw new DOMException("Stopped", "AbortError");
     });
 
     await runChatRequest(options);
     expect(options.onUpdate).toHaveBeenCalledWith({ content: "Partial answer [stopped]" });
     expect(options.onUpdate).toHaveBeenLastCalledWith({ mcpEvents: [event] });
-    expect(options.onResponseId).toHaveBeenCalledExactlyOnceWith(null);
   });
 
-  it("should preserve partial output and reset the session after a request error", async () => {
+  it("should preserve partial output after a request error", async () => {
     const options = requestOptions();
     vi.mocked(makeOpenAIResponsesRequest).mockImplementation(async (...args) => {
       args[1]("assistant", "Partial answer");
@@ -99,7 +94,6 @@ describe("runChatRequest", () => {
     await runChatRequest(options);
     expect(options.onUpdate).toHaveBeenCalledWith({ content: "Partial answer" });
     expect(options.onUpdate).toHaveBeenLastCalledWith({ mcpEvents: [event] });
-    expect(options.onResponseId).toHaveBeenCalledWith(null);
   });
 
   it("should show an error when no response text has arrived", async () => {
@@ -107,7 +101,6 @@ describe("runChatRequest", () => {
     vi.mocked(makeOpenAIResponsesRequest).mockRejectedValue(new Error("Provider unavailable"));
     await runChatRequest(options);
     expect(options.onUpdate).toHaveBeenLastCalledWith({ content: "Provider unavailable" });
-    expect(options.onResponseId).toHaveBeenCalledWith(null);
   });
 
   it.each([400, 422, 401, 429, 500])(
@@ -191,7 +184,6 @@ describe("runChatRequest", () => {
     });
     await runChatRequest(options);
     expect(options.onUpdate).toHaveBeenCalledExactlyOnceWith({ content: " [stopped]" });
-    expect(options.onResponseId).toHaveBeenCalledWith(null);
   });
 
   describe("when the UI language is not English", () => {
