@@ -23,6 +23,7 @@ class Blocked:
 
 
 ScreenOutcome: TypeAlias = Screened | Blocked
+_RequestData: TypeAlias = dict[str, object]  # mutable-ok: the shared guardrail assignment edits request data in place
 
 
 def _registered_guardrails() -> Sequence[object]:
@@ -39,9 +40,11 @@ def _screens_events(callback: CustomGuardrail, request_data: Mapping[str, object
     )
 
 
-async def _assigned_guardrails(request_data: dict[str, object], caller: UserAPIKeyAuth) -> None:
+async def _assigned_guardrails(request_data: _RequestData, caller: UserAPIKeyAuth) -> None:
     """The key, team and policy guardrails a request from this caller would carry, as the tool path assigns them."""
-    from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+    from litellm.proxy.litellm_pre_call_utils import (
+        move_guardrails_to_metadata,  # pyright: ignore[reportUnknownVariableType]  # legacy untyped request-data helper
+    )
 
     await move_guardrails_to_metadata(data=request_data, _metadata_variable_name="metadata", user_api_key_dict=caller)
 
@@ -54,14 +57,14 @@ async def screen_event(
     subscription_id: str | None,
     caller: UserAPIKeyAuth | None,
     callbacks: Callable[[], Sequence[object]] = _registered_guardrails,
-    assign: Callable[[dict[str, object], UserAPIKeyAuth], Awaitable[None]] = _assigned_guardrails,
+    assign: Callable[[_RequestData, UserAPIKeyAuth], Awaitable[None]] = _assigned_guardrails,
 ) -> ScreenOutcome:
     from mcp.types import CallToolResult
 
     from litellm.proxy.mcp_server.guardrail_translation.handler import MCPGuardrailTranslationHandler
     from litellm.proxy.mcp_server.utils import mcp_tool_result_structured_content
 
-    request_data: Final[dict[str, object]] = {
+    request_data: Final[_RequestData] = {
         "metadata": {},
         "mcp_event": {
             "server": server_name,
