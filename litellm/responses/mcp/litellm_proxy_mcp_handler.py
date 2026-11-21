@@ -190,6 +190,15 @@ def _gateway_tool(name: str, server: MCPServer | None, tool_name: str, scopes: I
     )
 
 
+async def _acting_mcp_auth(user_api_key_auth: "UserAPIKeyAuth | None") -> "UserAPIKeyAuth | None":
+    """Resolve a dashboard session (including one rebound to a billing team) to its acting MCP principal."""
+    if user_api_key_auth is None or not hasattr(user_api_key_auth, "dashboard_model_access_auth"):
+        return user_api_key_auth
+    from litellm.proxy.mcp_server.ui_session_utils import acting_user_auth
+
+    return await acting_user_auth(user_api_key_auth.dashboard_model_access_auth())
+
+
 class LiteLLM_Proxy_MCP_Handler:
     """
     Helper class with static methods for MCP integration with Responses API.
@@ -388,6 +397,8 @@ class LiteLLM_Proxy_MCP_Handler:
             _get_tools_from_mcp_servers,
             raise_generic_mcp_access_denial,
         )
+
+        user_api_key_auth = await _acting_mcp_auth(user_api_key_auth)
 
         mcp_servers: Final = [
             server_url.split("/")[-1]
@@ -735,12 +746,13 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> GatewayTools:
         if parse_allowed_tools_tool_choice(tool_choice) is None:
             return NO_GATEWAY_TOOLS
+        acting_auth: Final = await _acting_mcp_auth(user_api_key_auth)
         served: Final = {name: _served_tool(name, server_name) for name, server_name in tool_server_map.items()}
         servers: Final = {server.server_id: server for server, _ in served.values() if server is not None}
         scopes: Final = tuple(
             [
                 await LiteLLM_Proxy_MCP_Handler._label_scope(
-                    tool, tuple(servers.values()), user_api_key_auth, granted_toolsets
+                    tool, tuple(servers.values()), acting_auth, granted_toolsets
                 )
                 for tool in mcp_tools_with_litellm_proxy
             ]
@@ -910,7 +922,7 @@ class LiteLLM_Proxy_MCP_Handler:
         tool_call_id: str | None = None
         rules_obj: Final = Rules()
         logging_safe_headers: Final = logging_safe_mcp_headers(raw_headers)
-        typed_user_api_key_auth: Final[UserAPIKeyAuth | None] = user_api_key_auth
+        typed_user_api_key_auth: Final[UserAPIKeyAuth | None] = await _acting_mcp_auth(user_api_key_auth)
         for tool_call in tool_calls:
             logging_request_data: dict[str, object] = {}
             tool_name: str | None = None
