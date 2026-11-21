@@ -1469,7 +1469,9 @@ def _retry_attempt_records(litellm_params: Mapping[str, object] | None) -> tuple
                 cast("Mapping[str, object]", record)  # cast-ok: RetryAttemptRecord TypedDict, read with .get
                 for record in (
                     *cast("Sequence[object]", records),  # cast-ok: untyped router tuple
-                    *cast("Sequence[object]", hops if isinstance(hops, (list, tuple)) else ()),  # cast-ok: untyped router tuple
+                    *cast(
+                        "Sequence[object]", hops if isinstance(hops, (list, tuple)) else ()
+                    ),  # cast-ok: untyped router tuple
                 )
                 if isinstance(record, dict)
             )
@@ -1485,7 +1487,7 @@ def _int_or_none(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
 
-_AttemptIdentity = tuple[str | None, int | None, int | None]
+_AttemptIdentity: TypeAlias = tuple[str | None, int | None, int | None]
 
 
 def _attempt_identity(record: Mapping[str, object]) -> _AttemptIdentity:
