@@ -36,6 +36,13 @@ class KeyFacts:
     last_refreshed_at: float | None
 
 
+@dataclass(frozen=True, slots=True)
+class FetchUnreachable:
+    """JWKS or OIDC discovery answered 5xx or 429. `reason` reaches the client, so it never holds the reply body."""
+
+    reason: str
+
+
 class EndUserParams(TypedDict, total=False):
     """The `UserAPIKeyAuth` fields one end user sets. A key that is absent leaves the token's own value."""
 

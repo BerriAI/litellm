@@ -3,7 +3,8 @@ use std::{fmt, sync::Arc, time::Duration};
 use litellm_config::LitellmRole;
 use litellm_coroutine::{Co, Reply};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
+    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, Fetched, KeyHash, OperatorHooks, Rows,
+    Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, Keyed},
@@ -223,7 +224,7 @@ pub(crate) enum Ask {
 
     FetchJson {
         url: String,
-        reply: Reply<Option<Value>>,
+        reply: Reply<Fetched>,
     },
     FetchUserinfo {
         endpoint: String,
@@ -506,7 +507,7 @@ impl AuthHost for PythonAuthHost {
         self.ask(|reply| Ask::ProxyBudgetAlert { key, reply }).await
     }
 
-    async fn fetch_json(&self, url: &str) -> Result<Option<Value>, Error> {
+    async fn fetch_json(&self, url: &str) -> Result<Fetched, Error> {
         let url = url.to_owned();
         self.ask(|reply| Ask::FetchJson { url, reply }).await
     }

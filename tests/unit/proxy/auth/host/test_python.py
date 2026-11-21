@@ -24,15 +24,27 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import AliasMissing, EndUserRow, RegisteredAgentFacts, TeamMissing
-from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
+from litellm.proxy.auth.host.facts import (
+    AliasMissing,
+    EndUserRow,
+    FetchUnreachable,
+    RegisteredAgentFacts,
+    TeamMissing,
+)
+from litellm.proxy.auth.host.python import (
+    AgentLookup,
+    HttpCall,
+    NoRegisteredAgents,
+    PythonAuthHost,
+    SharedFetches,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
+from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustDenial, RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
@@ -270,7 +282,7 @@ async def test_concurrent_requests_share_one_jwks_fetch() -> None:
 
 @pytest.mark.asyncio
 async def test_concurrent_requests_share_a_failed_jwks_fetch_and_the_next_one_fetches_again() -> None:
-    jwks: Final = _Jwks(status=503)
+    jwks: Final = _Jwks(status=404)
     cache: Final = UserApiKeyCache()
     shared_fetches: Final = SharedFetches()
     token: Final = _token({"sub": "admin-1", "scope": "litellm_proxy_admin"})
@@ -282,12 +294,33 @@ async def test_concurrent_requests_share_a_failed_jwks_fetch_and_the_next_one_fe
     )
 
     assert all(
-        str(failure).startswith(f"JWT Auth: JWKS endpoint {JWKS_URL} returned status 503") for failure in failures
+        str(failure).startswith(f"JWT Auth: JWKS endpoint {JWKS_URL} returned status 404") for failure in failures
     )
     assert jwks.fetches == 1
-    with pytest.raises(Exception, match="returned status 503"):
+    with pytest.raises(Exception, match="returned status 404"):
         _ = await _authorize(token, "/key/generate", cache, jwks, shared_fetches)
     assert jwks.fetches == 2
+
+
+@pytest.mark.asyncio
+async def test_a_jwks_5xx_with_nothing_cached_is_denied_as_unreachable_and_backs_off() -> None:
+    jwks: Final = _Jwks(status=503)
+    cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
+    token: Final = _token({"sub": "admin-1", "scope": "litellm_proxy_admin"})
+
+    outcomes: Final = (
+        await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache),
+        await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache),
+    )
+
+    assert all(
+        isinstance(denial := outcome.denial, RustDenial.Proxy)
+        and denial.status == 503
+        and "JWKS endpoint is temporarily unreachable" in denial.message
+        for outcome in outcomes
+    )
+    assert jwks.fetches == 1
 
 
 class _ParkedFetch:
@@ -432,14 +465,30 @@ DISCOVERY_URL: Final = "https://idp.example/.well-known/openid-configuration"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("url", [JWKS_URL, DISCOVERY_URL], ids=["jwks", "discovery"])
+@pytest.mark.parametrize("status", [500, 503, 429])
+async def test_a_jwt_endpoint_answering_5xx_or_429_is_unreachable_for_its_status_without_a_retry(
+    url: str, status: int
+) -> None:
+    http: Final = _ScriptedHttp(_reply(status, url, text="down"))
+    what: Final = "OIDC discovery endpoint" if url == DISCOVERY_URL else "JWKS endpoint"
+
+    assert await _scripted_host(http).fetch_json(url) == FetchUnreachable(
+        reason=f"JWT Auth: {what} {url} returned status {status}"
+    )
+    assert http.replies == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("url", "reply", "message"),
     [
-        (DISCOVERY_URL, _reply(500, DISCOVERY_URL, text="down"), f"OIDC discovery endpoint {DISCOVERY_URL} returned"),
+        (DISCOVERY_URL, _reply(404, DISCOVERY_URL, text="gone"), f"OIDC discovery endpoint {DISCOVERY_URL} returned"),
+        (JWKS_URL, _reply(404, JWKS_URL, text="gone"), f"JWKS endpoint {JWKS_URL} returned status 404"),
         (DISCOVERY_URL, _reply(200, DISCOVERY_URL, text="<html>"), "Failed to parse OIDC discovery document"),
         (JWKS_URL, _reply(200, JWKS_URL, text="<html>"), "Error parsing response"),
     ],
-    ids=["discovery-status", "discovery-not-json", "jwks-not-json"],
+    ids=["discovery-status", "jwks-status", "discovery-not-json", "jwks-not-json"],
 )
 async def test_an_unusable_jwt_endpoint_reply_names_the_endpoint(url: str, reply: httpx.Response, message: str) -> None:
     with pytest.raises(Exception, match=message):

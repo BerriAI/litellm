@@ -10,8 +10,8 @@ use strum::VariantArray;
 
 use super::{JwtSettings, operator::operator_accepts};
 use crate::{
-    AssertionRejection, AuthHost, Error, KeyError, KeyFailure, Searched, Token, TokenError,
-    VerifyDenial,
+    AssertionRejection, AuthHost, Error, Fetched, KeyError, KeyFailure, Searched, Token,
+    TokenError, VerifyDenial,
     identity::jwt::claims::{InternalClaim, nested_value},
     value,
 };
@@ -512,8 +512,10 @@ async fn refresh(host: &impl AuthHost, source: Source<'_>) -> Lookup<Value> {
     let url = match source {
         Source::Discovery(url) | Source::Jwks(url) => url,
     };
-    let Some(body) = host.fetch_json(url).await? else {
-        return Ok(Err(KeyFailure::unreachable(url)));
+    let body = match host.fetch_json(url).await? {
+        Fetched::Document(body) => body,
+        Fetched::TransportFailed => return Ok(Err(KeyFailure::unreachable(url))),
+        Fetched::Unavailable(error) => return Ok(Err(KeyFailure::Unreachable { error })),
     };
     Ok(match source {
         Source::Discovery(url) => match body.get("jwks_uri") {
@@ -938,7 +940,12 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
         ScriptedHost {
             fetched: fetched
                 .iter()
-                .map(|(url, body)| ((*url).to_owned(), body.clone()))
+                .map(|(url, body)| {
+                    let fetched = body
+                        .clone()
+                        .map_or(Fetched::TransportFailed, Fetched::Document);
+                    ((*url).to_owned(), fetched)
+                })
                 .collect(),
             ..ScriptedHost::default()
         }
@@ -1502,6 +1509,43 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
             .into()
         );
         assert_eq!(host.calls().len(), 4);
+    }
+
+    #[rstest]
+    #[case::answered_5xx(
+        Fetched::Unavailable(format!("JWT Auth: JWKS endpoint {JWKS} returned status 500")),
+        "JWT Auth: JWKS endpoint https://idp.example/jwks returned status 500"
+    )]
+    #[case::transport_failed(Fetched::TransportFailed, UNREACHABLE)]
+    #[tokio::test]
+    async fn an_unreachable_idp_is_a_503_naming_why_for_the_whole_backoff(
+        settings: JwtSettings,
+        #[case] fetched: Fetched,
+        #[case] reason: &str,
+    ) {
+        let host = ScriptedHost {
+            fetched: HashMap::from([(JWKS.to_owned(), fetched)]),
+            ..ScriptedHost::default()
+        };
+        let token = rs256(Some("k"), json!({}));
+
+        let first = verify(&host, &token, &settings, AT).await.unwrap_err();
+        let second = verify(&host, &token, &settings, AT).await.unwrap_err();
+
+        assert_eq!(fetches(&host).len(), 1);
+        assert_eq!(first, second);
+        assert_eq!(
+            first.public(),
+            Some(PublicDenial::Proxy {
+                status: 503,
+                message: format!(
+                    "Service Unavailable, the identity provider's JWKS endpoint is temporarily unreachable, so the \
+                     JWT signature could not be verified. Please retry shortly. Error: {reason}"
+                ),
+                error_type: ErrorType::AuthProviderUnavailable,
+                param: None,
+            })
+        );
     }
 
     #[rstest]

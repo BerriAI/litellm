@@ -8,7 +8,8 @@ use litellm_config::LitellmRole;
 use serde_json::Value;
 
 use crate::{
-    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
+    AgentIdentityFailure, AuthHost, BudgetExceeded, Error, Fetched, KeyHash, OperatorHooks, Rows,
+    Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, KeyRecord, Keyed},
@@ -62,8 +63,8 @@ pub(crate) struct ScriptedHost {
     /// Team rows whose model access the host allows.
     pub(crate) model_access: HashSet<&'static str>,
     pub(crate) jwt_user_over_budget: Option<BudgetExceeded>,
-    /// Bodies by URL; `None` is a transport outage, an unscripted URL a host error.
-    pub(crate) fetched: HashMap<String, Option<Value>>,
+    /// Fetch outcomes by URL; an unscripted URL is a host error.
+    pub(crate) fetched: HashMap<String, Fetched>,
     pub(crate) userinfo: Option<Value>,
     pub(crate) json_cache: Mutex<HashMap<String, Value>>,
     pub(crate) custom_validate_passes: bool,
@@ -278,7 +279,7 @@ impl AuthHost for ScriptedHost {
         self.step("proxy_budget_alert", format!("proxy_budget_alert {key}"))
     }
 
-    async fn fetch_json(&self, url: &str) -> Result<Option<Value>, Error> {
+    async fn fetch_json(&self, url: &str) -> Result<Fetched, Error> {
         self.record(format!("fetch {url}"));
         self.fetched.get(url).cloned().ok_or(Error::HostFailed)
     }

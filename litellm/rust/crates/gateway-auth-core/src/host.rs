@@ -47,6 +47,16 @@ pub type MembershipRow<H> = <<H as AuthHost>::Rows as Rows>::Membership;
 pub type OrgRow<H> = <<H as AuthHost>::Rows as Rows>::Org;
 pub type AgentRow<H> = <<H as AuthHost>::Rows as Rows>::Agent;
 
+/// What a GET of a JWKS or OIDC discovery URL came to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fetched {
+    Document(Value),
+    /// Transport failures outlasted the retries.
+    TransportFailed,
+    /// The endpoint answered 5xx or 429. Carries the host's reason, never the reply body.
+    Unavailable(String),
+}
+
 /// Code the operator wrote, which only a host that embeds their Python can run.
 pub trait OperatorHooks: Send + Sync {
     /// The operator's `custom_validate` callable. The core decides when it runs and what `false` means.
@@ -116,10 +126,10 @@ pub trait AuthHost: Send + Sync {
     /// Drops the cached key, after the core found it stale or unusable.
     fn evict_key(&self, hash: &KeyHash) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// GET with the transient-failure retries. `None` once transport failures outlast them; a
-    /// non-200 or non-JSON reply is a host error carrying the proxy's message. Callers that fetch
-    /// one URL at the same time share one request, so an expired JWKS costs the IdP one fetch.
-    fn fetch_json(&self, url: &str) -> impl Future<Output = Result<Option<Value>, Error>> + Send;
+    /// GET with the transient-failure retries. Any other non-200 or a non-JSON reply is a host
+    /// error carrying the proxy's message. Callers that fetch one URL at the same time share one
+    /// request, so an expired JWKS costs the IdP one fetch.
+    fn fetch_json(&self, url: &str) -> impl Future<Output = Result<Fetched, Error>> + Send;
 
     /// GET the OIDC UserInfo endpoint with `Authorization: Bearer {token}`. `None` is a JSON
     /// `null` body; any failure is a host error carrying `Failed to fetch OIDC UserInfo: ...`.

@@ -13,6 +13,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import read_email_verified
 from litellm.proxy.auth.host.facts import (
     AliasMissing,
+    FetchUnreachable,
     FoundTeam,
     TeamFacts,
     TeamMissing,
@@ -127,7 +128,11 @@ async def _key_rebuilds(call: RustAuth, step: RustAuthStep, host: PythonAuthHost
 async def _jwt_io(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -> bool:
     match step:
         case RustAuthStep.FetchJson(url=url):
-            call.json(await host.fetch_json(url))
+            match await host.fetch_json(url):
+                case FetchUnreachable(reason=reason):
+                    call.fetch_unavailable(reason)
+                case document:
+                    call.json(document)
         case RustAuthStep.FetchUserinfo(endpoint=endpoint, token=token):
             call.json(await host.fetch_userinfo(endpoint, token))
         case RustAuthStep.CachedDocument(key=key):

@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -63,6 +64,7 @@ from litellm.proxy.auth.auth_object_prefetch import prefetch_identity_keys
 from litellm.proxy.auth.host.facts import (
     AliasMissing,
     EndUserRow,
+    FetchUnreachable,
     FoundTeam,
     RegisteredAgentFacts,
     TeamMissing,
@@ -514,9 +516,13 @@ class PythonAuthHost:
         if response is None:
             return None
         discovery: Final = OIDC_DISCOVERY_PATH in url
+        what: Final = "OIDC discovery endpoint" if discovery else "JWKS endpoint"
+        answered: Final = f"JWT Auth: {what} {url} returned status {response.status_code}"
+        if response.is_server_error or response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
+            verbose_proxy_logger.error("%s: %s", answered, response.text)
+            return FetchUnreachable(reason=answered)
         if response.status_code != 200:
-            what: Final = "OIDC discovery endpoint" if discovery else "JWKS endpoint"
-            raise Exception(f"JWT Auth: {what} {url} returned status {response.status_code}: {response.text}")
+            raise Exception(f"{answered}: {response.text}")
         try:
             return _DECODED_JSON.validate_python(response.json())
         except Exception as e:
