@@ -22569,8 +22569,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_logs_post"];
+        /** Ingest Otlp Logs */
+        post: operations["ingest_otlp_logs_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24704,8 +24704,11 @@ export interface paths {
         /** List Agent Traces */
         get: operations["list_agent_traces_v1_traces_get"];
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_traces_post"];
+        /**
+         * Forward Otlp Traces
+         * @description An agent that traces itself sends its spans here with its gateway key; they go to Lens as sent, filed under that key's owner.
+         */
+        post: operations["forward_otlp_traces_v1_traces_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -89603,7 +89606,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_logs_post: {
+    ingest_otlp_logs_v1_logs_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -92720,7 +92723,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_traces_post: {
+    forward_otlp_traces_v1_traces_post: {
         parameters: {
             query?: never;
             header?: never;
