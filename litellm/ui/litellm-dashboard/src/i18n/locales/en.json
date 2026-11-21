@@ -207,6 +207,7 @@
       "customer": "Customer organization",
       "apps": "Apps in this group",
       "appLimitsHint": "App limits do not reserve funds. All apps share the group’s remaining budget.",
+      "usageHint": "Usage charts show requests attributed to customer organizations. The shared budget covers all requests.",
       "noApps": "No apps selected. Edit this app group to add apps.",
       "editApp": "Edit app settings",
       "customers": "Customer organization budgets",

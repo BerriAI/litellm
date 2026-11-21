@@ -98,6 +98,8 @@ beforeEach(() => {
     "GET /models": () => ({ data: [] }),
     "GET /management/v1/apps/resources/team/team-chat/models": () => [],
   };
+  routes["GET /management/v1/customer_teams/daily/activity"] =
+    routes["GET /management/v1/customer_organizations/daily/activity"];
   network = mockAppRequests(routes);
   requests = network.requests;
 });
@@ -108,6 +110,7 @@ const appGroup: AppGroup = {
   name: "Product suite",
   budget_id: "group-custom",
   budget: { max_budget: 10000 },
+  budget_usage: [{ source: "scalar", max_budget: 10000, budget_duration: null, spend: 0, reset_at: null }],
   spend: 0,
   created_at: "",
   updated_at: "",
@@ -116,6 +119,74 @@ const appGroup: AppGroup = {
 };
 
 describe("App groups", () => {
+  it("shows group usage and filters an app within the same group and date range", async () => {
+    network.routes["GET /management/v1/app_groups"] = () => [appGroup];
+    configureApp({ app_group_id: appGroup.app_group_id, budget: { max_budget: 2000 } });
+    network.routes["GET /management/v1/customer_organizations/daily/activity"] = (request) => {
+      const query = new URL(request.url).searchParams;
+      const scoped = query.get("app_group_id") === appGroup.app_group_id;
+      const groupSpend = query.has("app_id") ? 2.5 : 12.5;
+      const metrics = {
+        spend: scoped ? groupSpend : 900,
+        total_tokens: 1500,
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        api_requests: 3,
+      };
+      return {
+        results: [
+          {
+            date: query.get("start_date"),
+            metrics,
+            breakdown: { model_groups: { "group-model": { metrics, metadata: {} } } },
+          },
+        ],
+        metadata: { has_more: false, total_pages: 1 },
+      };
+    };
+    const user = userEvent.setup();
+    render(<AppGroupsPage />, {
+      searchParams: "?app_group=group-suite&from=2026-11-01&to=2026-11-03",
+    });
+    const models = within(await screen.findByRole("table", { name: "Models" }));
+    expect(await models.findByText("$12.50")).toBeInTheDocument();
+    expect(screen.getByTitle("1,500 tokens")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Usage over time" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Current budget" })).getByText("$0.00 / $10,000.00"),
+    ).toBeInTheDocument();
+    await chooseAppOption(user, screen.getByRole("combobox", { name: "App", exact: true }), "chat");
+    await waitFor(() =>
+      expect(within(screen.getByRole("table", { name: "Models" })).getByText("$2.50")).toBeInTheDocument(),
+    );
+    const activity = requests
+      .map((request) => new URL(request.url))
+      .filter(
+        (url) =>
+          url.pathname.endsWith("/daily/activity") && url.searchParams.get("app_group_id") === appGroup.app_group_id,
+      );
+    expect(
+      activity.some(
+        (url) =>
+          url.searchParams.get("app_id") === app.app_id &&
+          url.searchParams.get("start_date") === "2026-11-01" &&
+          url.searchParams.get("end_date") === "2026-11-03",
+      ),
+    ).toBe(true);
+    const customerLink = new URL(
+      screen.getByRole("link", { name: "Customer organization budgets" }).getAttribute("href")!,
+      "http://localhost",
+    );
+    const expectedScope = {
+      app_group: "group-suite",
+      group_tab: "customers",
+      from: "2026-11-01",
+      to: "2026-11-03",
+      app_id: app.app_id,
+    };
+    expect(Object.fromEntries(customerLink.searchParams)).toEqual(expectedScope);
+  });
+
   it("assigns an app to a group while preserving its own budget preset", async () => {
     network.routes["GET /management/v1/app_groups"] = () => [appGroup];
     const user = await openAppSettings({ budget_id: overallPreset.budget_id, budget: overallPreset });
@@ -201,7 +272,7 @@ describe("App groups", () => {
       budget_id: "customer-standard",
     });
     const user = userEvent.setup();
-    render(<AppGroupsPage />, { searchParams: "?app_group=group-suite" });
+    render(<AppGroupsPage />, { searchParams: "?app_group=group-suite&group_tab=customers" });
     await user.click(await screen.findByRole("button", { name: "Set customer budget" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Customer budget for app group" }));
     await chooseAppOption(user, await dialog.findByRole("combobox", { name: "Customer organization" }), "Customer One");

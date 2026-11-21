@@ -12,10 +12,12 @@ export default function ApplicationsTable({
   rows,
   loading,
   onOpen,
+  keyPrefix,
 }: {
   rows: readonly ApplicationRow[];
   loading: boolean;
   onOpen?: (resourceId: string) => void;
+  keyPrefix?: string;
 }) {
   const { t } = useTranslation();
   const groups = useOverallAppBudgetGroups(Boolean(onOpen));
@@ -40,6 +42,7 @@ export default function ApplicationsTable({
         rows={tableRows}
         loading={loading}
         onEdit={onOpen}
+        keyPrefix={keyPrefix}
         overallSpend={usage.data?.get(null)?.spend ?? null}
       />
     </>

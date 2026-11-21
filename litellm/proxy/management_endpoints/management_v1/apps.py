@@ -48,13 +48,13 @@ async def get_app_store() -> AsyncIterator[AppStore]:
     await store.invalidate_cache()
 
 
-Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]
+Store: TypeAlias = Annotated[AppStore, Depends(get_app_store, scope="function")]
 Actor: TypeAlias = Annotated[str, Depends(customer_actor)]
 
 
 async def get_app_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    store: Annotated[AppStore, Depends(get_app_store)],
+    store: Store,
 ) -> AppAccess:
     if auth.user_role == LitellmUserRoles.PROXY_ADMIN:
         return ALL_APPS

@@ -52,6 +52,11 @@ export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerA
   yearlyMembers: UsageRow[];
 }
 
+export type CustomerUsageAnalysisData = Pick<
+  CustomerHierarchyUsage,
+  "results" | "metadata" | "teams" | "api_keys" | "teamResults"
+>;
+
 interface CustomerUsageRequest {
   scope: CustomerUsageScope;
   accessToken: string;
@@ -254,6 +259,35 @@ export const customerAppUsageCall = async (
         ),
       },
     })),
+  };
+};
+
+export const customerAppGroupUsageCall = async (
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId"> & {
+    appGroupId: string;
+  },
+): Promise<CustomerUsageAnalysisData> => {
+  const [organizationPages, teamPages] = await Promise.all([
+    activityPages("customer_organizations", [], request),
+    activityPages("customer_teams", [], request),
+  ]);
+  const usage = mergeCustomerActivityPages(organizationPages);
+  const teamUsage = mergeCustomerActivityPages(teamPages);
+  const labels = new Map(
+    teamUsage.results.flatMap((day) =>
+      Object.entries(day.breakdown.entities).map(
+        ([id, { metadata }]) =>
+          [id, "alias" in metadata && typeof metadata.alias === "string" ? metadata.alias : id] as const,
+      ),
+    ),
+  );
+  return {
+    ...usage,
+    teams: customerEntityRankings(teamUsage.results, labels, usage.metadata, {
+      unassignedLabel: i18n.t("customerPortal.analytics.unassignedTeam"),
+    }),
+    api_keys: customerKeyRankings(usage.results, i18n.t("customerPortal.analytics.unnamedKey")),
+    teamResults: customerEntityDailyData(usage.results, teamUsage.results, labels),
   };
 };
 

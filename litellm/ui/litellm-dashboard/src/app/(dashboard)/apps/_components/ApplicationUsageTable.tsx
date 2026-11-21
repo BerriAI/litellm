@@ -19,8 +19,6 @@ import {
   type ApplicationUsageTableRow,
 } from "./applicationTableData";
 
-const GROUP_TABLE = { ...APPLICATION_TABLE, keyPrefix: "groups_" };
-
 export default function ApplicationUsageTable({
   rows,
   loading,
@@ -29,6 +27,7 @@ export default function ApplicationUsageTable({
   onEdit,
   onOpen,
   actions,
+  keyPrefix,
 }: {
   rows: readonly ApplicationUsageTableRow[];
   loading: boolean;
@@ -37,11 +36,13 @@ export default function ApplicationUsageTable({
   onEdit?: (id: string) => void;
   onOpen?: (id: string) => void;
   actions?: ReactNode;
+  keyPrefix?: string;
 }) {
   const { t } = useTranslation();
-  const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(
-    kind === "groups" ? GROUP_TABLE : APPLICATION_TABLE,
-  );
+  const defaultPrefix = kind === "groups" ? "groups_" : "";
+  const tableOptions = { ...APPLICATION_TABLE, keyPrefix: keyPrefix ?? defaultPrefix };
+  const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } =
+    useUrlTableState(tableOptions);
   const columns = APPLICATION_COLUMNS.map((column) =>
     column.id === "application" && kind === "groups" ? { ...column, label: "apps.groups.parent" as const } : column,
   );
