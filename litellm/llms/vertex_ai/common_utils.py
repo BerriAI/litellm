@@ -51,20 +51,26 @@ GEMINI_FILES_API_URI_PREFIXES: Final = (
 def gemini_media_capability(
     model: str,
     key: Literal["supports_part_media_resolution", "supports_media_in_tool_response"],
+    *,
+    custom_llm_provider: str | None = None,
 ) -> bool:
     name: Final = model.rsplit("/", 1)[-1]
     qualified_name: Final = f"gemini/{name}"
     catalog: Final = cast(  # cast-ok: the live model-cost table contains model rows
         Mapping[str, Mapping[str, object]], litellm.model_cost
     )
-    for candidate in (model, qualified_name, f"vertex_ai/{name}", name):
+    if custom_llm_provider is None:
+        candidates = (model, qualified_name, f"vertex_ai/{name}", name)
+    else:
+        candidates = (f"{custom_llm_provider}/{name}", name)
+    for candidate in candidates:
         row = catalog.get(candidate)
         if row is None:
             continue
         flag = row.get(key)
         if isinstance(flag, bool):
             return flag
-    defaults: Final = match_fill_missing_generalizations(qualified_name, "gemini")
+    defaults: Final = match_fill_missing_generalizations(qualified_name, custom_llm_provider or "gemini")
     default_flag: Final = defaults.get(key) if defaults is not None else None
     if isinstance(default_flag, bool):
         return default_flag

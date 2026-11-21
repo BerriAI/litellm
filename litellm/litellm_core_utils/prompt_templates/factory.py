@@ -1528,7 +1528,7 @@ def _gemini_tool_file_options(
     if not allow_gemini_file_references:
         return {}, GeminiFileInspectionMetadata()
     fields: Final = {**content, **(as_str_mapping(content.get("file")) or {})}
-    return fields, encode_gemini_file_inspection_metadata(fields, model=model)
+    return fields, encode_gemini_file_inspection_metadata(fields, model=model, custom_llm_provider="gemini")
 
 
 def convert_to_gemini_tool_call_result(
@@ -1570,7 +1570,6 @@ def convert_to_gemini_tool_call_result(
 
     content_str: str = ""
     media_parts: Final[list[FunctionResponsePartType]] = []  # mutable-ok: preserve tool result media order
-    sibling_parts: Final[list[VertexPartType]] = []  # mutable-ok: preserve file references on older Gemini models
 
     if "content" in message:
         if isinstance(message["content"], str):
@@ -1638,10 +1637,7 @@ def convert_to_gemini_tool_call_result(
                         and (source_part := _gemini_files_api_tool_part(file_fields, model)) is not None
                         and "file_data" in source_part
                     ):
-                        if supports_media_in_tool_response:
-                            media_parts.append({"file_data": source_part["file_data"], **metadata})
-                        else:
-                            sibling_parts.append({**source_part, **metadata})
+                        media_parts.append({"file_data": source_part["file_data"], **metadata})
                         continue
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
@@ -1659,11 +1655,7 @@ def convert_to_gemini_tool_call_result(
                         # Convert file to base64 blob format for Gemini
                         try:
                             file_obj = convert_to_anthropic_image_obj(file_data, format=None)
-                            (
-                                sibling_parts
-                                if allow_gemini_file_references and not supports_media_in_tool_response
-                                else media_parts
-                            ).append(
+                            media_parts.append(
                                 {
                                     "inline_data": BlobType(data=file_obj["data"], mime_type=file_obj["media_type"]),
                                     **metadata,
@@ -1727,9 +1719,10 @@ def convert_to_gemini_tool_call_result(
     # For multimodal function responses, Gemini expects media parts nested
     # inside functionResponse.parts instead of sibling content parts.
     if media_parts:
+        if not supports_media_in_tool_response:
+            return [_part, *(VertexPartType(**part) for part in media_parts)]
         _function_response["parts"] = media_parts
-    if media_parts or sibling_parts:
-        return [_part, *sibling_parts]
+        return [_part]
 
     return _part
 

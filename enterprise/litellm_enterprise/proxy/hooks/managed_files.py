@@ -1770,15 +1770,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if (file_id := _chat_message_file_id(part, role)) is not None:
                     yield file_id
 
+    @staticmethod
+    def _responses_input_file_id(part: Mapping[str, object]) -> str | None:
+        part_type: Final = part.get("type")
+        if part_type == "input_file":
+            file_id: Final = part.get("file_id")
+            if isinstance(file_id, str) and file_id:
+                return file_id
+            url = part.get("file_url")
+        elif part_type == "input_image":
+            url = part.get("image_url")
+        else:
+            return None
+        return url if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
         """
         Gets file ids from responses API input.
 
         The input can be:
         - A string (no files)
-        - A list of input items, where each item can have:
-          - type: "input_file" with file_id
-          - content: a list that can contain items with type: "input_file" and file_id
+        - A list of file or image items, either directly or inside message content
         """
         file_ids: List[str] = []
 
@@ -1792,20 +1804,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if not isinstance(item, dict):
                 continue
 
-            # Check for direct input_file type
-            if item.get("type") == "input_file":
-                file_id = item.get("file_id")
-                if isinstance(file_id, str) and file_id:
-                    file_ids.append(file_id)
+            if (file_id := self._responses_input_file_id(item)) is not None:
+                file_ids.append(file_id)
 
             # Check for input_file in content array
             content = item.get("content")
             if isinstance(content, list):
                 for content_item in content:
-                    if isinstance(content_item, dict) and content_item.get("type") == "input_file":
-                        file_id = content_item.get("file_id")
-                        if isinstance(file_id, str) and file_id:
-                            file_ids.append(file_id)
+                    if (
+                        isinstance(content_item, dict)
+                        and (file_id := self._responses_input_file_id(content_item)) is not None
+                    ):
+                        file_ids.append(file_id)
 
         return file_ids
 
