@@ -16,7 +16,10 @@ use litellm_host_http::Sse;
 use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
 };
-use litellm_llms_types::formats::messages::MessagesOptionalParams;
+use litellm_llms_types::formats::messages::{
+    MessagesOptionalParams,
+    streaming::{MessagesStreamEvent, MessagesStreamUsage},
+};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use litellm_router_core::{Attempt, Deployment, Op, Served};
 use serde_json::{Map, Value};
@@ -27,7 +30,8 @@ use crate::{
     headers::Routing,
     model_restamp::{ReportedModel, Stamp},
     request,
-    routing::{self, Host, RouteAttempt},
+    routing::{self, Host, RouteAttempt, RouteChunks},
+    stream_event::{Counts, Kind, Read, Reading},
     stream_outcome::{self, Streamed},
 };
 
@@ -159,18 +163,21 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
                 Served::new((CallOutput::Complete(body), cache), total_tokens)
             }
             CallOutput::Stream { head, chunks } => {
-                let chunks = stream_outcome::reporting_outcome(
-                    self.gateway,
-                    deployment,
-                    chunks,
-                    stream_outcome::messages_event,
-                );
+                let chunks =
+                    stream_outcome::reporting_outcome(self.gateway, deployment, chunks, read_event);
                 Served {
                     deferred: true,
                     ..Served::new((CallOutput::Stream { head, chunks }, cache), 0)
                 }
             }
         })
+    }
+
+    fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
+        match &mut outcome.0 {
+            CallOutput::Stream { chunks, .. } => Some((chunks, read_event)),
+            CallOutput::Complete(_) => None,
+        }
     }
 }
 
@@ -257,6 +264,41 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
     (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
 }
 
+/// An Anthropic Messages event. `message_start` counts the input and `message_delta` the output,
+/// only a `content_block_delta` carries generated output (`is_anthropic_content_delta_chunk`),
+/// and an `error` event is answered as its error type is before a stream, with the event's own
+/// data as the body (`parse_anthropic_error_event`).
+pub(crate) fn read_event(data: &str) -> Reading {
+    match serde_json::from_str(data) {
+        Ok(MessagesStreamEvent::MessageStart { message }) => Reading::lifecycle(message.usage),
+        Ok(
+            MessagesStreamEvent::MessageDelta { usage, .. }
+            | MessagesStreamEvent::MessageStop { usage, .. },
+        ) => Reading::lifecycle(usage),
+        Ok(MessagesStreamEvent::ContentBlockDelta { .. }) => Reading::of(Kind::Content),
+        Ok(MessagesStreamEvent::Error { error }) => Reading::of(Kind::Failed {
+            status: error.error_type.status(),
+            answer: data.to_owned(),
+        }),
+        Ok(
+            MessagesStreamEvent::ContentBlockStart { .. }
+            | MessagesStreamEvent::ContentBlockStop { .. }
+            | MessagesStreamEvent::Ping
+            | MessagesStreamEvent::Other(_),
+        )
+        | Err(_) => Reading::of(Kind::Lifecycle),
+    }
+}
+
+impl From<MessagesStreamUsage> for Counts {
+    fn from(usage: MessagesStreamUsage) -> Self {
+        Self {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -296,5 +338,81 @@ mod tests {
         };
 
         assert_eq!(read.as_ref().map(|named| named.as_deref()), expected);
+    }
+
+    /// A provider's stream goes out as it was sent, so the reader takes events Anthropic itself
+    /// would never send: a strict reading would hold back content or lose the usage they carry.
+    #[rstest]
+    #[case::a_start_counts_its_input(
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#,
+        Kind::Lifecycle,
+        Some(7)
+    )]
+    #[case::a_closing_delta_counts_its_output(
+        r#"{"type":"message_delta","delta":{},"usage":{"output_tokens":5}}"#,
+        Kind::Lifecycle,
+        Some(5)
+    )]
+    #[case::a_ping_says_nothing(r#"{"type":"ping"}"#, Kind::Lifecycle, None)]
+    #[case::a_block_opening_is_not_content_yet(
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        Kind::Lifecycle,
+        None
+    )]
+    #[case::a_text_delta_is_content(
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+        Kind::Content,
+        None
+    )]
+    #[case::a_delta_of_a_type_not_named_yet_is_content(
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"future_delta","payload":1}}"#,
+        Kind::Content,
+        None
+    )]
+    #[case::a_known_delta_with_a_field_of_another_shape_is_content(
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":["hi"]}}"#,
+        Kind::Content,
+        None
+    )]
+    #[case::an_error_without_a_type_is_no_failure(r#"{"type":"error"}"#, Kind::Lifecycle, None)]
+    #[case::data_that_is_no_event_says_nothing("[DONE]", Kind::Lifecycle, None)]
+    fn a_messages_event_that_is_no_error_says_whether_content_began_and_what_it_counts(
+        #[case] data: &str,
+        #[case] kind: Kind,
+        #[case] total_tokens: Option<u64>,
+    ) {
+        let reading = read_event(data);
+
+        assert_eq!(
+            (reading.kind, reading.usage.map(Counts::total)),
+            (kind, total_tokens)
+        );
+    }
+
+    #[rstest]
+    #[case::overloaded(
+        r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#,
+        529
+    )]
+    #[case::without_a_message(r#"{"type":"error","error":{"type":"overloaded_error"}}"#, 529)]
+    #[case::refused(
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"no"}}"#,
+        400
+    )]
+    #[case::of_a_type_not_named_yet(
+        r#"{"type":"error","error":{"type":"future_error","message":"busy"}}"#,
+        500
+    )]
+    fn a_messages_error_event_is_answered_as_its_type_is_before_a_stream_with_its_own_data(
+        #[case] data: &str,
+        #[case] status: u16,
+    ) {
+        assert_eq!(
+            read_event(data),
+            Reading::of(Kind::Failed {
+                status,
+                answer: data.to_owned()
+            })
+        );
     }
 }
