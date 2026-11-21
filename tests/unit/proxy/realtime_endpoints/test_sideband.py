@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Final
 
 import pytest
@@ -76,7 +77,25 @@ async def test_a_sideband_that_never_reaches_the_provider_is_given_up_on_and_sto
             outcome.set_result("stopped")
             raise
 
-    assert await join_sideband(client, _session(), timeout=0) is False
+    assert await join_sideband(client, _session(), timeout=0, wind_down=0) is False
     with pytest.raises(WebSocketDisconnect):
         await client.receive_text()
     assert await asyncio.wait_for(outcome, 1) == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_sideband_finishes_releasing_its_holds_before_it_is_stopped() -> None:
+    client: Final = SidebandClientWebSocket("/v1/realtime")
+    outcome: Final[asyncio.Future[str]] = asyncio.get_running_loop().create_future()
+
+    async def _session() -> None:
+        try:
+            await client.send_text(json.dumps({"type": "error", "error": {"message": "rate limited"}}))
+            await asyncio.sleep(0.05)
+            outcome.set_result("released")
+        except asyncio.CancelledError:
+            outcome.set_result("stopped")
+            raise
+
+    assert await join_sideband(client, _session()) is False
+    assert await asyncio.wait_for(outcome, 1) == "released"

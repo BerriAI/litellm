@@ -16,6 +16,7 @@ from starlette.websockets import WebSocketDisconnect
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 SIDEBAND_ATTACH_TIMEOUT_SECONDS: Final = 10.0
+_SIDEBAND_WIND_DOWN_SECONDS: Final = 5.0
 
 _SIDEBAND_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: holds each task until it finishes
 
@@ -79,10 +80,12 @@ async def join_sideband(
     client: SidebandClientWebSocket,
     session: Coroutine[object, object, None],
     timeout: float = SIDEBAND_ATTACH_TIMEOUT_SECONDS,
+    wind_down: float = _SIDEBAND_WIND_DOWN_SECONDS,
 ) -> bool:
     """Run the metering session in the background and say whether it joined the call.
 
     A call whose sideband did not join would run unmetered, so its creator refuses it.
+    A refused session gets `wind_down` seconds to release its budget hold and parallel slot before it is stopped.
     """
     task: Final = asyncio.create_task(session)
     _SIDEBAND_TASKS.add(task)
@@ -91,5 +94,7 @@ async def join_sideband(
     if await client.joined(timeout):
         return True
     await client.close()
-    _ = task.cancel()
+    finished, _ = await asyncio.wait({task}, timeout=wind_down)
+    if not finished:
+        _ = task.cancel()
     return False
