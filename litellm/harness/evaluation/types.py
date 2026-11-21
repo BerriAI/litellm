@@ -305,15 +305,16 @@ def _cost_sum(costs: Sequence[float | None]) -> float | None:
 
 def _summary(target: str, runs: tuple[EvalRun, ...]) -> EvalSummary:
     selected: Final = tuple(run for run in runs if run.target == target)
+    results: Final = tuple(run.result for run in selected if run.result is not None)
     checks: Final = tuple(run.check for run in selected if run.check is not None)
-    tool_counts: Final = tuple(run.tool_calls for run in selected)
+    tool_counts: Final = tuple(run.tool_calls for run in selected if run.result is not None)
     return EvalSummary(
         target=target,
         total=len(selected),
         passed=sum(run.status is EvalStatus.PASS for run in selected),
         errors=sum(run.status is EvalStatus.ERROR for run in selected),
-        cost=_cost_sum(tuple(run.cost for run in selected)),
-        usage=_usage_sum(tuple(run.usage for run in selected)),
+        cost=_cost_sum(tuple(result.cost for result in results)),
+        usage=_usage_sum(tuple(result.usage for result in results)),
         tool_calls=None
         if any(count is None for count in tool_counts)
         else sum(count for count in tool_counts if count is not None),
@@ -447,7 +448,7 @@ class EvalScorecard:
             "|---|---|---|---|---|---|---|---|"
         )
         note: Final = (
-            "\n\n* Some usage or cost is unavailable."
+            "\n\n* Known subtotals only; some metrics are unavailable."
             if any(not summary.metrics_complete for summary in self.summaries)
             else ""
         )

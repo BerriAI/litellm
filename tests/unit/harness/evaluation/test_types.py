@@ -49,9 +49,9 @@ def test_should_aggregate_known_usage_and_serialize_unknown_metrics_without_auth
     summary: Final = report.summaries[0]
     assert summary.total == 3 and summary.passed == 1 and summary.errors == 1
     assert summary.pass_rate == 1 / 3
-    assert summary.cost is None
-    assert summary.usage is None
-    assert summary.tool_calls is None
+    assert summary.cost == 0.5
+    assert summary.usage == Usage(input_tokens=20, output_tokens=8, calls=4)
+    assert summary.tool_calls == 2
     assert summary.mean_duration == 2
     assert summary.judge_cost == 0.1
     assert summary.judge_usage == Usage(input_tokens=2, output_tokens=1, calls=1)
@@ -69,6 +69,7 @@ def test_should_aggregate_known_usage_and_serialize_unknown_metrics_without_auth
     assert "Agent cost (USD)" in report.to_markdown()
     assert "Judge cost (USD)" in report.to_markdown()
     assert "unknown" in report.to_markdown()
+    assert "Known subtotals" in report.to_markdown()
 
 
 def test_should_escape_multiline_labels_and_check_output_in_markdown() -> None:
@@ -165,10 +166,12 @@ def test_should_keep_unreported_custom_metrics_unknown_and_explicit_zero_known()
         (
             EvalRun("one", "t", "unknown", 1, EvalStatus.PASS, unknown, None, 1, "pass"),
             EvalRun("two", "t", "known", 1, EvalStatus.PASS, known, None, 1, "pass"),
+            EvalRun("three", "t", "unknown", 2, EvalStatus.ERROR, None, None, 1, "startup failed"),
         ),
     )
     incomplete, complete = report.summaries
     assert incomplete.cost is None and incomplete.usage is None and incomplete.tool_calls is None
     assert not incomplete.metrics_complete
+    assert (incomplete.total, incomplete.passed, incomplete.errors) == (2, 1, 1)
     assert complete.cost == 0.0 and complete.usage == Usage() and complete.tool_calls == 0
     assert complete.metrics_complete
