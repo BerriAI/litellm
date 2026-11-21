@@ -1,3 +1,4 @@
+import importlib
 import random
 import re
 import time
@@ -16,6 +17,10 @@ from litellm_proxy_extras.prisma_toolchain import (
 
 MIGRATION_LOCK_KEY: Final = int.from_bytes(b"llm_mig2", "big")
 PRISMA_ADVISORY_LOCK_KEY: Final = 72707369
+PRISMA_DISABLE_ADVISORY_LOCK_ENV_VAR: Final = "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK"
+PSYCOPG_UNAVAILABLE_HINT: Final = (
+    "The litellm[extra_proxy] extra provides psycopg, and PSYCOPG_IMPL=python also needs a system libpq."
+)
 _SERVER_ANSWERED_MARKERS: Final = ("FATAL:", "SSL", "certificate")
 
 
@@ -50,12 +55,27 @@ def _migration_url(database_url: str, direct_url: "str | None") -> str:
     return urlunsplit(direct._replace(query=urlencode((*parameters, ("schema", schema)))))
 
 
+def _psycopg_import_error() -> ImportError | None:
+    try:
+        importlib.import_module("psycopg")
+    except ImportError as exc:
+        return exc
+    return None
+
+
 def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
+    """Prisma's own advisory lock is disabled only when psycopg loads, because only then can
+    `prisma_migration_lock` hold Prisma's key in its place."""
     database_url: Final = environment.get("DATABASE_URL")
     if not database_url:
         return environment
     migration_url: Final = _migration_url(database_url, environment.get("DIRECT_URL"))
-    return {**environment, "DATABASE_URL": migration_url, "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK": "1"}
+    if _psycopg_import_error() is None:
+        return {**environment, "DATABASE_URL": migration_url, PRISMA_DISABLE_ADVISORY_LOCK_ENV_VAR: "1"}
+    return {
+        **{key: value for key, value in environment.items() if key != PRISMA_DISABLE_ADVISORY_LOCK_ENV_VAR},
+        "DATABASE_URL": migration_url,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +143,12 @@ def migration_lock(
     database_url: str,
     lock: AdvisoryLock = COORDINATOR_LOCK,
 ) -> Generator[MigrationCoordinator, None, None]:
-    import psycopg
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise RuntimeError(
+            f"The {lock.name} needs psycopg, which could not be imported: {exc}. {PSYCOPG_UNAVAILABLE_HINT}"
+        ) from exc
 
     wait_seconds: Final = migration_lock_timeout()
     deadline: Final = time.monotonic() + wait_seconds
@@ -156,7 +181,17 @@ def migration_lock(
 def prisma_migration_lock(database_url: str) -> Generator[None, None, None]:
     """Hold only Prisma's key as an xact lock on a pinned connection with Prisma's session lock disabled.
 
-    This keeps deploy independent of the coordinator key held by request-log index builds."""
+    This keeps deploy independent of the coordinator key held by request-log index builds. Without
+    psycopg, `migration_environment` leaves Prisma's own session lock on and this holds nothing."""
+    import_error: Final = _psycopg_import_error()
+    if import_error is not None:
+        logger.warning(
+            "psycopg could not be imported (%s), so prisma runs its migrations under its own advisory lock. %s",
+            import_error,
+            PSYCOPG_UNAVAILABLE_HINT,
+        )
+        yield
+        return
     with migration_lock(database_url, PRISMA_LOCK) as coordinator:
         coordinator.release_statement_snapshot()
         yield

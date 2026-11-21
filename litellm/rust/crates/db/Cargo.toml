@@ -4,21 +4,18 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-include = ["Cargo.toml", "src/**", "queries/**", ".sqlx/**"]
+include = ["Cargo.toml", "src/**"]
 
 [dependencies]
-chrono.workspace = true
 futures-util.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-error.workspace = true
 litellm-secret-value.workspace = true
-macro_rules_attribute.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 sqlx.workspace = true
 strum.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["macros", "net", "sync", "time"] }
 
 [dev-dependencies]
 rstest.workspace = true

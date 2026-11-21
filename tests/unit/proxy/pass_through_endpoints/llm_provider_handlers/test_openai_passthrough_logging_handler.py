@@ -1555,8 +1555,18 @@ class TestOpenAIPassthroughIntegration:
     async def test_success_handler_falls_back_for_non_openai_routes(self):
         """Test that non-OpenAI routes don't call our handler"""
         # Arrange
+        anthropic_message = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-sonnet",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
         mock_httpx_response = MagicMock(spec=httpx.Response)
-        mock_httpx_response.text = '{"status": "success"}'
+        mock_httpx_response.text = json.dumps(anthropic_message)
+        mock_httpx_response.json.return_value = anthropic_message
         mock_httpx_response.headers = {"content-type": "application/json"}
 
         mock_logging_obj = MagicMock()
@@ -1577,7 +1587,7 @@ class TestOpenAIPassthroughIntegration:
         # Act
         result = await self.handler.pass_through_async_success_handler(
             httpx_response=mock_httpx_response,
-            response_body={"status": "success"},
+            response_body=anthropic_message,
             logging_obj=mock_logging_obj,
             url_route="https://api.anthropic.com/v1/messages",
             result="",

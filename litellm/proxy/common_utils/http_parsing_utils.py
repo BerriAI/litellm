@@ -205,9 +205,29 @@ def _parse_binary_body(body: bytes) -> dict[str, object]:
     return {}
 
 
+_BODY_SENT_SCOPE_KEY: Final = "litellm_request_sent_body"
+
+
 def _declared_content_length(headers: Mapping[str, str]) -> int | None:
     declared: Final = headers.get("content-length")
     return int(declared) if isinstance(declared, str) and declared.isdigit() else None
+
+
+def _request_declares_body(headers: Mapping[str, str]) -> bool:
+    content_length: Final = _declared_content_length(headers)
+    return "transfer-encoding" in headers or (content_length is not None and content_length > 0)
+
+
+def request_sent_body(request: Request) -> bool:
+    recorded: Final[object] = request.scope.get(_BODY_SENT_SCOPE_KEY) if hasattr(request, "scope") else None
+    if isinstance(recorded, bool):
+        return recorded
+    return _request_declares_body(request.headers)
+
+
+def _record_body_sent(request: Request, sent: bool) -> None:
+    if hasattr(request, "scope"):
+        request.scope[_BODY_SENT_SCOPE_KEY] = sent  # rebind-ok: the ASGI scope is per-request shared state
 
 
 def _mark_body_received(byte_count: int | None) -> None:
@@ -216,6 +236,13 @@ def _mark_body_received(byte_count: int | None) -> None:
         "litellm.request.body_received",
         None if byte_count is None else {"litellm.request.body_bytes": byte_count},
     )
+
+
+async def _receive_body(request: Request) -> bytes:
+    body: Final = await request.body()
+    _record_body_sent(request, len(body) > 0)
+    _mark_body_received(len(body))
+    return body
 
 
 def is_otlp_trace_request(request: HTTPConnection) -> bool:
@@ -249,6 +276,7 @@ def _reraise_request_size_error(error: Exception) -> None:
 async def _read_form_data(request: Request) -> FormData:
     try:
         form_data: Final = await request.form()
+        _record_body_sent(request, len(form_data) > 0)
         _mark_body_received(_declared_content_length(request.headers))
     except ClientDisconnect:
         raise
@@ -295,8 +323,7 @@ async def read_request_body(request: Request | None) -> dict:
         content_type: Final = _request_headers.get("content-type", "")
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
-            binary_body: Final = await request.body()
-            _mark_body_received(len(binary_body))
+            binary_body: Final = await _receive_body(request)
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
             form_body: Final = dict(await _read_form_data(request))
@@ -308,8 +335,7 @@ async def read_request_body(request: Request | None) -> dict:
             )
         else:
             # Read the request body
-            body: Final = await request.body()
-            _mark_body_received(len(body))
+            body: Final = await _receive_body(request)
 
             # Return empty dict if body is empty or None
             if not body:
@@ -362,11 +388,11 @@ async def read_request_body(request: Request | None) -> dict:
     except ValidationError as e:
         from fastapi.routing import APIRoute
 
+        from litellm.integrations.lens.proxy.buffering import LensRoute
         from litellm.proxy.auth.auth_utils import (
             request_dispatched_to_pass_through_endpoint,
             request_dispatched_to_provider_pass_through,
         )
-        from litellm.proxy.lens.buffering import LensRoute
 
         route: Final[object] = request.scope.get("route")
         if (

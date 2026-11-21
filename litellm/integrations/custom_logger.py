@@ -3,6 +3,7 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
+from datetime import datetime
 from functools import cache
 from itertools import takewhile
 from types import MappingProxyType
@@ -22,7 +23,6 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LLMResponseTypes,
     ModelResponse,
-    ModelResponseStream,
     StandardAuditLogPayload,
     StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
@@ -30,7 +30,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
+    from fastapi import APIRouter, HTTPException
     from opentelemetry.trace import Span as _Span
 
     from litellm.caching.caching import DualCache
@@ -67,6 +67,8 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    logs_every_failed_attempt: ClassVar[bool] = False
+    reads_original_response: ClassVar[bool] = False
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
     wants_failed_prompt_token_estimate: ClassVar[bool] = False
@@ -107,6 +109,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         self.message_logging = message_logging
         self.turn_off_message_logging = turn_off_message_logging
+
+    async def async_setup_proxy(self) -> "APIRouter | None":
+        """
+        Runs once when the proxy starts, before it serves traffic. Raising aborts startup.
+
+        HTTP API routes on a returned router are added to the proxy behind LiteLLM key auth.
+        Websocket routes, mounts and plain Starlette routes are refused.
+        """
+        return None
+
+    async def async_close_proxy(self) -> None:
+        """Runs when the proxy shuts down, after in-flight requests and queued logs have drained."""
 
     @staticmethod
     def get_callback_env_vars(callback_name: str | None = None) -> list[str]:
@@ -200,6 +214,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
+
+    async def async_log_failed_attempt(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        await self.async_log_failure_event(kwargs, None, start_time, end_time)
 
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""
@@ -310,7 +332,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> LLMResponseTypes | None:
+    ) -> object:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
@@ -544,7 +566,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         async for item in response:
             yield item
 

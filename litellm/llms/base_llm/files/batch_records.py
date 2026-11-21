@@ -21,6 +21,7 @@ def responses_batch_body_to_chat_body(
     drop_params: bool | None = None,
     *,
     caller_input: str | ResponseInputParam | None = None,
+    base_model: str | None = None,
 ) -> dict[str, object]:  # mutable-ok: provider transforms take the bridged chat body as a plain dict
     """
     Rewrite the body of an OpenAI `/v1/responses` batch record as a Chat Completions body.
@@ -56,4 +57,5 @@ def responses_batch_body_to_chat_body(
         drop_params=drop_params,
         caller_input=caller_input,
         metadata=openai_request_body.get("metadata"),
+        base_model=base_model,
     )

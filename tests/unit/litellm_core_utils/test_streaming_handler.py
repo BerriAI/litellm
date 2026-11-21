@@ -17,6 +17,7 @@ import httpx
 import pytest
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
+from openai.types.completion import Completion
 from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
@@ -5258,6 +5259,161 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
     )
 
 
+_BRIDGED_MODEL: Final = "gpt-6.1-sol"
+_BRIDGED_RESPONSE: Final = MappingProxyType(
+    {"id": "resp_1", "object": "response", "created_at": 1, "model": _BRIDGED_MODEL, "status": "in_progress"}
+)
+_BRIDGED_MESSAGE: Final = MappingProxyType({"id": "msg_1", "type": "message", "role": "assistant"})
+_BRIDGED_TOOL_CALL: Final = MappingProxyType(
+    {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "get_weather"}
+)
+_BRIDGED_USAGE: Final = MappingProxyType({"input_tokens": 5, "output_tokens": 1, "total_tokens": 6})
+_BRIDGED_TEXT_EVENTS: Final = (
+    {"type": "response.created", "sequence_number": 0, "response": {**_BRIDGED_RESPONSE, "output": []}},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**_BRIDGED_MESSAGE, "status": "in_progress", "content": []},
+    },
+    {
+        "type": "response.output_text.delta",
+        "sequence_number": 2,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "hello",
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 3,
+        "response": {
+            **_BRIDGED_RESPONSE,
+            "status": "completed",
+            "output": [
+                {
+                    **_BRIDGED_MESSAGE,
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+                }
+            ],
+            "usage": dict(_BRIDGED_USAGE),
+        },
+    },
+)
+_BRIDGED_TOOL_EVENTS: Final = (
+    {"type": "response.created", "sequence_number": 0, "response": {**_BRIDGED_RESPONSE, "output": []}},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**_BRIDGED_TOOL_CALL, "status": "in_progress", "arguments": ""},
+    },
+    {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 2,
+        "item_id": "fc_1",
+        "output_index": 0,
+        "delta": '{"city":"Berlin"}',
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 3,
+        "response": {
+            **_BRIDGED_RESPONSE,
+            "status": "completed",
+            "output": [{**_BRIDGED_TOOL_CALL, "status": "completed", "arguments": '{"city":"Berlin"}'}],
+            "usage": dict(_BRIDGED_USAGE),
+        },
+    },
+)
+
+
+def _bridged_stream(
+    events: Sequence[Mapping[str, object]], provider: str, sync_mode: bool, logging_obj: Logging
+) -> CustomStreamWrapper:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    lines: Final = [f"data: {json.dumps(event)}" for event in events]
+    logging_obj.model_call_details["custom_llm_provider"] = provider
+    return CustomStreamWrapper(
+        completion_stream=OpenAiResponsesToChatCompletionStreamIterator(
+            streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)), sync_stream=sync_mode
+        ),
+        model=_BRIDGED_MODEL,
+        custom_llm_provider=provider,
+        logging_obj=logging_obj,
+    )
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_bridged_text_stream_sets_the_model_on_every_chunk(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    received: Final = await _collect(_bridged_stream(_BRIDGED_TEXT_EVENTS, provider, sync_mode, logging_obj), sync_mode)
+
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "hello"
+    assert [c.model for c in received] == [_BRIDGED_MODEL] * len(received), [c.model for c in received]
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_bridged_tool_call_stream_sets_the_model_on_every_chunk(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    received: Final = await _collect(_bridged_stream(_BRIDGED_TOOL_EVENTS, provider, sync_mode, logging_obj), sync_mode)
+    tool_call_chunks: Final = [c for c in received if c.choices and c.choices[0].delta.tool_calls]
+
+    assert tool_call_chunks, [c.choices[0].delta for c in received if c.choices]
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
+    assert [c.model for c in received] == [_BRIDGED_MODEL] * len(received), [c.model for c in received]
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_stream_adopts_each_upstream_model_and_keeps_it_when_a_chunk_has_none(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    upstream_models: Final = (None, "gpt-6.1-sol-2026-11-01", None, "")
+    chunks: Final = [
+        ModelResponseStream(
+            model=upstream_model,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=f"part{index}"),
+                    finish_reason="stop" if index == len(upstream_models) - 1 else None,
+                )
+            ],
+        )
+        for index, upstream_model in enumerate(upstream_models)
+    ]
+    logging_obj.model_call_details["custom_llm_provider"] = provider
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=_BRIDGED_MODEL,
+        custom_llm_provider=provider,
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert [(c.choices[0].delta.content, c.model) for c in received if c.choices and c.choices[0].delta.content] == [
+        ("part0", _BRIDGED_MODEL),
+        ("part1", "gpt-6.1-sol-2026-11-01"),
+        ("part2", "gpt-6.1-sol-2026-11-01"),
+        ("part3", ""),
+    ]
+
+
 def test_gemini_legacy_vertex_stop_finish_reason_normalised():
     """
     The legacy vertex_ai SDK streaming path sets finish_reason from a proto enum
@@ -10186,3 +10342,213 @@ async def test_async_stream_success_log_survives_garbage_collection_while_its_ca
         await drain_logging_tasks()
 
         assert (received, survived, logger.parks, logger.finished.is_set()) == ("Hello there", True, 1, True)
+
+
+def _openai_chat_chunk(choices: Sequence[Mapping[str, object]]) -> ChatCompletionChunk:
+    return ChatCompletionChunk.model_validate(
+        {
+            "id": "chatcmpl-reason",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": choices,
+        }
+    )
+
+
+def _openai_chat_stream(logging_obj: Logging, chunks: Sequence[ChatCompletionChunk]) -> tuple[ModelResponseStream, ...]:
+    return tuple(
+        CustomStreamWrapper(
+            completion_stream=iter(chunks), model="gpt-4o", custom_llm_provider="openai", logging_obj=logging_obj
+        )
+    )
+
+
+_UPSTREAM_REASON_FIELDS: Final = {"native_finish_reason": "end_turn"}
+
+
+@pytest.mark.parametrize("final_content", ["!", ""], ids=["content-then-finish", "finish-only"])
+@pytest.mark.parametrize("finish_fields", [_UPSTREAM_REASON_FIELDS, None], ids=["with-fields", "without-fields"])
+def test_openai_stream_relays_the_finish_chunks_choice_fields_only_on_the_finish_chunk(
+    logging_obj: Logging, final_content: str, finish_fields: Mapping[str, str] | None
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            _openai_chat_chunk([{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}]),
+            _openai_chat_chunk(
+                [
+                    {
+                        "index": 0,
+                        "delta": {"content": final_content},
+                        "finish_reason": "stop",
+                        **({"provider_specific_fields": dict(finish_fields)} if finish_fields else {}),
+                    }
+                ]
+            ),
+        ),
+    )
+
+    choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in emitted))
+    assert [getattr(choice, "provider_specific_fields", None) for choice in choices if choice.finish_reason] == [
+        finish_fields
+    ]
+    assert [
+        fields
+        for choice in choices
+        if not choice.finish_reason and (fields := getattr(choice, "provider_specific_fields", None))
+    ] == []
+    rebuilt: Final = litellm.stream_chunk_builder(list(emitted))
+    assert rebuilt is not None
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == finish_fields
+
+
+def test_openai_chunk_finishing_two_choices_closes_the_stream_with_the_closing_choices_own_fields(
+    logging_obj: Logging,
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            _openai_chat_chunk(
+                [
+                    {"index": index, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}
+                    for index in (0, 1)
+                ]
+            ),
+            _openai_chat_chunk(
+                [
+                    {
+                        "index": 1,
+                        "delta": {"content": ""},
+                        "finish_reason": "stop",
+                        "provider_specific_fields": {"native_finish_reason": "length_one"},
+                    },
+                    {
+                        "index": 0,
+                        "delta": {"content": ""},
+                        "finish_reason": "stop",
+                        "provider_specific_fields": {"native_finish_reason": "length_zero"},
+                    },
+                ]
+            ),
+        ),
+    )
+
+    finished: Final = [
+        (choice.index, getattr(choice, "provider_specific_fields", None))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+        if choice.finish_reason
+    ]
+    assert finished == [(0, {"native_finish_reason": "length_zero"})]
+
+
+def test_openai_stream_keeps_the_choice_fields_of_chunks_that_finish_nothing_where_they_are(
+    logging_obj: Logging,
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            _openai_chat_chunk(
+                [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hi"},
+                        "finish_reason": None,
+                        "provider_specific_fields": {"segment": "greeting"},
+                    }
+                ]
+            ),
+            _openai_chat_chunk([{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}]),
+        ),
+    )
+
+    assert [
+        (choice.delta.content, getattr(choice, "provider_specific_fields", None))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+        if not choice.finish_reason
+    ] == [("Hi", {"segment": "greeting"}), ("!", None)]
+
+
+_TWO_CHOICE_REASONS: Final = MappingProxyType(
+    {0: {"native_finish_reason": "eos_zero"}, 1: {"native_finish_reason": "eos_one"}}
+)
+
+
+def _finishing_choice(index: int) -> Mapping[str, object]:
+    return {
+        "index": index,
+        "delta": {"content": f" from {index}"},
+        "finish_reason": "stop",
+        "provider_specific_fields": dict(_TWO_CHOICE_REASONS[index]),
+    }
+
+
+@pytest.mark.parametrize(
+    "finishing_chunks",
+    [
+        pytest.param(((0,), (1,)), id="zero-then-one"),
+        pytest.param(((1,), (0,)), id="one-then-zero"),
+        pytest.param(((1, 0),), id="both-in-one-chunk"),
+    ],
+)
+def test_openai_stream_with_two_choices_keeps_the_other_choices_reason_on_the_wire(
+    logging_obj: Logging, finishing_chunks: tuple[tuple[int, ...], ...]
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            *(
+                _openai_chat_chunk(
+                    [{"index": index, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}]
+                )
+                for index in (0, 1)
+            ),
+            *(_openai_chat_chunk([_finishing_choice(index) for index in indices]) for indices in finishing_chunks),
+        ),
+    )
+
+    assert {
+        (choice.index, choice.get("provider_specific_fields", {}).get("native_finish_reason"))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+        if choice.get("provider_specific_fields")
+    } == {(0, "eos_zero"), (1, "eos_one")}
+
+
+def _completion_chunk(
+    text: str, finish_reason: str | None, choice_extras: Mapping[str, object] = MappingProxyType({})
+) -> Completion:
+    return Completion.construct(
+        id="cmpl-reason",
+        created=1,
+        model="m",
+        object="text_completion",
+        choices=[{"index": 0, "text": text, "finish_reason": finish_reason, "logprobs": None, **choice_extras}],
+    )
+
+
+@pytest.mark.parametrize("final_text", [", 6", ""], ids=["text-then-finish", "finish-only"])
+def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_the_closing_chunk(
+    logging_obj: Logging, final_text: str
+) -> None:
+    emitted: Final = tuple(
+        CustomStreamWrapper(
+            completion_stream=iter(
+                (
+                    _completion_chunk(", 5", None),
+                    _completion_chunk(
+                        final_text,
+                        "stop",
+                        {"stop_reason": ", 7", "provider_specific_fields": dict(_UPSTREAM_REASON_FIELDS)},
+                    ),
+                )
+            ),
+            model="m",
+            custom_llm_provider="text-completion-openai",
+            logging_obj=logging_obj,
+        )
+    )
+
+    assert [
+        (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+    ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]

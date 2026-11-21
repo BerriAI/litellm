@@ -17,6 +17,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
@@ -280,8 +281,9 @@ def _anthropic_options_as_chat_params(
     )
 
 
-def _anthropic_system_as_chat_sends_it(system: object) -> object:
-    return _system_text(system) if system else system
+def _anthropic_system_as_chat_sends_it(system: object) -> str | None:
+    filtered: Final = system_without_claude_code_billing_header(system)
+    return _system_text(filtered) if filtered else None
 
 
 class MistralTokenCounter(BaseTokenCounter):
@@ -302,12 +304,28 @@ class MistralTokenCounter(BaseTokenCounter):
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
-                return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+                anthropic_items, _, counted_tools, text = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
                     model=model_to_use,
                     messages=tuple(map(_with_tool_result_text_joins, messages)),
-                    system=system,
+                    system=None,
                     tools=tools,
                     output_format=output_format,
+                )
+                system_text: Final = _anthropic_system_as_chat_sends_it(system)
+                return OpenAICountTokensConfig.count_request_parts(
+                    (
+                        {
+                            "type": "message",
+                            "role": "developer",
+                            "content": [{"type": "input_text", "text": system_text}],
+                        },
+                        *anthropic_items,
+                    )
+                    if system_text
+                    else anthropic_items,
+                    None,
+                    counted_tools,
+                    text,
                 )
             case "openai":
                 replayed_turns: Final = _MISTRAL_CHAT_CONFIG.replayed_turns(messages, model_to_use)
@@ -404,7 +422,7 @@ class MistralTokenCounter(BaseTokenCounter):
             model_to_use=model_to_use,
             messages=sent_messages,
             tools=tools,
-            system=_anthropic_system_as_chat_sends_it(system) if messages_format == "anthropic" else system,
+            system=system,
             messages_format=messages_format,
             output_format=output_format,
         )

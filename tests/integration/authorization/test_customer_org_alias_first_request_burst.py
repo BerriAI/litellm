@@ -1,3 +1,4 @@
+import dataclasses
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +12,7 @@ from tests.integration._support.wire import Reply, Request, wire_server
 _ORG_ALIAS_HEADER: Final = "x-litellm-customer-org-alias"
 _ORGANIZATIONS: Final = "/management/v1/customer_organizations"
 _BURST: Final = 150
+_BURST_READ_TIMEOUT_SECONDS: Final = 60
 _CHAT_RESPONSE: Final = (
     b'{"id":"chatcmpl-scripted","object":"chat.completion","created":1700000000,"model":"scripted",'
     b'"choices":[{"index":0,"message":{"role":"assistant","content":"scripted response"},"finish_reason":"stop"}],'
@@ -51,8 +53,14 @@ def test_a_burst_of_first_requests_on_new_org_aliases_is_served_and_registers_ev
                 gateway.request, "DELETE", f"{_ORGANIZATIONS}/{alias}", params={"cascade": "true"}
             )
 
-        with ThreadPoolExecutor(max_workers=_BURST) as pool:
-            responses: Final = tuple(pool.map(lambda alias: _chat(gateway, key, model, alias), aliases))
+        with (
+            httpx.Client(
+                base_url=gateway.client.base_url, timeout=_BURST_READ_TIMEOUT_SECONDS, trust_env=False
+            ) as client,
+            ThreadPoolExecutor(max_workers=_BURST) as pool,
+        ):
+            patient: Final = dataclasses.replace(gateway, client=client)
+            responses: Final = tuple(pool.map(lambda alias: _chat(patient, key, model, alias), aliases))
 
         refused: Final = tuple(response.text for response in responses if response.status_code != 200)
         assert Counter(response.status_code for response in responses) == {200: _BURST}, refused[:1]

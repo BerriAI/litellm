@@ -1,0 +1,6 @@
+{
+  "requests": [],
+  "outcome": {
+    "error": "invalid request: claude-sonnet-4-5@20250929 on vertex_ai needs `output_format` to be a JSON object, got str. To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+  }
+}
