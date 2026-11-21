@@ -1040,6 +1040,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     record_spend_counter_value,
     spend_counter_batch_scope,
 )
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import capture_spend_logs_ledger_setting
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -1642,7 +1643,12 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    connections: Final = rust_connections(os.environ)
+    from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
+
+    connections: Final = rust_connections(
+        os.environ,
+        rust_spend_log_writer=spend_log_writer_runs_in_rust(general_settings_view()),
+    )
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
@@ -1807,7 +1813,15 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     settings: Final = general_settings_view()
     enforce_fips_mode(settings)
     if configure_pool_budget_from_settings.get() and prisma_client is None:
-        resources.enter_context(with_configured_connection_budget(settings.get("database_connection_pool_limit")))
+        from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
+
+        resources.enter_context(
+            with_configured_connection_budget(
+                settings.get("database_connection_pool_limit"),
+                rust_spend_log_writer=spend_log_writer_runs_in_rust(settings),
+            )
+        )
+    resources.callback(capture_spend_logs_ledger_setting(settings))
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -3536,11 +3550,29 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 spend_event_producer: SpendEventProducer | None = None
 
 
+def _register_rust_spend_loggers() -> bool:
+    from litellm.proxy.spend_tracking.rust_spend_log_rows import uses_spend_logs_ledger
+
+    if not uses_spend_logs_ledger():
+        return False
+    from litellm.proxy.hooks.rust_spend_logger import rust_spend_loggers
+
+    logger: Final = rust_spend_loggers(prisma_client)
+    if logger is None:
+        return False
+    litellm.logging_callback_manager.add_litellm_callback(logger)  # pyright: ignore[reportArgumentType]  # the callback list also holds V2 callbacks
+    litellm.logging_callback_manager.add_litellm_async_success_callback(logger)
+    return True
+
+
 def cost_tracking():
     global prisma_client, spend_event_producer
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
+        if _register_rust_spend_loggers():
+            litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
+            return
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
         db_logger: Final = ProxyDBLogger(spend_event_producer)
         litellm.logging_callback_manager.add_litellm_callback(db_logger)

@@ -262,10 +262,13 @@ def _namespace(rust: RustHandle, manifest: WireManifest) -> dict[str, object]:  
 
 
 def rust_logger(
-    rust: RustHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
+    rust: RustHandle,
+    projections: Mapping[Field, Projection] = NO_PROJECTIONS,
+    host: object = None,
+    base: type[RustLogger] = RustLogger,
 ) -> RustLogger:
     manifest: Final = WireManifest.model_validate_json(rust.manifest())
-    cls: Final = type(manifest.selection.name, (RustLogger,), _namespace(rust, manifest))
+    cls: Final = type(manifest.selection.name, (base,), _namespace(rust, manifest))
     return cls(rust, projections, host)
 
 

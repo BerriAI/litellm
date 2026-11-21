@@ -105,7 +105,7 @@ fn entry_cost(entry: &Value) -> f64 {
 }
 
 /// `guardrail_information_cost(guardrail_information)`: the billable cost of the guardrail records.
-pub(crate) fn guardrail_information_cost(information: &Value) -> f64 {
+pub fn guardrail_information_cost(information: &Value) -> f64 {
     match information {
         Value::None => 0.0,
         Value::List(items) => number::sum(items.iter().map(entry_cost)),

@@ -3882,6 +3882,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-spend-logger"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "litellm-callbacks",
+ "litellm-callbacks-budgets",
+ "litellm-callbacks-spend-log",
+ "litellm-coroutine",
+ "litellm-db",
+ "litellm-python-compat",
+ "litellm-redis-store",
+ "litellm-repositories",
+ "litellm-spend-log-writer",
+ "litellm-tracing",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "veil",
+]
+
+[[package]]
 name = "litellm-circuit-breaker"
 version = "0.1.0"
 dependencies = [
@@ -4663,6 +4688,7 @@ dependencies = [
  "litellm-callbacks-python",
  "litellm-callbacks-s3-log",
  "litellm-callbacks-spend-log",
+ "litellm-callbacks-spend-logger",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-core-utils",

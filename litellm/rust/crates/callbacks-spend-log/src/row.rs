@@ -94,20 +94,27 @@ static HASHED_JWT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\Ahashed-jwt-[a-fA-F0-9]{64}\z").expect("hashed jwt pattern compiles")
 });
 
-fn strip_bearer(value: &str) -> &str {
+/// The value with any case-insensitive `Bearer ` prefix dropped.
+pub fn strip_bearer(value: &str) -> &str {
     match value.get(..7) {
         Some(prefix) if prefix.eq_ignore_ascii_case("bearer ") => &value[7..],
         _ => value,
     }
 }
 
-fn hash_token(token: &str) -> String {
+/// `hash_token`: the key's SHA-256 as lowercase hex.
+pub fn hash_token(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+
+/// The value is a SHA-256 hex digest, so it is already the logged form of a key.
+pub fn is_sha256_hex(value: &str) -> bool {
+    SHA256_HEX.is_match(value)
 }
 
 fn is_non_secret_key_value(value: &str, key_alias: &Value) -> bool {
     NON_SECRET_KEY_ALIASES.contains(&value)
-        || SHA256_HEX.is_match(value)
+        || is_sha256_hex(value)
         || HASHED_JWT.is_match(value)
         || (value.starts_with(&format!("{CLI_SESSION_KEY_PREFIX}-"))
             && matches!(key_alias, Value::Str(alias) if alias == value))

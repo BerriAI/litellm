@@ -90,6 +90,10 @@ impl Budgets {
         }
     }
 
+    pub fn store(&self) -> &Arc<SpendCounters> {
+        &self.store
+    }
+
     pub fn with_logger(self, logger: Logger) -> Self {
         Self {
             logger: Some(logger),

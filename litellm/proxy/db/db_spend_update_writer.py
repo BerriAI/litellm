@@ -99,6 +99,7 @@ from litellm.proxy.spend_tracking.savings import (
 )
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -862,7 +863,7 @@ class DBSpendUpdateWriter:
         proxy_settings: Final = cast(  # cast-ok: proxy settings use string keys
             Mapping[str, object], general_settings
         )
-        use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
+        use_ledger: Final = spend_logs_ledger_enabled(proxy_settings)
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
         customer_hierarchy: Final = customer_hierarchy_ids_from_request(request_fields)
         if kwargs is not None:
@@ -1028,6 +1029,36 @@ class DBSpendUpdateWriter:
                 end_user_id,
             )
             return True
+
+    async def record_after_ledger_row(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: "PrismaClient | None",
+        kwargs: Mapping[str, object],
+        completion_response: object,
+        hashed_token: str | None,
+        team_id: str | None,
+        billable_cost: float,
+        spend_logs_kept: bool,
+        claimed: bool,
+    ) -> None:
+        if claimed and prisma_client is not None:
+            await _track_guardrail_usage_of_cost_row(payload, prisma_client, not spend_logs_kept)
+        await self._enqueue_autorouter_turn_transaction(
+            payload=payload, prisma_client=prisma_client, spend_logs_kept=spend_logs_kept
+        )
+        await self._record_session_spend(hashed_token, billable_cost, _SPEND_METADATA_ADAPTER.validate_python(kwargs))
+        if spend_logs_kept:
+            await self._enqueue_tool_usage_transaction(  # pyright: ignore[reportUnknownMemberType]  # the step takes the untyped kwargs dict
+                payload=payload,
+                completion_response=completion_response,
+                prisma_client=prisma_client,
+                kwargs=dict(kwargs),
+            )
+        self._record_request_error_safely(payload=payload, prisma_client=prisma_client)
+        self._enqueue_tool_registry_upsert(  # pyright: ignore[reportUnknownMemberType]  # the step takes the untyped kwargs dict
+            kwargs=dict(kwargs), completion_response=completion_response, hashed_token=hashed_token, team_id=team_id
+        )
 
     async def _record_session_spend(
         self, api_key: str | None, spend: float, request_fields: Mapping[str, object]

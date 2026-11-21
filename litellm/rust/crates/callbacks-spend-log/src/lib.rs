@@ -44,9 +44,12 @@ use std::sync::Arc;
 
 use litellm_tracing::TokenRedactor;
 
-pub use accounting::{AccountingSavings, AccountingWindow, LedgerColumns, LedgerInput};
+pub use accounting::{
+    AccountingSavings, AccountingWindow, LedgerColumns, LedgerInput, guardrail_information_cost,
+};
+pub use consts::VIDEO_STATUS_CALL_TYPES;
 pub use input::RowInput;
-pub use row::{SpendLogRow, SpendLogStatus};
+pub use row::{SpendLogRow, SpendLogStatus, hash_token, is_sha256_hex, strip_bearer};
 
 /// The default of `MAX_STRING_LENGTH_PROMPT_IN_DB`.
 pub const DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB: i64 = 2048;

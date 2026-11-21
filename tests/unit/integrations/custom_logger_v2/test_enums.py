@@ -20,7 +20,7 @@ def test_field_round_trips_from_its_config_string() -> None:
 
 def test_field_bits_are_distinct_and_fit_a_u64_bitset() -> None:
     bits = [member.bit for member in Field]
-    assert len(set(bits)) == len(bits) == 49
+    assert len(set(bits)) == len(bits) == 50
     assert all(0 <= bit < 64 for bit in bits)
 
 
@@ -29,13 +29,14 @@ def test_fields_fall_in_the_four_cost_tiers_of_the_design() -> None:
         FieldTier.small_record: 29,
         FieldTier.content: 12,
         FieldTier.wire: 4,
-        FieldTier.compatibility: 4,
+        FieldTier.compatibility: 5,
     }
     assert {member for member in Field if member.tier is FieldTier.compatibility} == {
         Field.standard_logging_payload,
         Field.deprecated_kwargs,
         Field.deprecated_response_obj,
         Field.standard_logging_payload_ref,
+        Field.spend_log_input,
     }
 
 
@@ -90,4 +91,5 @@ def test_field_bits_are_the_wire_contract_shared_with_the_rust_manifest() -> Non
         "limiter_request": 46,
         "spend_log_id": 47,
         "billed_retry_attempts": 48,
+        "spend_log_input": 49,
     }

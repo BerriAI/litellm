@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.secret_redaction import (
 )
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.rust_bridge import _native
 from litellm.types.proxy.spend_log_rows import LedgerColumns, NativeSpendLogRow
 from litellm.types.utils import LiteLLMBatch, batch_chat_usage
@@ -512,7 +513,7 @@ class LedgerRowInput:
 def uses_spend_logs_ledger() -> bool:
     from litellm.proxy.proxy_server import general_settings_view
 
-    return general_settings_view().get("use_spend_logs_ledger", True) is not False
+    return spend_logs_ledger_enabled(general_settings_view())
 
 
 @lru_cache(maxsize=8)

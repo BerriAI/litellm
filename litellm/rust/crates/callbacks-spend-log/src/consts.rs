@@ -134,7 +134,7 @@ pub(crate) const BATCH_COST_REQUEST_ID_SUFFIX: &str = "_batch_cost";
 pub(crate) const VIDEO_COST_REQUEST_ID_SUFFIX: &str = "_video_cost";
 
 /// `VIDEO_STATUS_CALL_TYPES` from `types/videos/utils.py`.
-pub(crate) const VIDEO_STATUS_CALL_TYPES: [&str; 2] = ["video_status", "avideo_status"];
+pub const VIDEO_STATUS_CALL_TYPES: [&str; 2] = ["video_status", "avideo_status"];
 
 /// `SensitiveDataMasker`'s default patterns plus the `apikey` the request body masker adds.
 pub(crate) const SENSITIVE_PATTERNS: [&str; 15] = [

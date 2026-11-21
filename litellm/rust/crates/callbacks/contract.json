@@ -494,6 +494,11 @@
       "name": "billed_retry_attempts",
       "bit": 48,
       "tier": "small_record"
+    },
+    {
+      "name": "spend_log_input",
+      "bit": 49,
+      "tier": "compatibility"
     }
   ],
   "tiers": [
@@ -536,6 +541,7 @@
     "rate_limit_state",
     "request_tags",
     "spend_log_id",
+    "spend_log_input",
     "standard_logging_payload_ref",
     "usage"
   ],
