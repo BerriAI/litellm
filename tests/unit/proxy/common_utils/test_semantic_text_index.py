@@ -257,7 +257,7 @@ def _priced_embedding_router() -> Router:
 async def test_a_caller_over_budget_is_refused_the_embedding_sub_call(proxy_auth_state: ProxyAuthState) -> None:
     router: Final = _priced_embedding_router()
     proxy_auth_state.serve(router)
-    caller: Final = UserAPIKeyAuth(api_key="sk-spent", spend=2.0, max_budget=1.0)
+    caller: Final = UserAPIKeyAuth(api_key="sk-spent", spend=2.0, max_budget=1.0, request_route="/mcp-rest/tools/call")
 
     scores: Final = await SemanticTextIndex().scores(
         QUERY, ("valid one",), router_embedder(router, "emb", caller, _pass_through_key_limits()), "emb"

@@ -45,8 +45,10 @@ class SubCallModelRefused(ValueError):
     """The caller's model allowlist, budget or rate limit refuses the sub-call's model, as it would refuse a direct call."""
 
 
-async def admit_sub_call_model(user_api_key_dict: UserAPIKeyAuth, model: str, router: Router) -> None:
-    verdict: Final = await caller_can_call_model(user_api_key_auth=user_api_key_dict, model=model, llm_router=router)
+async def admit_sub_call_model(user_api_key_dict: UserAPIKeyAuth, model: str, router: Router, route: str) -> None:
+    verdict: Final = await caller_can_call_model(
+        user_api_key_auth=user_api_key_dict, model=model, llm_router=router, sub_call_route=route
+    )
     if verdict != "allowed":
         raise SubCallModelRefused(f"{model} is not available to this key ({verdict})")
 
@@ -119,7 +121,7 @@ def router_embedder(
     budget and guardrail pre-call hooks /embeddings runs."""
 
     async def embed(texts: Sequence[str]) -> Sequence[Vector]:
-        await admit_sub_call_model(user_api_key_dict, embedding_model, router)
+        await admit_sub_call_model(user_api_key_dict, embedding_model, router, "/embeddings")
         request: Final = {
             "model": embedding_model,
             "input": list(texts),
