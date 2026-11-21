@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Span as RecordingSpan
@@ -48,6 +48,9 @@ from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2
 from litellm.integrations.otel.model.metadata import LLMCallEvent, RequestIdentity
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.types.utils import CaptureMessageContent
+
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,6 +481,18 @@ class _Placement:
     interaction: Interaction | None = None
 
 
+_OPEN: Final[TypeAdapter[_Open]] = TypeAdapter(_Open)
+_SHARED_KEY: Final = "lens:interaction:{session}"
+_SHARED_SECONDS: Final = 6 * 60 * 60
+
+
+def _shared_cache() -> "RedisCache | None":
+    """The Redis every gateway worker reaches, when the proxy was given one."""
+    from litellm.proxy import proxy_server
+
+    return proxy_server.redis_usage_cache
+
+
 def _span_context(turn: Interaction, span_id: int) -> SpanContext:
     return SpanContext(turn.trace_id, span_id, is_remote=True, trace_flags=TraceFlags(TraceFlags.SAMPLED))
 
@@ -512,6 +527,61 @@ class _LensTraceLogger(OpenTelemetryV2):
         return None
 
     _open_interactions: OrderedDict[str, _Open]  # mutable-ok: bounded per-worker memory of each session's turn
+
+    @override
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        session_id: Final = await self._recall(kwargs)
+        await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+        await self._share(session_id)
+
+    @override
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        session_id: Final = await self._recall(kwargs)
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+        await self._share(session_id)
+
+    async def _recall(self, kwargs: Mapping[str, object]) -> str | None:
+        """Bring in the interaction another gateway worker opened for this call's session, so a subagent's
+        call or a side request finds it whichever worker it lands on. Without a shared cache each worker
+        only knows the interactions it opened itself."""
+        call: Final = LLMCallEvent.from_dict(kwargs)
+        made_by: Final = agent_call(call.payload)
+        session_id: Final = call.session_id or made_by.derived_session
+        shared: Final = _shared_cache()
+        if not session_id or not made_by.integration or shared is None:
+            return None
+        try:
+            stored: Final = await shared.async_get_cache(_SHARED_KEY.format(session=session_id))
+            opened: Final = _OPEN.validate_json(stored) if isinstance(stored, (str, bytes)) else None
+        except (ValidationError, OSError, RuntimeError):
+            return session_id
+        if opened is not None:
+            self._open_interactions[session_id] = opened
+        return session_id
+
+    async def _share(self, session_id: str | None) -> None:
+        shared: Final = _shared_cache()
+        opened: Final = self._open_interactions.get(session_id) if session_id else None
+        if shared is None or opened is None or session_id is None:
+            return
+        try:
+            await shared.async_set_cache(
+                _SHARED_KEY.format(session=session_id), _OPEN.dump_json(opened).decode(), ttl=_SHARED_SECONDS
+            )
+        except (OSError, RuntimeError):
+            return
 
     @override
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
