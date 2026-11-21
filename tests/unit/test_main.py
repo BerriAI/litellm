@@ -13174,3 +13174,138 @@ def test_aleph_alpha_completion_that_is_not_text_fails_the_call(
 
     with pytest.raises(APIError):
         _aleph_alpha_completion()
+
+
+_SPLIT_TIMEOUT: Final = httpx.Timeout(connect=1.0, read=10.0, write=None, pool=4.0)
+_SPLIT_TIMEOUT_ON_THE_WIRE: Final = MappingProxyType({"connect": 1.0, "read": 10.0, "write": None, "pool": 4.0})
+_MISTRAL_MODEL: Final = "mistral/ministral-8b-latest"
+_MISTRAL_CHAT_COMPLETION: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-timeout",
+        "object": "chat.completion",
+        "created": 1789852145,
+        "model": "ministral-8b-latest",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+)
+_MISTRAL_CHAT_COMPLETION_STREAM: Final = (
+    b'data: {"id":"chatcmpl-timeout","object":"chat.completion.chunk","created":1789852145,'
+    b'"model":"ministral-8b-latest","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},'
+    b'"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+)
+_ANTHROPIC_MESSAGE: Final = MappingProxyType(
+    {
+        "id": "msg_timeout",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+)
+
+
+@dataclass(slots=True)
+class _WireTimeoutRecorder:
+    body: Mapping[str, object]
+    timeouts: tuple[object, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.timeouts = (*self.timeouts, request.extensions["timeout"])
+        if json.loads(request.content).get("stream") is True:
+            return httpx.Response(
+                200, content=_MISTRAL_CHAT_COMPLETION_STREAM, headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(200, json=dict(self.body))
+
+
+async def _wire_timeouts(
+    asynchronous: bool,
+    model: str,
+    body: Mapping[str, object],
+    stream: Literal["off", "live", "fake"],
+    timeouts: Mapping[str, object],
+) -> tuple[object, ...]:
+    recorder: Final = _WireTimeoutRecorder(body)
+    kwargs: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_key": "test-key",
+        "num_retries": 0,
+        "stream": stream != "off",
+        "fake_stream": stream == "fake",
+        **timeouts,
+    }
+    if asynchronous:
+        async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(recorder))
+        try:
+            async_response: Final = await litellm.acompletion(client=async_client, **kwargs)
+            if stream != "off":
+                assert [chunk async for chunk in async_response]
+        finally:
+            await async_client.close()
+        return recorder.timeouts
+    with httpx.Client(transport=httpx.MockTransport(recorder)) as sync_client:
+        response: Final = litellm.completion(client=HTTPHandler(client=sync_client), **kwargs)
+        if stream != "off":
+            assert tuple(response)
+    return recorder.timeouts
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "model,body",
+    [(_MISTRAL_MODEL, _MISTRAL_CHAT_COMPLETION), ("anthropic/claude-opus-5-5", _ANTHROPIC_MESSAGE)],
+    ids=["mistral", "anthropic"],
+)
+async def test_split_httpx_timeout_reaches_the_wire_for_providers_on_the_shared_httpx_handler(
+    asynchronous: bool, model: str, body: Mapping[str, object], local_model_cost_map: None
+) -> None:
+    sent: Final = await _wire_timeouts(asynchronous, model, body, "off", {"timeout": _SPLIT_TIMEOUT})
+
+    assert sent == (_SPLIT_TIMEOUT_ON_THE_WIRE,)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "stream,expected",
+    [
+        ("live", {"connect": 0.5, "read": 20.0, "write": 6.0, "pool": 8.0}),
+        ("fake", {"connect": 1.0, "read": 20.0, "write": None, "pool": 8.0}),
+    ],
+)
+async def test_split_stream_timeout_bounds_a_live_stream_and_never_shortens_a_fake_one_on_the_shared_httpx_handler(
+    asynchronous: bool,
+    stream: Literal["live", "fake"],
+    expected: Mapping[str, float | None],
+    local_model_cost_map: None,
+) -> None:
+    sent: Final = await _wire_timeouts(
+        asynchronous,
+        _MISTRAL_MODEL,
+        _MISTRAL_CHAT_COMPLETION,
+        stream,
+        {"timeout": _SPLIT_TIMEOUT, "stream_timeout": httpx.Timeout(connect=0.5, read=20.0, write=6.0, pool=8.0)},
+    )
+
+    assert sent == (expected,)
+
+
+@pytest.mark.parametrize(
+    "timeouts,expected",
+    [
+        ({"timeout": _SPLIT_TIMEOUT, "request_timeout": 3.0}, _SPLIT_TIMEOUT_ON_THE_WIRE),
+        ({"request_timeout": _SPLIT_TIMEOUT}, _SPLIT_TIMEOUT_ON_THE_WIRE),
+        ({"timeout": 2.5, "request_timeout": _SPLIT_TIMEOUT}, {"connect": 2.5, "read": 2.5, "write": 2.5, "pool": 2.5}),
+    ],
+    ids=["timeout_wins", "request_timeout_alias", "numeric_timeout_wins"],
+)
+async def test_first_set_timeout_reaches_the_wire_whole_for_providers_on_the_shared_httpx_handler(
+    timeouts: Mapping[str, object], expected: Mapping[str, float | None], local_model_cost_map: None
+) -> None:
+    sent: Final = await _wire_timeouts(False, _MISTRAL_MODEL, _MISTRAL_CHAT_COMPLETION, "off", timeouts)
+
+    assert sent == (expected,)

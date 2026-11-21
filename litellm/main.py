@@ -1577,6 +1577,61 @@ def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | Async
     return ctx.client
 
 
+# Providers whose completion dispatcher below always sends the request through litellm's own httpx handlers,
+# so every field of an httpx.Timeout reaches the wire. A provider that can reach a handler not verified to accept
+# httpx.Timeout (native SDK, aiohttp, in-process or legacy handlers) stays out and keeps the read-timeout float.
+_SHARED_HTTPX_COMPLETION_PROVIDERS: Final = frozenset(
+    {
+        "a2a",
+        "anthropic",
+        "anthropic_text",
+        "bedrock_mantle",
+        "bytez",
+        "cloudflare",
+        "cohere",
+        "cohere_chat",
+        "cometapi",
+        "compactifai",
+        "databricks",
+        "databricks_agent",
+        "datarobot",
+        "deepseek",
+        "edenai",
+        "fal_ai",
+        "gdc",
+        "gigachat",
+        "gradient_ai",
+        "groq",
+        "heroku",
+        "huggingface",
+        "langflow",
+        "langgraph",
+        "lemonade",
+        "minimax",
+        "mistral",
+        "nadir",
+        "oci",
+        "ollama",
+        "ollama_chat",
+        "opencode_go",
+        "openrouter",
+        "ovhcloud",
+        "ragflow",
+        "sagemaker_chat",
+        "sagemaker_nova",
+        "scaledown",
+        "snowflake",
+        "triton",
+        "watsonx_text",
+        "xai",
+    }
+)
+
+
+def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
+    return custom_llm_provider in _SHARED_HTTPX_COMPLETION_PROVIDERS or supports_httpx_timeout(custom_llm_provider)
+
+
 def _dispatch_client_azure(
     ctx: CompletionDispatchContext,
 ) -> openai.AzureOpenAI | openai.AsyncAzureOpenAI | HTTPHandler | AsyncHTTPHandler | None:
@@ -6346,7 +6401,7 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
+            supports_httpx_timeout=_completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 
