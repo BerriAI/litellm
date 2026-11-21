@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     get_budget_window_start,
     normalize_budget_window_start,
+    rolled_budget_window_start,
 )
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -1897,9 +1898,8 @@ class ResetBudgetJob:
         duration: Final = str(window["budget_duration"])
         scheduled_start: Final = _window_spend_start(duration, next_reset_at, reset_settings)
         window_start: Final = (
-            max(
-                scheduled_start,
-                _as_utc(datetime.fromisoformat(str(window["reset_at"]).replace("Z", "+00:00"))),
+            rolled_budget_window_start(
+                scheduled_start, _as_utc(datetime.fromisoformat(str(window["reset_at"]).replace("Z", "+00:00")))
             )
             if scheduled_start is not None
             else None
