@@ -25,7 +25,7 @@ from litellm.models.budget import (
     carry_budget_limit_resets,
     initialize_budget_limits,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions, evict_local, evict_shared
+from litellm.proxy.common_utils.cache_invalidation_pubsub import broadcast_evictions, evict_local, evict_shared
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     get_budget_reset_settings,

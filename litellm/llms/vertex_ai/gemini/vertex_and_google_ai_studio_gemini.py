@@ -272,6 +272,38 @@ def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
     return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
 
 
+_MALFORMED_FINISH_REASONS: Final[frozenset[GeminiFinishReason]] = frozenset(
+    {"MALFORMED_FUNCTION_CALL", "MALFORMED_RESPONSE"}
+)
+_OUTPUT_FIELDS: Final = ("content", "tool_calls", "function_call", "images", "audio")
+
+
+_CHOICE_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _native_finish_reason(choice: object) -> object:
+    fields: Final[object] = getattr(choice, "provider_specific_fields", None)
+    return _CHOICE_FIELDS.validate_python(fields).get("native_finish_reason") if isinstance(fields, dict) else None
+
+
+def _is_malformed_without_output(choice: object) -> bool:
+    return (
+        isinstance(choice, litellm.Choices)
+        and _native_finish_reason(choice) in _MALFORMED_FINISH_REASONS
+        and not any(getattr(choice.message, field, None) for field in _OUTPUT_FIELDS)
+    )
+
+
+def _malformed_without_output_error(response: ModelResponse, headers: httpx.Headers) -> VertexAIError | None:
+    if not response.choices or not all(_is_malformed_without_output(choice) for choice in response.choices):
+        return None
+    return VertexAIError(
+        status_code=500,
+        message=f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output",
+        headers=headers,
+    )
+
+
 def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
@@ -4237,10 +4269,18 @@ def _transform_long_decode_hops(
         raw_response=first_response,
     )
     merged_usage: Final = getattr(merged, "usage", None)
-    if not isinstance(merged_usage, Usage):
-        return merged
-    marked: Final = with_initial_prompt_tokens(merged_usage, initial_prompt_tokens_of(hops))
-    return merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
+    marked: Final = (
+        with_initial_prompt_tokens(merged_usage, initial_prompt_tokens_of(hops))
+        if isinstance(merged_usage, Usage)
+        else merged_usage
+    )
+    response: Final = merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
+    failure: Final = _malformed_without_output_error(response, first_response.headers)
+    if failure is None:
+        return response
+    failed_attempt: Final = logging_obj.served_round(response)
+    logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
+    raise failure
 
 
 def _provider_finish_reasons(

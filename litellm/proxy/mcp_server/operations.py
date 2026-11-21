@@ -60,8 +60,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    publish_auth_cache_invalidation,
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
@@ -236,7 +236,7 @@ async def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
     """Drop a stored-or-deleted BYOK credential from this worker's cache and from every peer worker's."""
     cache_key: Final = byok_credential_cache_key(user_id, server_id)
     byok_credential_cache.delete_cache(cache_key)
-    await publish_auth_cache_invalidation(cache_key=cache_key)
+    await publish_cache_invalidation(cache_key=cache_key)
 
 
 def _mcp_session_id_from_headers(

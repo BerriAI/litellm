@@ -48,15 +48,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    AUTH_OBJECTS_TARGET,
-    UserApiKeyCache,
-    end_user_cache_key,
-    model_access_group_cache_key,
-    project_cache_key,
-    tag_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import CURSOR_CHAT_COMPLETIONS_ROUTE, is_chat_completions_body
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin_to_estimate,
@@ -76,6 +68,7 @@ from litellm.proxy.spend_tracking.native_budgets import (
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     end_user_counter,
     key_counter,
@@ -111,7 +104,7 @@ class BudgetCounter:
     fallback_spend: float
     entity_type: str
     entity_id: str
-    source_cache_key: str | None = None
+    source_cache_key: AuthObject | None = None
     spend_log_entity_id: str | None = None
     window_duration: str | None = None
     window_start: datetime | None = None
@@ -635,7 +628,7 @@ async def _get_budget_counters(
             counters.append(
                 _BudgetCounter(
                     counter_key=key_counter(valid_token.token),
-                    source_cache_key=valid_token.token,
+                    source_cache_key=AuthObject.virtual_key(valid_token.token),
                     max_budget=float(valid_token.max_budget),
                     fallback_spend=float(valid_token.spend or 0.0),
                     entity_type="Key",
@@ -658,7 +651,7 @@ async def _get_budget_counters(
             counters.append(
                 _BudgetCounter(
                     counter_key=team_counter(team_id),
-                    source_cache_key=f"team_id:{team_id}",
+                    source_cache_key=AuthObject.team(team_id),
                     max_budget=float(team_object.max_budget),
                     fallback_spend=float(team_object.spend or 0.0),
                     entity_type="Team",
@@ -697,7 +690,7 @@ async def _get_budget_counters(
         counters.append(
             _BudgetCounter(
                 counter_key=user_counter(user_object.user_id),
-                source_cache_key=user_object.user_id,
+                source_cache_key=AuthObject.user(user_object.user_id),
                 max_budget=user_budget,
                 fallback_spend=float(user_object.spend or 0.0),
                 entity_type="User",
@@ -766,7 +759,7 @@ async def _get_end_user_budget_counter(
     if end_user_id is None:
         return None
 
-    source_cache_key: Final = end_user_cache_key(end_user_id)
+    source_cache_key: Final = AuthObject.end_user(end_user_id)
     max_budget = _to_float(valid_token.end_user_max_budget)
     fallback_spend = 0.0
     if end_user_object is not None:
@@ -820,7 +813,7 @@ async def _get_tag_budget_counters(
         counters.append(
             _BudgetCounter(
                 counter_key=tag_counter(tag_name),
-                source_cache_key=tag_cache_key(tag_name),
+                source_cache_key=AuthObject.tag(tag_name),
                 max_budget=max_budget,
                 fallback_spend=_to_float(_get_value(tag_object, "spend")) or 0.0,
                 entity_type="Tag",
@@ -862,7 +855,7 @@ def _model_access_group_counter(group: str, budget: ModelAccessGroupBudget | Non
         return None
     return _BudgetCounter(
         counter_key=model_access_group_counter(group),
-        source_cache_key=model_access_group_cache_key(group),
+        source_cache_key=AuthObject.model_access_group(group),
         max_budget=budget.max_budget,
         fallback_spend=budget.spend,
         entity_type="Model access group",
@@ -891,7 +884,7 @@ async def _get_team_member_budget_counter(
     if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
-    membership_cache_key: Final = team_membership_reservation_cache_key(
+    membership_cache_key: Final = AuthObject.team_membership_reservation(
         user_id=valid_token.user_id, team_id=team_object.team_id
     )
     cached_team_membership: Final = _CACHED_VALUE.validate_python(
@@ -912,7 +905,7 @@ async def _get_team_member_budget_counter(
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
             default_budget: Final = _CACHED_VALUE.validate_python(
-                await user_api_key_cache.async_get_cache(key=f"team_member_default_budget:{default_budget_id}")
+                await user_api_key_cache.async_get_cache(key=AuthObject.team_member_default_budget(default_budget_id))
             )
             default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
             if default_cap is not None and default_cap > 0:
@@ -949,7 +942,7 @@ async def _get_org_budget_counter(
         return None
 
     org_table: Final = _CACHED_VALUE.validate_python(
-        await user_api_key_cache.async_get_cache(key=f"org_id:{org_id}:with_budget")
+        await user_api_key_cache.async_get_cache(key=AuthObject.org_with_budget(org_id))
     )
     if org_table is None:
         return None
@@ -965,7 +958,7 @@ async def _get_org_budget_counter(
     org_spend: Final = _to_float(_get_value(org_table, "spend")) or 0.0
     return _BudgetCounter(
         counter_key=org_counter(org_id),
-        source_cache_key=f"org_id:{org_id}:with_budget",
+        source_cache_key=AuthObject.org_with_budget(org_id),
         max_budget=org_max_budget,
         fallback_spend=org_spend,
         entity_type="Organization",
@@ -981,7 +974,7 @@ async def _get_project_budget_counter(
     if valid_token.project_id is None:
         return None
 
-    source_cache_key: Final = project_cache_key(valid_token.project_id)
+    source_cache_key: Final = AuthObject.project(valid_token.project_id)
     project_object: Final = _CACHED_VALUE.validate_python(
         await user_api_key_cache.async_get_cache(key=source_cache_key)
     )

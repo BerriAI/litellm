@@ -24,6 +24,7 @@ import litellm
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request, google_count_tokens
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy._prisma import prisma_with_empty_config
@@ -328,10 +329,11 @@ def _cached_key(key: UserAPIKeyAuth, *teams: LiteLLM_TeamTableCachedObj) -> Iter
     user_key: Final = "sk-cached-test-key"
     user_api_key_cache: Final = UserApiKeyCache()
     user_api_key_cache.set_cache(
-        key=proxy_server.hash_token(user_key), value=key.model_copy(update={"token": proxy_server.hash_token(user_key)})
+        key=AuthObject.virtual_key(proxy_server.hash_token(user_key)),
+        value=key.model_copy(update={"token": proxy_server.hash_token(user_key)}),
     )
     for team in teams:
-        user_api_key_cache.set_cache(key=f"team_id:{team.team_id}", value=team)
+        user_api_key_cache.set_cache(key=AuthObject.team(team.team_id), value=team)
     with pytest.MonkeyPatch.context() as key_auth:
         key_auth.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
         key_auth.setattr(proxy_server, "master_key", MASTER_KEY)
