@@ -1755,6 +1755,9 @@ if TYPE_CHECKING:
     from .llms.vercel_ai_gateway.decisions.transformation import (
         VercelAIGatewayDecisionsConfig as VercelAIGatewayDecisionsConfig,
     )
+    from .llms.litellm_proxy.decisions.transformation import (
+        LiteLLMProxyDecisionsConfig as LiteLLMProxyDecisionsConfig,
+    )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,
     )
