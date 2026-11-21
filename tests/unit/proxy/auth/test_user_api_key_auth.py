@@ -428,6 +428,7 @@ async def test_unknown_jwt_team_returns_generic_auth_error(
 
     assert response.status_code == 401, response.text
     assert response.json()["error"]["type"] == "auth_error", response.text
+    assert response.json()["error"]["message"] == "Authentication Error, invalid credentials", response.text
     assert "doesn't exist" not in response.text
     assert unknown_team not in response.text
 

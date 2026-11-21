@@ -1,3 +1,4 @@
+use crate::error::InvalidCredentials;
 use crate::{
     BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
     PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
@@ -198,9 +199,7 @@ impl RbacDenial {
 impl TeamDenial {
     pub(crate) fn public(&self) -> PublicDenial {
         match self {
-            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => {
-                auth(&"Authentication Error, invalid credentials")
-            }
+            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => auth(&InvalidCredentials),
             Self::TeamAliasAmbiguous { .. } => http(400, self),
             Self::NoDb | Self::NoTeamInToken { .. } => plain(self),
             Self::NoTeamsInToken
