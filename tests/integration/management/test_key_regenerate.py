@@ -188,3 +188,45 @@ async def test_key_regenerate_explicit_null_cannot_remove_capped_limit(
     assert nothing_stored.status_code == 200, nothing_stored.text
     row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(limited)})
     assert row is not None and row.expires is not None
+
+
+async def test_key_regenerate_budget_change_needs_the_same_rights_as_key_update(gateway_client, db, resources, actors):
+    admin_headers = {"Authorization": f"Bearer {actors.keys[Actor.PROXY_ADMIN].cleartext}"}
+    member = actors.keys[Actor.INTERNAL_USER]
+    member_headers = {"Authorization": f"Bearer {member.cleartext}"}
+    team_admin_headers = {"Authorization": f"Bearer {actors.keys[Actor.TEAM_ADMIN].cleartext}"}
+    own_key = await create_scratch_key(
+        gateway_client,
+        actors.keys[Actor.PROXY_ADMIN].cleartext,
+        resources.prefix,
+        user_id=member.user_id,
+        key_alias=f"{resources.prefix}-member-own",
+    )
+    team_key = await create_scratch_key(
+        gateway_client,
+        actors.keys[Actor.PROXY_ADMIN].cleartext,
+        resources.prefix,
+        user_id=actors.keys[Actor.OWNER].user_id,
+        team_id=actors.team_alpha_id,
+        key_alias=f"{resources.prefix}-owner-team",
+    )
+    for key in (own_key, team_key):
+        seeded = await gateway_client.post("/key/update", headers=admin_headers, json={"key": key, "max_budget": 50.0})
+        assert seeded.status_code == 200, seeded.text
+
+    raised = await gateway_client.post(
+        "/key/regenerate", headers=member_headers, json={"key": own_key, "max_budget": 100.0}
+    )
+    row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(own_key)})
+    unchanged = await gateway_client.post(
+        "/key/regenerate", headers=member_headers, json={"key": own_key, "max_budget": 50.0}
+    )
+    team_admin_raised = await gateway_client.post(
+        "/key/regenerate", headers=team_admin_headers, json={"key": team_key, "max_budget": 100.0}
+    )
+
+    assert raised.status_code == 403, raised.text
+    assert row is not None and row.max_budget == 50.0
+    assert unchanged.status_code == 200, unchanged.text
+    assert team_admin_raised.status_code == 200, team_admin_raised.text
+    assert team_admin_raised.json()["max_budget"] == 100.0

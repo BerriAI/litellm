@@ -3928,6 +3928,46 @@ async def _acting_as_team_admin_for_key_update(
     return True
 
 
+def _caller_created_and_owns_key(key_row: LiteLLM_VerificationToken, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Personal-key bypass: the caller both created the key AND still owns it. Checking only created_by would let a
+    demoted admin who created a key for another user keep editing it without admin rights after it was reassigned.
+    """
+    return (
+        user_api_key_dict.user_id is not None
+        and key_row.created_by == user_api_key_dict.user_id
+        and key_row.user_id == user_api_key_dict.user_id
+    )
+
+
+async def _require_regenerate_budget_change_rights(
+    update_request: UpdateKeyRequest,
+    key_in_db: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    budget_change: Final = classify_key_budget_change(data=update_request, existing=key_in_db)
+    if isinstance(budget_change, KeyBudgetUnchanged):
+        return
+    if _caller_created_and_owns_key(key_in_db, user_api_key_dict) and await _owner_may_change_key_budget(
+        budget_change=budget_change,
+        data=update_request,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    ):
+        return
+    await _check_key_admin_access(
+        user_api_key_dict=user_api_key_dict,
+        hashed_token=key_in_db.token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route="/key/regenerate (max_budget/spend)",
+    )
+
+
 async def _owner_may_change_key_budget(
     budget_change: KeyBudgetChange,
     data: UpdateKeyRequest,
@@ -4126,15 +4166,7 @@ async def _validate_update_key_data(
         entity="key",
     )
 
-    # Personal-key bypass: the caller both created the key AND still owns it
-    # (user_id == caller).  Checking only created_by would let a demoted admin
-    # who originally created a key for another user continue editing it without
-    # admin authorization after the key was reassigned.
-    caller_is_creator: Final = (
-        user_api_key_dict.user_id is not None
-        and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
-        and getattr(existing_key_row, "user_id", None) == user_api_key_dict.user_id
-    )
+    caller_is_creator: Final = _caller_created_and_owns_key(existing_key_row, user_api_key_dict)
     # Team keys: can_team_member_execute_key_management_endpoint (called above)
     # already validated team membership + /key/update permission and would have
     # raised if the caller lacked it.  Reaching this point on a team key for a
@@ -6598,6 +6630,13 @@ async def _execute_virtual_key_regeneration(
         update_request: Final = _regenerate_request_as_update_request(key=hashed_api_key, data=data)
         if update_request is not None:
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
+            await _require_regenerate_budget_change_rights(
+                update_request=update_request,
+                key_in_db=key_in_db,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False, existing_key_row=key_in_db)
         raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
