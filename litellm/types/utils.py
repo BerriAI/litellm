@@ -4877,6 +4877,7 @@ class LlmProviders(str, Enum):
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     EDENAI = "edenai"
+    DEAPI = "deapi"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"
