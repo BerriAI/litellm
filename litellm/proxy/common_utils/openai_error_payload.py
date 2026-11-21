@@ -17,7 +17,7 @@ from litellm._logging import (
     redact_internal_details_from_client_message,
 )
 from litellm.constants import STRINGIFIED_NONE
-from litellm.litellm_core_utils.core_helpers import error_status_code
+from litellm.litellm_core_utils.core_helpers import error_status_code, http_error_status
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
@@ -150,7 +150,7 @@ def _openai_error_object_extras(error_object: Mapping[str, object]) -> Mapping[s
 
 def _is_provider_specific(key: str, value: object) -> bool:
     if key == "code":
-        return value not in (None, "") and _http_error_status(value) is None
+        return value not in (None, "") and http_error_status(value) is None
     return key not in _OPENAI_ERROR_OBJECT_FIELDS
 
 

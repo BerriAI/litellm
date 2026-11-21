@@ -24,7 +24,7 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -190,20 +190,6 @@ class OpenAIError(BaseLLMException):
             response=self.response,
             body=None if body is None else dict(body),
         )
-
-
-_ERROR_BODY: Final = TypeAdapter(dict[str, object])
-
-
-def openai_sdk_error_body(
-    error_message: str,
-) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
-    try:
-        decoded: Final = _ERROR_BODY.validate_json(error_message)
-    except ValidationError:
-        return None
-    nested: Final = decoded.get("error")
-    return _ERROR_BODY.validate_python(nested) if isinstance(nested, dict) else decoded
 
 
 def upstream_error_response(error: Exception) -> httpx.Response | None:

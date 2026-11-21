@@ -16222,6 +16222,44 @@ async def test_openai_compatible_backend_400_relays_param_and_unwrapped_message_
 
 
 @pytest.mark.usefixtures("httpx_transport")
+async def test_azure_responses_400_relays_param_and_unwrapped_message() -> None:
+    body: Final = {
+        "error": {
+            "message": "Invalid 'max_output_tokens': integer below minimum value.",
+            "type": "invalid_request_error",
+            "param": "max_output_tokens",
+            "code": "integer_below_min_value",
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://azure-backend.example.com/openai/").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = litellm.responses(
+                model="azure/gpt-deployment",
+                input="hi",
+                api_base="https://azure-backend.example.com",
+                api_key="azure-key",
+                api_version="2025-04-01-preview",
+            )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "azure-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert (payload["param"], payload["type"], payload["code"]) == (
+        "max_output_tokens",
+        "invalid_request_error",
+        "400",
+    )
+    assert payload["provider_specific_fields"] == {"code": "integer_below_min_value"}
+    assert str(payload["message"]).endswith("Invalid 'max_output_tokens': integer below minimum value.")
+
+
+@pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
 async def test_openai_compatible_backend_400_redacts_secrets_and_internal_details_from_param_and_type(
     route: str, call: Callable[[], object]

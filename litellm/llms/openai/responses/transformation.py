@@ -58,7 +58,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
-from ..common_utils import OpenAIError, openai_sdk_error_body, without_cache_control
+from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
@@ -73,6 +73,20 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_ERROR_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _openai_sdk_error_body(
+    error_message: str,
+) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
+    try:
+        decoded: Final = _ERROR_BODY.validate_json(error_message)
+    except ValidationError:
+        return None
+    nested: Final = decoded.get("error")
+    return _ERROR_BODY.validate_python(nested) if isinstance(nested, dict) else decoded
+
 
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
@@ -1390,11 +1404,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         status_code: int,
         headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
     ) -> BaseLLMException:
-        return OpenAIError(
+        return BaseLLMException(
             status_code=status_code,
             message=error_message,
             headers=headers,
-            body=openai_sdk_error_body(error_message),
+            body=_openai_sdk_error_body(error_message),
         )
 
     #########################################################

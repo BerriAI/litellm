@@ -133,6 +133,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     has_attributes,
+    http_error_status,
     is_expected_client_error,
     native_messages_reported_cost,
     provider_reported_usage_cost,
@@ -7955,13 +7956,9 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
     return ()
 
 
-def _is_http_error_status(code: str) -> bool:
-    return len(code) == 3 and code.isascii() and code.isdigit() and 400 <= int(code) <= 599
-
-
 def _logged_error_code(original_exception: Exception | None) -> str:
     carried_code: Final = str(getattr(original_exception, "code", None))
-    if _is_http_error_status(carried_code):
+    if http_error_status(carried_code) is not None:
         return carried_code
     status_code: Final[object] = getattr(original_exception, "status_code", None)
     if status_code is not None:
@@ -7974,7 +7971,7 @@ def _logged_error_code(original_exception: Exception | None) -> str:
 
 def _provider_error_code(code: object) -> str | None:
     text: Final = str(code)
-    if text in ("", "None") or _is_http_error_status(text):
+    if text in ("", "None") or http_error_status(text) is not None:
         return None
     return redact_string(text)
 
