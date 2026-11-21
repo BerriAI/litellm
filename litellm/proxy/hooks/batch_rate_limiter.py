@@ -117,6 +117,14 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
 
+def _count_or_estimate_batch_entry_tokens(entry: object, raw_line: bytes) -> int:
+    try:
+        counted: Final = count_entry_tokens(decoded_json_object(entry))
+    except Exception:
+        return estimate_batch_entry_tokens(raw_line)
+    return estimate_batch_entry_tokens(raw_line) if counted is None else counted
+
+
 class _FileContentFetchKwargs(TypedDict, total=False, extra_items=object):
     pass
 
@@ -1106,10 +1114,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     entry_output_tokens = no_max_tokens_output_floor(min_configured_otpm_limit)
                 output_tokens += entry_output_tokens
 
-                try:
-                    entry_total_tokens = count_entry_tokens(decoded_json_object(entry))
-                except Exception:
-                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
+                entry_total_tokens = _count_or_estimate_batch_entry_tokens(entry, raw_line)
                 total_tokens += entry_total_tokens
 
                 if isinstance(model, str) and isinstance(row_model, str):

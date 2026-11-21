@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Mapping
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
@@ -3604,12 +3605,11 @@ async def test_gemini_native_output_rows_are_priced_from_usage_metadata(monkeypa
         ({"modelInput": {"prompt": "hello"}}, {"prompt": "hello"}),
     ],
 )
-def test_native_row_matches_canonical_input_count(entry, body):
-    canonical = bu.count_entry_tokens({"body": body})
-    assert canonical > 0
+def test_native_row_matches_canonical_input_count(entry: Mapping[str, object], body: Mapping[str, object]) -> None:
+    canonical: Final = bu.count_entry_tokens({"body": body})
+    assert canonical is not None and canonical > 0
     assert bu.count_entry_tokens(entry) == canonical
 
 
-def test_partially_supported_native_row_raises_for_whole_row_estimate():
-    with pytest.raises(ValueError, match="Unsupported batch content part"):
-        bu.count_entry_tokens({"request": {"contents": [{"parts": [{"text": "hello"}, {"fileData": {}}]}]}})
+def test_partially_supported_native_row_signals_whole_row_estimate() -> None:
+    assert bu.count_entry_tokens({"request": {"contents": [{"parts": [{"text": "hello"}, {"fileData": {}}]}]}}) is None

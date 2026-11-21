@@ -6,43 +6,51 @@ from typing import Final
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 
 
-def _part_text(part: object) -> str:
+def _part_text(part: object) -> str | None:
     fields: Final = as_str_mapping(part)
     if fields is None or fields.keys() - {"type", "text"} or fields.get("type", "text") != "text":
-        raise ValueError("Unsupported batch content part")
+        return None
     text: Final = fields.get("text")
-    if not isinstance(text, str):
-        raise ValueError("Expected a text part")
-    return text
+    return text if isinstance(text, str) else None
 
 
-def _text(content: object) -> str:
+def _text(content: object) -> str | None:
     if isinstance(content, str):
         return content
     parts: Final = as_object_list(content)
     if not parts:
-        raise ValueError("Expected text parts")
-    return "\n".join(_part_text(part) for part in parts)
+        return None
+    texts: Final = tuple(_part_text(part) for part in parts)
+    if None in texts:
+        return None
+    return "\n".join(text for text in texts if text is not None)
 
 
-def _chat_turn(turn: object, field: str) -> Mapping[str, object]:
+def _chat_turn(turn: object, field: str) -> Mapping[str, object] | None:
     fields: Final = as_str_mapping(turn)
     if fields is None or fields.keys() - {"role", field}:
-        raise ValueError("Unsupported batch turn")
+        return None
     role: Final = fields.get("role", "user")
-    return {"role": "assistant" if role == "model" else role, "content": _text(fields.get(field))}
+    text: Final = _text(fields.get(field))
+    return {"role": "assistant" if role == "model" else role, "content": text} if text is not None else None
 
 
-def _chat(messages: object, system: object, *, vertex_parts: bool = False) -> Mapping[str, object]:
+def _chat(messages: object, system: object, *, vertex_parts: bool = False) -> Mapping[str, object] | None:
     turns: Final = as_object_list(messages)
     if not turns:
-        raise ValueError("Expected chat messages")
+        return None
     field: Final = "parts" if vertex_parts else "content"
-    prefix: Final = () if system is None else ({"role": "system", "content": _text(system)},)
-    return {"messages": [*prefix, *(_chat_turn(turn, field) for turn in turns)]}
+    system_text: Final = _text(system)
+    if system is not None and system_text is None:
+        return None
+    prefix: Final = () if system_text is None else ({"role": "system", "content": system_text},)
+    parsed_turns: Final = tuple(_chat_turn(turn, field) for turn in turns)
+    if None in parsed_turns:
+        return None
+    return {"messages": [*prefix, *parsed_turns]}
 
 
-def bedrock_batch_input(body: Mapping[str, object]) -> Mapping[str, object]:
+def bedrock_batch_input(body: Mapping[str, object]) -> Mapping[str, object] | None:
     if body.keys() - {
         "messages",
         "system",
@@ -63,16 +71,16 @@ def bedrock_batch_input(body: Mapping[str, object]) -> Mapping[str, object]:
         "normalize",
         "embeddingTypes",
     }:
-        raise ValueError("Unsupported structured batch input")
+        return None
     if "messages" in body:
         return _chat(body["messages"], body.get("system"))
     for field in ("prompt", "inputText"):
         if isinstance(body.get(field), str) and body[field]:
             return {"input": body[field]}
-    raise ValueError("Unsupported Bedrock batch input")
+    return None
 
 
-def vertex_batch_input(body: Mapping[str, object]) -> Mapping[str, object]:
+def vertex_batch_input(body: Mapping[str, object]) -> Mapping[str, object] | None:
     if body.keys() - {
         "messages",
         "system",
@@ -96,19 +104,26 @@ def vertex_batch_input(body: Mapping[str, object]) -> Mapping[str, object]:
         "embed_content_config",
         "title",
     }:
-        raise ValueError("Unsupported structured batch input")
+        return None
     if "messages" in body:
         return _chat(body["messages"], body.get("system"))
     if "contents" in body:
         system: Final = body.get("systemInstruction", body.get("system_instruction"))
         system_fields: Final = as_str_mapping(system)
         if system is not None and system_fields is None:
-            raise ValueError("Expected a Vertex system instruction")
-        return _chat(body["contents"], system_fields["parts"] if system_fields is not None else None, vertex_parts=True)
+            return None
+        if system_fields is not None and "parts" not in system_fields:
+            return None
+        return _chat(
+            body["contents"], system_fields.get("parts") if system_fields is not None else None, vertex_parts=True
+        )
     content: Final = as_str_mapping(body.get("content"))
     if content is not None:
-        text: Final = _text(content["parts"])
+        text: Final = _text(content.get("parts"))
+        if text is None:
+            return None
         if "title" in body:
-            return {"input": _text(body["title"]) + "\n" + text}
+            title: Final = _text(body["title"])
+            return {"input": title + "\n" + text} if title is not None else None
         return {"input": text}
-    raise ValueError("Unsupported Vertex batch input")
+    return None

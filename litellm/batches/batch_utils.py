@@ -741,7 +741,7 @@ def estimate_batch_entry_tokens(raw_line: bytes) -> int:
 _estimate_batch_entry_tokens = estimate_batch_entry_tokens
 
 
-def _batch_entry_body(entry: Mapping[str, object]) -> Mapping[str, object]:
+def _batch_entry_body(entry: Mapping[str, object]) -> Mapping[str, object] | None:
     if "body" not in entry:
         if (request := as_str_mapping(entry.get("request"))) is not None:
             return vertex_batch_input(request)
@@ -753,9 +753,11 @@ def _batch_entry_body(entry: Mapping[str, object]) -> Mapping[str, object]:
 def count_entry_tokens(
     entry: Mapping[str, object],
     model_name: str | None = None,
-) -> int:
-    """Token-count a single batch input entry's body (chat / text / embedding)."""
+) -> int | None:
+    """Count a batch row, or return None when native content needs a whole-row estimate."""
     body: Final = _batch_entry_body(entry)
+    if body is None:
+        return None
     model: Final = cast(str, body.get("model", model_name or ""))  # cast-ok: provider batch model names are strings
 
     messages: Final = body.get("messages")

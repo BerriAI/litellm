@@ -48,6 +48,7 @@ from capabilities import (
     VERTEX_BATCH_BACKEND,
     Capability,
     Provider,
+    Scenario,
     batch_model_name,
     coverage_cells_for_lifecycle,
     decoded_model_from_id,
@@ -932,13 +933,13 @@ class TestBatchEnqueuedTokenLimit:
         resources.defer(lambda: client.proxy.delete_key(key))
         return key
 
+    @pytest.mark.parametrize("scenario", ("encoded", "unified"))
     @pytest.mark.parametrize(
-        "cap",
+        "provider_cap",
         [
-            pytest.param(replace(cap, scenario=scenario), id=f"{cap.provider}-{scenario}", marks=lifecycle_meta(cap))
+            pytest.param(cap, id=cap.provider, marks=lifecycle_meta(cap))
             for cap in CAPABILITIES
             if cap.provider in {"vertex_ai", "bedrock"} and cap.scenario == "unified"
-            for scenario in ("encoded", "unified")
         ],
     )
     @pytest.mark.covers(
@@ -946,15 +947,21 @@ class TestBatchEnqueuedTokenLimit:
         exercised_on=["batches"],
     )
     def test_native_file_counts_toward_enqueued_limit(
-        self, cap: Capability, client: BatchClient, resources: ResourceManager, batch_deployments: None
+        self,
+        provider_cap: Capability,
+        scenario: Scenario,
+        client: BatchClient,
+        resources: ResourceManager,
+        batch_deployments: None,
     ) -> None:
-        key = self._generate_enqueued_key(client, resources, limit=1, marker=cap.id)
-        file = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
+        cap: Final = replace(provider_cap, scenario=scenario)
+        key: Final = self._generate_enqueued_key(client, resources, limit=1, marker=cap.id)
+        file: Final = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
         resources.defer(lambda: cleanup_file(client, file.id, key=key, provider=cap.file_provider))
 
-        result = create_for_scenario(client, cap, file.id, key)
+        result: Final = create_for_scenario(client, cap, file.id, key)
         if result.ok:
-            batch = BatchObject.model_validate_json(result.body)
+            batch: Final = BatchObject.model_validate_json(result.body)
             resources.defer(lambda: cleanup_batch(client, batch.id, key=key, provider=op_provider(cap)))
         assert result.status_code == 429
         assert "batch enqueued token limit exceeded" in result.body.lower()
