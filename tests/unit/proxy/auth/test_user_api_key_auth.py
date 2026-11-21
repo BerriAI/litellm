@@ -1590,54 +1590,62 @@ async def test_user_api_key_auth_websocket():
         assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "authorization",
-    ["bearer some_api_key", "BEARER some_api_key", "bEaReR some_api_key", "bearer  some_api_key "],
-)
-async def test_user_api_key_auth_websocket_accepts_a_non_canonical_case_of_the_bearer_scheme(authorization):
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+def _websocket_with_authorization(sent: list[Message], authorization: str) -> WebSocket:
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
 
-    mock_websocket = MagicMock(spec=WebSocket)
-    mock_websocket.query_params = {"model": "some_model"}
-    mock_websocket.headers = {"authorization": authorization}
-    mock_websocket.scope = {"headers": [(b"authorization", authorization.encode())]}
-    mock_websocket.url = URL(url="/ws")
-    key_owner: Final = UserAPIKeyAuth(api_key="some_api_key", user_id="key-owner")
+    async def send(message: Message) -> None:
+        sent.append(message)
 
-    async def authenticate_only_the_issued_key(request: StarletteRequest, api_key: str) -> UserAPIKeyAuth:
-        if api_key != "Bearer some_api_key":
-            raise HTTPException(status_code=401, detail="invalid key")
-        return key_owner
-
-    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", side_effect=authenticate_only_the_issued_key):
-        authorized: Final = await user_api_key_auth_websocket(mock_websocket)
-
-    assert authorized == key_owner
-    mock_websocket.close.assert_not_called()
+    return WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/responses",
+            "query_string": b"model=gpt-5.4",
+            "headers": [(b"authorization", authorization.encode())],
+        },
+        receive,
+        send,
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "authorization",
-    ["Basic some_api_key", "Bearersome_api_key", "bearer", "NotBearer some_api_key", "Token some_api_key"],
-)
-async def test_user_api_key_auth_websocket_rejects_a_non_bearer_authorization_header(authorization):
+@pytest.mark.parametrize("authorization", ["bearer {key}", "BEARER {key}", "bEaReR {key}", "bearer  {key} "])
+async def test_user_api_key_auth_websocket_accepts_a_non_canonical_case_of_the_bearer_scheme(
+    authorization: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
 
-    mock_websocket = MagicMock(spec=WebSocket)
-    mock_websocket.query_params = {"model": "some_model"}
-    mock_websocket.headers = {"authorization": authorization}
-    mock_websocket.scope = {"headers": [(b"authorization", authorization.encode())]}
-    mock_websocket.url = URL(url="/ws")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    sent: Final[list[Message]] = []
 
-    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
-        with pytest.raises(HTTPException) as exc_info:
-            await user_api_key_auth_websocket(mock_websocket)
+    authorized: Final = await user_api_key_auth_websocket(
+        _websocket_with_authorization(sent, authorization.format(key=MASTER_KEY))
+    )
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "Invalid Authorization header format"
-    mock_user_api_key_auth.assert_not_called()
+    assert authorized.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert authorized.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+    assert sent == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorization", ["Basic {key}", "Bearer{key}", "bearer", "NotBearer {key}", "Token {key}"])
+async def test_user_api_key_auth_websocket_rejects_a_non_bearer_authorization_header(
+    authorization: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    sent: Final[list[Message]] = []
+
+    with pytest.raises(HTTPException) as rejection:
+        await user_api_key_auth_websocket(_websocket_with_authorization(sent, authorization.format(key=MASTER_KEY)))
+
+    assert rejection.value.status_code == 403
+    assert rejection.value.detail == "Invalid Authorization header format"
+    assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
 
 
 @pytest.mark.asyncio
@@ -2531,22 +2539,7 @@ def test_custom_auth_attaches_the_user_budget_even_when_it_does_not_enforce():
 
 
 def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
-    async def receive() -> Message:
-        return {"type": "websocket.connect"}
-
-    async def send(message: Message) -> None:
-        sent.append(message)
-
-    return WebSocket(
-        {
-            "type": "websocket",
-            "path": "/v1/responses",
-            "query_string": b"model=gpt-5.4",
-            "headers": [(b"authorization", f"Bearer {bearer}".encode())],
-        },
-        receive,
-        send,
-    )
+    return _websocket_with_authorization(sent, f"Bearer {bearer}")
 
 
 def _serve_virtual_key(monkeypatch: pytest.MonkeyPatch, user_key: str, token: UserAPIKeyAuth) -> None:
