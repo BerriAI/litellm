@@ -6,6 +6,7 @@ on the LiteLLM gateway. Blocks or alerts when unregistered servers are found.
 """
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
@@ -18,7 +19,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
-    saved_toolset_exists,
+    read_saved_toolset,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -67,7 +68,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
                     "unregistered_servers": sorted(unregistered),
                     "detection_message": message,
                 },
-            )
+            ) from next((error for error in unregistered.values() if error is not None), None)
         else:
             verbose_proxy_logger.warning(message)
 
@@ -92,15 +93,15 @@ class MCPSecurityGuardrail(CustomGuardrail):
         return server_names
 
     @staticmethod
-    async def _find_unregistered_mcp_servers(data: Mapping[str, object]) -> frozenset[str]:
-        """Check tools in data against the MCP server registry. Returns set of unregistered server names."""
+    async def _find_unregistered_mcp_servers(data: Mapping[str, object]) -> Mapping[str, Exception | None]:
+        """Maps each requested MCP server the gateway cannot vouch for to the toolset read error behind it, if any."""
         tools: Final = data.get("tools")
         if not tools or not isinstance(tools, list):
-            return frozenset()
+            return MappingProxyType({})
 
         requested_servers: Final = MCPSecurityGuardrail._extract_mcp_server_names_from_tools(tools)
         if not requested_servers:
-            return frozenset()
+            return MappingProxyType({})
 
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -112,4 +113,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
                 for name in requested_servers
                 if global_mcp_server_manager.get_mcp_server_by_identifier(name) is None
             )
-            return frozenset([name for name in not_servers if not await saved_toolset_exists(name)])
+            lookups: Final = tuple([(name, await read_saved_toolset(name)) for name in not_servers])
+            return MappingProxyType(
+                {name: found if isinstance(found, Exception) else None for name, found in lookups if found is not True}
+            )
