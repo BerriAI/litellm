@@ -919,6 +919,7 @@ async def test_raw_content_stays_reserved_until_its_serialization_thread_finishe
             assert exporter.pending_content_bytes >= 70_000
         finally:
             blocker.release.set()
+            await exporter.aclose()
         for _ in range(MAX_SERIALIZATIONS):
             await asyncio.wait_for(exporter.serialize_slots.acquire(), timeout=5)
         assert exporter.pending_content_bytes == 0
