@@ -442,6 +442,12 @@ const menuGroups: MenuGroup[] = [
         icon: <LayoutGrid {...ICON} />,
       },
       {
+        key: "model-recommender",
+        page: "model-recommender",
+        label: <Trans i18nKey="modelRecommender.title" />,
+        icon: <LayoutGrid {...ICON} />,
+      },
+      {
         key: "caching",
         page: "caching",
         label: "shell.nav.items.responseCache",

@@ -914,6 +914,9 @@ from litellm.proxy.middleware.budget_reservation_release_middleware import (
 )
 from litellm.proxy.middleware.litellm_response_headers_middleware import LiteLLMResponseHeadersMiddleware
 from litellm.proxy.middleware.redis_request_batch_middleware import RedisRequestBatchMiddleware
+from litellm.proxy.model_recommender.endpoint import recommend_models
+from litellm.proxy.model_recommender.models import RecommendationRequest, RecommendationResponse
+from litellm.proxy.model_recommender.speed import GatewaySpeedClient
 from litellm.proxy.plugin_routes import (
     register_plugins_from_config,
 )
@@ -19476,6 +19479,29 @@ async def model_group_info(
             *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
     }
+
+
+@router.post(
+    "/model/recommend",
+    tags=["model management"],
+    response_model=RecommendationResponse,
+    description="Rank the caller's accessible chat model groups by intelligence, observed speed and configured cost.",
+)
+async def model_recommend(
+    request: RecommendationRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> RecommendationResponse:
+    return await recommend_models(
+        request,
+        user_api_key_dict,
+        TypeAdapter(Mapping[str, tuple[object, ...]]).validate_python(
+            await model_group_info(user_api_key_dict=user_api_key_dict)
+        ),
+        llm_router,
+        TypeAdapter(Mapping[str, object]).validate_python(general_settings),
+        GatewaySpeedClient(prisma_client.db) if prisma_client else None,
+        await request_caller_aliases(user_api_key_dict),
+    )
 
 
 def _names_a_model_group_row_reads(model_group: str, aliases: CallerAliases, router_aliases: object) -> frozenset[str]:
