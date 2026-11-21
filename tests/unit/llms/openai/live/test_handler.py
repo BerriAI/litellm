@@ -18,7 +18,7 @@ from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY, REALTIME_WEBS
 from litellm.cost_calculator import handle_realtime_stream_cost_calculation
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.openai.live import handler as live_handler
-from litellm.llms.openai.live.handler import LiveSessionStart, OpenAILiveSessions, parse_live_session_start
+from litellm.llms.openai.live.handler import LiveAttach, LiveSessionStart, OpenAILiveSessions, parse_live_session_start
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject, Usage
 
@@ -1258,7 +1258,11 @@ async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
 ) -> None:
     router: Final = Router(
         model_list=[
-            {"model_name": "live-voice", "litellm_params": {"model": "openai/gpt-live-1"}, "model_info": {"id": "live-a"}}
+            {
+                "model_name": "live-voice",
+                "litellm_params": {"model": "openai/gpt-live-1"},
+                "model_info": {"id": "live-a"},
+            }
         ],
         num_retries=0,
     )
@@ -1296,3 +1300,44 @@ async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
     if worker.coroutine is not None:
         worker.coroutine.close()
     assert get_deployment_successes_for_current_minute(router, "live-a") == counted_successes
+
+
+def _attached_upstream() -> _FakeUpstream:
+    """An upstream for a session that already runs: it speaks without waiting for a `session.start`."""
+    upstream: Final = _FakeUpstream(
+        client_frames=(),
+        upstream_frames=(
+            '{"type":"session.started","session":{"model":"gpt-live-1"}}',
+            '{"type":"session.closed","usage":{"seconds":7}}',
+        ),
+    )
+    upstream.client_frames_sent.set()
+    return upstream
+
+
+@pytest.mark.parametrize(("metered", "expected_dispatches"), [(True, 1), (False, 0)], ids=["proxy-meter", "caller"])
+@pytest.mark.asyncio
+async def test_attached_live_session_joins_without_starting_or_closing_it_and_bills_only_when_metered(
+    metered: bool, expected_dispatches: int
+) -> None:
+    upstream: Final = _attached_upstream()
+    connector: Final = _FakeConnector(upstream)
+    client: Final = _FakeClientWebSocket(messages=(), disconnect_after_send_type="session.started")
+    logger: Final = _FakeLogging()
+    worker: Final = _FakeLoggingWorker()
+
+    await OpenAILiveSessions(logging_worker=worker, websocket_connector=connector).async_live_session(
+        model="gpt-live-1",
+        websocket=client,
+        logging_obj=cast(Logging, logger),
+        session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        attach=LiveAttach(session_id="live_abc", metered=metered),
+    )
+    if worker.coroutine is not None:
+        await worker.coroutine
+
+    assert connector.url == "wss://api.openai.com/v1/live/sessions/live_abc/attach"
+    assert upstream.sent_text.qsize() == 0, "an attached socket must not start or close the caller's session"
+    assert logger.dispatch_count == expected_dispatches

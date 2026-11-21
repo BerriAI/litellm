@@ -1,5 +1,6 @@
 #### Realtime WebRTC Endpoints #####
 
+import asyncio
 import json
 import time
 from collections.abc import Generator, Mapping
@@ -32,6 +33,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+)
+from litellm.proxy.realtime_endpoints.sideband import (
+    SidebandClientWebSocket,
+    keep_sideband_task,
+    realtime_call_id,
 )
 from litellm.types.realtime import (
     RealtimeClientSecretRequest,
@@ -323,6 +329,28 @@ def _decode_realtime_token_payload(
     return decoded
 
 
+def _start_realtime_billing_sideband(call_id: str, model: str, caller_auth: UserAPIKeyAuth) -> None:
+    """Meter a WebRTC call from the proxy's own sideband, since its audio and usage bypass the proxy."""
+    from litellm.proxy.proxy_server import (
+        _route_realtime_websocket_session,  # pyright: ignore[reportPrivateUsage]  # the WebSocket session route owns realtime metering
+    )
+
+    keep_sideband_task(
+        asyncio.create_task(
+            _route_realtime_websocket_session(
+                SidebandClientWebSocket("/v1/realtime"),  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
+                caller_auth,
+                route_model=model,
+                model=None,
+                intent=None,
+                guardrails=None,
+                request_path="/v1/realtime",
+                sideband_call_id=call_id,
+            )
+        )
+    )
+
+
 @router.post(
     "/v1/realtime/client_secrets",
     dependencies=[Depends(user_api_key_auth)],
@@ -474,7 +502,7 @@ async def create_realtime_client_secret(
         team_id=getattr(user_api_key_dict, "team_id", None),
         expires_at=expires_at if isinstance(expires_at, int) else None,
         session_type=session_type,
-        caller_auth=_caller_auth_for_token(user_api_key_dict) if session_type == "translation" else None,
+        caller_auth=_caller_auth_for_token(user_api_key_dict),
     )
     encrypted_token: Final[str] = encrypt_value_helper(token_payload)
     upstream_json["value"] = encrypted_token
@@ -666,10 +694,15 @@ async def proxy_realtime_calls(
             code=error_status_code(e, 500),
         )
 
+    location: Final = upstream_resp.headers.get("location")
+    call_id: Final = realtime_call_id(location) if upstream_resp.is_success and not is_translation_request else None
+    if call_id is not None and token_caller_auth.token:
+        _start_realtime_billing_sideband(call_id=call_id, model=model, caller_auth=token_caller_auth)
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
         media_type=_header_value(upstream_resp.headers, "content-type", "application/sdp"),
+        headers=None if location is None else {"Location": location},
     )
 
 

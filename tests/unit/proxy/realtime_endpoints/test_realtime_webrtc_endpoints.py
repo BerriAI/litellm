@@ -7,7 +7,7 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 import functools
 import json
 import time
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -576,12 +576,16 @@ def test_transcription_sessions_requires_auth(proxy_app):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body", [
-    {"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
-    {"audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+        {"audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+    ],
+)
 async def test_transcription_sessions_rejects_disallowed_resolved_model(
-    proxy_app, body,
+    proxy_app,
+    body,
 ):
     proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="test-user",
@@ -982,18 +986,25 @@ async def test_transcription_sessions_encrypts_client_secret(
         assert captured_route_type["route_type"] == "acreate_realtime_transcription_session"
         assert captured_route_type["session"]["input_audio_transcription"]["model"] == "gpt-realtime-whisper"
         assert captured_route_type["session"]["audio"]["input"]["transcription"] == {
-            "model": "gpt-realtime-whisper", "language": "en",
+            "model": "gpt-realtime-whisper",
+            "language": "en",
         }
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body", [
-    {"model": "gpt-4o-realtime-preview", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-    {"input_audio_transcription": {"model": "gpt-4o-realtime-preview"}, "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-    {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "gpt-realtime-whisper"}},
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "gpt-4o-realtime-preview", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+        {
+            "input_audio_transcription": {"model": "gpt-4o-realtime-preview"},
+            "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
+        },
+        {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+    ],
+)
 async def test_transcription_sessions_route_the_allowed_model_over_a_nested_model_the_key_cannot_call(
     proxy_app,
     mock_route_request_transcription_sessions,
@@ -1886,3 +1897,76 @@ def test_realtime_session_routes_answer_400_for_a_malformed_body(
 
     assert (response.status_code, response.json()["error"]["type"]) == (400, "invalid_request_error")
     assert upstream.called is False
+
+
+def _upstream_sdp_answer_route(location: str | None) -> Callable[..., Awaitable[Awaitable[httpx.Response]]]:
+    answer: Final = httpx.Response(
+        201,
+        content=b"v=0\r\n",
+        headers={"content-type": "application/sdp", **({} if location is None else {"location": location})},
+    )
+
+    async def _route(*args: object, **kwargs: object) -> Awaitable[httpx.Response]:
+        async def _inner() -> httpx.Response:
+            return answer
+
+        return _inner()
+
+    return _route
+
+
+@pytest.mark.parametrize(
+    ("caller_auth", "location", "expected_sidebands"),
+    [
+        (
+            {"token": "caller-key-hash", "team_id": "team-a"},
+            "/v1/realtime/calls/rtc_abc",
+            [("rtc_abc", "caller-key-hash")],
+        ),
+        (None, "/v1/realtime/calls/rtc_abc", []),
+        ({"token": "caller-key-hash"}, None, []),
+    ],
+    ids=["billed-to-the-minting-key", "token-without-a-caller-key", "no-call-id-from-upstream"],
+)
+def test_realtime_calls_meter_the_call_on_a_sideband_for_the_key_that_minted_the_token(
+    proxy_app,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+    caller_auth: dict[str, object] | None,
+    location: str | None,
+    expected_sidebands: list[tuple[str, str]],
+) -> None:
+    from litellm.proxy.realtime_endpoints import endpoints as realtime_endpoints
+
+    started: Final[list[tuple[str, str | None]]] = []
+
+    def _record(call_id: str, model: str, caller_auth: UserAPIKeyAuth) -> None:
+        started.append((call_id, caller_auth.token))
+
+    monkeypatch.setattr(realtime_endpoints, "_start_realtime_billing_sideband", _record)
+    encrypted_token: Final = encrypt_value_helper(
+        _encode_realtime_token_payload(
+            ephemeral_key="fake_upstream_epk",
+            model_id="gpt-realtime",
+            user_id=None,
+            team_id=None,
+            expires_at=int(time.time()) + 3600,
+            caller_auth=caller_auth,
+        )
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.route_request", side_effect=_upstream_sdp_answer_route(location)),
+        patch("litellm.proxy.proxy_server.add_litellm_data_to_request", side_effect=mock_add_litellm_data),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        mock_logging.post_call_failure_hook = AsyncMock()
+        response: Final = TestClient(proxy_app).post(
+            "/v1/realtime/calls", headers={"Authorization": f"Bearer {encrypted_token}"}, content=b"v=0\r\n"
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.headers.get("location") == location
+    assert started == expected_sidebands

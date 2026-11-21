@@ -62,7 +62,7 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_pr
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
 from ..llms.openai.common_utils import is_openai_backed_api_base
-from ..llms.openai.live.handler import LiveUpstream, OpenAILiveSessions
+from ..llms.openai.live.handler import LiveAttach, LiveUpstream, OpenAILiveSessions
 from ..llms.openai.realtime.handler import (
     OpenAIRealtime,
     confirm_gateway_session_started,
@@ -833,6 +833,7 @@ async def _alive_session(
     azure_ad_token: str | None,
     litellm_metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
+    attach: LiveAttach | None = None,
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
@@ -847,6 +848,7 @@ async def _alive_session(
             api_base=azure_upstream.url,
             api_key=api_key,
             upstream=azure_upstream,
+            attach=attach,
         )
         return
     resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
@@ -858,6 +860,35 @@ async def _alive_session(
         api_base=resolved_api_base,
         api_key=await resolve_openai_bearer_token_async(
             static_api_key=openai_static_api_key(api_key), api_base=resolved_api_base, litellm_params=litellm_params
+        ),
+        attach=attach,
+    )
+
+
+async def live_session_upstream(litellm_params: Mapping[str, object]) -> tuple[str, LiveUpstream] | None:
+    """Resolve a deployment to its provider model and Live endpoint, or None when the provider has no Live API."""
+    params: Final = GenericLiteLLMParams.model_validate(litellm_params)
+    model, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
+        model=str(litellm_params.get("model") or ""),
+        custom_llm_provider=params.custom_llm_provider,
+        api_base=params.api_base,
+        api_key=params.api_key,
+    )
+    api_base: Final = dynamic_api_base or params.api_base
+    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
+        azure_ad_token: Final = litellm_params.get("azure_ad_token")
+        return model, await _azure_live_upstream(
+            api_base, dynamic_api_key, azure_ad_token if isinstance(azure_ad_token, str) else None, litellm_params
+        )
+    if custom_llm_provider != "openai":
+        return None
+    resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
+    return model, openai_live_sessions.openai_upstream(
+        resolved_api_base,
+        await resolve_openai_bearer_token_async(
+            static_api_key=openai_static_api_key(dynamic_api_key),
+            api_base=resolved_api_base,
+            litellm_params=litellm_params,
         ),
     )
 
@@ -875,6 +906,7 @@ async def _arealtime(
     query_params: RealtimeQueryParams | None = None,
     live_session_start: Mapping[str, object] | None = None,
     realtime_mode: str = "realtime",
+    live_attach: LiveAttach | None = None,
     **kwargs,
 ) -> None:
     """
@@ -947,6 +979,7 @@ async def _arealtime(
             azure_ad_token=azure_ad_token,
             litellm_metadata=session_litellm_metadata,
             litellm_params=deployment_params,
+            attach=live_attach,
         )
         return
 
