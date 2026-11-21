@@ -822,7 +822,7 @@
   },
   "vectorStores": {
     "page": {
-      "title": "向量存储管理",
+      "title": "向量存储",
       "lastRefreshed": "上次刷新：{{time}}",
       "refresh": "刷新",
       "description": "可以使用向量存储来保存和检索模型嵌入向量。",
@@ -3713,7 +3713,7 @@
         "removing": "正在移除…",
         "remove": "移除"
       },
-      "title": "成本跟踪设置",
+      "title": "成本追踪",
       "description": "为不同模型提供商配置折扣和加价，修改将自动保存。",
       "loading": "正在加载配置…",
       "discounts": {
@@ -4047,7 +4047,7 @@
   "costOptimization": {
     "view": {
       "title": "成本优化",
-      "description": "跟踪和配置提示词压缩与提示词缓存以节省费用。自动路由位于“模型与端点”的“自动路由”选项卡。",
+      "description": "跟踪和配置提示词压缩与提示词缓存以节省费用。自动路由位于“模型管理”的“自动路由”选项卡。",
       "tabs": {
         "overall": "总体",
         "compression": "提示词压缩",
@@ -8484,7 +8484,7 @@
         "home": "首页",
         "virtualKeys": "虚拟密钥",
         "playground": "Playground",
-        "modelsAndEndpoints": "模型与端点",
+        "modelsAndEndpoints": "模型管理",
         "agentic": "智能体应用",
         "agents": "智能体",
         "workflowRuns": "工作流运行记录",
@@ -9026,7 +9026,7 @@
         "reset": "主题设置已恢复默认！",
         "resetFailed": "重置主题设置失败，请重试"
       },
-      "title": "界面主题定制",
+      "title": "界面主题",
       "description": "使用自定义标志和网站图标，定制 LiteLLM 管理界面。",
       "logoUrl": {
         "label": "自定义标志地址",
