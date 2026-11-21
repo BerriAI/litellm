@@ -5,6 +5,10 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes,
+)
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
@@ -372,7 +376,11 @@ class ArizePhoenixLogger(OpenTelemetry):
         self._create_guardrail_span(kwargs=kwargs, context=ctx)
 
         if parent_span is not None:
-            self.set_attributes(parent_span, kwargs, response_obj)
+            self.safe_set_attribute(
+                span=parent_span,
+                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                value=OpenInferenceSpanKindValues.CHAIN.value,
+            )
             parent_error_message: Final = (
                 None if success else self._record_exception_on_span(span=parent_span, kwargs=kwargs)
             )
