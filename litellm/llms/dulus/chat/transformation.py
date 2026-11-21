@@ -1,4 +1,5 @@
 from typing import Final
+from urllib.parse import urlparse
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -56,7 +57,17 @@ class DulusConfig(OpenAIGPTConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         resolved_api_base: Final = api_base or get_secret_str("DULUS_API_BASE") or "https://control.dulus.ai/v1"
-        dynamic_api_key: Final = api_key or get_secret_str("DULUS_API_KEY")
+        # DULUS_API_KEY from the environment is only sent over HTTPS. A plain-HTTP
+        # base (a local gateway) has to be given its key explicitly.
+        over_https: Final = urlparse(resolved_api_base).scheme.lower() == "https"
+        dynamic_api_key: Final = api_key or (get_secret_str("DULUS_API_KEY") if over_https else None)
+        if not dynamic_api_key and not over_https:
+            raise AuthenticationError(
+                message=f"Refusing to send DULUS_API_KEY to non-HTTPS api_base {resolved_api_base!r}. "
+                "Pass api_key explicitly for a plain-HTTP gateway.",
+                llm_provider="dulus",
+                model="dulus/*",
+            )
         if not dynamic_api_key:
             raise AuthenticationError(
                 message="Missing DULUS_API_KEY - set DULUS_API_KEY or pass api_key. "

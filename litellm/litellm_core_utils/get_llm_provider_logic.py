@@ -322,7 +322,11 @@ def _get_llm_provider(
                         dynamic_api_key = api_key or clf_env_key
                     elif endpoint == "control.dulus.ai/v1":
                         custom_llm_provider = "dulus"  # rebind-ok: endpoint inference, like every branch
-                        dulus_env_key = get_secret_str("DULUS_API_KEY")
+                        # Only attach the environment key over HTTPS; a plain-HTTP base
+                        # must bring its own credential.
+                        dulus_env_key = (
+                            get_secret_str("DULUS_API_KEY") if urlparse(api_base).scheme.lower() == "https" else None
+                        )
                         dynamic_api_key = api_key or dulus_env_key
                     elif endpoint == "api.mistral.ai/v1":
                         custom_llm_provider = "mistral"

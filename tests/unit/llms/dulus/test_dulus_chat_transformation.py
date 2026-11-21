@@ -96,3 +96,27 @@ def test_cost_map_has_pricing_for_budgets() -> None:
         else:
             assert entry["input_cost_per_token"] > 0, model
             assert entry["output_cost_per_token"] > 0, model
+
+
+def test_environment_key_never_goes_over_plain_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DULUS_API_KEY from the environment is only attached to an HTTPS api_base."""
+    from litellm.exceptions import AuthenticationError
+
+    monkeypatch.setenv("DULUS_API_KEY", "dulus_sk_fake-environment-key")
+    monkeypatch.delenv("DULUS_API_BASE", raising=False)
+    _model, provider, key, _base = get_llm_provider(model="dulus-b-27b", api_base="http://control.dulus.ai/v1")
+    assert provider == "dulus"
+    assert key is None
+
+    config = DulusConfig()
+    with pytest.raises(AuthenticationError):
+        config.get_openai_compatible_provider_info("http://control.dulus.ai/v1", None)
+    monkeypatch.setenv("DULUS_API_BASE", "http://localhost:8080/v1")
+    with pytest.raises(AuthenticationError):
+        config.get_openai_compatible_provider_info(None, None)
+
+    # an explicit key for a local HTTP gateway is the caller's choice and still works
+    assert config.get_openai_compatible_provider_info("http://localhost:8080/v1", "dulus_sk_fake-explicit-key") == (
+        "http://localhost:8080/v1",
+        "dulus_sk_fake-explicit-key",
+    )
