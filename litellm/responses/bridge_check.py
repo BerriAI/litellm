@@ -372,23 +372,12 @@ def _is_interactions_eligible_target(
 
 
 _ONE_CANDIDATE: Final = (None, 1)
-_CANDIDATE_COUNT_KEYS: Final = ("candidate_count", "candidateCount")
+_GENERATE_CONTENT_BODY_KEYS: Final = frozenset({"generationConfig", "generation_config"})
 
 
-def _asks_generate_content_for_candidates(*param_sources: Mapping[str, object] | None) -> bool:
+def _sends_a_generate_content_body(*param_sources: Mapping[str, object] | None) -> bool:
     extra_bodies: Final = (str_keyed_mapping((source or {}).get("extra_body")) for source in param_sources)
-    generation_configs: Final = (
-        str_keyed_mapping((extra_body or {}).get(key))
-        for extra_body in extra_bodies
-        for key in ("generationConfig", "generation_config")
-    )
-    return any(
-        config.get(key) not in _ONE_CANDIDATE
-        for config in generation_configs
-        if config is not None
-        for key in _CANDIDATE_COUNT_KEYS
-        if key in config
-    )
+    return any(not _GENERATE_CONTENT_BODY_KEYS.isdisjoint(extra_body or {}) for extra_body in extra_bodies)
 
 
 def _is_gemini_4_or_newer(model: str) -> bool:
@@ -458,7 +447,7 @@ def should_route_to_interactions_api(
     return (
         _is_gemini_4_or_newer(model)
         and candidate_count in _ONE_CANDIDATE
-        and not _asks_generate_content_for_candidates(str_keyed_mapping(optional_params), llm_map)
+        and not _sends_a_generate_content_body(str_keyed_mapping(optional_params), llm_map)
     )
 
 

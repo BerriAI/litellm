@@ -20,6 +20,8 @@ from tests.integration._support.ports import allocate_port
 if TYPE_CHECKING:
     from collections.abc import Buffer
 
+from integration._support import gemini_parity  # noqa: E402
+
 _POLL_SECONDS: Final = 0.05
 _WRITE_PIECE_BYTES: Final = 64 * 1024
 
@@ -253,10 +255,12 @@ def wire_server(
                 self.close_connection = True
                 disconnected.put(self.path)
                 return
-            request: Final = Request(self.command, self.path, headers, body, tuple(self.headers.items()))
+            raw_request: Final = Request(self.command, self.path, headers, body, tuple(self.headers.items()))
+            bridged: Final = gemini_parity.is_interactions(self.path)
+            request: Final = gemini_parity.as_generate_content(raw_request) if bridged else raw_request
             received.put(request)
             try:
-                reply = respond(request)
+                reply = gemini_parity.as_interactions(respond(request)) if bridged else respond(request)
             except Exception as error:
                 errors.put(error)
                 reply = Reply(status=500)
