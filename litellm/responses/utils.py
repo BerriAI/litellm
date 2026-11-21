@@ -5,7 +5,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, Optional, TypeVar, Union, cast, get_type_hints, overload
+from typing import Any, Final, NoReturn, Optional, Protocol, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     decoded_json_object,
     iter_items,
+    require_attributes,
 )
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils, override_headers
@@ -75,6 +76,13 @@ _CONTENT_PART_EVENT_TYPES: Final = frozenset({"response.content_part.added", "re
 
 class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
     pass
+
+
+class _LooksUpById(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
@@ -455,7 +463,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
-        litellm_metadata: Mapping[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
@@ -463,8 +471,8 @@ class ResponsesAPIRequestUtils:
         by some streaming providers.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Final[dict[str, Any]] = litellm_metadata.get("model_info", {}) or {}
-        model_id: Final = model_info.get("id")
+        model_info: Final = litellm_metadata.get("model_info") or _NO_MODEL_INFO
+        model_id: Final = require_attributes(model_info, _LooksUpById, "get").get("id")
 
         # access the response id based on the object type
         if isinstance(responses_api_response, dict):
@@ -508,7 +516,7 @@ class ResponsesAPIRequestUtils:
     _update_responses_api_response_id_with_model_id = update_responses_api_response_id_with_model_id
 
     @staticmethod
-    def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
+    def _build_encrypted_item_id(model_id: object, item_id: str) -> str:
         """Encode model_id into an output item ID for encrypted-content items.
 
         Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
@@ -554,7 +562,7 @@ class ResponsesAPIRequestUtils:
         return model_id if isinstance(model_id, str) and model_id else None
 
     @staticmethod
-    def affinity_item_id(item_type: object, item_id: object, encrypted_content: object, model_id: str) -> str | None:
+    def affinity_item_id(item_type: object, item_id: object, encrypted_content: object, model_id: object) -> str | None:
         """The ``encitem_`` id an output item carries under encrypted-content affinity, or ``None`` to keep its id.
 
         Reasoning and compaction items qualify by type, so a stream encodes them before their
@@ -582,7 +590,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _affinity_item_updates(
-        item_type: object, item_id: object, encrypted_content: object, model_id: str
+        item_type: object, item_id: object, encrypted_content: object, model_id: object
     ) -> Mapping[str, str]:
         encoded_id: Final = ResponsesAPIRequestUtils.affinity_item_id(item_type, item_id, encrypted_content, model_id)
         wrapped: Final = (
@@ -635,7 +643,7 @@ class ResponsesAPIRequestUtils:
         return None if encoded_item_id is None else {**event, "item_id": encoded_item_id}
 
     @staticmethod
-    def wrap_encrypted_content_with_model_id(encrypted_content: str, model_id: str) -> str:
+    def wrap_encrypted_content_with_model_id(encrypted_content: str, model_id: object) -> str:
         """Wrap encrypted_content with model_id metadata for affinity routing.
 
         When Codex or other clients send items with encrypted_content but no ID,
@@ -687,7 +695,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _update_encrypted_content_item_ids_in_response(
         response: Union["ResponsesAPIResponse", dict[str, object]],
-        model_id: str | None,
+        model_id: object,
     ) -> Union["ResponsesAPIResponse", dict[str, object]]:
         """Rewrite item IDs for reasoning, compaction and other output items that contain ``encrypted_content``.
 
@@ -826,7 +834,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _build_responses_api_response_id(
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
         response_id: str,
     ) -> str:
         """Build the responses_api_response_id"""
@@ -936,7 +944,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def build_container_id(
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
         container_id: str,
     ) -> str:
         """Build a managed container ID with provider and model info encoded.
@@ -1028,7 +1036,7 @@ class ResponsesAPIRequestUtils:
     def encode_container_ids_in_annotations(
         annotations: object,
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
     ) -> None:
         """Encode ``container_id`` on each annotation (e.g. ``container_file_citation``)."""
         if not annotations or not _is_object_sequence(annotations):
@@ -1046,7 +1054,7 @@ class ResponsesAPIRequestUtils:
     def _encode_container_ids_in_message_content(
         content: object,
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
     ) -> None:
         """Walk message ``content`` parts and encode citation ``container_id`` values."""
         if not content:
@@ -1070,7 +1078,7 @@ class ResponsesAPIRequestUtils:
     def encode_container_id_on_output_item(
         item: object,
         custom_llm_provider: str | None,
-        model_id: str | None,
+        model_id: object,
     ) -> None:
         """Mutate one output item (dict or object): wrap raw ``container_id`` as LiteLLM-managed.
 
@@ -1235,7 +1243,7 @@ class ResponsesAPIRequestUtils:
     def _update_container_ids_in_response(
         responses_api_response: ResponsesAPIResponse | dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: Mapping[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Encode container IDs in the response output with provider/model info.
 
@@ -1243,8 +1251,8 @@ class ResponsesAPIRequestUtils:
         so that follow-up container API calls can auto-route to the correct provider.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Final[dict[str, Any]] = litellm_metadata.get("model_info", {}) or {}
-        model_id: Final = model_info.get("id")
+        model_info: Final = litellm_metadata.get("model_info") or _NO_MODEL_INFO
+        model_id: Final = require_attributes(model_info, _LooksUpById, "get").get("id")
 
         # Get the output list
         output: Final = (

@@ -288,6 +288,14 @@ async def _call_gemini_pass_through(method: str, endpoint: str, override_header:
         ("DELETE", "v1beta/files/other/../abc123"),
         ("GET", "v1beta/files/other/%2e%2e/abc123"),
         ("GET", "v1beta/files/./abc123"),
+        ("GET", "v1beta/files/other/%252e%252e/abc123"),
+        ("DELETE", "v1beta/files/other/%25252e%25252e/abc123"),
+        ("GET", "v1beta/files/%252e/abc123"),
+        ("GET", "v1beta/files\\abc123"),
+        ("DELETE", "v1beta/files\\abc123"),
+        ("GET", "v1beta/files%5Cabc123"),
+        ("GET", "v1beta\\files\\abc123"),
+        ("DELETE", "v1beta/files/other%5c..%5cabc123"),
     ],
 )
 async def test_gemini_pass_through_refuses_a_file_the_caller_does_not_own(
@@ -314,6 +322,63 @@ async def test_gemini_pass_through_refuses_a_file_the_caller_does_not_own(
 
     assert refused.value.status_code == 403
     assert guard.checked == ("abc123",)
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_refuses_an_encoded_path_the_provider_would_redirect_to_another_callers_file(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    host: Final = "generativelanguage.googleapis.com"
+    redirect: Final = respx_mock.get(url__regex=rf"https://{host}/v1beta/files/other/.+").mock(
+        return_value=httpx.Response(302, headers={"location": f"https://{host}/v1beta/files/abc123"})
+    )
+    plain_file: Final = respx_mock.get(f"https://{host}/v1beta/files/abc123").mock(
+        return_value=httpx.Response(200, json={"name": "files/abc123"})
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through("GET", "v1beta/files/other/%252e%252e/abc123")
+
+    assert refused.value.status_code == 403
+    assert guard.checked == ("abc123",)
+    assert redirect.call_count == 0
+    assert plain_file.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_rejects_a_file_path_encoded_too_many_times(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    deeply_encoded_dots: Final = f"%{'25' * 1200}2e%{'25' * 1200}2e"
+
+    with pytest.raises(HTTPException) as rejected:
+        await _call_gemini_pass_through("GET", f"v1beta/files/other/{deeply_encoded_dots}/abc123")
+
+    assert rejected.value.status_code == 400
     assert upstream.call_count == 0
 
 

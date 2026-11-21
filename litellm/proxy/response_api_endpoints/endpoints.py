@@ -13,7 +13,6 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    Any,
     Final,
     Literal,
     NamedTuple,
@@ -843,12 +842,12 @@ async def cursor_chat_completions(
 
         # Transform non-streaming Responses API response to chat completions format
         if isinstance(response, ResponsesAPIResponse):
-            logging_obj: Final = processor.data.get("litellm_logging_obj")
+            logging_obj: Final = _DECODED_JSON.validate_python(processor.data.get("litellm_logging_obj"))
             transformed_response: Final = responses_api_bridge.transformation_handler.transform_response(
                 model=processor.data.get("model", ""),
                 raw_response=response,
                 model_response=ModelResponse(),
-                logging_obj=cast(Any, logging_obj),
+                logging_obj=logging_obj,
                 request_data=processor.data,
                 messages=processor.data.get("input", []),
                 optional_params={},
@@ -2748,6 +2747,12 @@ async def _bill_rejected_frame(
                 )
             except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
                 verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+    from litellm.proxy.hooks.rust_spend_logger import bill_failure_in_rust
+
+    try:
+        await bill_failure_in_rust(user_api_key_dict, exception, frame_data)
+    except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
+        verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
 
 
 def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:

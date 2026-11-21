@@ -2,7 +2,7 @@ import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Final, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -536,7 +536,7 @@ def set_object_metadata_field(
         "UpdateProjectRequest",
     ],
     field_name: str,
-    value: Any,
+    value: object,
 ) -> None:
     """
     Helper function to set metadata fields that require premium user checks

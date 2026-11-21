@@ -3089,6 +3089,10 @@ class TranscriptionResponse(OpenAIObject):
     def set_audio_transcription_duration(self, duration: float) -> None:
         self._hidden_params["audio_transcription_duration"] = duration
 
+    def report_duration_usage_when_provider_sent_none(self, duration: object) -> None:
+        if self.usage is None and isinstance(duration, (int, float)) and duration > 0:
+            self.usage = TranscriptionUsageDurationObject(type="duration", seconds=duration)
+
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)

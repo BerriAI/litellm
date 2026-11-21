@@ -8,12 +8,18 @@ their respective publisher-specific count-tokens endpoints.
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, filter_and_transform_beta_headers
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    drops_unsupported_params,
+    json_contains,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     OBJECT_LIST_ADAPTER,
@@ -53,6 +59,16 @@ def count_tokens_request_body(
             drop_custom=drops_unsupported_params(drop_params),
         ),
     }
+
+
+class _SplitsOnSeparator(Protocol):
+    def split(self, sep: str, /) -> object: ...
+
+
+def _model_without_version_suffix(model: object) -> object:
+    if not json_contains(model, "@"):
+        return model
+    return subscript(require_attributes(model, _SplitsOnSeparator, "split").split("@"), 0)
 
 
 def count_tokens_publisher(model: str) -> str | None:
@@ -140,10 +156,10 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
     async def handle_count_tokens_request(
         self,
         model: str,
-        request_data: dict[str, Any],
+        request_data: Mapping[str, object],
         litellm_params: dict[str, Any],
         extra_headers: Mapping[str, str] = MappingProxyType({}),
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle token counting request for a Vertex AI partner model.
 
@@ -163,9 +179,14 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # count-tokens endpoint does not accept versioned model names.
         model = self._strip_version_suffix(model)
         if "model" in request_data:
+            requested_model: Final = request_data["model"]
             request_data = {
                 **request_data,
-                "model": self._strip_version_suffix(request_data["model"]),
+                "model": (
+                    self._strip_version_suffix(requested_model)
+                    if isinstance(requested_model, str)
+                    else _model_without_version_suffix(requested_model)
+                ),
             }
 
         # Validate request

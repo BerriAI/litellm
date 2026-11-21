@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import ssl
+import typing
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
@@ -45,6 +46,7 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     only,
     proxy_request_headers,
+    require_attributes,
     stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
@@ -653,6 +655,7 @@ def unrequested_stream(
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
 _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 _INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
+_CHUNK_JSON: Final = TypeAdapter(object)
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str])
@@ -1180,9 +1183,15 @@ def _raised_like_python(error: _RaisedT, request_provider: str) -> _RaisedT:
     return error if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS else _raised(error)
 
 
+class _ChunkPayload(typing.Protocol):
+    def pop(self, key: str, default: Mapping[str, object], /) -> object: ...
+
+
 def _chunk_parser_failure(text: str) -> Exception:
     try:
-        json.loads(text).pop(_INVOCATION_METRICS, {})
+        require_attributes(_CHUNK_JSON.validate_python(json.loads(text)), _ChunkPayload, "pop").pop(
+            _INVOCATION_METRICS, {}
+        )
     except Exception as error:  # noqa: BLE001  # the chunk parser's own failure is what Python raised
         return error
     return ValueError(text)

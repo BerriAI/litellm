@@ -25,9 +25,13 @@ from typing import Final
 
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import subscript
 
 EVAL_DIR: Final = os.path.join(os.path.dirname(__file__), "evals")
 RESULTS_DIR: Final = os.path.join(os.path.dirname(__file__), "results")
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -42,12 +46,12 @@ def _load_jsonl(filename: str) -> list[dict]:
             line = line.strip()
             if not line:
                 continue
-            obj = json.loads(line)
+            obj = _DECODED_JSON.validate_python(json.loads(line))
             cases.append(
                 {
-                    "sentence": obj["sentence"],
-                    "expected": obj["expected"],
-                    "test": obj["test"],
+                    "sentence": subscript(obj, "sentence"),
+                    "expected": subscript(obj, "expected"),
+                    "test": subscript(obj, "test"),
                 }
             )
     return cases

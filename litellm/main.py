@@ -26,7 +26,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
@@ -247,6 +247,7 @@ from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
+    keyword_arguments,
     normalize_drop_params,
     safe_deep_copy,
     without,
@@ -1081,12 +1082,19 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-async def _async_streaming(response, model, custom_llm_provider, litellm_params: Mapping[str, object]):
+async def _awaited_stream(pending: Awaitable[object]) -> object:
+    return await pending
+
+
+async def _async_streaming(
+    response: object, model, custom_llm_provider, litellm_params: Mapping[str, object]
+) -> AsyncIterator[object]:
     try:
         print_verbose(f"received response in _async_streaming: {response}")
-        if asyncio.iscoroutine(response):
-            response = await response
-        async for line in response:
+        resolved: Final = await _awaited_stream(response) if asyncio.iscoroutine(response) else response
+        async for line in (  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # untyped stream
+            resolved
+        ):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
@@ -8781,6 +8789,9 @@ async def atranscription(
                 sync_calculated_duration: Final = calculate_request_duration(file)
                 if sync_calculated_duration is not None:
                     response.set_audio_transcription_duration(sync_calculated_duration)
+                    response.report_duration_usage_when_provider_sent_none(sync_calculated_duration)
+            else:
+                response.report_duration_usage_when_provider_sent_none(existing_duration)
 
         return response
     except Exception as e:
@@ -9130,6 +9141,9 @@ def transcription(
                 )
         elif calculated_duration is not None:
             response.set_audio_transcription_duration(calculated_duration)
+            response.report_duration_usage_when_provider_sent_none(calculated_duration)
+    elif isinstance(response, TranscriptionResponse):
+        response.report_duration_usage_when_provider_sent_none(getattr(response, "duration", None))
 
     return response
 
@@ -9826,7 +9840,11 @@ def config_completion(**kwargs):
     if litellm.config_path is not None:
         config_args: Final = read_config_args(litellm.config_path)
         # overwrite any args passed in with config args
-        return completion(**kwargs, **config_args)
+        forwarded: Final = keyword_arguments(
+            config_args,
+            completion,  # pyright: ignore[reportUnknownArgumentType]  # completion has untyped params
+        )
+        return completion(**kwargs, **_ForwardedCompletionParams(**forwarded))
     else:
         raise ValueError(
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
@@ -9846,7 +9864,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: 
 async def acount_tokens(
     model: str,
     messages: list[dict[str, object]] | None = None,
-    tools: list[dict[str, Any]] | None = None,
+    tools: list[dict[str, object]] | None = None,
     system: str | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
