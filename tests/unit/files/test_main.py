@@ -243,3 +243,61 @@ async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, mo
     assert delete_route.call_count == 1
     assert deleted.id == "file-abc123"
     assert deleted.deleted is True
+
+
+BOGUS_PROVIDER: Final = "not_a_real_provider"
+
+
+def test_create_file__unsupported_provider_raises_badrequest():
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        litellm.create_file(
+            file=("data.jsonl", b"{}"),
+            purpose="batch",
+            custom_llm_provider=BOGUS_PROVIDER,
+        )
+
+    assert BOGUS_PROVIDER in str(exc_info.value)
+    assert exc_info.value.response.request.method == "create_file"
+
+
+def test_file_retrieve__unsupported_provider_raises_badrequest():
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        litellm.file_retrieve(
+            file_id="file-abc123",
+            custom_llm_provider=BOGUS_PROVIDER,
+        )
+
+    assert BOGUS_PROVIDER in str(exc_info.value)
+    assert exc_info.value.response.request.method == "file_retrieve"
+
+
+def test_file_delete__unsupported_provider_raises_badrequest():
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        litellm.file_delete(
+            file_id="file-abc123",
+            custom_llm_provider=BOGUS_PROVIDER,
+        )
+
+    assert BOGUS_PROVIDER in str(exc_info.value)
+    assert exc_info.value.response.request.method == "file_delete"
+
+
+def test_file_list__unsupported_provider_raises_badrequest():
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        litellm.file_list(
+            custom_llm_provider=BOGUS_PROVIDER,
+        )
+
+    assert BOGUS_PROVIDER in str(exc_info.value)
+    assert exc_info.value.response.request.method == "file_list"
+
+
+def test_file_content__unsupported_provider_raises_badrequest():
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        litellm.file_content(
+            file_id="file-abc123",
+            custom_llm_provider=BOGUS_PROVIDER,
+        )
+
+    assert BOGUS_PROVIDER in str(exc_info.value)
+    assert exc_info.value.response.request.method == "file_content"
