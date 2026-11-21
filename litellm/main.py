@@ -1400,6 +1400,7 @@ from litellm.responses.bridge_check import (
     dispatch_interactions_bridge,
     resolve_bridge_allowed_openai_params,
     resolve_bridge_tool_choice,
+    serves_only_responses,
     should_route_to_interactions_api,
     str_keyed_mapping,
     strip_interactions_routing_params,
@@ -5864,7 +5865,9 @@ def completion(
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
     # model whose model_cost mode is "responses" but whose provider has no
-    # Responses API config (get_provider_responses_api_config -> None).
+    # Responses API config (get_provider_responses_api_config -> None). A route
+    # with no chat endpoint bridges anyway, since its native Responses config
+    # ends the round-trip.
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
     skip_interactions_api_bridge: Final = kwargs.pop(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # untyped kwargs dict
         "_skip_interactions_api_bridge", False
@@ -6260,8 +6263,11 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
+        may_bridge_to_responses_api: Final = not skip_responses_api_bridge or serves_only_responses(
+            model, custom_llm_provider
+        )
         bridges_to_responses_api: Final = (
-            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+            responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api
         )
         cleaned_provider_params: Final = strip_interactions_routing_params(
             provider_params  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
@@ -6633,7 +6639,7 @@ def completion(
         replay_as_stream: Final = (
             partial(_replayed_stream, logging_obj=logging, stream_options=stream_options) if replays_stream else None
         )
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api:
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)

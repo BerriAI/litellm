@@ -11,9 +11,11 @@ import {
   within,
 } from "../../../../../tests/test-utils";
 import AppsManager from "./AppsManager";
+import AppGroupsPage from "../../app-groups/page";
 import AppSettingsPage from "../settings/page";
 import type { App, AppResource, Budget } from "./appForms";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
+import type { AppGroup } from "./appGroupApi";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "test-session", userRole: "Admin", isLoading: false }),
@@ -53,6 +55,7 @@ beforeEach(() => {
   overallPresets = [overallPreset];
   resources = [resource];
   const routes: Parameters<typeof mockAppRequests>[0] = {
+    "GET /management/v1/app_groups": () => [],
     "GET /management/v1/apps/definition": () => definition,
     "PUT /management/v1/apps/definition": async (request) => {
       definition = await request.json();
@@ -64,6 +67,10 @@ beforeEach(() => {
       configuredApps = [{ ...configuredApps[0], ...(await request.json()) }];
       return configuredApps[0];
     },
+    "GET /management/v1/app_group_budget_groups": () => ({
+      default_budgets: overallPresets,
+      budget_groups_revision: "g".repeat(64),
+    }),
     "GET /management/v1/app_budget_groups": () => ({
       default_budgets: overallPresets,
       budget_groups_revision: "a".repeat(64),
@@ -76,7 +83,7 @@ beforeEach(() => {
     "GET /management/v1/customer_organizations/daily/activity": (request) => {
       const url = new URL(request.url);
       const metrics = {
-        spend: url.searchParams.has("app_id") ? 12.5 : 50,
+        spend: url.searchParams.has("app_id") || url.searchParams.has("app_group_id") ? 12.5 : 50,
         total_tokens: 1500,
         prompt_tokens: 1000,
         completion_tokens: 500,
@@ -91,10 +98,229 @@ beforeEach(() => {
     "GET /models": () => ({ data: [] }),
     "GET /management/v1/apps/resources/team/team-chat/models": () => [],
   };
+  routes["GET /management/v1/customer_teams/daily/activity"] =
+    routes["GET /management/v1/customer_organizations/daily/activity"];
   network = mockAppRequests(routes);
   requests = network.requests;
 });
 afterEach(() => vi.unstubAllGlobals());
+
+const appGroup: AppGroup = {
+  app_group_id: "group-suite",
+  name: "Product suite",
+  budget_id: "group-custom",
+  budget: { max_budget: 10000 },
+  budget_usage: [{ source: "scalar", max_budget: 10000, budget_duration: null, spend: 0, reset_at: null }],
+  spend: 0,
+  created_at: "",
+  updated_at: "",
+  created_by: "",
+  updated_by: "",
+};
+
+describe("App groups", () => {
+  it("shows group usage and filters an app within the same group and date range", async () => {
+    network.routes["GET /management/v1/app_groups"] = () => [appGroup];
+    configureApp({
+      app_group_id: appGroup.app_group_id,
+      budget: { max_budget: 2000, budget_duration: "1mo" },
+      budget_usage: [{ source: "scalar", max_budget: 2000, budget_duration: "1mo", spend: 1200, reset_at: null }],
+    });
+    network.routes["GET /management/v1/customer_organizations/daily/activity"] = (request) => {
+      const query = new URL(request.url).searchParams;
+      const scoped =
+        query.get("app_group_id") === appGroup.app_group_id &&
+        query.get("start_date") === "2026-11-01" &&
+        query.get("end_date") === "2026-11-03";
+      const groupSpend = query.has("app_id") ? 2.5 : 12.5;
+      const metrics = {
+        spend: scoped ? groupSpend : 900,
+        total_tokens: 1500,
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        api_requests: 3,
+      };
+      return {
+        results: [
+          {
+            date: query.get("start_date"),
+            metrics,
+            breakdown: { model_groups: { "group-model": { metrics, metadata: {} } } },
+          },
+        ],
+        metadata: { has_more: false, total_pages: 1 },
+      };
+    };
+    const user = userEvent.setup();
+    render(<AppGroupsPage />, {
+      searchParams: "?app_group=group-suite&from=2026-11-01&to=2026-11-03",
+    });
+    const models = within(await screen.findByRole("table", { name: "Models" }));
+    expect(await models.findByText("$12.50")).toBeInTheDocument();
+    const applications = within(screen.getByRole("table", { name: "Applications" }));
+    expect(await applications.findByText("$2.50")).toBeInTheDocument();
+    expect(applications.getByText("$1,200.00 / $2,000.00")).toBeInTheDocument();
+    expect(applications.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "60");
+    expect(applications.getByRole("meter", { name: "Overall spend share" })).toHaveAttribute("aria-valuenow", "20");
+    expect(screen.getByTitle("1,500 tokens")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Usage over time" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Current budget" })).getByText("$0.00 / $10,000.00"),
+    ).toBeInTheDocument();
+    await chooseAppOption(user, screen.getByRole("combobox", { name: "App", exact: true }), "chat");
+    await waitFor(() =>
+      expect(within(screen.getByRole("table", { name: "Models" })).getByText("$2.50")).toBeInTheDocument(),
+    );
+    const activity = requests
+      .map((request) => new URL(request.url))
+      .filter(
+        (url) =>
+          url.pathname.endsWith("/daily/activity") && url.searchParams.get("app_group_id") === appGroup.app_group_id,
+      );
+    expect(
+      activity.some(
+        (url) =>
+          url.searchParams.get("app_id") === app.app_id &&
+          url.searchParams.get("start_date") === "2026-11-01" &&
+          url.searchParams.get("end_date") === "2026-11-03",
+      ),
+    ).toBe(true);
+    const customerLink = new URL(
+      screen.getByRole("link", { name: "Customer organization budgets" }).getAttribute("href")!,
+      "http://localhost",
+    );
+    const expectedScope = {
+      app_group: "group-suite",
+      group_tab: "customers",
+      from: "2026-11-01",
+      to: "2026-11-03",
+      app_id: app.app_id,
+    };
+    expect(Object.fromEntries(customerLink.searchParams)).toEqual(expectedScope);
+  });
+
+  it("assigns an app to a group while preserving its own budget preset", async () => {
+    network.routes["GET /management/v1/app_groups"] = () => [appGroup];
+    const user = await openAppSettings({ budget_id: overallPreset.budget_id, budget: overallPreset });
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "App group" }), "Product suite");
+    expect(await saveAppSettings(user)).toMatchObject({
+      app_group_id: "group-suite",
+      budget_id: overallPreset.budget_id,
+    });
+  });
+
+  it("lists groups separately, searches them, and edits a child app without losing the group", async () => {
+    network.routes["GET /management/v1/app_groups"] = () => [
+      appGroup,
+      { ...appGroup, app_group_id: "group-other", name: "Other suite" },
+    ];
+    network.routes["GET /management/v1/app_groups/group-suite/customer_organizations"] = () => [];
+    network.routes["GET /management/v1/customer_organizations"] = () => ({ data: [], meta: { total_pages: 1 } });
+    configureApp({ app_group_id: appGroup.app_group_id, budget: { max_budget: 2000 } });
+    const user = userEvent.setup();
+    render(<AppGroupsPage />);
+    const table = within(await screen.findByRole("table", { name: "App groups" }));
+    expect(await table.findByRole("button", { name: "Product suite" })).toBeInTheDocument();
+    expect(table.getByRole("button", { name: "Other suite" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search app groups" }), { target: { value: "Product" } });
+    await waitFor(() => expect(table.queryByRole("button", { name: "Other suite" })).not.toBeInTheDocument());
+    await user.click(table.getByRole("button", { name: "Product suite" }));
+    expect(await screen.findByRole("heading", { name: "Product suite" })).toBeInTheDocument();
+    const applications = within(await screen.findByRole("table", { name: "Applications" }));
+    await user.click(await applications.findByRole("button", { name: "Edit chat" }));
+    const editor = within(await screen.findByRole("region", { name: "Overall app budget" }));
+    fireEvent.change(editor.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "2500" } });
+    expect(await saveAppSettings(user)).toMatchObject({ budget: { max_budget: 2500 } });
+    expect(screen.getByRole("heading", { name: "Product suite" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "App groups" }));
+    expect(await screen.findByRole("table", { name: "App groups" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search app groups" })).toHaveValue("Product");
+  });
+
+  it("shows ten app groups per page and opens a group from the next page", async () => {
+    network.routes["GET /management/v1/app_groups"] = () =>
+      Array.from({ length: 11 }, (_, index) => ({
+        ...appGroup,
+        app_group_id: `group-${index + 1}`,
+        name: `Group ${String(index + 1).padStart(2, "0")}`,
+      }));
+    const user = userEvent.setup();
+    render(<AppGroupsPage />);
+    const table = within(await screen.findByRole("table", { name: "App groups" }));
+    await table.findByRole("button", { name: "Group 10", exact: true });
+    expect(table.getAllByRole("row")).toHaveLength(11);
+    expect(table.queryByRole("button", { name: "Group 11", exact: true })).not.toBeInTheDocument();
+    expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("10");
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    const group = await table.findByRole("button", { name: "Group 11", exact: true });
+    expect(table.getAllByRole("row")).toHaveLength(2);
+    await user.click(group);
+    expect(await screen.findByRole("heading", { name: "Group 11", exact: true })).toBeInTheDocument();
+  });
+
+  it("preselects the catalog default when creating a group with selected apps", async () => {
+    network.routes["POST /management/v1/app_groups"] = () => appGroup;
+    network.routes["GET /management/v1/app_group_budget_groups"] = () => ({
+      default_budgets: [overallPreset],
+      default_budget_template_id: overallPreset.budget_id,
+      budget_groups_revision: "g".repeat(64),
+    });
+    resources = [resource, { resource_type: "team", resource_id: "team-search", alias: "search", app_id: null }];
+    const user = userEvent.setup();
+    render(<AppGroupsPage />);
+    await user.click(await screen.findByRole("button", { name: "Create app group" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Create app group" }));
+    fireEvent.change(await dialog.findByRole("textbox", { name: "Group name" }), {
+      target: { value: "Product suite" },
+    });
+    await user.click(dialog.getByRole("combobox", { name: "Select apps" }));
+    await user.click(await screen.findByRole("option", { name: /chat/ }));
+    await user.click(await screen.findByRole("option", { name: /search/ }));
+    await user.keyboard("{Escape}");
+    expect(dialog.getByRole("combobox", { name: "Budget source" })).toHaveTextContent("App Standard");
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(network.writes).toHaveLength(1));
+    const expected = {
+      name: "Product suite",
+      description: null,
+      apps: [
+        { resource_type: "team", resource_id: "team-chat" },
+        { resource_type: "team", resource_id: "team-search" },
+      ],
+      budget_id: overallPreset.budget_id,
+    };
+    expect(await network.writes[0].json()).toEqual(expected);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("sets a customer cap across the group using the existing customer budget catalog", async () => {
+    network.routes["GET /management/v1/app_groups"] = () => [appGroup];
+    network.routes["GET /management/v1/app_groups/group-suite/customer_organizations"] = () => [];
+    network.routes["GET /management/v1/customer_organizations"] = () => ({
+      data: [{ customer_org_id: "customer-one", alias: "Customer One" }],
+      meta: { total_pages: 1 },
+    });
+    network.routes["GET /management/v1/app_customer_organization_budget_groups"] = () => ({
+      default_budgets: [{ ...overallPreset, budget_id: "customer-standard", name: "Customer Standard" }],
+      budget_groups_revision: "b".repeat(64),
+    });
+    network.routes["PUT /management/v1/app_groups/group-suite/customer_organizations/customer-one"] = () => ({
+      app_group_id: "group-suite",
+      customer_org_id: "customer-one",
+      budget_id: "customer-standard",
+    });
+    const user = userEvent.setup();
+    render(<AppGroupsPage />, { searchParams: "?app_group=group-suite&group_tab=customers" });
+    await user.click(await screen.findByRole("button", { name: "Set customer budget" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Customer budget for app group" }));
+    await chooseAppOption(user, await dialog.findByRole("combobox", { name: "Customer organization" }), "Customer One");
+    await chooseAppOption(user, dialog.getByRole("combobox", { name: "Budget source" }), /^Customer Standard/);
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(network.writes).toHaveLength(1));
+    expect(await network.writes[0].json()).toEqual({ budget_id: "customer-standard" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
 
 function configureApp(settings: Partial<App>) {
   resources = [{ ...resource, app_id: app.app_id }];
@@ -108,6 +334,21 @@ async function openAppSettings(settings?: Partial<App>) {
   await user.click(await screen.findByRole("button", { name: "Edit chat" }));
   return user;
 }
+
+it.each(["default", "none", "existing"])("respects the app catalog default with a %s choice", async (choice) => {
+  network.routes["GET /management/v1/app_budget_groups"] = () => ({
+    default_budgets: [overallPreset],
+    default_budget_template_id: overallPreset.budget_id,
+    budget_groups_revision: "a".repeat(64),
+  });
+  const user = await openAppSettings(choice === "existing" ? { budget_id: null, budget: null } : undefined);
+  const source = await screen.findByRole("combobox", { name: "Overall app budget" });
+  expect(source).toHaveTextContent(choice === "existing" ? "No limit" : "App Standard");
+  if (choice === "none") await chooseAppOption(user, source, /^No limit/);
+  expect(await saveAppSettings(user, choice === "existing" ? "PATCH" : "POST")).toMatchObject({
+    budget_id: choice === "default" ? overallPreset.budget_id : null,
+  });
+});
 
 it("saves the selected app on its Settings page and keeps member defaults untouched", async () => {
   configureApp({ auto_create_customers: true, customer_margin: 0.025 });
@@ -511,7 +752,7 @@ describe("Gateway app definition", () => {
     definition = { resource_type: null };
     render(<AppsManager />, { searchParams: "?app=team-chat" });
     expect(await screen.findByRole("combobox")).toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 
   it.each(["?page_size=0", "?page=-3", "?page=0", "?page_size=-5&page=9"])(

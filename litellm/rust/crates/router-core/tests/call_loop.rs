@@ -9,15 +9,16 @@ use std::{
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HealthState, InMemoryRouterCache, Op, Outcomes, PreRoute, PreRouted,
-    Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
-    RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
-    UsageCounts, UsageWindow,
+    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, Op, Outcomes, PreRoute,
+    PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost,
+    RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served,
+    SuccessReport, UsageCounts, UsageWindow,
     call::{StreamOrigin, Unanswered},
     fallback::Fallbacks,
     health::CooldownValue,
     health::current_minute,
     host::UncountedRetries,
+    precall::PreCallFacts,
     select,
     select::PassThrough,
 };
@@ -98,6 +99,7 @@ struct RecordingCache {
     inner: InMemoryRouterCache,
     cooldown_reads: Mutex<Vec<Vec<String>>>,
     held: Mutex<HashMap<String, CooldownValue>>,
+    health_reads: Mutex<u32>,
 }
 
 impl RecordingCache {
@@ -181,6 +183,7 @@ impl RouterCache for RecordingCache {
     }
 
     async fn health_states(&self) -> Result<HashMap<String, HealthState>, litellm_cache::Error> {
+        *self.health_reads.lock() += 1;
         self.inner.health_states().await
     }
 
@@ -839,6 +842,186 @@ async fn a_fallback_the_host_refuses_ends_the_call_before_the_next_target() {
         ended.error
     );
     assert_eq!(host.selected(), ["p1", "b1"]);
+}
+
+/// A [`ScriptedHost`] that keeps the group of every attempt and every host step a call makes
+/// beyond its attempts, named as [`step_name`] names what `Router::reach` reports.
+#[derive(Default)]
+struct SteppedHost {
+    scripted: ScriptedHost,
+    attempted: Mutex<BTreeSet<String>>,
+    steps: Mutex<BTreeSet<String>>,
+}
+
+fn step_name(step: &HostStep) -> String {
+    match step {
+        HostStep::Pick(strategy, scope) => format!("pick {strategy} {scope:?}"),
+        HostStep::PreCallFacts => "pre-call facts".to_owned(),
+        HostStep::HealthStates => "health states".to_owned(),
+        HostStep::FallbackParams(_) => "fallback params".to_owned(),
+    }
+}
+
+impl SteppedHost {
+    fn made(&self, step: &HostStep) {
+        self.steps.lock().insert(step_name(step));
+    }
+}
+
+impl RouterHost for SteppedHost {
+    type Response = String;
+    type Failure = Raised;
+    type Cache = RecordingCache;
+
+    async fn attempt(&self, attempt: &Attempt) -> Result<Served<String>, AttemptFailure<Raised>> {
+        self.attempted
+            .lock()
+            .insert(attempt.deployment.model_name.clone());
+        self.scripted.attempt(attempt).await
+    }
+
+    async fn select(
+        &self,
+        stage: &SelectStage,
+        ctx: &RoutingContext<'_>,
+        candidates: Vec<Arc<Deployment>>,
+    ) -> Result<Vec<Arc<Deployment>>, Error> {
+        match stage {
+            SelectStage::Strategy(strategy) => {
+                self.made(&HostStep::Pick(strategy.clone(), ctx.scope.clone()));
+            }
+            other => {
+                self.steps.lock().insert(format!("{other:?}"));
+            }
+        }
+        Ok(candidates)
+    }
+
+    async fn pre_call_facts(
+        &self,
+        _ctx: &RoutingContext<'_>,
+        _candidates: &[Arc<Deployment>],
+    ) -> Result<PreCallFacts, Error> {
+        self.made(&HostStep::PreCallFacts);
+        Ok(PreCallFacts::default())
+    }
+
+    async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
+        Ok(true)
+    }
+
+    async fn refuses_fallbacks(
+        &self,
+        _level: u32,
+        _targets: &[serde_json::Map<String, serde_json::Value>],
+    ) -> bool {
+        self.made(&HostStep::FallbackParams("fallbacks"));
+        false
+    }
+
+    async fn sleep(&self, _duration: Duration) {}
+
+    fn observe(&self, _event: &RouterEvent) {}
+
+    fn cache(&self) -> &RecordingCache {
+        &self.scripted.cache
+    }
+}
+
+/// `primary` is asked for and each group in `failing` fails once, so the call walks its fallbacks.
+#[rstest]
+#[case::every_step_behind_a_dict_fallback(
+    json!({
+        "routing_groups": [
+            {"group_name": "pool", "models": ["backup"], "routing_strategy": "least-busy"},
+        ],
+        "enable_pre_call_checks": true,
+        "enable_health_check_routing": true,
+    }),
+    json!({"fallbacks": [{"primary": [{"model": "backup", "temperature": 0}]}]}),
+    vec![("primary", server_error())],
+    &["primary", "backup"],
+)]
+#[case::the_router_strategy_through_an_alias_and_its_own_chain(
+    json!({"routing_strategy": "least-busy"}),
+    json!({
+        "model_group_alias": {"spare": "context"},
+        "context_window_fallbacks": [{"primary": ["spare"]}],
+        "fallbacks": [{"spare": ["backup"]}],
+    }),
+    vec![("primary", context_window()), ("context", server_error())],
+    &["primary", "context", "backup"],
+)]
+#[case::the_fallbacks_of_every_group(
+    json!({}),
+    json!({"fallbacks": [{"*": ["backup"]}]}),
+    vec![("primary", server_error())],
+    &["primary", "backup"],
+)]
+#[case::no_fallback(json!({}), json!({}), vec![("primary", server_error())], &["primary"])]
+#[tokio::test]
+async fn a_call_stays_inside_what_reach_reports_for_its_name(
+    #[case] settings: Value,
+    #[case] dynamic: Value,
+    #[case] failing: Vec<(&str, AttemptError)>,
+    #[case] walked: &[&str],
+) {
+    let config = RouterConfig {
+        model_list: tiers(false).model_list,
+        ..serde_json::from_value(settings).unwrap()
+    };
+    let dynamic: RouterDynamicConfig = serde_json::from_value(
+        dynamic
+            .as_object()
+            .into_iter()
+            .flatten()
+            .chain(json!({"num_retries": 0}).as_object().into_iter().flatten())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    )
+    .unwrap();
+    let router = Router::new(config, dynamic).unwrap();
+    let host = SteppedHost {
+        scripted: ScriptedHost::scripted(
+            failing
+                .into_iter()
+                .map(|(group, failure)| (group, vec![failure]))
+                .collect(),
+        ),
+        ..SteppedHost::default()
+    };
+
+    let _ = router.call(&host, Op::from("acompletion"), request()).await;
+
+    let reached = router.reach("primary").unwrap();
+    let served: BTreeSet<String> = reached
+        .iter()
+        .filter(|reached| reached.served)
+        .map(|reached| reached.group.clone())
+        .collect();
+    let reported: BTreeSet<String> = reached
+        .iter()
+        .flat_map(|reached| &reached.steps)
+        .map(step_name)
+        .collect();
+    let attempted = host.attempted.lock().clone();
+    let made: BTreeSet<String> = host
+        .steps
+        .lock()
+        .iter()
+        .cloned()
+        .chain(
+            (*host.scripted.cache.health_reads.lock() > 0)
+                .then(|| step_name(&HostStep::HealthStates)),
+        )
+        .collect();
+    assert_eq!(
+        attempted,
+        ids(walked),
+        "the call did not walk its fallbacks"
+    );
+    assert!(attempted.is_subset(&served), "{attempted:?} of {served:?}");
+    assert_eq!(made, reported);
 }
 
 #[rstest]

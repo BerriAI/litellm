@@ -22,6 +22,7 @@ pub use input::{
 };
 pub use manifest::{
     Activation, Manifest, ManifestError, OptOutBy, Selection, Subscription, SubscriptionProblem,
+    Violation,
 };
 pub use payload::{PayloadHost, PayloadRef, RenderOptions, Rendered, render_all};
 pub use record::{

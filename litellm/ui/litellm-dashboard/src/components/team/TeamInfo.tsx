@@ -162,6 +162,7 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "default_estimated_output_tokens_per_model",
   "allowed_passthrough_routes",
   "guardrails",
+  "policies",
   "opted_out_global_guardrails",
   "disable_global_guardrails",
   "require_trace_id",
@@ -562,7 +563,11 @@ const toMemberDefaultsValues = (info: TeamInfoRecord): MemberDefaultsValues => (
   ],
 });
 
-const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): TeamUpdateFormValues => ({
+const toTeamFormValues = (
+  info: TeamInfoRecord,
+  effectiveGuardrails: string[],
+  policies: string[],
+): TeamUpdateFormValues => ({
   team_alias: info.team_alias,
   models: info.models.length === 0 ? [ALL_PROXY_MODELS] : info.models,
   max_budget: info.max_budget,
@@ -590,7 +595,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   guardrails: effectiveGuardrails,
   disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
   require_trace_id: info.metadata?.require_trace_id === true,
-  policies: info.policies || [],
+  policies,
   access_group_ids: info.access_group_ids || [],
   vector_stores: info.object_permission?.vector_stores || [],
   allowed_passthrough_routes: info.metadata?.allowed_passthrough_routes || [],
@@ -661,6 +666,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
+  const [keyOwnerFilter, setKeyOwnerFilter] = useState<string>();
   const [isEditing, setIsEditing] = useState(false);
   const [memberDefaultsEditorTeamId, setMemberDefaultsEditorTeamId] = useState<string | null>(null);
   const isEditingMemberDefaults = memberDefaultsEditorTeamId === teamId;
@@ -669,6 +675,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
+  const storedTeamPolicies: unknown = teamData?.team_info?.metadata?.policies;
+  const legacyTeamPolicies = teamData?.team_info?.policies;
+  const teamPolicies = useMemo(
+    () =>
+      Array.isArray(storedTeamPolicies)
+        ? storedTeamPolicies.filter((policy): policy is string => typeof policy === "string")
+        : legacyTeamPolicies ?? [],
+    [storedTeamPolicies, legacyTeamPolicies],
+  );
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
@@ -733,10 +748,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
   const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
 
+  const handleTabChange = (value: string) => {
+    if (value !== TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS) setKeyOwnerFilter(undefined);
+    setActiveTab(String(value));
+    onTabChange(value);
+  };
+
+  const viewMemberKeys = () => {
+    setKeyOwnerFilter(selectedEditMember?.user_id ?? undefined);
+    setIsEditMemberModalVisible(false);
+    setActiveTab(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS);
+    onTabChange(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS);
+  };
+
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
     return info
-      ? toTeamFormValues(info, computeEffectiveGuardrails(info, globalGuardrailNames))
+      ? toTeamFormValues(info, computeEffectiveGuardrails(info, globalGuardrailNames), teamPolicies)
       : EMPTY_TEAM_UPDATE_VALUES;
   };
 
@@ -841,7 +869,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // Fetch resolved guardrails for all policies
   useEffect(() => {
     const fetchPolicyGuardrails = async () => {
-      if (!accessToken || !teamData?.team_info?.policies || teamData.team_info.policies.length === 0) {
+      if (!accessToken || teamPolicies.length === 0) {
         return;
       }
 
@@ -850,7 +878,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       try {
         await Promise.all(
-          teamData.team_info.policies.map(async (policyName: string) => {
+          teamPolicies.map(async (policyName) => {
             try {
               const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
               guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
@@ -869,7 +897,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     };
 
     fetchPolicyGuardrails();
-  }, [accessToken, teamData?.team_info?.policies]);
+  }, [accessToken, teamPolicies]);
 
   const handleMemberCreate = async (values: any) => {
     try {
@@ -1185,6 +1213,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration ?? null,
         metadata: {
           ...parsedMetadata,
+          ...(storedTeamPolicies !== undefined ? { policies: storedTeamPolicies } : {}),
           ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
@@ -1206,7 +1235,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...maxBudgetAlertEmailsMetadata,
           ...memberBudgetAlertEmailsMetadata,
         },
-        ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
+        ...(values.policies !== undefined && form.getFieldState("policies").isDirty
+          ? { policies: values.policies }
+          : {}),
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
 
@@ -1812,9 +1843,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
           <Card className="block p-6">
             <p className="font-semibold text-foreground mb-3">{t("teams.teamInfo.overview.policiesTitle")}</p>
-            {info.policies && info.policies.length > 0 ? (
+            {teamPolicies.length > 0 ? (
               <div className="space-y-4">
-                {info.policies.map((policy: string, index: number) => (
+                {teamPolicies.map((policy, index) => (
                   <div key={index} className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary">{policy}</Badge>
@@ -1846,7 +1877,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             )}
           </Card>
 
-          <LoggingSettingsView loggingConfigs={info.metadata?.logging || []} disabledCallbacks={[]} variant="card" />
+          <LoggingSettingsView loggingConfigs={info.metadata?.logging || []} variant="card" />
         </div>
       ),
     },
@@ -1863,7 +1894,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     {
       key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]),
-      children: <TeamVirtualKeysTable teamId={teamId} teamAlias={info.team_alias} organization={organization} />,
+      children: (
+        <TeamVirtualKeysTable
+          key={keyOwnerFilter}
+          teamId={teamId}
+          teamAlias={info.team_alias}
+          organization={organization}
+          initialOwnerFilter={keyOwnerFilter}
+        />
+      ),
     },
     {
       key: TEAM_INFO_TAB_KEYS.MEMBERS,
@@ -2812,7 +2851,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
-                disabledCallbacks={[]}
                 variant="inline"
                 className="pt-4 border-t border-border"
               />
@@ -2859,14 +2897,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <Tabs
-        value={activeTab}
-        className="mb-4"
-        onValueChange={(value) => {
-          setActiveTab(String(value));
-          onTabChange(value);
-        }}
-      >
+      <Tabs value={activeTab} className="mb-4" onValueChange={handleTabChange}>
         <TabsList variant="line" className="mb-4 h-auto w-full flex-wrap justify-start rounded-none border-b p-0">
           {tabItems.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
@@ -3007,6 +3038,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               type: "multi-select" as const,
               options: (info.models || []).map((m: string) => ({ label: m, value: m })),
               placeholder: t("teams.teamInfo.editMember.allowedModelsPlaceholder"),
+              description:
+                canEditAsProxyAdmin && selectedEditMember?.user_id && !selectedEditMember.allowed_models?.length ? (
+                  <>
+                    {t("teams.teamInfo.editMember.addModelsOnKey")}{" "}
+                    <Button type="button" variant="link" className="h-auto p-0 text-sm" onClick={viewMemberKeys}>
+                      {t("teams.teamInfo.editMember.viewMemberKeys")}
+                    </Button>
+                  </>
+                ) : undefined,
             },
           ],
         }}

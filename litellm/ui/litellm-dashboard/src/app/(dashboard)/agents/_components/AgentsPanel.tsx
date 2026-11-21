@@ -1,6 +1,8 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
-import { Info, Plus } from "lucide-react";
+import { Bot, Info, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getAgentsList, deleteAgentCall } from "@/components/networking";
 import AddAgentForm from "./add_agent_form";
@@ -140,77 +142,83 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex flex-col gap-2 mb-4">
-        <h1 className="text-2xl font-bold">{t("agents.panel.title")}</h1>
-        <p className="text-sm text-muted-foreground">{term(t("agents.panel.description"))}</p>
-        <Alert className="mb-3">
+    <Page>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Bot />
+            {t("agents.panel.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{term(t("agents.panel.description"))}</PageHeaderDescription>
+          {isAdmin && (
+            <PageHeaderControls>
+              <Button onClick={handleAddAgent} disabled={!accessToken}>
+                <Plus />
+                {t("agents.panel.addAgent")}
+              </Button>
+            </PageHeaderControls>
+          )}
+        </PageHeader>
+
+        <Alert>
           <Info />
           <AlertTitle>{t("agents.panel.authAlert.title")}</AlertTitle>
           <AlertDescription>{t("agents.panel.authAlert.description")}</AlertDescription>
         </Alert>
-        {isAdmin && (
-          <div className="mt-2 flex items-center gap-4">
-            <Button onClick={handleAddAgent} disabled={!accessToken}>
-              <Plus />
-              {t("agents.panel.addAgent")}
-            </Button>
-          </div>
+
+        {selectedAgentId ? (
+          <AgentInfoView
+            agentId={selectedAgentId}
+            onClose={() => setSelectedAgentId(null)}
+            accessToken={accessToken}
+            isAdmin={isAdmin}
+          />
+        ) : (
+          <AgentsTable
+            agents={agentsList}
+            isLoading={isLoading}
+            isAdmin={isAdmin}
+            healthCheckEnabled={healthCheckEnabled}
+            isHealthCheckLoading={isHealthCheckLoading}
+            onHealthCheckToggle={handleHealthCheckToggle}
+            onAgentClick={(id) => setSelectedAgentId(id)}
+            onDeleteClick={handleDeleteClick}
+          />
         )}
-      </div>
 
-      {selectedAgentId ? (
-        <AgentInfoView
-          agentId={selectedAgentId}
-          onClose={() => setSelectedAgentId(null)}
+        <AddAgentForm
+          visible={isAddModalVisible}
+          onClose={handleCloseModal}
           accessToken={accessToken}
-          isAdmin={isAdmin}
+          onSuccess={handleSuccess}
+          teams={teams}
         />
-      ) : (
-        <AgentsTable
-          agents={agentsList}
-          isLoading={isLoading}
-          isAdmin={isAdmin}
-          healthCheckEnabled={healthCheckEnabled}
-          isHealthCheckLoading={isHealthCheckLoading}
-          onHealthCheckToggle={handleHealthCheckToggle}
-          onAgentClick={(id) => setSelectedAgentId(id)}
-          onDeleteClick={handleDeleteClick}
-        />
-      )}
 
-      <AddAgentForm
-        visible={isAddModalVisible}
-        onClose={handleCloseModal}
-        accessToken={accessToken}
-        onSuccess={handleSuccess}
-        teams={teams}
-      />
-
-      {agentToDelete && (
-        <AlertDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) handleDeleteCancel();
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("agents.panel.deleteDialog.title")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("agents.panel.deleteDialog.description", { name: agentToDelete.name })}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("agents.panel.deleteDialog.cancel")}</AlertDialogCancel>
-              <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
-                {t("agents.panel.deleteDialog.confirm")}
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
-    </div>
+        {agentToDelete && (
+          <AlertDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) handleDeleteCancel();
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t("agents.panel.deleteDialog.title")}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t("agents.panel.deleteDialog.description", { name: agentToDelete.name })}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t("agents.panel.deleteDialog.cancel")}</AlertDialogCancel>
+                <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
+                  {t("agents.panel.deleteDialog.confirm")}
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
+      </PageContent>
+    </Page>
   );
 };
 
