@@ -289,7 +289,7 @@ def test_messages_over_a_chat_bridged_deployment_reports_end_turn_only_for_a_fin
     gateway: Gateway, family: Family, ending: Ending, terminal: bool
 ) -> None:
     with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
-        model: Final = _deploy(scenario, family, wire)
+        model: Final = scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
         text, call_id = _post(
             gateway,
             "/v1/messages",
@@ -314,7 +314,7 @@ def test_responses_over_a_chat_bridged_deployment_completes_only_a_finished_stre
     gateway: Gateway, family: Family, ending: Ending, terminal: bool
 ) -> None:
     with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
-        model: Final = _deploy(scenario, family, wire)
+        model: Final = scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
         text, call_id = _post(gateway, "/v1/responses", {"model": model, "input": _prompt(ending)})
         types: Final = tuple(string_value(frame.get("type") or "") for frame in data_frames(text))
         assert types[:1] == ("response.created",), text
