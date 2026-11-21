@@ -810,3 +810,98 @@ def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, u
 def test_schema_size_counts_every_written_object_once(schema, properties, branches):
     assert schema_property_count(schema) == properties
     assert schema_grammar_branch_count(schema) == branches
+
+
+_DROPPED_KEYWORDS: Final = frozenset({"propertyNames", "uniqueItems", "if", "then"})
+
+
+def _keyword_schema():
+    return {
+        "type": "object",
+        "properties": {
+            "answers": {"type": "object", "propertyNames": {"type": "string"}, "additionalProperties": {"type": "string"}},
+            "tags": {"type": "array", "uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}},
+            "choice": {"anyOf": [{"type": "array", "uniqueItems": False}, {"type": "null"}]},
+            "uniqueItems": {"type": "boolean", "default": {"uniqueItems": True}},
+            "if": {"type": "string", "examples": [{"propertyNames": "data"}]},
+        },
+        "if": {"properties": {"tags": {"const": []}}},
+        "then": {"required": ["answers"]},
+        "$defs": {"propertyNames": {"type": "object", "propertyNames": {"pattern": "^a"}}},
+        "patternProperties": {"(?<!x)y": {"type": "array", "uniqueItems": True}},
+        "required": ["answers"],
+    }
+
+
+class TestDropSchemaKeywords:
+    def test_drops_the_keywords_from_every_schema_position_and_keeps_names_and_data(self):
+        from litellm.litellm_core_utils.prompt_templates.json_schema_utils import drop_schema_keywords
+
+        schema = _keyword_schema()
+
+        result = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {
+                "answers": {"type": "object", "additionalProperties": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "object"}},
+                "choice": {"anyOf": [{"type": "array"}, {"type": "null"}]},
+                "uniqueItems": {"type": "boolean", "default": {"uniqueItems": True}},
+                "if": {"type": "string", "examples": [{"propertyNames": "data"}]},
+            },
+            "$defs": {"propertyNames": {"type": "object"}},
+            "patternProperties": {"(?<!x)y": {"type": "array"}},
+            "required": ["answers"],
+        }
+        assert schema == _keyword_schema()
+
+    def test_returns_the_same_object_when_no_keyword_is_in_a_schema_position(self):
+        from litellm.litellm_core_utils.prompt_templates.json_schema_utils import drop_schema_keywords
+
+        schema = {
+            "type": "object",
+            "properties": {"uniqueItems": {"type": "array", "items": {"type": "string"}}},
+            "$defs": {"if": {"type": "string", "default": "propertyNames"}},
+        }
+
+        assert drop_schema_keywords(schema, _DROPPED_KEYWORDS) is schema
+
+
+class TestWithSanitizedSchemaAt:
+    @staticmethod
+    def _drop(schema):
+        from litellm.litellm_core_utils.prompt_templates.json_schema_utils import drop_schema_keywords
+
+        return drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+    def test_sanitizes_the_schema_under_the_path_and_keeps_its_siblings(self):
+        from litellm.litellm_core_utils.prompt_templates.json_schema_utils import with_sanitized_schema_at
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "reply", "strict": True, "schema": _keyword_schema()},
+        }
+
+        result = with_sanitized_schema_at(response_format, ("json_schema", "schema"), self._drop)
+
+        assert result == {
+            "type": "json_schema",
+            "json_schema": {"name": "reply", "strict": True, "schema": self._drop(_keyword_schema())},
+        }
+        assert response_format["json_schema"]["schema"] == _keyword_schema()
+
+    @pytest.mark.parametrize(
+        "container",
+        [
+            {"type": "json_object"},
+            {"type": "json_schema", "json_schema": "not-a-mapping"},
+            {"type": "json_schema", "json_schema": {"name": "reply", "schema": None}},
+            {"type": "json_schema", "json_schema": {"name": "reply", "schema": {"type": "object"}}},
+        ],
+        ids=["no-json-schema", "json-schema-not-a-mapping", "schema-not-a-mapping", "nothing-to-drop"],
+    )
+    def test_returns_the_same_container_when_nothing_under_the_path_changes(self, container):
+        from litellm.litellm_core_utils.prompt_templates.json_schema_utils import with_sanitized_schema_at
+
+        assert with_sanitized_schema_at(container, ("json_schema", "schema"), self._drop) is container

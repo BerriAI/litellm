@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable, Iterator, Mapping
+from functools import partial
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, islice
 from types import MappingProxyType
@@ -222,16 +223,47 @@ def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
     return _schema_without_rejected_regex(schema, _uses_regex_lookaround)
 
 
+def drop_schema_keywords(schema: Mapping[str, object], keywords: frozenset[str]) -> Mapping[str, object]:
+    """Drop each of ``keywords`` from every schema position, with its value.
+
+    Only schema positions are walked, as in :func:`drop_non_python_regex_patterns`, so a
+    property or ``$defs`` entry that is only named like a keyword stays, and so does a key
+    inside ``default``, ``examples`` or ``const`` data. The input is never mutated, and the
+    same object comes back when nothing was dropped.
+    """
+    return _schema_rebuilt(schema, partial(_node_without_keywords, keywords=keywords))
+
+
+def with_sanitized_schema_at(
+    container: Mapping[str, object],
+    path: tuple[str, ...],
+    sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> Mapping[str, object]:
+    """Run the JSON schema found under the keys in ``path`` through ``sanitize``, such as
+    ``("json_schema", "schema")`` on a chat ``response_format``. The same object comes back
+    when ``path`` leads to no schema or nothing changed."""
+    if not path:
+        return sanitize(container)
+    value: Final = _schema_at(container, path[0])
+    if value is None:
+        return container
+    sanitized: Final = with_sanitized_schema_at(value, path[1:], sanitize)
+    return container if sanitized is value else {**container, path[0]: sanitized}
+
+
 def _schema_without_rejected_regex(
     schema: Mapping[str, object], rejected: Callable[[str], bool]
 ) -> Mapping[str, object]:
+    return _schema_rebuilt(schema, partial(_node_without_rejected_regex, rejected=rejected))
+
+
+def _schema_rebuilt(
+    schema: Mapping[str, object],
+    rewrite: Callable[[Mapping[str, object], Mapping[int, Mapping[str, object]]], Mapping[str, object]],
+) -> Mapping[str, object]:
     rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
     for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
-        rebuilt.update(
-            (id(node), rewritten)
-            for node in level
-            if (rewritten := _node_without_rejected_regex(node, rebuilt, rejected)) is not node
-        )
+        rebuilt.update((id(node), rewritten) for node in level if (rewritten := rewrite(node, rebuilt)) is not node)
     return rebuilt.get(id(schema), schema)
 
 
@@ -385,6 +417,23 @@ def _node_without_rejected_regex(
     if not dropped_pattern_properties or kept.get("additionalProperties") is not False:
         return kept
     return {**kept, "additionalProperties": _any_of(dropped_pattern_properties)}
+
+
+def _node_without_keywords(
+    node: Mapping[str, object],
+    rebuilt: Mapping[int, Mapping[str, object]],
+    keywords: frozenset[str],
+) -> Mapping[str, object]:
+    kept: Final = {
+        key: _keyword_value_rebuilt(key, value, rebuilt, _rejects_no_regex)
+        for key, value in node.items()
+        if key not in keywords
+    }
+    return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
+
+
+def _rejects_no_regex(pattern: str) -> bool:
+    return False
 
 
 def _dropped_pattern_properties(

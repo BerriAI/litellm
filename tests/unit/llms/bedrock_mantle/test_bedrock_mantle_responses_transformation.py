@@ -371,6 +371,85 @@ class TestBedrockMantleResponsesTools:
         assert "file_search" in str(mock_warning.call_args)
 
 
+def _schema_with_gemma_4_refused_keywords() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "answers": {"type": "object", "propertyNames": {"type": "string"}},
+            "uniqueItems": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+        },
+    }
+
+
+_SCHEMA_GEMMA_4_ACCEPTS: Final = {
+    "type": "object",
+    "properties": {
+        "answers": {"type": "object"},
+        "uniqueItems": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+
+class TestBedrockMantleResponsesGemma4SchemaKeywords:
+    """Mantle's gemma-4 models answered 400 "The task request was rejected by the target" on
+    /openai/v1/responses to a tool or text.format schema carrying propertyNames or uniqueItems."""
+
+    def _transform(self, model: str, params: dict[str, object], input: object = "hello") -> dict:
+        return BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    def _params(self) -> dict[str, object]:
+        return {
+            "tools": [
+                {"type": "function", "name": "ask", "parameters": _schema_with_gemma_4_refused_keywords()},
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [{"type": "function", "name": "spawn", "parameters": _schema_with_gemma_4_refused_keywords()}],
+                },
+            ],
+            "text": {"format": {"type": "json_schema", "name": "reply", "schema": _schema_with_gemma_4_refused_keywords()}},
+        }
+
+    @pytest.mark.parametrize("model", ["google.gemma-4-31b", "us-west-2/google.gemma-4-26b-a4b"])
+    def test_gemma_4_tools_namespace_tools_and_text_format_lose_the_refused_keywords(self, model: str) -> None:
+        body: Final = self._transform(model, self._params())
+
+        assert body["tools"][0]["parameters"] == _SCHEMA_GEMMA_4_ACCEPTS
+        assert body["tools"][1]["tools"][0]["parameters"] == _SCHEMA_GEMMA_4_ACCEPTS
+        assert body["text"]["format"]["schema"] == _SCHEMA_GEMMA_4_ACCEPTS
+        assert body["text"]["format"]["name"] == "reply"
+
+    def test_gemma_4_tools_hoisted_from_codex_additional_tools_lose_the_refused_keywords(self) -> None:
+        body: Final = self._transform(
+            "google.gemma-4-31b",
+            {},
+            input=[
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "function", "name": "ask", "parameters": _schema_with_gemma_4_refused_keywords()}],
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            ],
+        )
+
+        assert body["tools"][0]["parameters"] == _SCHEMA_GEMMA_4_ACCEPTS
+
+    @pytest.mark.parametrize("model", ["openai.gpt-oss-120b", "google.gemma-3-27b-it"])
+    def test_other_mantle_models_keep_every_keyword(self, model: str) -> None:
+        body: Final = self._transform(model, self._params())
+
+        assert body["tools"][0]["parameters"] == _schema_with_gemma_4_refused_keywords()
+        assert body["tools"][1]["tools"][0]["parameters"] == _schema_with_gemma_4_refused_keywords()
+        assert body["text"]["format"]["schema"] == _schema_with_gemma_4_refused_keywords()
+
+
 class TestBedrockMantleSamplingParams:
     """Mantle serves OpenAI's gpt-5 models under their OpenAI sampling rule: top_p and a
     non-default temperature are accepted only when reasoning.effort resolves to none, so

@@ -18,6 +18,7 @@ from functools import partial
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import drop_schema_keywords
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
 from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
 from litellm.secret_managers.main import get_secret_str
@@ -133,6 +134,42 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
 
 def is_mantle_claude_model(model: str) -> bool:
     return "claude" in model.lower()
+
+
+_GEMMA_4_REJECTED_SCHEMA_KEYWORDS: Final = frozenset(
+    {
+        "$dynamicAnchor",
+        "$dynamicRef",
+        "$recursiveAnchor",
+        "$recursiveRef",
+        "contains",
+        "dependencies",
+        "dependentRequired",
+        "dependentSchemas",
+        "else",
+        "if",
+        "maxContains",
+        "maxProperties",
+        "minContains",
+        "minProperties",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "uniqueItems",
+    }
+)
+
+
+def is_mantle_gemma_4_model(model: str) -> bool:
+    return split_mantle_region_prefix(model)[1].startswith("google.gemma-4")
+
+
+def drop_schema_keywords_gemma_4_rejects(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Mantle's gemma-4 models answer 400 "The task request was rejected by the target" to a tool,
+    ``response_format`` or ``text.format`` schema carrying any of these keywords, which every other
+    Mantle family accepts, and Claude Code's ``AskUserQuestion`` tool sends ``propertyNames``."""
+    return drop_schema_keywords(schema, _GEMMA_4_REJECTED_SCHEMA_KEYWORDS)
 
 
 def mantle_health_check_mode(model: str) -> Literal["anthropic_messages"] | None:
