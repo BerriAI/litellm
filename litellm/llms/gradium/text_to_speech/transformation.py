@@ -121,7 +121,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         self, kwargs: Mapping[str, object]
     ) -> dict[str, object]:  # mutable-ok: merged into dict_body
         extra_body: Final = kwargs.get("extra_body")
-        extra_fields: Final = _REQUEST_FIELDS.validate_python(extra_body) if isinstance(extra_body, dict) else {}
+        extra_fields: Final = _REQUEST_FIELDS.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}
         return {**self._set_request_fields(kwargs), **self._set_request_fields(extra_fields)}
 
     def map_openai_params(

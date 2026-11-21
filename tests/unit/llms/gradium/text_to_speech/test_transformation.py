@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -335,10 +336,27 @@ def test_speech_ignores_an_extra_body_that_is_not_an_object(gradium_env: None, e
             voice="alloy",
             api_base=_API_BASE,
             api_key=_API_KEY,
+            json_config={"padding_bonus": -1.0},
             extra_body=extra_body,
         )
 
-        assert "json_config" not in _sent_body(route)
+        assert _sent_body(route)["json_config"] == {"padding_bonus": -1.0}
+
+
+def test_speech_forwards_json_config_from_a_read_only_extra_body(gradium_env: None):
+    with respx.mock:
+        route: Final = respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        litellm.speech(
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base=_API_BASE,
+            api_key=_API_KEY,
+            extra_body=MappingProxyType({"json_config": {"padding_bonus": 2.0}}),
+        )
+
+        assert _sent_body(route)["json_config"] == {"padding_bonus": 2.0}
 
 
 def test_speech_keeps_top_level_json_config_when_extra_body_sets_it_to_none(gradium_env: None):
@@ -505,7 +523,9 @@ def test_speech_prices_other_gradium_models_like_the_default_one(
     with respx.mock:
         respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
 
-        response: Final = litellm.speech(model=model, input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY)
+        response: Final = litellm.speech(
+            model=model, input="Bonjour", voice="alloy", api_base=_API_BASE, api_key=_API_KEY
+        )
 
         price_per_character: Final = litellm.model_cost[model]["input_cost_per_character"]
         assert price_per_character == litellm.model_cost["gradium/default"]["input_cost_per_character"]
