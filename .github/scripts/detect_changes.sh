@@ -16,7 +16,7 @@ run_full() {
 }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-classify="${here}/../../.circleci/scripts/classify_changes.sh"
+classify="${here}/ci/classify_changes.sh"
 
 [ -n "${PR_NUMBER:-}" ] || run_full "not a pull_request event"
 [ -n "${REPO:-}" ] || run_full "no repository in the environment"

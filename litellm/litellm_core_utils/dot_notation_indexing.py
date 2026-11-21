@@ -23,7 +23,8 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
-from collections.abc import Mapping
+import copy
+from collections.abc import Iterable, Mapping
 from typing import Any, Final, TypeVar
 
 from litellm.constants import NESTED_VALUE_MISSING_SENTINEL
@@ -114,8 +115,8 @@ def _parse_path_segments(path: str) -> list:
     import re
 
     # Match field names OR bracket expressions
-    # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern: Final = r"[^\.\[]+|\[[^\]]*\]"
+    # Pattern: field_name (anything except . or [) | [anything_in_brackets except [ or ]]
+    pattern: Final = r"[^\.\[]+|\[[^\]\[]*\]"
     segments: Final = re.findall(pattern, path)
     return segments
 
@@ -194,7 +195,7 @@ def _delete_nested_value_custom(
 
 
 def delete_nested_value(
-    data: dict[str, Any],
+    data: Mapping[str, object],
     path: str,
     depth: int = 0,
     max_depth: int = 20,
@@ -225,9 +226,7 @@ def delete_nested_value(
         >>> delete_nested_value(data, "tools[*].input_examples")
         {"tools": [{"name": "t1"}]}
     """
-    import copy
-
-    result: Final = copy.deepcopy(data)
+    result: Final = copy.deepcopy(data if isinstance(data, dict) else dict(data))
 
     try:
         # Parse path into segments
@@ -243,6 +242,13 @@ def delete_nested_value(
         # Invalid path or parsing error - silently skip
         pass
 
+    return result
+
+
+def delete_nested_values(data: Mapping[str, object], paths: Iterable[str]) -> Mapping[str, object]:
+    result: Final = copy.deepcopy(dict(data))
+    for path in dict.fromkeys(paths):
+        _delete_nested_value_custom(result, _parse_path_segments(path), 0)
     return result
 
 

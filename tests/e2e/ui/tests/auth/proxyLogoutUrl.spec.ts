@@ -3,9 +3,9 @@ import { Role, users } from "../../fixtures/users";
 import { logInThroughLoginPage } from "../../helpers/userOnboarding";
 
 /**
- * Runs as part of the standard e2e suite: both `run_e2e.sh` and the CircleCI
- * `e2e_ui_testing` job boot the proxy with PROXY_LOGOUT_URL=https://www.example.com
- * and export the same value to this Playwright process. The spec reads it to
+ * Runs as part of the standard e2e suite. `run_e2e.sh` boots the proxy with
+ * PROXY_LOGOUT_URL=https://www.example.com and exports the same value to
+ * this Playwright process. The spec reads it to
  * know where the browser is expected to land.
  *
  * The skip guard below is a safety net for environments that launch the proxy

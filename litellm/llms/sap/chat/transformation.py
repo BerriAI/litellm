@@ -2,14 +2,18 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
-from collections.abc import AsyncIterator, Iterator
+import types
+from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_get
+from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -23,7 +27,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import get_token_creator
+from ..credentials import AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -40,6 +44,9 @@ from .models import (
     SAPToolChatMessage,
     SAPUserMessage,
 )
+from .reasoning import normalize_reasoning_blocks
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -55,14 +62,14 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 
 
 def validate_dict(
-    data: dict, model: type[BaseModel]
+    data: Mapping[str, object], model: type[BaseModel]
 ) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
 def _fold_message_cache_control(
-    message: dict[str, object],
-) -> dict[str, object]:
+    message: Mapping[str, object],
+) -> Mapping[str, object]:
     """Move a message-level cache_control marker onto the content block.
 
     litellm's cache_control_injection_points hook attaches cache_control to the
@@ -102,7 +109,7 @@ def _message_role_mapping(role: str) -> type[ChatMessage]:
 def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
-        folded_message = _fold_message_cache_control(message)
+        folded_message = _fold_message_cache_control(message_with_file_parts_as_image_urls(message))
         message_role_class = _message_role_mapping(str(folded_message["role"]))
         validated_message = validate_dict(folded_message, message_role_class)
         template.append(validated_message)
@@ -141,7 +148,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -184,15 +191,19 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
+        deployments: Final[AICoreDeploymentList] = client.get(
+            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
+        ).json()
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
+                cfg = _DECODED_JSON.validate_python(
+                    client.get(
+                        join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
+                        headers=self.headers,
+                    ).json()
+                )
+                if require_get(cfg).get("executableId") == "orchestration":
                     valid.append((dep["deploymentUrl"], dep["createdAt"]))
             # newest first
         return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
@@ -262,7 +273,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = f"{self.deployment_url}/v2/completion"
+        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
         return api_base_
 
     def _build_prompt_module(
@@ -405,7 +416,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(
+            normalize_reasoning_blocks(raw_response.json()["final_result"], "message")
+        )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```

@@ -18,6 +18,7 @@ from litellm._logging import redact_secrets
 from litellm.constants import (
     OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
 )
@@ -35,7 +36,7 @@ from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject, Usage
 
 _LIVE_EVENT_FRAME_ADAPTER: Final = TypeAdapter(dict[str, object])
 _LIVE_USAGE_EVENT_TYPES: Final = frozenset({"session.usage.updated", "session.closed"})
-_LIVE_WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws"})
+LIVE_WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws"})
 _LIVE_SESSION_CLOSE_FRAME: Final = '{"type": "session.close"}'
 
 
@@ -81,6 +82,12 @@ class _LivePreCallArgs(TypedDict):
     api_base: ReadOnly[str]
     headers: ReadOnly[Mapping[str, str]]
     complete_input_dict: ReadOnly[_LivePreCallInput]
+
+
+@dataclass(frozen=True, slots=True)
+class LiveUpstream:
+    url: str
+    headers: Mapping[str, str]
 
 
 class LiveClientWebSocket(Protocol):
@@ -316,12 +323,15 @@ async def _forward_live_backend_frames(
     backend_websocket: LiveBackendWebSocket,
     client_gone: asyncio.Event,
     event_retention: _LiveEventRetention,
+    upstream_ended_abnormally: asyncio.Event,
 ) -> None:
     from starlette.websockets import WebSocketDisconnect
     from websockets.exceptions import ConnectionClosed
 
     event_loop: Final = asyncio.get_running_loop()
-    async for message, close_deadline in _live_backend_messages(websocket, backend_websocket):
+    async for message, close_deadline in _live_backend_messages(
+        websocket, backend_websocket, upstream_ended_abnormally
+    ):
         if (event := _metering_event(message)) is not None:
             event_retention.retain(event)
         if client_gone.is_set():
@@ -341,6 +351,7 @@ async def _forward_live_backend_frames(
 async def _live_backend_messages(
     websocket: LiveClientWebSocket,
     backend_websocket: LiveBackendWebSocket,
+    upstream_ended_abnormally: asyncio.Event,
 ) -> AsyncIterator[tuple[str, float | None]]:
     from starlette.websockets import WebSocketDisconnect
     from websockets.exceptions import ConnectionClosed
@@ -350,6 +361,8 @@ async def _live_backend_messages(
             yield message, None
     except ConnectionClosed as error:
         upstream_close: Final = backend_close_from(error)
+        if not upstream_close.ended_cleanly:
+            upstream_ended_abnormally.set()
         with suppress(WebSocketDisconnect, RuntimeError, ConnectionClosed, OSError):
             await websocket.close(code=upstream_close.code, reason=upstream_close.reason)
         return
@@ -399,8 +412,16 @@ class OpenAILiveSessions(OpenAIRealtime):
     @staticmethod
     def _construct_live_url(api_base: str) -> str:
         parsed_url: Final = urlsplit(api_base)
-        websocket_scheme: Final = _LIVE_WEBSOCKET_SCHEMES.get(parsed_url.scheme, parsed_url.scheme)
+        websocket_scheme: Final = LIVE_WEBSOCKET_SCHEMES.get(parsed_url.scheme, parsed_url.scheme)
         return urlunsplit((websocket_scheme, parsed_url.netloc, "/v1/live/sessions", "", ""))
+
+    def _openai_upstream(self, api_base: str | None, api_key: str | None) -> LiveUpstream:
+        if api_key is None:
+            raise ValueError("api_key is required for OpenAI Live session calls")
+        return LiveUpstream(
+            url=self._construct_live_url(api_base or self._get_default_api_base()),
+            headers=self._get_additional_headers(api_key),
+        )
 
     async def async_live_session(
         self,
@@ -411,14 +432,13 @@ class OpenAILiveSessions(OpenAIRealtime):
         session_start: Mapping[str, object],
         api_base: str | None,
         api_key: str | None,
+        upstream: LiveUpstream | None = None,
     ) -> None:
-        if api_key is None:
-            raise ValueError("api_key is required for OpenAI Live session calls")
+        resolved_upstream: Final = upstream if upstream is not None else self._openai_upstream(api_base, api_key)
         from websockets.exceptions import InvalidStatus
 
-        resolved_api_base: Final = api_base or self._get_default_api_base()
-        url: Final = self._construct_live_url(resolved_api_base)
-        headers: Final = self._get_additional_headers(api_key)
+        url: Final = resolved_upstream.url
+        headers: Final = resolved_upstream.headers
         ssl_config: Final = self._get_ssl_config(url)
         session: Final = as_str_mapping(session_start.get("session"))
         if session is None:
@@ -434,6 +454,7 @@ class OpenAILiveSessions(OpenAIRealtime):
             "complete_input_dict": {"session_start": rewritten_start},
         }
         event_retention: Final = _LiveEventRetention()
+        session_ended_abnormally: Final = asyncio.Event()
         try:
             logging_obj.pre_call(input=None, api_key=api_key, additional_args=pre_call_args)
             async with self._websocket_connector(
@@ -448,7 +469,11 @@ class OpenAILiveSessions(OpenAIRealtime):
                         websocket=websocket,
                         backend_websocket=backend_websocket,
                         event_retention=event_retention,
+                        upstream_ended_abnormally=session_ended_abnormally,
                     )
+                except Exception:
+                    session_ended_abnormally.set()
+                    raise
                 finally:
                     session_end_time: Final = self._clock()
                     retained_events: Final = event_retention.results()
@@ -463,6 +488,10 @@ class OpenAILiveSessions(OpenAIRealtime):
                     logging_obj.model_call_details[  # rebind-ok: flags the shared logging object as already logged
                         REALTIME_SESSION_SUCCESS_LOGGED_KEY
                     ] = True
+                    if session_ended_abnormally.is_set():
+                        logging_obj.model_call_details[  # rebind-ok: flags the shared logging object for the router
+                            REALTIME_SESSION_ENDED_ABNORMALLY_KEY
+                        ] = True
         except InvalidStatus as error:
             await close_after_upstream_handshake_refusal(websocket, error.response.status_code)
         except Exception as error:  # noqa: BLE001  # any relay failure must still close the client socket with a redacted reason
@@ -484,6 +513,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         websocket: LiveClientWebSocket,
         backend_websocket: LiveBackendWebSocket,
         event_retention: _LiveEventRetention,
+        upstream_ended_abnormally: asyncio.Event,
     ) -> None:
         from websockets.exceptions import ConnectionClosed
 
@@ -503,6 +533,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                 backend_websocket=backend_websocket,
                 client_gone=client_gone,
                 event_retention=event_retention,
+                upstream_ended_abnormally=upstream_ended_abnormally,
             )
         )
         client_gone_task: Final = asyncio.create_task(client_gone.wait())

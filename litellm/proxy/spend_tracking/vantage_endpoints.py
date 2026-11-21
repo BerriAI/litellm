@@ -122,7 +122,9 @@ async def _get_vantage_settings():
 
     encrypted_api_key: Final = settings.get("api_key")
     if encrypted_api_key:
-        decrypted_api_key = decrypt_value_helper(encrypted_api_key, key="vantage_api_key", exception_type="error")
+        decrypted_api_key: Final = decrypt_value_helper(
+            encrypted_api_key, key="vantage_api_key", exception_type="error"
+        )
         if decrypted_api_key is None:
             raise HTTPException(
                 status_code=500,

@@ -12,7 +12,7 @@ Reference: https://open.manus.im/docs/openai-compatibility#file-management
 
 import time
 from collections.abc import Iterable, Mapping
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -20,8 +20,11 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import require_attributes, require_get
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    extract_file_data,
+)
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -41,9 +44,14 @@ from litellm.types.utils import LlmProviders
 
 MANUS_API_BASE: Final = "https://api.manus.im"
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+class _ReplaceableText(Protocol):
+    def replace(self, old: str, new: str, /) -> str: ...
 
 
 class ManusFilesConfig(BaseFilesConfig):
@@ -140,8 +148,8 @@ class ManusFilesConfig(BaseFilesConfig):
 
         # Manus API uses /v1/files endpoint
         if api_base.endswith("/v1"):
-            return f"{api_base}/files"
-        return f"{api_base}/v1/files"
+            return join_api_base(api_base, "files")
+        return join_api_base(api_base, "v1/files")
 
     def get_error_class(
         self,
@@ -246,25 +254,28 @@ class ManusFilesConfig(BaseFilesConfig):
         """
         try:
             # For two-step uploads, get the initial response from litellm_params
-            initial_response_data: Final = litellm_params.get("initial_file_response")
+            file_params: Final[Mapping[str, object]] = litellm_params
+            initial_response_data: Final = file_params.get("initial_file_response")
             if initial_response_data:
                 response_json = initial_response_data
             else:
                 # Log raw response for debugging
                 verbose_logger.debug("Manus raw response text: %s", raw_response.text)
-                response_json = raw_response.json()
+                response_json = _DECODED_JSON.validate_python(raw_response.json())
 
             verbose_logger.debug("Manus file response: %s", response_json)
+            file_fields: Final = require_get(response_json)
 
             # Parse created_at timestamp
-            created_at_str: Final = response_json.get("created_at", "")
+            created_at_str: Final = file_fields.get("created_at", "")
             if created_at_str:
                 try:
                     # Try parsing ISO format
+                    created_at_text: Final = require_attributes(created_at_str, _ReplaceableText, "replace")
                     created_at = int(
                         time.mktime(
                             time.strptime(
-                                created_at_str.replace("Z", "+00:00")[:19],
+                                created_at_text.replace("Z", "+00:00")[:19],
                                 "%Y-%m-%dT%H:%M:%S",
                             )
                         )
@@ -274,15 +285,17 @@ class ManusFilesConfig(BaseFilesConfig):
             else:
                 created_at = int(time.time())
 
-            return OpenAIFileObject(
-                id=response_json.get("id", ""),
-                bytes=response_json.get("bytes", 0),
-                created_at=created_at,
-                filename=response_json.get("filename", ""),
-                object="file",
-                purpose=response_json.get("purpose", "assistants"),
-                status="uploaded",  # After successful upload, status is uploaded
-                status_details=response_json.get("status_details"),
+            return OpenAIFileObject.model_validate(
+                {
+                    "id": file_fields.get("id", ""),
+                    "bytes": file_fields.get("bytes", 0),
+                    "created_at": created_at,
+                    "filename": file_fields.get("filename", ""),
+                    "object": "file",
+                    "purpose": file_fields.get("purpose", "assistants"),
+                    "status": "uploaded",  # After successful upload, status is uploaded
+                    "status_details": file_fields.get("status_details"),
+                }
             )
         except Exception as e:
             verbose_logger.exception("Error parsing Manus file response: %s", e)
@@ -423,7 +436,7 @@ class ManusFilesConfig(BaseFilesConfig):
             litellm_params=litellm_params,
         )
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{api_base}/{encoded_file_id}/content", {}
+        return join_api_base(api_base, f"{encoded_file_id}/content"), {}
 
     def transform_file_content_response(
         self,

@@ -15,6 +15,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 def _chat_reply(marker: str) -> dict[str, JsonValue]:
     return {
@@ -662,6 +664,8 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
             "guardrails": None,
             "is_from_config": False,
             "methods": ["POST"],
+            "display_name": None,
+            "show_in_model_hub": False,
         }
         assert created == expected, created
         assert _readback(candidate, endpoint_id) == [expected]

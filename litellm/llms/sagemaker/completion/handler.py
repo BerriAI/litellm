@@ -1,9 +1,11 @@
 import json
-from collections.abc import Callable
+import types
+from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Final, cast
+from typing import ClassVar, Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -12,7 +14,9 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
+from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -36,6 +40,7 @@ from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
 sagemaker_config: Final = SagemakerConfig()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _InvokeEndpointArgs(TypedDict):
@@ -54,6 +59,8 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = ""
 
 # set os.environ['AWS_REGION_NAME'] = <your-region_name>
 class SagemakerLLM(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SAGEMAKER_SESSION_POLICY
+
     def _load_credentials(
         self,
         optional_params: dict,
@@ -152,7 +159,7 @@ class SagemakerLLM(BaseAWSLLM):
         model_id: Final = optional_params.get("model_id", None)
 
         ## Load Config
-        config: Final = litellm.SagemakerConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.SagemakerConfig.get_config())
         for k, v in config.items():
             if (
                 k not in inference_params
@@ -573,7 +580,7 @@ class SagemakerLLM(BaseAWSLLM):
         inference_params.pop("stream", None)
 
         ## Load Config
-        config: Final = litellm.SagemakerConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.SagemakerConfig.get_config())
         for k, v in config.items():
             if (
                 k not in inference_params
@@ -588,8 +595,11 @@ class SagemakerLLM(BaseAWSLLM):
         inference_component_name: Final = embedding_params.get("model_id")
         if inference_component_name is not None and not isinstance(inference_component_name, str):
             raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
-        body_params: Final = {k: v for k, v in embedding_params.items() if k != "model_id"}
-        request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
+        body_params: Final = {k: v for k, v in embedding_params.items() if k not in ("model_id", "extra_body")}
+        request_data: Final = {
+            **extra_body_fields(embedding_params),
+            **provider_config.transform_embedding_request(endpoint_name, input, body_params, {}),
+        }
         data: Final = json.dumps(request_data).encode("utf-8")
         invoke_args: Final = _InvokeEndpointArgs(
             EndpointName=endpoint_name,
@@ -623,7 +633,7 @@ class SagemakerLLM(BaseAWSLLM):
             status_code, error_message = client_error_details(e)
             raise SagemakerError(status_code=status_code, message=with_inference_component_hint(error_message))
 
-        response = json.loads(response["Body"].read().decode("utf8"))
+        response = _DECODED_JSON.validate_python(json.loads(response["Body"].read().decode("utf8")))
         ## LOGGING
         logging_obj.post_call(
             input=input,

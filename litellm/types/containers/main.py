@@ -1,11 +1,13 @@
 import builtins
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Final, Literal
 
-from pydantic import PrivateAttr
+from pydantic import PrivateAttr, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(builtins.object)
 
 
 class ExpiresAfter(LiteLLMBaseModel):
@@ -25,7 +27,7 @@ class ContainerObject(LiteLLMBaseModel):
     expires_after: ExpiresAfter | None = None
     last_active_at: int | None = None
     name: str | None = None
-    _hidden_params: dict[str, Any] = PrivateAttr(default={})
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -45,7 +47,7 @@ class ContainerObject(LiteLLMBaseModel):
 
     def __getitem__(self, key: str) -> builtins.object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -69,7 +71,7 @@ class DeleteContainerResult(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key: str) -> builtins.object:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -94,7 +96,7 @@ class ContainerListResponse(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key: str) -> builtins.object:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -167,7 +169,7 @@ class ContainerFileObject(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key: str) -> builtins.object:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -192,7 +194,7 @@ class ContainerFileListResponse(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key: str) -> builtins.object:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -216,7 +218,7 @@ class DeleteContainerFileResponse(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key: str) -> builtins.object:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:

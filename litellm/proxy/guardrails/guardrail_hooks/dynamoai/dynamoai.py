@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping
 from datetime import datetime
 from typing import Final
 
@@ -133,7 +133,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final[DynamoAIResponse] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
@@ -189,7 +189,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         applied_policies: Final = response.get("appliedPolicies", [])
 
         violations_detected: Final[list[str]] = []
-        violation_details: Final[dict[str, object]] = {}
+        violation_details: Final[dict[str, Mapping[str, object]]] = {}
 
         # For now, only handle BLOCK action
         if final_action == "BLOCK":

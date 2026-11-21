@@ -22,8 +22,9 @@ request a permanent miss.
 from __future__ import annotations
 
 import functools
+import queue
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 from botocore.auth import SigV4Auth
@@ -70,3 +71,19 @@ def bedrock_signer(region: str, credentials: Callable[[], Credentials] = pod_cre
     """Credentials are resolved on the first signed request, not here, so a run
     that mounts Bedrock but never calls it needs no AWS identity at all."""
     return BedrockSigner(region, credentials)
+
+
+@dataclass(frozen=True, slots=True)
+class ConverseBodyCapture:
+    """The raw Converse bodies the proxy sent upstream, seen by a live edge
+    between the proxy and Bedrock. Pass ``observe`` as the edge's
+    ``observe_request`` and ``drain`` once the calls under test are done."""
+
+    _bodies: queue.SimpleQueue[bytes] = field(default_factory=queue.SimpleQueue)
+
+    def observe(self, url: str, headers: Mapping[str, str], body: bytes | None) -> None:
+        if body is not None and "/converse" in url:
+            self._bodies.put(body)
+
+    def drain(self) -> tuple[bytes, ...]:
+        return tuple(self._bodies.get_nowait() for _ in range(self._bodies.qsize()))

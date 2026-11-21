@@ -187,7 +187,16 @@ _PROVIDERS: Final = (
         "cloudflare/@cf/cloudflare/clef",
         takes_images=True,
     ),
-    _Provider("hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None),
+    _Provider(
+        "hosted_vllm",
+        "hosted_vllm/Qwen/Qwen3-0.6B",
+        "/v1/systemone",
+        "Qwen/Qwen3-0.6B",
+        None,
+        False,
+        None,
+        takes_images=True,
+    ),
     _Provider(
         "databricks",
         "databricks/ai_decide",
@@ -205,7 +214,7 @@ _PROVIDERS: Final = (
         "databricks-openjev-qwen35-4b",
         _API_KEY,
         False,
-        None,
+        "databricks/databricks-openjev-qwen35-4b",
     ),
     _Provider(
         "azure_ai", "azure_ai/decision-1", "/providers/microsoft/v1/systemone", "decision-1", _API_KEY, False, None
@@ -259,6 +268,23 @@ _OPENAI_IMAGE_MESSAGES: Final[list[JsonValue]] = [
         ],
     }
 ]
+_ORDER_EVIDENCE: Final[dict[str, JsonValue]] = {
+    "ticket": {"body": "Please refund the duplicate charge.", "attachment": None},
+    "order": {"charges": [49, 49]},
+}
+_JSON_INPUT: Final[list[JsonValue]] = [
+    {
+        "role": "user",
+        "content": [{"type": "input_text", "text": _INPUT}, {"type": "input_json", "data": _ORDER_EVIDENCE}],
+    }
+]
+_OPENAI_JSON_MESSAGES: Final[list[JsonValue]] = [
+    {
+        "role": "user",
+        "type": "message",
+        "content": [{"type": "input_text", "text": _INPUT}, {"type": "input_json", "data": _ORDER_EVIDENCE}],
+    }
+]
 _MESSAGE_LIST_INPUT: Final[list[JsonValue]] = [
     {"role": "user", "content": _INPUT},
     {"role": "user", "content": [{"type": "input_text", "text": _FOLLOW_UP}]},
@@ -286,14 +312,10 @@ def _expected_spend(provider: _Provider) -> float:
     cost_map: Final = _JSON_OBJECT.validate_json(Path("model_prices_and_context_window.json").read_bytes())
     prices: Final = object_value(cost_map[provider.cost_map_key])
     input_key: Final = (
-        "input_cost_per_token_decisions"
-        if "input_cost_per_token_decisions" in prices
-        else "input_cost_per_token"
+        "input_cost_per_token_decisions" if "input_cost_per_token_decisions" in prices else "input_cost_per_token"
     )
     output_key: Final = (
-        "output_cost_per_token_decisions"
-        if "output_cost_per_token_decisions" in prices
-        else "output_cost_per_token"
+        "output_cost_per_token_decisions" if "output_cost_per_token_decisions" in prices else "output_cost_per_token"
     )
     return _INPUT_TOKENS * _number(prices[input_key]) + _OUTPUT_TOKENS * _number(prices[output_key])
 
@@ -522,6 +544,48 @@ def test_openai_forwards_image_input_in_its_own_message_shape(gateway: Gateway) 
         assert response.status_code == 200, response.text
         (call,) = _upstream_calls(gateway, handle)
         assert call["body"] == {"model": _OPENAI.body_model, "input": _OPENAI_IMAGE_MESSAGES, "questions": _QUESTIONS}
+
+
+def test_openai_forwards_input_json_in_its_own_message_shape(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _OPENAI.upstream_reply())
+        model: Final = _deployment(scenario, handle, _OPENAI)
+        response: Final = _decide(gateway, model, input=_JSON_INPUT)
+        assert response.status_code == 200, response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == {"model": _OPENAI.body_model, "input": _OPENAI_JSON_MESSAGES, "questions": _QUESTIONS}
+
+
+def test_a_system_one_provider_refuses_input_json_unless_the_deployment_drops_params(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _PERPLEXITY.upstream_reply())
+        refused: Final = _decide(gateway, _deployment(scenario, handle, _PERPLEXITY), input=_JSON_INPUT)
+        assert refused.status_code == 400, refused.text
+        assert "['input_json']" in refused.text and "drop_params" in refused.text, refused.text
+        assert _upstream_calls(gateway, handle) == []
+
+        dropping: Final = _deployment(scenario, handle, _PERPLEXITY, drop_params=True)
+        accepted: Final = _decide(gateway, dropping, input=_JSON_INPUT)
+        assert accepted.status_code == 200, accepted.text
+        assert [call["body"] for call in _upstream_calls(gateway, handle)] == [_PERPLEXITY.upstream_body()]
+
+
+def test_openai_box_answers_reach_the_caller_as_boxes_not_refusals(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        box: Final[dict[str, JsonValue]] = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
+        box_answer: Final[dict[str, JsonValue]] = {"type": "box", "name": "crack", "box": box, "confidence": 0.7}
+        handle: Final = _register(scenario, {**_OPENAI.upstream_reply(), "answers": [box_answer]})
+        model: Final = scenario.model(
+            model=_OPENAI.model,
+            api_base=handle.api_base(),
+            api_key=_OPENAI.api_key,
+            model_info={"supports_box_questions": True},
+        )
+        response: Final = _decide(
+            gateway, model, questions=[{"type": "box", "name": "crack", "instructions": "Where is the crack?"}]
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["answers"] == [box_answer], response.text
 
 
 def test_a_message_list_input_reaches_a_system_one_provider_as_its_flattened_text(gateway: Gateway) -> None:

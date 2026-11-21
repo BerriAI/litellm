@@ -4,7 +4,9 @@ from typing import Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -15,6 +17,7 @@ from ..common_utils import InfinityError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class InfinityEmbeddingConfig(BaseEmbeddingConfig):
@@ -36,11 +39,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity embeddings")
-        # Remove trailing slashes and ensure clean base URL
-        api_base = api_base.rstrip("/")
-        if not api_base.endswith("/embeddings"):
-            api_base = f"{api_base}/embeddings"
-        return api_base
+        return ensure_api_route(api_base, "embeddings")
 
     def validate_environment(
         self,
@@ -129,7 +128,8 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage_payload: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
+        response_body: Final = require_get(_DECODED_JSON.validate_python(raw_response_json))
+        usage_payload: Final = _JSON_OBJECT.validate_python(response_body.get("usage", {}))
         usage: Final = Usage(
             prompt_tokens=_INT.validate_python(usage_payload.get("prompt_tokens", 0) or 0),
             total_tokens=_INT.validate_python(usage_payload.get("total_tokens", 0) or 0),
