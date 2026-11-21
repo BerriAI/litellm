@@ -192,14 +192,6 @@ export function SearchInput({
   );
 }
 
-export function RowTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <ItemTitle className="w-full min-w-0">
-      <span className="line-clamp-2 wrap-anywhere">{children}</span>
-    </ItemTitle>
-  );
-}
-
 export function Joined({ parts }: { parts: (string | null | undefined)[] }) {
   return parts.filter(Boolean).map((part, index) => (
     <React.Fragment key={part}>
