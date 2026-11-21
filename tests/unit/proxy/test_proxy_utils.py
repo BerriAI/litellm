@@ -3917,10 +3917,11 @@ def _native_messages_sse(input_tokens: int, output_tokens: int) -> tuple[bytes, 
 
 
 async def _spend_rows_of_native_messages_stream_ending_in(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, frames_read: int | None
+    monkeypatch: pytest.MonkeyPatch, error: Exception, frames_read: int | None, served_as: str = "python_stream"
 ) -> list[tuple[str, int, int, float]]:
     """Streams a native /v1/messages answer through a post-call hook that raises ``error`` after reading
-    ``frames_read`` frames, or all of them when None, then runs the stream's teardown and the route's failure log."""
+    ``frames_read`` frames, or all of them when None, then runs the stream's teardown and the route's failure log.
+    ``served_as`` picks the Python handler's stream type or the bare byte stream the Rust bridge hands the proxy."""
     from litellm.caching.caching import DualCache
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -4005,8 +4006,13 @@ async def _spend_rows_of_native_messages_stream_ending_in(
         logging_obj._deferred_stream_complete_args = (success_logging(frames),)
 
     logging_obj._on_deferred_stream_complete = run_parked
+    served: Final = (
+        AnthropicMessagesStreamingResponse(completion_stream=upstream(), hidden_params={})
+        if served_as == "python_stream"
+        else upstream()
+    )
     guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
-        response=AnthropicMessagesStreamingResponse(completion_stream=upstream(), hidden_params={}),
+        response=served,
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
         request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
     )
@@ -4024,6 +4030,7 @@ async def _spend_rows_of_native_messages_stream_ending_in(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("served_as", ["python_stream", "rust_bridge_byte_stream"])
 @pytest.mark.parametrize("frames_read", [None, 3], ids=["refused_at_end", "refused_mid_stream"])
 @pytest.mark.parametrize(
     "refusal_error",
@@ -4034,9 +4041,11 @@ async def _spend_rows_of_native_messages_stream_ending_in(
     ids=["guardrail_raised", "presidio_blocked_entity"],
 )
 async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_upstream_usage(
-    monkeypatch, frames_read, refusal_error
+    monkeypatch, frames_read, refusal_error, served_as
 ):
-    rows: Final = await _spend_rows_of_native_messages_stream_ending_in(monkeypatch, refusal_error, frames_read)
+    rows: Final = await _spend_rows_of_native_messages_stream_ending_in(
+        monkeypatch, refusal_error, frames_read, served_as
+    )
 
     assert [row[:2] for row in rows] == [("failure", 30)]
     _, _, completion_tokens, response_cost = rows[0]

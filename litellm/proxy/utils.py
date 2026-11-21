@@ -817,12 +817,10 @@ async def _without_token_id_only_chunks(response: AsyncIterable[object]) -> Asyn
         yield chunk
 
 
-def _is_native_messages_stream(response: object) -> bool:
-    from litellm.litellm_core_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
-    from litellm.llms.anthropic.messages.native.streaming_iterator import AnthropicMessagesStreamingResponse
-
-    unwrapped: Final = response.inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
-    return isinstance(unwrapped, AnthropicMessagesStreamingResponse)
+def _is_messages_route(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    route: Final = user_api_key_dict.request_route
+    call_types: Final = get_call_types_for_route(route) if route else None
+    return bool(call_types) and call_types[0] == CallTypes.anthropic_messages
 
 
 class _ReadBytesTap:
@@ -5318,7 +5316,7 @@ class ProxyLogging:
         )
         if drops_token_ids:
             _drop_built_stream_token_ids(request_data)
-        read_tap: Final = _ReadBytesTap() if _is_native_messages_stream(response) else None  # pyright: ignore[reportUnknownArgumentType]  # the hook's response parameter is untyped
+        read_tap: Final = _ReadBytesTap() if _is_messages_route(user_api_key_dict) else None
         source: Final = response if read_tap is None else read_tap.tap(response)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # the hook's response parameter is untyped
         current_response = _without_token_id_only_chunks(source) if drops_token_ids else source
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
@@ -5389,10 +5387,10 @@ class ProxyLogging:
             raise
         except Exception as e:
             await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-            refused_native: Final = read_tap is not None and await ProxyLogging._refuse_native_messages_stream(
+            refused_messages: Final = read_tap is not None and await ProxyLogging._refuse_messages_stream(
                 request_data, e, tuple(read_tap.read)
             )
-            if not refused_native and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+            if not refused_messages and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
             raise
 
@@ -5747,12 +5745,13 @@ class ProxyLogging:
         return True
 
     @staticmethod
-    async def _refuse_native_messages_stream(
+    async def _refuse_messages_stream(
         request_data: Mapping[str, object], error: Exception, read: tuple[bytes, ...]
     ) -> bool:
-        """Drop the success log of a native /v1/messages stream that ends in an error ``post_call_failure_hook`` logs
+        """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
         as a failure, parked or still to come at teardown, and bill the bytes it read on the failure row instead.
-        Returns False when the error is not one, so the caller still flushes the parked success."""
+        Returns False when the error is not one, or when the stream parked an assembled chat response instead,
+        so the caller handles it as a chat stream."""
         from litellm.litellm_core_utils.asyncify import asyncify
         from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
             AnthropicPassthroughLoggingHandler,
@@ -5765,8 +5764,10 @@ class ProxyLogging:
         match parked_args:
             case (parked,) if asyncio.iscoroutine(parked):
                 parked.close()
-            case _:
+            case None:
                 pass
+            case _:
+                return False
         logging_obj.refuse_stream_success()
         logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
         logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators

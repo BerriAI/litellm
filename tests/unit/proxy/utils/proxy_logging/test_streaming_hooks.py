@@ -671,8 +671,11 @@ def _raising_at_end_of_stream(error: Exception) -> CustomLogger:
     ],
     ids=["guardrail_raised", "presidio_blocked_entity"],
 )
+@pytest.mark.parametrize(
+    "route", ["/chat/completions", "/v1/messages"], ids=["chat_completions", "messages_bridged_to_chat"]
+)
 async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_success(
-    proxy_logging, make_user_api_key_auth, monkeypatch, block
+    proxy_logging, make_user_api_key_auth, monkeypatch, block, route
 ):
     """
     A guardrail that raises ``GuardrailRaisedException`` at end of a
@@ -688,7 +691,7 @@ async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_suc
     with pytest.raises(type(block)):
         async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
             response=upstream,
-            user_api_key_dict=make_user_api_key_auth(),
+            user_api_key_dict=make_user_api_key_auth(request_route=route),
             request_data=request_data,
         ):
             pass
