@@ -17149,7 +17149,9 @@
         "rpmLimitTooltip": "Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit",
         "rpmLimitPlaceholder": "Requests per minute limit for this member in this team",
         "allowedModels": "Allowed Models",
-        "allowedModelsTooltip": "Models this member can access within this team. Leave empty to inherit all team models.",
+        "allowedModelsTooltip": "Selecting models limits this member to your selection. Leave empty to inherit all team models.",
+        "addModelsOnKey": "To add a model without changing inherited access, attach an access group to an inheriting virtual key.",
+        "viewMemberKeys": "View member’s keys",
         "allowedModelsPlaceholder": "Leave empty to inherit all team models"
       },
       "deleteMember": {

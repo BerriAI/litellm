@@ -666,6 +666,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
+  const [keyOwnerFilter, setKeyOwnerFilter] = useState<string>();
   const [isEditing, setIsEditing] = useState(false);
   const [memberDefaultsEditorTeamId, setMemberDefaultsEditorTeamId] = useState<string | null>(null);
   const isEditingMemberDefaults = memberDefaultsEditorTeamId === teamId;
@@ -746,6 +747,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     "detail_tab",
   );
   const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
+
+  const handleTabChange = (value: string) => {
+    if (value !== TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS) setKeyOwnerFilter(undefined);
+    setActiveTab(String(value));
+    onTabChange(value);
+  };
+
+  const viewMemberKeys = () => {
+    setKeyOwnerFilter(selectedEditMember?.user_id ?? undefined);
+    setIsEditMemberModalVisible(false);
+    setActiveTab(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS);
+    onTabChange(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS);
+  };
 
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
@@ -1880,7 +1894,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     {
       key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]),
-      children: <TeamVirtualKeysTable teamId={teamId} teamAlias={info.team_alias} organization={organization} />,
+      children: (
+        <TeamVirtualKeysTable
+          key={keyOwnerFilter}
+          teamId={teamId}
+          teamAlias={info.team_alias}
+          organization={organization}
+          initialOwnerFilter={keyOwnerFilter}
+        />
+      ),
     },
     {
       key: TEAM_INFO_TAB_KEYS.MEMBERS,
@@ -2875,14 +2897,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <Tabs
-        value={activeTab}
-        className="mb-4"
-        onValueChange={(value) => {
-          setActiveTab(String(value));
-          onTabChange(value);
-        }}
-      >
+      <Tabs value={activeTab} className="mb-4" onValueChange={handleTabChange}>
         <TabsList variant="line" className="mb-4 h-auto w-full flex-wrap justify-start rounded-none border-b p-0">
           {tabItems.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
@@ -3023,6 +3038,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               type: "multi-select" as const,
               options: (info.models || []).map((m: string) => ({ label: m, value: m })),
               placeholder: t("teams.teamInfo.editMember.allowedModelsPlaceholder"),
+              description:
+                canEditAsProxyAdmin && selectedEditMember?.user_id && !selectedEditMember.allowed_models?.length ? (
+                  <>
+                    {t("teams.teamInfo.editMember.addModelsOnKey")}{" "}
+                    <Button type="button" variant="link" className="h-auto p-0 text-sm" onClick={viewMemberKeys}>
+                      {t("teams.teamInfo.editMember.viewMemberKeys")}
+                    </Button>
+                  </>
+                ) : undefined,
             },
           ],
         }}
