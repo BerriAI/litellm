@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -239,4 +240,45 @@ def test_azure_sync_transcription_uses_the_deployments_route(
     sent_url: Final = route.calls.last.request.url
     assert sent_url.path == "/openai/deployments/gpt-transcribe/audio/transcriptions"
     assert sent_url.params.get("api-version") == expected_api_version
+    assert response.text == "hello"
+
+
+@pytest.mark.parametrize(
+    ("deployment_api_version", "request_params", "expected_api_version"),
+    [
+        (None, {}, "2024-10-21"),
+        ("2025-03-01-preview", {}, "2025-03-01-preview"),
+        ("2025-03-01-preview", {"api_version": "2024-12-01-preview"}, "2024-12-01-preview"),
+    ],
+)
+async def test_azure_router_transcription_api_version_precedence(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_api_version: str | None,
+    request_params: Mapping[str, str],
+    expected_api_version: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "api_version", "2024-10-21")
+    monkeypatch.setenv("AZURE_API_VERSION", "2024-06-01")
+    route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {
+                    "model": "azure/gpt-transcribe",
+                    "api_key": "test-key",
+                    "api_base": "https://transcribe-route.openai.azure.com",
+                    "api_version": deployment_api_version,
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.atranscription(model="transcriber", file=_audio_file(), **request_params)
+
+    assert route.calls.last.request.url.params.get("api-version") == expected_api_version
     assert response.text == "hello"
