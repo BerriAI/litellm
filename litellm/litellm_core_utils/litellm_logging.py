@@ -19,6 +19,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response
+from openai.types.chat import ChatCompletionStreamOptionsParam
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -667,6 +668,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
+        self.logged_call_type: str | None = None
+        self.endpoint_request: tuple[Sequence[object] | None, object] | None = None
         self.relays_llm_passthrough: Final = call_type in (
             CallTypes.llm_passthrough_route.value,
             CallTypes.allm_passthrough_route.value,
@@ -784,6 +787,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
+        self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -1032,7 +1036,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "start_time": self.start_time,
                 "stream": self.stream,
                 "user": user,
-                "call_type": str(self.call_type),
+                "call_type": str(self.payload_call_type()),
                 "litellm_call_id": self.litellm_call_id,
                 "completion_start_time": self.completion_start_time,
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
@@ -2391,6 +2395,39 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled = True
         return True
 
+    def set_logged_call_type(self, call_type: str | None) -> None:
+        self.logged_call_type = call_type
+
+    def apply_adapter_request(
+        self, messages: Sequence[AllMessageValues], stream_options: ChatCompletionStreamOptionsParam | None
+    ) -> None:
+        if self.endpoint_request is None:
+            self.endpoint_request = (self.messages, self.stream_options)
+        self.messages = messages
+        self.model_call_details["messages"] = messages
+        self.stream_options = stream_options
+
+    def start_endpoint_attempt(self) -> None:
+        self.logged_call_type = None
+        if self.endpoint_request is None:
+            return
+        messages, stream_options = self.endpoint_request
+        self.endpoint_request = None
+        self.messages = messages
+        self.model_call_details["messages"] = messages
+        self.stream_options = stream_options
+
+    def payload_call_type(self) -> str:
+        if self.logged_call_type is not None:
+            return self.logged_call_type
+        return self.call_type if isinstance(self.call_type, str) else str(self.call_type)
+
+    def claim_sync_success_log(self) -> bool:
+        if self._sync_success_scheduled:
+            return False
+        self._sync_success_scheduled = True
+        return True
+
     def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
@@ -2913,6 +2950,7 @@ class Logging(LiteLLMLoggingBaseClass):
         discarded as a duplicate of the in-progress create.
         """
         self.model_call_details.pop("has_logged_async_success", None)
+        self._sync_success_scheduled = False
         litellm_params = self.model_call_details.get("litellm_params")
         if not isinstance(litellm_params, dict):
             return
@@ -3122,13 +3160,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
                         kwargs=call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
                 elif isinstance(callback, CustomLogger):
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
                         kwargs=call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
                 if not for_async_request:
                     self.model_call_details = call_details
@@ -3697,7 +3735,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
                 elif isinstance(callback, CustomLogger):
                     result = redact_message_input_output_from_custom_logger(
@@ -3706,7 +3744,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self.payload_call_type(),
                     )
             except Exception:  # noqa: BLE001  # one failing hook must not skip later callbacks (slot release)
                 verbose_logger.error(
@@ -4279,6 +4317,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
+        if not self.stream and not self.claim_sync_success_log():
+            return
         executor.submit(
             self.success_handler,
             result,
@@ -4295,7 +4335,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
-        executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
+        if self.claim_sync_success_log():
+            executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict
         """The success-event payload with the request messages put back where `turn_off_message_logging`
@@ -4642,6 +4683,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
+        if isinstance(result, ModelResponse):
+            return result
         httpx_response: Final = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")

@@ -30,7 +30,9 @@ def _status_and_text(error: UpstreamError) -> tuple[int, str]:
             return error.response.status_code, error_response_text(error.response)
 
 
-def _fallback_for(error: UpstreamError, fallback: NativeOutputFallbackFactory, model: str) -> NativeOutputFallback | None:
+def _fallback_for(
+    error: UpstreamError, fallback: NativeOutputFallbackFactory, model: str
+) -> NativeOutputFallback | None:
     status_code, error_text = _status_and_text(error)
     if not is_bedrock_native_output_rejection(status_code, error_text):
         return None
