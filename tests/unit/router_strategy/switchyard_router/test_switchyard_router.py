@@ -1,15 +1,17 @@
 import asyncio
 import json
-from itertools import chain
 from collections.abc import AsyncIterator, Mapping
+from itertools import chain
+from math import isclose
 from typing import Final
 
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.router_api import ChangeSet
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+from litellm.router_api import ChangeSet, RoutingContext
 from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
 from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
 from litellm.types.decisions import OpenAIDecisionResponse
@@ -436,3 +438,163 @@ async def test_judge_cancellation_propagates() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await route(config(classifier={}), HELLO, completion=cancelled)
+
+
+@pytest.mark.asyncio
+async def test_switchyard_router_derives_savings_baseline_from_capable_group() -> None:
+    fast_input: Final = 0.000001
+    fast_output: Final = 0.000002
+    strong_input: Final = 0.00001
+    strong_output: Final = 0.00002
+    proxy: Final = litellm.Router(
+        model_list=[
+            switchyard_deployment(
+                {"models": {"capable": "strong", "efficient": "fast"}, "options": {"picker": "efficient_first"}}
+            ),
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "openai/fast", "api_key": "k"},
+                "model_info": {
+                    "id": "fast-id",
+                    "input_cost_per_token": fast_input,
+                    "output_cost_per_token": fast_output,
+                },
+            },
+            {
+                "model_name": "strong",
+                "litellm_params": {"model": "openai/strong", "api_key": "k"},
+                "model_info": {
+                    "id": "strong-id",
+                    "input_cost_per_token": strong_input,
+                    "output_cost_per_token": strong_output,
+                },
+            },
+        ]
+    )
+
+    switchyard: Final = proxy.registry().plugins("switchyard")["route"][0].strategy
+    routed: Final = await switchyard.async_pre_routing_hook(
+        "route",
+        {},
+        transcript("acompletion", "Edit", ("Edit applied",) * 3),
+        call_type="acompletion",
+    )
+    assert routed is not None and routed.routing_decision is not None
+    assert routed.model == "fast"
+    assert routed.routing_decision.get("savings_baseline_model") == "openai/strong"
+    assert routed.routing_decision.get("savings_baseline_deployment_id") == "strong-id"
+    savings: Final = autorouter_savings_for_request(
+        model="fast",
+        custom_llm_provider="openai",
+        routing_decision=routed.routing_decision,
+        usage_object={"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12},
+        model_id="fast-id",
+        llm_router=lambda: proxy,
+    )
+    expected: Final = 9 * (strong_input - fast_input) + 3 * (strong_output - fast_output)
+    assert savings is not None and isclose(savings, expected), (savings, expected)
+
+    fallback: Final = await switchyard.async_pre_routing_hook(
+        "route",
+        {},
+        [{"role": "user", "content": [{"type": "input_audio"}]}],
+        call_type="acompletion",
+    )
+    assert fallback is not None and fallback.routing_decision is not None
+    assert fallback.model == "strong"
+    assert fallback.routing_decision.get("switchyard_fallback_reason") == "unsupported_content"
+    assert fallback.routing_decision.get("savings_baseline_model") == "openai/strong"
+    assert fallback.routing_decision.get("savings_baseline_deployment_id") == "strong-id"
+    fallback_savings: Final = autorouter_savings_for_request(
+        model="strong",
+        custom_llm_provider="openai",
+        routing_decision=fallback.routing_decision,
+        usage_object={"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12},
+        model_id="strong-id",
+        llm_router=lambda: proxy,
+    )
+    assert fallback_savings == 0.0
+
+
+@pytest.mark.asyncio
+async def test_switchyard_router_picks_most_expensive_deployment_in_capable_group() -> None:
+    proxy: Final = litellm.Router(
+        model_list=[
+            switchyard_deployment(
+                {"models": {"capable": "strong", "efficient": "fast"}, "options": {"picker": "efficient_first"}}
+            ),
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "openai/fast", "api_key": "k"},
+                "model_info": {
+                    "id": "fast-id",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+            },
+            {
+                "model_name": "strong",
+                "litellm_params": {"model": "openai/strong", "api_key": "k"},
+                "model_info": {
+                    "id": "strong-cheap-id",
+                    "input_cost_per_token": 0.000005,
+                    "output_cost_per_token": 0.00001,
+                },
+            },
+            {
+                "model_name": "strong",
+                "litellm_params": {"model": "openai/strong", "api_key": "k"},
+                "model_info": {
+                    "id": "strong-pricy-id",
+                    "input_cost_per_token": 0.00002,
+                    "output_cost_per_token": 0.00004,
+                },
+            },
+        ]
+    )
+
+    switchyard: Final = proxy.registry().plugins("switchyard")["route"][0].strategy
+    routed: Final = await switchyard.async_pre_routing_hook(
+        "route",
+        {},
+        transcript("acompletion", "Edit", ("Edit applied",) * 3),
+        call_type="acompletion",
+    )
+    assert routed is not None and routed.routing_decision is not None
+    assert routed.model == "fast"
+    assert routed.routing_decision.get("savings_baseline_model") == "openai/strong"
+    assert routed.routing_decision.get("savings_baseline_deployment_id") == "strong-pricy-id"
+
+
+@pytest.mark.asyncio
+async def test_switchyard_router_omits_baseline_when_disabled_or_ctx_absent() -> None:
+    proxy: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "strong",
+                "litellm_params": {"model": "openai/strong", "api_key": "k"},
+                "model_info": {
+                    "id": "strong-id",
+                    "input_cost_per_token": 0.00001,
+                    "output_cost_per_token": 0.00002,
+                },
+            },
+        ]
+    )
+    route_config: Final = config()
+    disabled: Final = SwitchyardRouter(
+        "route",
+        route_config,
+        build_algorithm(route_config),
+        unexpected_judge,
+        unexpected_decision,
+        ctx=RoutingContext(proxy),
+        derive_savings_baseline=False,
+    )
+    without_ctx: Final = router(route_config)
+
+    for instance in (disabled, without_ctx):
+        result = await instance.async_pre_routing_hook("route", {}, HELLO, call_type="acompletion")
+        assert result is not None and result.routing_decision is not None
+        assert "savings_baseline_model" not in result.routing_decision
+        assert "savings_baseline_deployment_id" not in result.routing_decision
