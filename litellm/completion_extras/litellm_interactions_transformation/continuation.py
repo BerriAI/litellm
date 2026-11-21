@@ -9,6 +9,7 @@ from pydantic import JsonValue
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.env_utils import get_env_int_or_none
 from litellm.llms.vertex_ai.gemini.long_decode import DEFAULT_OUTPUT_BUDGET_ENV
+from litellm.responses.bridge_check import str_keyed_mapping
 
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
 
@@ -44,8 +45,8 @@ def with_default_output_budget(
     request_body: Mapping[str, object], model_max_output_tokens: Callable[[], int | None]
 ) -> Mapping[str, object]:
     budget: Final = get_env_int_or_none(DEFAULT_OUTPUT_BUDGET_ENV)
-    generation_config: Final = request_body.get("generation_config", {})
-    if budget is None or budget <= 0 or not isinstance(generation_config, Mapping):
+    generation_config: Final = str_keyed_mapping(request_body.get("generation_config", {}))
+    if budget is None or budget <= 0 or generation_config is None:
         return request_body
     if "max_output_tokens" in generation_config or request_body.get("continuation_token"):
         return request_body
@@ -58,8 +59,8 @@ def with_default_output_budget(
 
 
 def continuation_cap_of(request_body: Mapping[str, object]) -> int | None:
-    generation_config: Final = request_body.get("generation_config")
-    cap: Final = generation_config.get("max_output_tokens") if isinstance(generation_config, Mapping) else None
+    generation_config: Final = str_keyed_mapping(request_body.get("generation_config"))
+    cap: Final = generation_config.get("max_output_tokens") if generation_config is not None else None
     return cap if isinstance(cap, int) else None
 
 
