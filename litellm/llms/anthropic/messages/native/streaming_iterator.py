@@ -145,8 +145,11 @@ _DECODED_SSE_DATA: Final = TypeAdapter(object)
 def _decoded_sse_data_line(line: bytes) -> object | None:
     if not line.startswith(b"data:"):
         return None
+    payload: Final = line[len(b"data:") :].strip()
+    if not payload.startswith(b"{"):
+        return None
     try:
-        return _DECODED_SSE_DATA.validate_python(json.loads(line[len(b"data:") :].strip()))
+        return _DECODED_SSE_DATA.validate_python(json.loads(payload))
     except (ValueError, TypeError):
         return None
 
