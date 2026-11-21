@@ -93,6 +93,7 @@ def _breadcrumb(
     )
     deployment: Final = metadata.get("deployment")
     attempted: Final = metadata.get("attempted_retries")
+    fallbacks: Final = metadata.get("attempted_fallbacks")
     return {
         "model_group": model,
         "deployment_id": known_id,
@@ -101,6 +102,7 @@ def _breadcrumb(
         "exception_type": logged_class_name(error),
         "exception_string": str(error),
         "attempted_retries": attempted if type(attempted) is int else None,
+        "attempted_fallbacks": fallbacks if type(fallbacks) is int else None,
     }
 
 

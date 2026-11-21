@@ -2889,6 +2889,28 @@ def test_after_a_failed_fallback_every_timed_out_call_but_the_one_the_client_saw
     ]
 
 
+def test_failed_fallback_attempts_that_arrive_as_a_list_are_billed_like_the_routers_tuple():
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    metadata: Final = _failed_fallback_metadata()
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {**metadata, "failed_fallback_attempts": list(metadata["failed_fallback_attempts"])}
+        },
+        estimated_usage=litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24),
+        base_model=None,
+        deployment_id="dep-lit45-fallback",
+    )
+
+    assert [(a.deployment_id, a.attempted_retries) for a in attempts] == [
+        ("dep-lit45-primary", 0),
+        ("dep-lit45-fallback", 0),
+        ("dep-lit45-fallback", 1),
+    ]
+
+
 def test_a_fallback_that_failed_without_timing_out_adds_no_attempt_row_for_the_call_the_client_saw():
     from litellm.proxy.utils import _billed_earlier_attempts
 

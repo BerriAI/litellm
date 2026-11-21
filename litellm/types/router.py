@@ -1308,6 +1308,7 @@ class RetryAttemptRecord(TypedDict):
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]
+    attempted_fallbacks: ReadOnly[int | None]
 
 
 VALID_LITELLM_ENVIRONMENTS = [

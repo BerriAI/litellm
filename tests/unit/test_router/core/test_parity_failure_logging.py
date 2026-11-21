@@ -497,6 +497,50 @@ async def test_a_failed_request_names_the_attempt_the_client_saw_and_each_failed
     assert [_attempt(record) for record in logged["failed_fallback_attempts"]] == failed_hops
 
 
+@pytest.mark.parametrize("num_retries", [0, 1])
+@pytest.mark.parametrize(
+    "fallbacks",
+    [
+        pytest.param([{"a": [{"model": "a", "max_tokens": 9}]}], id="a_fallback_into_the_same_group"),
+        pytest.param(
+            [{"a": [{"model": "a", "max_tokens": 9}, {"model": "a", "max_tokens": 8}]}],
+            id="two_fallbacks_into_the_same_group",
+        ),
+        pytest.param([{"a": ["b"]}], id="a_fallback_into_another_group"),
+        pytest.param([], id="no_fallback"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_every_timed_out_call_of_a_failed_request_is_billed_once(
+    make_core: MakeCore, host: ScriptedHost, fallbacks: list[dict[str, list[object]]], num_retries: int
+) -> None:
+    """The failure row bills the call the client saw and each other timed-out call gets an attempt
+    row, also when a fallback lands on the deployment that already failed and restarts its retry count."""
+    from litellm.proxy.utils import (
+        _billed_earlier_attempts,  # pyright: ignore[reportPrivateUsage]  # the attempt rows of a failure
+    )
+
+    logging_obj: Final = _logging_obj_whose_metadata_each_call_replaces(host, {})
+    core: Final = make_core(
+        model_list=[deployment("a", "a1"), deployment("b", "b1")], num_retries=num_retries, fallbacks=fallbacks
+    )
+
+    _ = await _failed(core, "a", expected_error=litellm.Timeout, litellm_logging_obj=logging_obj, metadata={})
+
+    attempt_rows: Final = _billed_earlier_attempts(
+        model_call_details={"model": "gpt-4o-mini", "custom_llm_provider": "openai"},
+        litellm_params=logging_obj.litellm_params,
+        estimated_usage=litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24),
+        base_model=None,
+        deployment_id=None,
+    )
+    provider_calls: Final = len(host.calls_to("acompletion"))
+    assert provider_calls == (num_retries + 1) * (len(fallbacks[0]["a"]) + 1 if fallbacks else 1)
+    assert 1 + len(attempt_rows) == min(provider_calls, 5), [
+        (row.deployment_id, row.attempted_retries) for row in attempt_rows
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_request_cancelled_inside_a_fallback_call_names_no_attempt_the_client_saw(
     make_core: MakeCore, host: ScriptedHost

@@ -1469,7 +1469,7 @@ def _retry_attempt_records(litellm_params: Mapping[str, object] | None) -> tuple
                 cast("Mapping[str, object]", record)  # cast-ok: RetryAttemptRecord TypedDict, read with .get
                 for record in (
                     *cast("Sequence[object]", records),  # cast-ok: untyped router tuple
-                    *cast("Sequence[object]", hops if isinstance(hops, tuple) else ()),  # cast-ok: untyped router tuple
+                    *cast("Sequence[object]", hops if isinstance(hops, (list, tuple)) else ()),  # cast-ok: untyped router tuple
                 )
                 if isinstance(record, dict)
             )
@@ -1481,16 +1481,28 @@ def _record_deployment_id(record: Mapping[str, object]) -> str | None:
     return deployment_id if isinstance(deployment_id, str) else None
 
 
-def _attempt_identity(record: Mapping[str, object]) -> tuple[str | None, int | None]:
-    """What tells one provider call from another across the request: the deployment that served it
-    and the retry count within its model group. Two records with the same identity describe the
-    same call (the fallback handler re-logs the attempt that exhausted the previous group)."""
-    attempted_retries: Final = record.get("attempted_retries")
-    return _record_deployment_id(record), attempted_retries if isinstance(attempted_retries, int) else None
+def _int_or_none(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+_AttemptIdentity = tuple[str | None, int | None, int | None]
+
+
+def _attempt_identity(record: Mapping[str, object]) -> _AttemptIdentity:
+    """What tells one provider call from another across the request: the deployment that served it,
+    the retry count within its model group and how many fallback hops preceded it (the retry count
+    restarts on each hop, and a hop can land on the same deployment again). Two records with the
+    same identity describe the same call (the fallback handler re-logs the attempt that exhausted
+    the previous group)."""
+    return (
+        _record_deployment_id(record),
+        _int_or_none(record.get("attempted_retries")),
+        _int_or_none(record.get("attempted_fallbacks")),
+    )
 
 
 def _timed_out_earlier_records(
-    litellm_params: Mapping[str, object] | None, final_identity: tuple[str | None, int | None]
+    litellm_params: Mapping[str, object] | None, final_identity: _AttemptIdentity
 ) -> tuple[Mapping[str, object], ...]:
     """The ``Timeout`` breadcrumbs for calls other than the final attempt, one per provider call."""
     by_identity: Final = {
@@ -1549,10 +1561,9 @@ def _client_seen_record(litellm_params: Mapping[str, object] | None) -> Mapping[
 
 def _routed_attempt_identity(
     litellm_params: Mapping[str, object] | None, deployment_id: str | None
-) -> tuple[str | None, int | None]:
+) -> _AttemptIdentity:
     """The identity of the last attempt the router made, as its metadata describes it."""
     retry_metadata: Final = _retry_metadata_bucket(litellm_params)
-    final_attempt: Final = retry_metadata.get("attempted_retries")
     routed_model_info: Final = retry_metadata.get("model_info")
     routed_id: Final = (
         cast("Mapping[str, object]", routed_model_info).get("id")  # cast-ok: untyped router dict, read with .get
@@ -1561,7 +1572,8 @@ def _routed_attempt_identity(
     )
     return (
         routed_id if isinstance(routed_id, str) else deployment_id,
-        final_attempt if isinstance(final_attempt, int) else None,
+        _int_or_none(retry_metadata.get("attempted_retries")),
+        _int_or_none(retry_metadata.get("attempted_fallbacks")),
     )
 
 
@@ -1576,8 +1588,8 @@ def _billed_earlier_attempts(
     per failed attempt in ``metadata.previous_models``, including the attempt the failure row itself
     bills. That attempt is the one whose error the client got (``_client_seen_record``), else,
     when the error was no attempt's own, the record with the request's own deployment
-    and retry count (``attempted_retries`` restarts at 0 after a fallback hop, so the count alone
-    cannot tell the groups apart). Another attempt that ended in a ``Timeout`` had the same prompt
+    retry count and fallback hop (``attempted_retries`` restarts at 0 after a fallback hop, so the
+    count alone cannot tell the hops apart). Another attempt that ended in a ``Timeout`` had the same prompt
     accepted by its deployment, so it is billed like the failure row's attempt, at that deployment's
     input rate (else the cost map's rate for the record's own ``base_model`` or model, which a
     fallback hop can make a different model). Only the exception class survives on the record, so a
