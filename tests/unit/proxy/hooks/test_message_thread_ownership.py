@@ -598,6 +598,18 @@ async def may_compare(
     return False
 
 
+async def forwarded(
+    ownership: MessageThreadOwnership,
+    key: UserAPIKeyAuth,
+    data: dict[str, object],
+    call_type: CallTypesLiteral = "anthropic_messages",
+) -> dict[str, object]:
+    rescoped: Final = await ownership.async_pre_call_hook(
+        user_api_key_dict=key, cache=DualCache(), data=data, call_type=call_type
+    )
+    return data if rescoped is None else rescoped
+
+
 async def comparison_rejection(
     ownership: MessageThreadOwnership, key: UserAPIKeyAuth, data: dict[str, object], call_type: CallTypesLiteral
 ) -> HTTPException | None:
@@ -616,7 +628,9 @@ async def test_only_the_key_that_got_a_diagnostics_reply_can_compare_against_it(
         data={"diagnostics": START_DIAGNOSTICS}, user_api_key_dict=OWNER, response=anthropic_message("msg_diag")
     )
 
-    assert await may_compare(ownership, OWNER, compared_with("msg_diag", in_extra_body=in_extra_body))
+    assert await forwarded(ownership, OWNER, compared_with("msg_diag", in_extra_body=in_extra_body)) == compared_with(
+        "msg_diag", in_extra_body=in_extra_body
+    )
     assert not await may_compare(ownership, INTRUDER, compared_with("msg_diag", in_extra_body=in_extra_body))
 
 
@@ -641,14 +655,21 @@ async def test_any_key_can_start_a_diagnostics_comparison() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_comparison_against_a_message_this_proxy_never_served_with_diagnostics_is_refused() -> None:
+@pytest.mark.parametrize("in_extra_body", (False, True), ids=("top_level", "extra_body"))
+@pytest.mark.parametrize(
+    "message_id", ("msg_without_diagnostics", "msg_owner_forgotten"), ids=("served_without_diagnostics", "no_owner")
+)
+async def test_a_comparison_against_a_message_with_no_recorded_owner_is_answered_as_a_fresh_comparison(
+    message_id: str, in_extra_body: bool
+) -> None:
     ownership: Final = hook()
     await ownership.async_post_call_success_hook(
         data={}, user_api_key_dict=OWNER, response=anthropic_message("msg_without_diagnostics")
     )
 
-    assert not await may_compare(ownership, OWNER, compared_with("msg_without_diagnostics"))
-    assert not await may_compare(ownership, OWNER, compared_with("msg_never_served"))
+    assert await forwarded(ownership, OWNER, compared_with(message_id, in_extra_body=in_extra_body)) == compared_with(
+        None, in_extra_body=in_extra_body
+    )
 
 
 @pytest.mark.asyncio
@@ -658,7 +679,9 @@ async def test_a_pass_through_comparison_is_left_to_the_upstream_unless_another_
         data={"diagnostics": START_DIAGNOSTICS}, user_api_key_dict=OWNER, response=anthropic_message("msg_owned")
     )
 
-    assert await may_compare(ownership, INTRUDER, compared_with("msg_never_bound"), "pass_through_endpoint")
+    assert await forwarded(
+        ownership, INTRUDER, compared_with("msg_never_bound"), "pass_through_endpoint"
+    ) == compared_with("msg_never_bound")
     assert not await may_compare(ownership, INTRUDER, compared_with("msg_owned"), "pass_through_endpoint")
 
 
