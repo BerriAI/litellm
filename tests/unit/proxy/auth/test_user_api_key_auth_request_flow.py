@@ -1755,27 +1755,26 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
 
 
 @pytest.mark.asyncio
-async def test_return_user_api_key_auth_obj_user_spend_and_budget():
-    """
-    Test that return_user_api_key_auth_obj correctly sets user_spend and user_max_budget
-    from user_obj attributes.
-    """
+@pytest.mark.parametrize(("cap", "credit", "expected_budget"), [(None, None, 1000.0), (1300.0, 200.0, 1200.0)])
+async def test_return_user_api_key_auth_obj_user_spend_and_budget(
+    cap: float | None, credit: float | None, expected_budget: float
+) -> None:
     from datetime import datetime
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
 
-    user_obj = type(
-        "LiteLLM_UserTable",
-        (),
-        {
-            "tpm_limit": 1000,
-            "rpm_limit": 100,
-            "user_email": "test@example.com",
-            "spend": 250.0,
-            "max_budget": 1000.0,
-            "user_role": "internal_user",
-        },
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        tpm_limit=1000,
+        rpm_limit=100,
+        user_email="test@example.com",
+        spend=250.0,
+        max_budget=1000.0,
+        budget_duration="monthly",
+        rollover_max_budget=cap,
+        rollover_credit=credit,
+        user_role="internal_user",
     )
 
     api_key = "sk-test-key"
@@ -1805,7 +1804,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
 
     assert isinstance(result, UserAPIKeyAuth)
     assert result.user_spend == 250.0
-    assert result.user_max_budget == 1000.0
+    assert result.user_max_budget == expected_budget
     assert result.user_tpm_limit == 1000
     assert result.user_rpm_limit == 100
     assert result.user_email == "test@example.com"

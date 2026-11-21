@@ -295,6 +295,8 @@ export interface TeamMembership {
   budget_source: TeamMemberBudgetSource;
   spend: number;
   total_spend: number | null;
+  rollover_credit?: number | null;
+  effective_max_budget?: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -355,6 +357,7 @@ export interface TeamData {
     caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number | null;
+      rollover_max_budget?: number | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -407,6 +410,7 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) => {
     soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
     default_team_member_models: z.array(z.string()).optional(),
     team_member_budget: numericInputSchema,
+    team_member_rollover_max_budget: numericInputSchema,
     team_member_budget_duration: z.string().nullish(),
     team_member_key_duration: z.string().optional(),
     team_member_tpm_limit: numericInputSchema,
@@ -499,6 +503,7 @@ type TeamInfoRecord = TeamData["team_info"] & { team_member_key_duration?: strin
 const TEAM_MEMBER_SETTINGS_FIELDS = [
   "default_team_member_models",
   "team_member_budget",
+  "team_member_rollover_max_budget",
   "team_member_budget_duration",
   "team_member_key_duration",
   "team_member_tpm_limit",
@@ -516,6 +521,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   soft_budget_alerting_emails: "",
   default_team_member_models: [],
   team_member_budget: undefined,
+  team_member_rollover_max_budget: undefined,
   team_member_budget_duration: undefined,
   team_member_key_duration: undefined,
   team_member_tpm_limit: undefined,
@@ -567,6 +573,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   soft_budget_alerting_emails: legacySoftBudgetRecipientsText(info.metadata?.soft_budget_alerting_emails),
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
+  team_member_rollover_max_budget: info.team_member_budget_table?.rollover_max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -1163,6 +1170,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
 
       updateData.team_member_budget_duration = values.team_member_budget_duration;
+      if (form.getFieldState("team_member_rollover_max_budget").isDirty) {
+        updateData.team_member_rollover_max_budget = numberOrNull(values.team_member_rollover_max_budget);
+      }
 
       const newTeamMemberBudget =
         values.team_member_budget !== undefined ? numberOrNull(values.team_member_budget) : undefined;
@@ -1879,6 +1889,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)
                               }
                             />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_rollover_max_budget"
+                          label={labelWithHint(
+                            t("teams.teamInfo.editForm.teamMemberSettings.rolloverCap"),
+                            t("teams.teamInfo.editForm.teamMemberSettings.rolloverCapHint"),
+                          )}
+                        >
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
                           )}
                         </FormField>
                         <ModelMaxBudgetField

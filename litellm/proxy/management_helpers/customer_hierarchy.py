@@ -1740,9 +1740,7 @@ class CustomerHierarchyStore:
         return None
 
 
-async def delete_unattached_customer_budget(
-    budgets: TableActions[PrismaRecord], budget_id: str
-) -> PrismaRecord | Failure | None:
+async def delete_unattached_customer_budget(budgets: TableActions[T], budget_id: str) -> T | Failure | None:
     row: Final = await budgets.find_unique(where={"budget_id": budget_id})
     if row is None:
         return await budgets.delete(where={"budget_id": budget_id})
