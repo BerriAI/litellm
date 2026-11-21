@@ -565,6 +565,65 @@ async def test_presidio_initialized_output_dispatch(
     assert len(selected) == expected_calls
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,scope",
+    [("pre_call", None), ("pre_call", "both"), ("post_call", None), (["pre_call", "post_call"], None)],
+)
+async def test_presidio_output_parse_pii_masks_the_answer_then_restores_request_values(
+    mode: str | list[str], scope: Literal["both"] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typing import Final
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    email: Final = "jane@example.com"
+    known_pii: Final = (("Jane", "PERSON"), (email, "EMAIL_ADDRESS"))
+
+    async def analyze(text: str, presidio_config: object, request_data: object) -> list[dict[str, object]]:
+        return [
+            {"entity_type": entity, "start": text.find(value), "end": text.find(value) + len(value), "score": 1.0}
+            for value, entity in known_pii
+            if value in text
+        ]
+
+    async def anonymize(text: str, analyze_results: list[dict[str, object]]) -> dict[str, object]:
+        return {
+            "text": text.replace(email, "<EMAIL_ADDRESS>").replace("Jane", "<PERSON>"),
+            "items": [{"entity_type": result["entity_type"]} for result in analyze_results],
+        }
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode=mode,
+        default_on=True,
+        output_parse_pii=True,
+        presidio_filter_scope=scope,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "mask_then_restore"})
+    for callback in callbacks:
+        monkeypatch.setattr(callback, "analyze_text", analyze)
+        monkeypatch.setattr(callback, "_post_presidio_anonymize", anonymize)
+    data: Final = {"metadata": {"pii_tokens": {"<PERSON_1>": "Jane"}}}
+    response: Final = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=f"<PERSON_1> wrote to {email}"), index=0)]
+    )
+    for callback in callbacks:
+        if callback.should_run_guardrail(data, GuardrailEventHooks.post_call):
+            data["guardrail_to_apply"] = callback
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+            )
+    assert response.choices[0].message.content == "Jane wrote to <EMAIL_ADDRESS>"
+
+
 def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
