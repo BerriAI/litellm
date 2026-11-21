@@ -39,8 +39,7 @@ mod _native {
     use crate::auth::{
         AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
         KeyContextView, MappedClaimsView, MappingView, PlanView, TeamGrantView, jwt_claims,
-        jwt_is_allowed_domain, jwt_is_jwt, jwt_key_mapping_cache_key, jwt_presents_claims,
-        jwt_unverified_claims,
+        jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims, jwt_unverified_claims,
     };
     #[pymodule_export]
     use crate::auth::{
@@ -95,6 +94,8 @@ mod _native {
     use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
     #[pymodule_export]
     use crate::redis::store::auth_cache::{NativeAuthCache, PyAuthObject, PyLocalSizes};
+    #[pymodule_export]
+    use crate::redis::store::cache_invalidation::NativeCacheInvalidation;
     #[pymodule_export]
     use crate::redis::store::deployment_health::NativeDeploymentHealth;
     #[pymodule_export]
@@ -219,6 +220,7 @@ mod tests {
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
                 "AuthObject",
+                "NativeCacheInvalidation",
                 "NativeRateLimits",
                 "WindowCount",
                 "AtomicApplied",
@@ -314,7 +316,6 @@ mod tests {
                 "jwt_claims",
                 "jwt_is_allowed_domain",
                 "jwt_is_jwt",
-                "jwt_key_mapping_cache_key",
                 "jwt_presents_claims",
                 "jwt_unverified_claims",
             ];

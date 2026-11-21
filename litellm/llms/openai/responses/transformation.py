@@ -16,7 +16,14 @@ from litellm.integrations.anthropic_cache_control_hook import (
     deployment_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, process_response_headers
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    length_of,
+    normalize_drop_params,
+    process_response_headers,
+    subscript,
+    sum_of,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -344,6 +351,12 @@ def _delete_response_body(response: _DeleteResponse) -> _DeleteResponseBody:
 def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
     """Decode a Responses API response body into its JSON object form."""
     return response.json()
+
+
+def _reasoning_summary(reasoning_content: object) -> object:
+    if length_of(reasoning_content) > 100:
+        return sum_of(subscript(reasoning_content, slice(100)), "...")
+    return reasoning_content
 
 
 def list_input_items_query_params(
@@ -1008,7 +1021,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
+    def _handle_reasoning_item(self, item: dict[str, object]) -> Mapping[str, object]:
         """
         Handle reasoning items specifically to filter out status=None using OpenAI's model.
         Issue: https://github.com/BerriAI/litellm/issues/13484
@@ -1022,11 +1035,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data: Final = dict(item)
                 if "summary" not in item_data:
-                    item_data["summary"] = (
-                        item_data.get("reasoning_content", "")[:100] + "..."
-                        if len(item_data.get("reasoning_content", "")) > 100
-                        else item_data.get("reasoning_content", "")
-                    )
+                    item_data["summary"] = _reasoning_summary(item_data.get("reasoning_content", ""))
 
                 # Create ResponseReasoningItem object from the item data
                 reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)
