@@ -440,7 +440,19 @@ def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object], delta
         pytest.param(_PCM, {"response_format": "pcm", "speed": 0.5}, _BILLED_TOKENS // 2, id="slowed audio"),
         pytest.param(_AAC, {"response_format": "aac"}, _AAC_BILLED_TOKENS, id="aac drops the encoder delay"),
         pytest.param(_AAC, {"response_format": "aac", "speed": 2.0}, _AAC_BILLED_TOKENS * 2, id="sped up aac"),
+        pytest.param(
+            (b"\xff\xf1\x58\x40\x02\x1f\xfd" + bytes(9)) * (_AAC_FRAMES // 2),
+            {"response_format": "aac"},
+            _AAC_BILLED_TOKENS,
+            id="aac frames that each hold two blocks",
+        ),
         pytest.param(_FLAC, {"response_format": "flac"}, _BILLED_TOKENS, id="flac"),
+        pytest.param(
+            _FLAC_HEAD + _flac_frame(b"\xff\xf8\x90\x08\x1f"),
+            {"response_format": "flac"},
+            (31 * _FLAC_BLOCK + 512) * 20 // 24000,
+            id="flac ending on a power of two block",
+        ),
         pytest.param(_FLAC, {"response_format": "flac", "speed": 4.0}, _BILLED_TOKENS * 4, id="sped up flac"),
         pytest.param(
             _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\x1f", _flac_frame(b"\xff\xf8\x20\x08\x7f")[:-2] + bytes(2)),
@@ -470,6 +482,8 @@ def test_token_priced_speech_bills_the_length_of_the_audio_not_the_tokens_the_do
         pytest.param(_AAC.replace(b"\xff\xf1", b"\xff\x01"), "aac", id="aac whose frames lack their sync bits"),
         pytest.param(_AAC + b"\xff\xf1\x58\x40\x00\x1f\xfc", "aac", id="aac with a frame shorter than its header"),
         pytest.param(_AAC + bytes(16), "aac", id="aac followed by bytes that are not a frame"),
+        pytest.param(_AAC.replace(b"\xff\xf1", b"\x7f\xf1"), "aac", id="aac whose frames start off sync"),
+        pytest.param(_AAC + b"\xff\xf1\x58", "aac", id="aac cut off inside a frame header"),
         pytest.param(
             _FLAC_HEAD + _flac_frame(b"\xff\xf8\x70\x08\x00\x09\x00"), "flac", id="flac whose last frame is too long"
         ),
