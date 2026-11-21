@@ -42,6 +42,34 @@ _KEY_SPEND_RESET_SQL: Final = (
 _USER_SPEND_RESET_SQL: Final = (
     'UPDATE "LiteLLM_UserTable"' + _SPEND_RESET_SET + " WHERE user_id = $1" + _SPEND_RESET_WHERE
 )
+_USER_CREDIT_RESET_SQL: Final = (
+    'UPDATE "LiteLLM_UserTable"'
+    + _SPEND_RESET_SET
+    + ", rollover_credit = CASE WHEN budget_duration IS NOT NULL AND max_budget > 0"
+    " AND rollover_max_budget > max_budget AND rollover_max_budget < 'Infinity'::double precision THEN"
+    " LEAST(rollover_max_budget - max_budget, GREATEST(0, max_budget"
+    " + LEAST(rollover_max_budget - max_budget, GREATEST(0, COALESCE(rollover_credit, 0))) - $6::text::double precision))"
+    " ELSE NULL END WHERE user_id = $1" + _SPEND_RESET_WHERE
+)
+_MEMBER_CREDIT_RESET_SQL: Final = """
+UPDATE "LiteLLM_TeamMembership" AS member
+SET rollover_credit = CASE WHEN credit_room IS NOT NULL THEN
+        LEAST(credit_room, GREATEST(0, budget.max_budget
+            + LEAST(credit_room, GREATEST(0, COALESCE(member.rollover_credit, 0))) - member.spend)) END,
+    spend = CASE WHEN $2::boolean AND ABS(budget.max_budget) < 'Infinity'::double precision THEN
+        GREATEST(0, member.spend - budget.max_budget
+            - LEAST(COALESCE(credit_room, 0), GREATEST(0, COALESCE(member.rollover_credit, 0))))
+        ELSE 0 END
+FROM (
+    SELECT budget_id, max_budget, budget_reset_at,
+        CASE WHEN budget_duration IS NOT NULL AND max_budget > 0
+            AND rollover_max_budget > max_budget AND rollover_max_budget < 'Infinity'::double precision
+            THEN rollover_max_budget - max_budget END AS credit_room
+    FROM "LiteLLM_BudgetTable"
+) AS budget
+WHERE member.budget_id = budget.budget_id AND budget.budget_id = ANY($1::text[])
+    AND (budget.budget_reset_at IS NULL OR budget.budget_reset_at < (statement_timestamp() AT TIME ZONE 'UTC'))
+"""
 _TEAM_SPEND_RESET_SQL: Final = (
     'UPDATE "LiteLLM_TeamTable"' + _SPEND_RESET_SET + " WHERE team_id = $1" + _SPEND_RESET_WHERE
 )
@@ -111,6 +139,25 @@ class KeySpendResetWrites:
 class UserSpendResetWrites:
     table: BatchTable
     batch: PrismaBatch
+
+    def queue_credit_reset(
+        self,
+        user_id: str,
+        budget_reset_at: datetime,
+        expected_reset_at: datetime | None,
+        closed_spend: float,
+        spend_decrement: float,
+        spend_after_reset: float,
+    ) -> None:
+        self.batch.execute_raw(
+            _USER_CREDIT_RESET_SQL,
+            user_id,
+            _reset_timestamp(budget_reset_at),
+            repr(spend_decrement),
+            _reset_timestamp(expected_reset_at),
+            str(4 * ulp(spend_decrement) if spend_after_reset == 0.0 else 0.0),
+            repr(closed_spend),
+        )
 
     def queue_spend_reset(
         self,
@@ -238,6 +285,9 @@ WHERE budget_id = ANY($1::text[]) AND spend > total_spend
 class TeamMembershipSpendResetWrites:
     resets: LinkedSpendResetWrites
     batch: PrismaBatch
+
+    def queue_credit_reset(self, budget_ids: Sequence[str], carry_overage: bool) -> None:
+        self.batch.execute_raw(_MEMBER_CREDIT_RESET_SQL, list(budget_ids), carry_overage)
 
     def queue_spend_zero(self, where: Mapping[str, object]) -> None:
         self.resets.queue_spend_zero(where)

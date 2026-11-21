@@ -46,6 +46,7 @@ from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.budget import active_rollover_credit
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -92,6 +93,7 @@ from litellm.proxy._types import (
     TeamListResponseObject,
     TeamMemberAddRequest,
     TeamMemberBudgetSource,
+    TeamMemberBudgetWrite,
     TeamMemberDeleteRequest,
     TeamMemberResetBudgetResponse,
     TeamMemberUpdateRequest,
@@ -727,6 +729,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_rollover_max_budget: float | None = None,
         team_member_model_max_budget: GenericBudgetConfigType | None = None,
     ) -> bool:
         """Check if any team member limits are provided"""
@@ -736,6 +739,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit is not None,
                 team_member_tpm_limit is not None,
                 team_member_budget_duration is not None,
+                team_member_rollover_max_budget is not None,
                 team_member_model_max_budget is not None,
             ]
         )
@@ -761,6 +765,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_rollover_max_budget: float | None = None,
         team_member_model_max_budget: GenericBudgetConfigType | None = None,
         user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
@@ -770,7 +775,6 @@ class TeamMemberBudgetHandler:
         The team's own reset period is only inherited when the caller left the
         member duration out, so an explicit null means "never resets".
         """
-        from litellm.proxy._types import BudgetNewRequest
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             new_budget,
         )
@@ -781,8 +785,9 @@ class TeamMemberBudgetHandler:
             budget_id = f"team-budget-{uuid.uuid4().hex}"
 
         # Create budget request with all provided limits
-        budget_request: Final = BudgetNewRequest(
+        budget_request: Final = TeamMemberBudgetWrite(
             budget_id=budget_id,
+            rollover_max_budget=team_member_rollover_max_budget,
             budget_duration=(
                 team_member_budget_duration
                 if "team_member_budget_duration" in explicitly_set_fields
@@ -829,6 +834,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_rollover_max_budget: float | None = None,
         team_member_model_max_budget: GenericBudgetConfigType | None = None,
         user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
@@ -838,7 +844,6 @@ class TeamMemberBudgetHandler:
         A field the caller explicitly sent as null is written as null, so a
         team can keep a member budget while dropping its reset period.
         """
-        from litellm.proxy._types import BudgetNewRequest
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             update_budget,
         )
@@ -849,7 +854,9 @@ class TeamMemberBudgetHandler:
         team_member_budget_id: Final = team_table.metadata.get("team_member_budget_id")
         if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
             # Budget exists - create update request with only provided values
-            budget_request: Final = BudgetNewRequest(budget_id=team_member_budget_id)
+            budget_request: Final = TeamMemberBudgetWrite(budget_id=team_member_budget_id)
+            if "team_member_rollover_max_budget" in explicitly_set_fields:
+                budget_request.rollover_max_budget = team_member_rollover_max_budget
 
             if team_member_budget is not None or "team_member_budget" in explicitly_set_fields:
                 budget_request.max_budget = team_member_budget
@@ -894,6 +901,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
+                team_member_rollover_max_budget=team_member_rollover_max_budget,
                 team_member_model_max_budget=team_member_model_max_budget,
                 user_api_key_cache=user_api_key_cache,
                 explicitly_set_fields=explicitly_set_fields,
@@ -908,6 +916,7 @@ class TeamMemberBudgetHandler:
         """Remove team member fields from data dictionary"""
         data_dict.pop("team_member_budget", None)
         data_dict.pop("team_member_budget_duration", None)
+        data_dict.pop("team_member_rollover_max_budget", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
         data_dict.pop(  # pyright: ignore[reportUnknownMemberType]  # legacy raw dict lacks key typing
@@ -925,7 +934,6 @@ class TeamMemberBudgetHandler:
         user_api_key_cache: UserApiKeyCache | None = None,
     ) -> dict:
         """Clear explicitly-nulled fields on the team member budget row."""
-        from litellm.proxy._types import BudgetNewRequest
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             update_budget,
         )
@@ -935,7 +943,9 @@ class TeamMemberBudgetHandler:
 
         team_member_budget_id: Final = team_table.metadata.get("team_member_budget_id")
         if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
-            budget_request: Final = BudgetNewRequest(budget_id=team_member_budget_id)
+            budget_request: Final = TeamMemberBudgetWrite(budget_id=team_member_budget_id)
+            if "team_member_rollover_max_budget" in explicitly_set_fields:
+                budget_request.rollover_max_budget = None
             if "team_member_budget" in explicitly_set_fields:
                 budget_request.max_budget = None
             if "team_member_budget_duration" in explicitly_set_fields:
@@ -2091,6 +2101,7 @@ async def new_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_rollover_max_budget=data.team_member_rollover_max_budget,
             team_member_model_max_budget=data.team_member_model_max_budget,
         ):
             data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
@@ -2101,6 +2112,7 @@ async def new_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_rollover_max_budget=data.team_member_rollover_max_budget,
                 team_member_model_max_budget=data.team_member_model_max_budget,
                 user_api_key_cache=user_api_key_cache,
                 explicitly_set_fields=data.model_fields_set,
@@ -2932,6 +2944,7 @@ async def update_team(
                 "team_member_rpm_limit",
                 "team_member_tpm_limit",
                 "team_member_budget_duration",
+                "team_member_rollover_max_budget",
                 "team_member_model_max_budget",
             ]
             if field in updated_kv
@@ -2971,6 +2984,7 @@ async def update_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_rollover_max_budget=data.team_member_rollover_max_budget,
             team_member_model_max_budget=data.team_member_model_max_budget,
         ):
             updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
@@ -2981,6 +2995,7 @@ async def update_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_rollover_max_budget=data.team_member_rollover_max_budget,
                 team_member_model_max_budget=data.team_member_model_max_budget,
                 user_api_key_cache=user_api_key_cache,
                 explicitly_set_fields=_team_member_fields_in_request,
@@ -3010,6 +3025,21 @@ async def update_team(
             )
         else:
             TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
+
+        if (
+            _team_member_fields_in_request
+            & {
+                "team_member_rollover_max_budget",
+                "team_member_budget",
+                "team_member_budget_duration",
+            }
+            and existing_team_row.members_with_roles
+        ):
+            await _evict_created_membership_caches(
+                user_ids=_member_user_ids(existing_team_row.members_with_roles),
+                team_id=data.team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         # Check object permission
         if data.object_permission is not None:
@@ -4668,7 +4698,10 @@ async def reset_team_member_budget_fn(
     )
     await _team_membership_db(prisma_client).update(
         where=membership_where,
-        data={"litellm_budget_table": budget_link},
+        data={
+            "litellm_budget_table": budget_link,
+            **({"rollover_credit": None} if membership_row.budget_id != team_default_budget_id else {}),
+        },
     )
     await invalidate_team_member_spend_state(
         user_id=user_id,
@@ -5731,6 +5764,7 @@ async def team_info(
                     MappingProxyType(
                         {
                             **tm.model_dump(),
+                            **tm.rollover_usage(get_utc_datetime()),
                             "budget_source": member_budget_source(tm.budget_id, active_default_budget_id),
                         }
                     )
@@ -5852,6 +5886,7 @@ async def team_member_me(
         )
 
     floored: Final = with_total_spend_floor(membership)
+    credit: Final = floored.active_rollover_credit()
     return TeamMemberInfoResponse(
         user_id=caller_user_id,
         team_id=team_id,
@@ -5862,6 +5897,8 @@ async def team_member_me(
         total_spend=floored.total_spend,
         budget_id=floored.budget_id,
         litellm_budget_table=floored.litellm_budget_table,
+        rollover_credit=credit,
+        effective_max_budget=floored.effective_budget_with_rollover(get_utc_datetime()) if credit is not None else None,
     )
 
 
@@ -6334,9 +6371,19 @@ def _team_list_caller_membership(
     budget_reset_at: Final = (
         member_budget_row.budget_reset_at if member_budget_row is not None and max_budget is not None else None
     )
+    rollover_credit: Final = (
+        active_rollover_credit(
+            member_budget_row.max_budget,
+            getattr(member_budget_row, "rollover_max_budget", None),
+            getattr(member_budget_row, "budget_duration", None),
+            getattr(membership_row, "rollover_credit", None),
+        )
+        if member_budget_row is not None
+        else None
+    )
     return TeamListCallerMembership(
         spend=(membership_row.spend if membership_row is not None else 0.0) or 0.0,
-        max_budget=max_budget,
+        max_budget=max_budget + (rollover_credit or 0.0) if max_budget is not None else None,
         budget_reset_at=budget_reset_at,
     )
 

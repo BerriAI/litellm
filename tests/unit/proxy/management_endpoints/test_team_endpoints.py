@@ -2905,6 +2905,7 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_rollover_max_budget=None,
             team_member_model_max_budget=None,
             user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
@@ -3483,6 +3484,7 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_rollover_max_budget=None,
             team_member_model_max_budget=None,
             user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
@@ -17450,7 +17452,7 @@ async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default
     assert response.budget_source == "team_default"
     mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
         where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
-        data={"litellm_budget_table": {"connect": {"budget_id": "team-default-b"}}},
+        data={"litellm_budget_table": {"connect": {"budget_id": "team-default-b"}}, "rollover_credit": None},
     )
     mock_prisma_client.db.litellm_budgettable.update.assert_not_awaited()
     assert await real_cache.async_get_cache(key="team-1_member-1") is None
@@ -17491,7 +17493,7 @@ async def test_reset_team_member_budget_fn_detaches_member_when_team_has_no_usab
     assert response.budget_source == "none"
     mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
         where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
-        data={"litellm_budget_table": {"disconnect": True}},
+        data={"litellm_budget_table": {"disconnect": True}, "rollover_credit": None},
     )
 
 

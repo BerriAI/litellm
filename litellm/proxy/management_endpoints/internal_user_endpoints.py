@@ -31,6 +31,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.models.budget import active_rollover_credit
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -658,6 +659,10 @@ async def new_user(
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
+        if data.rollover_max_budget is not None:
+            _require_valid_rollover(
+                data_json.get("max_budget"), data.rollover_max_budget, data_json.get("budget_duration")
+            )
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
@@ -1003,6 +1008,13 @@ def _build_user_info_response(
     _user_info: Final = user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
     if isinstance(_user_info, dict):
         _user_info.pop("password", None)
+        if _user_info.get("rollover_max_budget") is not None:
+            rollover_user: Final = LiteLLM_UserTable.model_validate(_user_info)
+            _user_info["rollover_credit"] = rollover_user.active_rollover_credit()
+            _user_info["effective_max_budget"] = rollover_user.effective_max_budget()
+        else:
+            _user_info.pop("rollover_max_budget", None)
+            _user_info.pop("rollover_credit", None)
         _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
         if model_max_budget_usage is not None:
             _user_info["model_max_budget_usage"] = model_max_budget_usage
@@ -1286,6 +1298,10 @@ async def user_info_v2(
             )
 
         user_data: Final = user_row.model_dump()
+        rollover_user: Final = (
+            LiteLLM_UserTable.model_validate(user_data) if user_data.get("rollover_max_budget") is not None else None
+        )
+        rollover_credit: Final = rollover_user.active_rollover_credit() if rollover_user is not None else None
 
         return UserInfoV2Response(
             user_id=user_data.get("user_id", user_id),
@@ -1294,6 +1310,13 @@ async def user_info_v2(
             user_role=user_data.get("user_role"),
             spend=user_data.get("spend", 0.0),
             max_budget=user_data.get("max_budget"),
+            rollover_max_budget=rollover_user.rollover_max_budget if rollover_user is not None else None,
+            rollover_credit=rollover_credit,
+            effective_max_budget=(
+                rollover_user.effective_max_budget()
+                if rollover_user is not None and rollover_credit is not None
+                else None
+            ),
             tpm_limit=user_data.get("tpm_limit"),
             rpm_limit=user_data.get("rpm_limit"),
             models=user_data.get("models") or [],
@@ -1457,12 +1480,20 @@ def _windows_by_user(
     )
 
 
+def _require_valid_rollover(base: float | None, cap: float, duration: str | None) -> None:
+    if active_rollover_credit(base, cap, duration, None) is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Budget rollover requires a reset period and a positive base budget below the rollover cap.",
+        )
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "budget_limits"):
+        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "budget_limits", "rollover_max_budget"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1485,6 +1516,9 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
 
     if "budget_limits" in non_default_values:
         non_default_values["budget_limits"] = budget_windows_json(data.budget_limits, stored=None)
+
+    if "rollover_max_budget" in non_default_values and data.rollover_max_budget is None:
+        non_default_values["rollover_credit"] = None
 
     is_internal_user = False
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
@@ -1716,6 +1750,17 @@ async def _update_single_user_helper(
                 user_request.budget_limits, stored=existing_user_row.budget_limits
             )
 
+    if user_request.rollover_max_budget is not None:
+        _require_valid_rollover(
+            user_request.max_budget
+            if "max_budget" in non_default_values
+            else getattr(existing_user_row, "max_budget", None),
+            user_request.rollover_max_budget,
+            user_request.budget_duration
+            if "budget_duration" in non_default_values
+            else getattr(existing_user_row, "budget_duration", None),
+        )
+
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
     # can_user_call_user_update() already restricts non-admins to self-updates,
@@ -1733,11 +1778,18 @@ async def _update_single_user_helper(
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
         _protected_fields: Final = (
             "max_budget",
+            "rollover_max_budget",
             "budget_limits",
             "model_max_budget",
             "soft_budget",
             "spend",
             "object_permission",
+            *(
+                ("budget_duration",)
+                if isinstance(existing_user_row, LiteLLM_UserTable)
+                and existing_user_row.rollover_max_budget is not None
+                else ()
+            ),
         )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
@@ -2194,6 +2246,17 @@ async def bulk_user_update(
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
                 locked_users: Final = await user_tx_db(transaction).find_many(order={"created_at": "desc"})
+                if data.user_updates.rollover_max_budget is not None:
+                    for stored_user in locked_users:
+                        _require_valid_rollover(
+                            data.user_updates.max_budget
+                            if "max_budget" in non_default_values
+                            else stored_user.max_budget,
+                            data.user_updates.rollover_max_budget,
+                            data.user_updates.budget_duration
+                            if "budget_duration" in non_default_values
+                            else stored_user.budget_duration,
+                        )
                 windows_by_user: Final[Mapping[str, str]] = (
                     _windows_by_user(locked_users, data.user_updates.budget_limits)
                     if "budget_limits" in non_default_values

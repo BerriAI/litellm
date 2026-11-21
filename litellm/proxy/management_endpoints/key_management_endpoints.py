@@ -5457,6 +5457,7 @@ async def generate_key_helper_fn(
     *,
     llm_router: Router | None = None,
     actor: UserAPIKeyAuth | None = None,
+    rollover_max_budget: float | None = None,
 ):
     customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -5551,6 +5552,8 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if request_type == "user" and rollover_max_budget is not None:
+            user_data["rollover_max_budget"] = rollover_max_budget
         if request_type == "user" and budget_limits_json is not None:
             user_data["budget_limits"] = budget_limits_json
         if model_max_budget:

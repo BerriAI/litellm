@@ -29,7 +29,12 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
-from litellm.models.budget import BudgetLimit, carry_budget_limit_resets, initialize_budget_limits
+from litellm.models.budget import (
+    BudgetLimit,
+    active_rollover_credit,
+    carry_budget_limit_resets,
+    initialize_budget_limits,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.customer_hierarchy_auth import (
     forget_customer_hierarchies,
@@ -88,23 +93,50 @@ def _stored_budget_limit(window: Mapping[str, object]) -> BudgetLimit | None:
         return None
 
 
+def _validate_member_rollover(budget: TeamMemberBudgetWrite) -> None:
+    if (
+        budget.rollover_max_budget is not None
+        and active_rollover_credit(budget.max_budget, budget.rollover_max_budget, budget.budget_duration, None) is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Member rollover requires a reset period and a positive member budget below the rollover cap.",
+        )
+
+
 async def _write_budget_update(
     prisma_client: PrismaClient,
     budget_id: str,
     data: Mapping[str, object],
     limits: tuple[BudgetLimit, ...] | None,
 ) -> "prisma_models.LiteLLM_BudgetTable | None":
-    if "budget_limits" not in data and "budget_duration" not in data:
+    if not data.keys() & {"budget_limits", "budget_duration", "rollover_max_budget"}:
         return await BudgetRepository(prisma_client).table.update(where={"budget_id": budget_id}, data=data)
     async with prisma_client.tx() as tx_ctx:
         tx: Final = cast("_BudgetUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
         current: Final = await lock_budget_limits(tx, "LiteLLM_BudgetTable", budget_id)
+        if "rollover_max_budget" in data and data["rollover_max_budget"] is None:
+            await tx.execute_raw(
+                'UPDATE "LiteLLM_TeamMembership" SET rollover_credit = NULL'
+                " WHERE budget_id = $1 AND rollover_credit IS NOT NULL",
+                budget_id,
+            )
         duration: Final = data.get("budget_duration")
         stored: Final = (
             await tx.litellm_budgettable.find_unique(where={"budget_id": budget_id})
-            if isinstance(duration, str) and "budget_reset_at" not in data
+            if (isinstance(duration, str) and "budget_reset_at" not in data) or "rollover_max_budget" in data
             else None
         )
+        if "rollover_max_budget" in data and data["rollover_max_budget"] is not None and stored is not None:
+            _validate_member_rollover(
+                TeamMemberBudgetWrite.model_validate(
+                    {
+                        "max_budget": data.get("max_budget", stored.max_budget),
+                        "budget_duration": data.get("budget_duration", stored.budget_duration),
+                        "rollover_max_budget": data["rollover_max_budget"],
+                    }
+                )
+            )
         reset_data: Final = (
             {"budget_reset_at": get_budget_reset_time(budget_duration=duration)}
             if isinstance(duration, str)
@@ -188,6 +220,8 @@ async def new_budget(
         )
 
     validate_budget_duration(budget_obj.budget_duration)
+    if isinstance(budget_obj, TeamMemberBudgetWrite):
+        _validate_member_rollover(budget_obj)
 
     # Validate model_max_budget if present
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:

@@ -340,23 +340,26 @@ export default function UserInfoView({
       );
 
       // Update local state with new values
-      setUserData({
-        ...userData,
-        user_email: formValues.user_email ?? userData.user_email,
-        user_alias: formValues.user_alias ?? userData.user_alias,
-        user_role: formValues.user_role ?? userData.user_role,
-        models: formValues.models ?? userData.models,
-        max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
-        tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
-        rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
-        budget_duration:
-          formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
-        metadata: formValues.metadata ?? userData.metadata,
-        model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
-        object_permission: objectPermission
-          ? { ...userData.object_permission, ...objectPermission }
-          : userData.object_permission,
-      });
+      if (formValues.rollover_max_budget !== undefined || userData.rollover_max_budget != null) {
+        setUserData(await userGetInfoV2(accessToken, userData.user_id));
+      } else
+        setUserData({
+          ...userData,
+          user_email: formValues.user_email ?? userData.user_email,
+          user_alias: formValues.user_alias ?? userData.user_alias,
+          user_role: formValues.user_role ?? userData.user_role,
+          models: formValues.models ?? userData.models,
+          max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+          tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
+          rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
+          budget_duration:
+            formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
+          metadata: formValues.metadata ?? userData.metadata,
+          model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
+          object_permission: objectPermission
+            ? { ...userData.object_permission, ...objectPermission }
+            : userData.object_permission,
+        });
 
       toast.success(t("users.userInfo.toasts.updated"));
       setIsEditing(false);
@@ -402,7 +405,8 @@ export default function UserInfoView({
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
   const unlimited = t("users.userInfo.unlimited");
-  const budgetLimit = userData.max_budget === null ? unlimited : `$${formatNumberWithCommas(userData.max_budget, 2)}`;
+  const effectiveBudget = userData.effective_max_budget ?? userData.max_budget;
+  const budgetLimit = effectiveBudget === null ? unlimited : `$${formatNumberWithCommas(effectiveBudget, 2)}`;
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -414,6 +418,7 @@ export default function UserInfoView({
       user_role: userData.user_role,
       models: userData.models,
       max_budget: userData.max_budget,
+      rollover_max_budget: userData.rollover_max_budget,
       tpm_limit: userData.tpm_limit,
       rpm_limit: userData.rpm_limit,
       budget_duration: userData.budget_duration,
@@ -534,7 +539,7 @@ export default function UserInfoView({
                 {t("users.userInfo.overview.spend")}
                 <BudgetPeriodTooltip
                   spend={userData.spend}
-                  maxBudget={userData.max_budget}
+                  maxBudget={effectiveBudget}
                   budgetDuration={userData.budget_duration}
                   budgetResetAt={userData.budget_reset_at}
                 />
@@ -542,6 +547,13 @@ export default function UserInfoView({
               <div className="mt-2">
                 <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
                 <p>{t("users.userInfo.overview.budgetOf", { budget: budgetLimit })}</p>
+                {userData.rollover_credit != null && (
+                  <p>
+                    {t("users.userInfo.overview.rolledOver", {
+                      amount: formatNumberWithCommas(userData.rollover_credit, 2),
+                    })}
+                  </p>
+                )}
               </div>
             </Card>
 

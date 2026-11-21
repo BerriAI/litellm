@@ -686,18 +686,19 @@ async def _get_budget_counters(
                 fallback_spend=0.0,
             )
         )
+    user_budget: Final = user_object.effective_max_budget() if user_object is not None else None
     if (
         (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
         and user_object.user_id is not None
-        and user_object.max_budget is not None
-        and user_object.max_budget > 0
+        and user_budget is not None
+        and user_budget > 0
     ):
         counters.append(
             _BudgetCounter(
                 counter_key=user_counter(user_object.user_id),
                 source_cache_key=user_object.user_id,
-                max_budget=float(user_object.max_budget),
+                max_budget=user_budget,
                 fallback_spend=float(user_object.spend or 0.0),
                 entity_type="User",
                 entity_id=user_object.user_id,
@@ -905,8 +906,8 @@ async def _get_team_member_budget_counter(
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)
     team_member_budget: float | None = None
-    if member_budget_row is not None and member_budget_row.max_budget is not None:
-        team_member_budget = member_budget_row.effective_max_budget(now=now)
+    if team_membership is not None and member_budget_row is not None and member_budget_row.max_budget is not None:
+        team_member_budget = team_membership.effective_budget_with_rollover(now=now)
     else:
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):

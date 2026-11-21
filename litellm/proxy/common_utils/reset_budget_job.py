@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.duration_parser import (
     normalize_budget_window_start,
     rolled_budget_window_start,
 )
+from litellm.models.budget import active_rollover_credit
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
@@ -60,6 +61,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_cache_key,
     project_cache_key,
     tag_cache_key,
+    team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.budget_window_spend_writer import (
     roll_window_spend_row,
@@ -515,6 +517,8 @@ class _BudgetCascade:
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    member_credit_budget_ids: tuple[str, ...] = ()
+    member_credit_cache_keys: tuple[str, ...] = ()
     windows: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     customer_ids: Mapping[CustomerSpendEntity, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
     customer_org_alias_keys: tuple[str, ...] = ()
@@ -1105,6 +1109,16 @@ class ResetBudgetJob:
             if _rollover_enabled()
             else {}
         )
+        member_credit_budget_ids: Final = tuple(
+            b.budget_id
+            for b in budgets_to_reset
+            if b.budget_id is not None
+            and b.budget_id in windows
+            and b.budget_duration
+            and active_rollover_credit(b.max_budget, getattr(b, "rollover_max_budget", None), b.budget_duration, None)
+            is not None
+        )
+        member_credit_budget_id_set: Final = frozenset(member_credit_budget_ids)
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
             budget_ids=budget_ids,
@@ -1136,6 +1150,16 @@ class ResetBudgetJob:
                 *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
             ),
             rollover_caps=rollover_caps,
+            member_credit_budget_ids=member_credit_budget_ids,
+            member_credit_cache_keys=tuple(
+                key
+                for row in team_memberships
+                if row.budget_id in member_credit_budget_id_set
+                for key in (
+                    *_team_membership_cache_keys(row),
+                    team_membership_reservation_cache_key(user_id=row.user_id, team_id=row.team_id),
+                )
+            ),
             windows=windows,
             customer_ids=MappingProxyType({"org": tuple(row.customer_org_id for row in customer_orgs)}),
             customer_org_alias_keys=tuple(
@@ -1301,7 +1325,22 @@ class ResetBudgetJob:
             uow.row_locks.queue_row_locks(cascade.budget_ids)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
             uow.team_memberships.queue_total_spend_repair(cascade.budget_ids)
-            _queue_budget_linked_resets(uow.team_memberships, cascade)
+            if cascade.member_credit_budget_ids:
+                uow.team_memberships.queue_credit_reset(cascade.member_credit_budget_ids, _rollover_enabled())
+            _queue_budget_linked_resets(
+                uow.team_memberships,
+                replace(
+                    cascade,
+                    budget_ids=tuple(bid for bid in cascade.budget_ids if bid not in cascade.member_credit_budget_ids),
+                    rollover_caps=MappingProxyType(
+                        {
+                            bid: cap
+                            for bid, cap in cascade.rollover_caps.items()
+                            if bid not in cascade.member_credit_budget_ids
+                        }
+                    ),
+                ),
+            )
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
@@ -1319,7 +1358,7 @@ class ResetBudgetJob:
             counter_keys=tuple(counter_key for counter_key, _ in cascade.counter_resets),
             cache_keys=cascade.cache_keys,
         )
-        await self._evict_on_every_worker(cascade.customer_org_alias_keys)
+        await self._evict_on_every_worker((*cascade.customer_org_alias_keys, *cascade.member_credit_cache_keys))
         for entity, identities in cascade.customer_ids.items():
             if not identities:
                 continue
@@ -1471,6 +1510,20 @@ class ResetBudgetJob:
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
             for u in updated_users:
+                if (
+                    isinstance(u.row, LiteLLM_UserTable)
+                    and u.row.active_rollover_credit() is not None
+                    and u.row.budget_reset_at is not None
+                ):
+                    uow.users.queue_credit_reset(
+                        user_id=u.row.user_id,
+                        budget_reset_at=u.row.budget_reset_at,
+                        expected_reset_at=u.expected_reset_at,
+                        closed_spend=u.spend_decrement + u.row.spend,
+                        spend_decrement=u.spend_decrement,
+                        spend_after_reset=u.row.spend,
+                    )
+                    continue
                 uow.users.queue_spend_reset(
                     user_id=u.row.user_id,
                     budget_reset_at=u.row.budget_reset_at,
@@ -1671,12 +1724,18 @@ class ResetBudgetJob:
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
+                        reset_user: Final = (
+                            LiteLLM_UserTable.model_validate(user.model_dump())
+                            if getattr(user, "rollover_max_budget", None) is not None
+                            and not isinstance(user, LiteLLM_UserTable)
+                            else user
+                        )
                         pre_reset_spend, expected_reset_at = (
-                            float(user.spend or 0.0),
-                            user.budget_reset_at,
+                            float(reset_user.spend or 0.0),
+                            reset_user.budget_reset_at,
                         )
                         updated_user = await ResetBudgetJob._reset_budget_for_user(
-                            user=user,
+                            user=reset_user,
                             current_time=now,
                             reset_settings=self.reset_settings,
                         )
@@ -1708,6 +1767,13 @@ class ResetBudgetJob:
                             await self._invalidate_spend_counter(user_counter(str(user_id)))
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
                             await self._invalidate_global_proxy_spend_cache()
+                    await self._evict_on_every_worker(
+                        tuple(
+                            u.row.user_id
+                            for u in updated_users
+                            if isinstance(u.row, LiteLLM_UserTable) and u.row.active_rollover_credit() is not None
+                        )
+                    )
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
@@ -2185,7 +2251,11 @@ class ResetBudgetJob:
         still holds the pre-reset value, admitting requests past the cap.
         """
         try:
-            item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
+            if _rollover_enabled():
+                budget: Final = item.effective_max_budget() if isinstance(item, LiteLLM_UserTable) else item.max_budget
+                item.spend = _carried_spend(item.spend, _rollover_cap(budget))
+            else:
+                item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 item.budget_reset_at = compute_budget_reset_at(
                     budget_duration=item.budget_duration,

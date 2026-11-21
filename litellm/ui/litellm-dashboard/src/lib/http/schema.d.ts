@@ -30821,6 +30821,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -37580,6 +37582,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -37627,6 +37631,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -39317,6 +39323,8 @@ export interface components {
             budget_id?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -39538,6 +39546,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -39637,6 +39649,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -42687,6 +42703,8 @@ export interface components {
             organization_alias: string;
             /** Organization Id */
             organization_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -42810,6 +42828,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -43019,6 +43039,8 @@ export interface components {
             } | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -43125,6 +43147,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -43298,6 +43322,8 @@ export interface components {
             project_id?: string | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
@@ -44592,6 +44618,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -51765,10 +51793,14 @@ export interface components {
         TeamMemberInfoResponse: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role?: string | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -51797,10 +51829,14 @@ export interface components {
              * @enum {string}
              */
             budget_source: "team_default" | "custom" | "none";
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role: string;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -53860,6 +53896,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id: string;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -54107,6 +54145,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -54216,6 +54256,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -54322,6 +54364,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -55105,6 +55149,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Metadata */
@@ -55127,6 +55173,10 @@ export interface components {
              */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
