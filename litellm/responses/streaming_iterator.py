@@ -1645,6 +1645,17 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return None
 
 
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
+    {
+        "function_call",
+        "custom_tool_call",
+        "mcp_approval_request",
+        "computer_call",
+        "local_shell_call",
+        "shell_call",
+        "apply_patch_call",
+    }
+)
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
@@ -2826,8 +2837,7 @@ class ManagedResponsesWebSocketHandler:
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
-        API message dicts suitable for the next turn's ``input``, keeping every item a later turn can answer by
-        ``call_id``.
+        API message dicts suitable for the next turn's ``input``, keeping every item a later turn can answer.
         """
         resp_obj: Final = completed_event.get("response", {})
         if not _is_json_object(resp_obj):
@@ -2855,7 +2865,9 @@ class ManagedResponsesWebSocketHandler:
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
-            elif isinstance(item.get("call_id"), str):
+            elif (isinstance(item_type, str) and item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES) or isinstance(
+                item.get("call_id"), str
+            ):
                 messages.append(item)
         return messages
 
