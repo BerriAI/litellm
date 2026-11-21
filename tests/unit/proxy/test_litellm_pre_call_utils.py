@@ -9481,6 +9481,24 @@ def test_newrelic_vars_scoped_to_newrelic_callback_entry():
     assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}
 
 
+def test_convert_key_logging_metadata_to_callback_drops_generic_logger_endpoint() -> None:
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    result: Final = convert_key_logging_metadata_to_callback(
+        AddTeamCallback.model_construct(
+            callback_name="generic_api",
+            callback_type="success",
+            callback_vars={
+                "GENERIC_LOGGER_ENDPOINT": "http://169.254.169.254/latest/meta-data/",
+                "posthog_api_key": "valid_val",
+            },
+        ),
+        None,
+    )
+    assert result.callback_vars == {"posthog_api_key": "valid_val"}
+
+
 def _reserved_stamp_request(path: str) -> MagicMock:
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()
@@ -12132,7 +12150,10 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_served_model
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)

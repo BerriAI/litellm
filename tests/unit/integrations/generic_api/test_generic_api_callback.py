@@ -38,9 +38,19 @@ async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
 
 
 @pytest.fixture(autouse=True)
-def set_verbose_logger_level() -> Iterator[None]:
+def set_verbose_logger_level(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    import socket
+
     original_level = verbose_logger.level
     verbose_logger.setLevel(logging.DEBUG)
+    orig_getaddrinfo: Final = socket.getaddrinfo
+
+    def patched_getaddrinfo(host, port, *args, **kwargs):
+        if host == "owned-logger.invalid":
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port or 443))]
+        return orig_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", patched_getaddrinfo)
     yield
     verbose_logger.setLevel(original_level)
 
@@ -1169,3 +1179,166 @@ async def test_queued_logs_go_to_the_replacement_only_when_it_accepts_every_even
         replacement.shutdown()
         await replacement._flush_task
         await handler.close()
+
+
+def test_generic_api_logger_rejects_ssrf_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="GenericAPILogger endpoint blocked by SSRF guard"):
+        GenericAPILogger.resolve_endpoint("http://169.254.169.254/latest/meta-data/")
+
+    with pytest.raises(ValueError, match="GenericAPILogger endpoint blocked by SSRF guard"):
+        GenericAPILogger.resolve_endpoint("http://127.0.0.1:8200/v1/sys")
+
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    allowed: Final = GenericAPILogger.resolve_endpoint("http://127.0.0.1:8200/v1/sys")
+    assert allowed == "http://127.0.0.1:8200/v1/sys"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_blocks_redirect_to_private_ip() -> None:
+    from litellm.litellm_core_utils.url_utils import SSRFError
+
+    async def redirect_to_metadata(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(307, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(redirect_to_metadata))
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    with pytest.raises(SSRFError):
+        await logger._send_single_post("https://owned-logger.invalid", "{}")
+    await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_strips_credentials_on_cross_origin_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.host == "192.0.2.1":
+            return httpx.Response(307, headers={"Location": "https://198.51.100.1/logs"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1", "198.51.100.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/logs",
+        headers={
+            "Authorization": "Bearer secret-token",
+            "Cookie": "session=123",
+            "X-Tracking-ID": "audit-456",
+        },
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/logs", "{}")
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    first_req: Final = captured_requests[0]
+    second_req: Final = captured_requests[1]
+    assert first_req.headers.get("Authorization") == "Bearer secret-token"
+    assert first_req.headers.get("Cookie") == "session=123"
+    assert second_req.headers.get("Authorization") is None
+    assert second_req.headers.get("Cookie") is None
+    assert second_req.headers.get("X-Tracking-ID") == "audit-456"
+    await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_preserves_credentials_on_same_origin_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.path == "/v1/logs":
+            return httpx.Response(307, headers={"Location": "https://192.0.2.1/v2/logs"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/v1/logs",
+        headers={
+            "Authorization": "Bearer secret-token",
+            "Cookie": "session=123",
+        },
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/v1/logs", "{}")
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    second_req: Final = captured_requests[1]
+    assert second_req.headers.get("Authorization") == "Bearer secret-token"
+    assert second_req.headers.get("Cookie") == "session=123"
+    await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_switches_to_get_without_body_on_303_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.path == "/v1/logs":
+            return httpx.Response(303, headers={"Location": "https://192.0.2.1/confirmation"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/v1/logs",
+        headers={"Content-Type": "application/json"},
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/v1/logs", '{"sensitive": "data"}')
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    first_req: Final = captured_requests[0]
+    second_req: Final = captured_requests[1]
+    assert first_req.method == "POST"
+    assert first_req.content == b'{"sensitive": "data"}'
+    assert second_req.method == "GET"
+    assert second_req.content == b""
+    assert second_req.headers.get("Content-Type") is None
+    await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_logger_post_preserves_body_on_308_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []  # mutable-ok: records mock requests
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.path == "/v1/logs":
+            return httpx.Response(308, headers={"Location": "https://192.0.2.1/v2/logs"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["192.0.2.1"])
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    logger: Final = GenericAPILogger(
+        endpoint="https://192.0.2.1/v1/logs",
+        headers={"Content-Type": "application/json"},
+        async_httpx_client=handler,
+        flush_interval=3600,
+    )
+    response: Final = await logger._send_single_post("https://192.0.2.1/v1/logs", '{"sensitive": "data"}')
+    assert response.status_code == 200
+    assert len(captured_requests) == 2
+    first_req: Final = captured_requests[0]
+    second_req: Final = captured_requests[1]
+    assert first_req.method == "POST"
+    assert second_req.method == "POST"
+    assert second_req.content == b'{"sensitive": "data"}'
+    await handler.close()
