@@ -22,6 +22,7 @@ from litellm.exceptions import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -33,8 +34,6 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
-
-from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
 
 from .continuation import (
     client_continuation_token,

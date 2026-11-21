@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from itertools import chain
 from typing import Final, TypeAlias
 
 from pydantic import JsonValue
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.env_utils import get_env_int_or_none
+from litellm.llms.vertex_ai.gemini.long_decode import DEFAULT_OUTPUT_BUDGET_ENV
 
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
 
@@ -36,6 +38,23 @@ def resumable_body(
     if resends_input or not resumes_stored_turn:
         return dict(request_body)
     return {key: value for key, value in request_body.items() if key != "input"}
+
+
+def with_default_output_budget(
+    request_body: Mapping[str, object], model_max_output_tokens: Callable[[], int | None]
+) -> Mapping[str, object]:
+    budget: Final = get_env_int_or_none(DEFAULT_OUTPUT_BUDGET_ENV)
+    generation_config: Final = request_body.get("generation_config", {})
+    if budget is None or budget <= 0 or not isinstance(generation_config, Mapping):
+        return request_body
+    if "max_output_tokens" in generation_config or request_body.get("continuation_token"):
+        return request_body
+    if request_body.get("response_modalities") not in (None, ["text"], ["TEXT"]):
+        return request_body
+    model_max: Final = model_max_output_tokens()
+    if model_max is None:
+        return request_body
+    return {**request_body, "generation_config": {**generation_config, "max_output_tokens": min(budget, model_max)}}
 
 
 def continuation_cap_of(request_body: Mapping[str, object]) -> int | None:

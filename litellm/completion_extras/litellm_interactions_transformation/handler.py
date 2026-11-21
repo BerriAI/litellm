@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import contextlib
 import re
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from types import MappingProxyType
 from typing import Final, NoReturn, Protocol, TypeAlias, runtime_checkable
 
@@ -33,6 +34,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
+from litellm.llms.vertex_ai.gemini.transformation import text_chat_model_max_output_tokens
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ModelResponse, Usage
 
@@ -45,6 +47,7 @@ from .continuation import (
     output_tokens_of,
     resends_input_on_resume,
     resumable_body,
+    with_default_output_budget,
 )
 from .request_transformation import MediaFetcher, transform_chat_to_interactions_request
 from .response_transformation import transform_interactions_response_to_chat_response
@@ -84,6 +87,18 @@ class _PreparedWireCall:
     body: dict[str, object]  # mutable-ok: JSON request body passed to HTTPHandler.post
     is_stream: bool
     stream_options: dict[str, object] | None  # mutable-ok: CustomStreamWrapper stream_options contract
+    renewed_headers: Callable[[], dict[str, str]]  # mutable-ok: httpx headers dict contract
+
+
+class _CredentialRenewalError(ValueError):
+    pass
+
+
+def _hop_wire(wire: _PreparedWireCall, hop_body: dict[str, object]) -> _PreparedWireCall:  # mutable-ok: JSON body
+    try:
+        return replace(wire, body=hop_body, headers=wire.renewed_headers())
+    except Exception as error:  # noqa: BLE001  # any credential failure ends the chain with the answer so far
+        raise _CredentialRenewalError(str(error)) from error
 
 
 def _resolve_stream_flag(
@@ -512,13 +527,17 @@ class InteractionsToCompletionBridgeHandler:
             **_str_headers(optional_params.get("extra_headers")),
             **_str_headers(headers),
         }
-        validated_headers: Final = _str_headers(
-            interactions_config.validate_environment(  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # BaseInteractionsAPIConfig uses bare dict
-                headers=merged_headers,
-                model=model,
-                litellm_params=generic_params,
+
+        def validated() -> dict[str, str]:  # mutable-ok: httpx headers dict contract
+            return _str_headers(
+                interactions_config.validate_environment(  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # BaseInteractionsAPIConfig uses bare dict
+                    headers=dict(merged_headers),
+                    model=model,
+                    litellm_params=generic_params,
+                )
             )
-        )
+
+        validated_headers: Final = validated()
         interactions_base: Final = _without_vertex_model_path(generic_params.api_base or api_base)
         complete_url: Final = interactions_config.get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # BaseInteractionsAPIConfig uses bare dict
             api_base=interactions_base,
@@ -554,11 +573,20 @@ class InteractionsToCompletionBridgeHandler:
             url=complete_url,
             headers=validated_headers,
             body=resumable_body(
-                {str(k): v for k, v in raw_body.items()},
+                with_default_output_budget(
+                    {str(k): v for k, v in raw_body.items()},
+                    partial(
+                        text_chat_model_max_output_tokens,
+                        model,
+                        custom_llm_provider,
+                        (litellm_params or {}).get("model_info"),
+                    ),
+                ),
                 resends_input=resends_input_on_resume(custom_llm_provider),
             ),
             is_stream=is_stream,
             stream_options=_extract_stream_options(optional_params),
+            renewed_headers=validated,
         )
 
     def completion(
@@ -682,7 +710,7 @@ class InteractionsToCompletionBridgeHandler:
                 open_sync_hop=lambda hop_body: _checked_hop_response(
                     _send_sync_request(
                         client,
-                        wire=replace(wire, body=hop_body),
+                        wire=_hop_wire(wire, hop_body),
                         timeout=timeout,
                         ssl_verify=llm_map.get("ssl_verify"),
                     ),
@@ -724,7 +752,7 @@ class InteractionsToCompletionBridgeHandler:
                 hop_response = _checked_hop_response(
                     _send_sync_request(
                         client,
-                        wire=replace(wire, body=hop_body),
+                        wire=_hop_wire(wire, hop_body),
                         timeout=timeout,
                         ssl_verify=llm_map.get("ssl_verify"),
                     ),
@@ -842,7 +870,7 @@ class InteractionsToCompletionBridgeHandler:
                 return await _checked_async_hop_response(
                     await _send_async_request(
                         client,
-                        wire=replace(wire, body=hop_body),
+                        wire=_hop_wire(wire, hop_body),
                         timeout=timeout,
                         custom_llm_provider=custom_llm_provider,
                         ssl_verify=llm_map.get("ssl_verify"),
@@ -893,7 +921,7 @@ class InteractionsToCompletionBridgeHandler:
                 hop_response = await _checked_async_hop_response(
                     await _send_async_request(
                         client,
-                        wire=replace(wire, body=hop_body),
+                        wire=_hop_wire(wire, hop_body),
                         timeout=timeout,
                         custom_llm_provider=custom_llm_provider,
                         ssl_verify=llm_map.get("ssl_verify"),
