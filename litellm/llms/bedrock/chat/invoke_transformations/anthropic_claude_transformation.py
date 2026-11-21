@@ -554,4 +554,5 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if trace is not None:
             setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)
             logging_obj.record_native_bedrock_guardrail(response)
+        response.model = BedrockModelInfo.get_base_model(model)
         return response
