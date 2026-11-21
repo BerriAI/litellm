@@ -10,7 +10,7 @@ import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import request_timeout
-from litellm.exceptions import APIConnectionError, PermissionDeniedError
+from litellm.exceptions import APIConnectionError, PermissionDeniedError, Timeout
 from litellm.interactions.utils import get_provider_interactions_api_config
 from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,  # pyright: ignore[reportUnknownVariableType]  # upstream helper uses bare dict
@@ -32,13 +32,16 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
+from litellm.types.utils import LlmProviders, ModelResponse, Usage
 
 from .continuation import (
     JsonMapping,
+    initial_input_tokens_of,
     log_failed_hop,
     merge_hops,
     next_hop_body,
+    output_tokens_of,
     resends_input_on_resume,
     resumable_body,
 )
@@ -429,7 +432,13 @@ async def _send_async_request(
     return pooled_resp
 
 
-_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError)
+_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError, Timeout)
+
+
+def _mark_initial_prompt_tokens(result: ModelResponse, hops: Sequence[JsonMapping]) -> None:
+    usage: Final = getattr(result, "usage", None)
+    if isinstance(usage, Usage):
+        setattr(result, "usage", with_initial_prompt_tokens(usage, initial_input_tokens_of(hops)))  # noqa: B010  # ModelResponse sets usage dynamically
 
 
 def _interaction_of(response: httpx.Response) -> JsonMapping:
@@ -691,7 +700,10 @@ class InteractionsToCompletionBridgeHandler:
         hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
         while (
             hop_body := next_hop_body(
-                wire.body, hops[-1], len(hops) - 1, resends_input=resends_input_on_resume(custom_llm_provider)
+                wire.body,
+                hops[-1],
+                sum(map(output_tokens_of, hops[:-1])),
+                resends_input=resends_input_on_resume(custom_llm_provider),
             )
         ) is not None:
             try:
@@ -713,6 +725,7 @@ class InteractionsToCompletionBridgeHandler:
             model=model,
             model_response=model_response,
         )
+        _mark_initial_prompt_tokens(result, hops)
         _attach_response_metadata(result, raw_response, wire.url)
         return result
 
@@ -856,7 +869,10 @@ class InteractionsToCompletionBridgeHandler:
         hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
         while (
             hop_body := next_hop_body(
-                wire.body, hops[-1], len(hops) - 1, resends_input=resends_input_on_resume(custom_llm_provider)
+                wire.body,
+                hops[-1],
+                sum(map(output_tokens_of, hops[:-1])),
+                resends_input=resends_input_on_resume(custom_llm_provider),
             )
         ) is not None:
             try:
@@ -879,6 +895,7 @@ class InteractionsToCompletionBridgeHandler:
             model=model,
             model_response=model_response,
         )
+        _mark_initial_prompt_tokens(result, hops)
         _attach_response_metadata(result, raw_response, wire.url)
         return result
 

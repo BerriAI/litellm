@@ -80,7 +80,12 @@ def test_unary_bridge_resends_with_the_continuation_token_until_the_answer_compl
     )
     with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
         response: Final = litellm.completion(
-            model=MODEL, messages=list(MESSAGES), api_key="k", api_base=API_BASE, client=HTTPHandler(client=raw_client)
+            model=MODEL,
+            messages=list(MESSAGES),
+            max_tokens=1000,
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
         )
 
     choice, token = _message_of(response)
@@ -110,7 +115,7 @@ async def test_async_unary_bridge_returns_the_partial_answer_and_token_when_a_ho
         handler: Final = AsyncHTTPHandler()
         handler.client = raw_client
         response: Final = await litellm.acompletion(
-            model=MODEL, messages=list(MESSAGES), api_key="k", api_base=API_BASE, client=handler
+            model=MODEL, messages=list(MESSAGES), max_tokens=1000, api_key="k", api_base=API_BASE, client=handler
         )
 
     choice, token = _message_of(response)
@@ -139,6 +144,7 @@ def test_caller_continuation_token_is_forwarded_to_interactions() -> None:
     with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
         _ = litellm.completion(
             model=MODEL,
+            max_tokens=1000,
             messages=list(MESSAGES),
             continuation_token="tok-cap",
             api_key="k",
@@ -176,6 +182,7 @@ def test_streaming_bridge_continues_into_the_next_hop_as_one_stream() -> None:
     with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
         stream: Final = litellm.completion(
             model=MODEL,
+            max_tokens=1000,
             messages=list(MESSAGES),
             stream=True,
             stream_options={"include_usage": True},
@@ -202,6 +209,7 @@ def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_fails() -> N
     with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
         stream: Final = litellm.completion(
             model=MODEL,
+            max_tokens=1000,
             messages=list(MESSAGES),
             stream=True,
             api_key="k",
@@ -236,6 +244,7 @@ def test_vertex_resume_of_a_stored_turn_sends_no_input_because_the_previous_inte
     with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
         response: Final = litellm.completion(
             model="vertex_ai/gemini-4-neon",
+            max_tokens=1000,
             messages=list(MESSAGES),
             vertex_project="unit-project",
             vertex_location="global",

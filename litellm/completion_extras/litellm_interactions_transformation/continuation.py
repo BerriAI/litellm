@@ -12,7 +12,6 @@ JsonMapping: TypeAlias = Mapping[str, JsonValue]
 
 HOP_END_STATUS: Final = "requires_continuation"
 CUT_OFF_STATUSES: Final = frozenset({"incomplete", HOP_END_STATUS})
-MAX_CONTINUATION_HOPS: Final = 32
 
 
 def _token_of(interaction: JsonMapping) -> str | None:
@@ -39,11 +38,35 @@ def resumable_body(
     return {key: value for key, value in request_body.items() if key != "input"}
 
 
+def continuation_cap_of(request_body: Mapping[str, object]) -> int | None:
+    generation_config: Final = request_body.get("generation_config")
+    cap: Final = generation_config.get("max_output_tokens") if isinstance(generation_config, Mapping) else None
+    return cap if isinstance(cap, int) else None
+
+
+def output_tokens_of(interaction: JsonMapping) -> int:
+    usage: Final = interaction.get("usage")
+    counts: Final = (
+        tuple(usage.get(key) for key in ("total_output_tokens", "total_thought_tokens"))
+        if isinstance(usage, dict)
+        else ()
+    )
+    return sum(count for count in counts if isinstance(count, int) and not isinstance(count, bool))
+
+
 def next_hop_body(
-    request_body: Mapping[str, object], interaction: JsonMapping, hops_so_far: int, *, resends_input: bool
+    request_body: Mapping[str, object],
+    interaction: JsonMapping,
+    produced_before: int,
+    *,
+    resends_input: bool,
 ) -> dict[str, object] | None:  # mutable-ok: JSON request body passed to HTTPHandler.post
     token: Final = _token_of(interaction)
-    if interaction.get("status") != HOP_END_STATUS or token is None or hops_so_far >= MAX_CONTINUATION_HOPS:
+    output_cap: Final = continuation_cap_of(request_body)
+    hop_tokens: Final = output_tokens_of(interaction)
+    if interaction.get("status") != HOP_END_STATUS or token is None or output_cap is None:
+        return None
+    if hop_tokens <= 0 or produced_before + hop_tokens >= output_cap:
         return None
     interaction_id: Final = interaction.get("id")
     return resumable_body(
@@ -87,7 +110,15 @@ def merge_hops(hops: Sequence[JsonMapping]) -> JsonMapping:
         return last
     hop_steps: Final = tuple(hop.get("steps") for hop in hops)
     steps: Final = list(chain.from_iterable(steps for steps in hop_steps if isinstance(steps, list)))
-    return {**last, "steps": steps, "usage": merge_hop_usage(tuple(hop.get("usage") for hop in hops))}
+    merged: Final = {**last, "steps": steps, "usage": merge_hop_usage(tuple(hop.get("usage") for hop in hops))}
+    first_id: Final = hops[0].get("id")
+    return {**merged, "id": first_id} if first_id else merged
+
+
+def initial_input_tokens_of(hops: Sequence[JsonMapping]) -> int | None:
+    first_usage: Final = hops[0].get("usage")
+    count: Final = first_usage.get("total_input_tokens") if isinstance(first_usage, dict) else None
+    return count if len(hops) > 1 and isinstance(count, int) else None
 
 
 def log_failed_hop(error: Exception | str) -> None:

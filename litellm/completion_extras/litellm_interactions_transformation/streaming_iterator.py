@@ -33,11 +33,15 @@ from litellm.types.utils import (
     Usage,
 )
 
+from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
+
 from .continuation import (
     client_continuation_token,
+    initial_input_tokens_of,
     log_failed_hop,
     merge_hop_usage,
     next_hop_body,
+    output_tokens_of,
     resends_input_on_resume,
 )
 from .response_transformation import (
@@ -480,7 +484,7 @@ class InteractionsChatStreamingIterator:
         raw_interaction: Final = event.get("interaction")
         interaction_map: Final = raw_interaction if isinstance(raw_interaction, dict) else _EMPTY_JSON_MAP
         maybe_id: Final = interaction_map.get("id") or event.get("id")
-        if isinstance(maybe_id, str) and maybe_id:
+        if isinstance(maybe_id, str) and maybe_id and not self._hop_usages:
             self._stream_id = maybe_id
 
         raw_status: Final = interaction_map.get("status") or event.get("status")
@@ -504,7 +508,7 @@ class InteractionsChatStreamingIterator:
             hop_body: Final = next_hop_body(
                 self._request_body,
                 interaction_map,
-                len(self._hop_usages) - 1,
+                sum(output_tokens_of({"usage": usage}) for usage in self._hop_usages[:-1]),
                 resends_input=resends_input_on_resume(self._custom_llm_provider),
             )
             if hop_body is not None:
@@ -520,7 +524,12 @@ class InteractionsChatStreamingIterator:
             if continuation_token is not None
             else Delta(),
             finish_reason=finish_reason,
-            usage=transform_interactions_usage(raw_usage) if raw_usage is not None else None,
+            usage=with_initial_prompt_tokens(
+                transform_interactions_usage(raw_usage),
+                initial_input_tokens_of(tuple({"usage": usage} for usage in self._hop_usages)),
+            )
+            if raw_usage is not None
+            else None,
         )
 
     def _take_pending_hop(self) -> HopBody | None:
@@ -563,7 +572,7 @@ class InteractionsChatStreamingIterator:
     def _adopt_stream_id(self, event: JsonMapping) -> None:
         raw_inter: Final = event.get("interaction")
         created_id: Final = raw_inter.get("id") if isinstance(raw_inter, dict) else event.get("id")
-        if isinstance(created_id, str) and created_id:
+        if isinstance(created_id, str) and created_id and not self._hop_usages:
             self._stream_id = created_id
 
     def _raise_on_failed_status_update(self, event: JsonMapping) -> None:
