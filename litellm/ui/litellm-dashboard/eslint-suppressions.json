@@ -830,7 +830,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 10
+      "count": 8
     },
     "react-hooks/immutability": {
       "count": 1

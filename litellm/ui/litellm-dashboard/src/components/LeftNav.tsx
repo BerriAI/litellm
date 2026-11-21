@@ -74,7 +74,8 @@ import { usePluginMode } from "@/contexts/PluginModeContext";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { type MouseEvent, useMemo, useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { productNames } from "@/i18n/untranslated/productNames";
 import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
@@ -110,7 +111,8 @@ export interface MenuItem {
   key: string;
   page: string;
   route?: string;
-  label: string | React.ReactNode;
+  label: React.ReactNode;
+  untranslatedLabel?: string;
   roles?: string[];
   children?: MenuItem[];
   icon?: React.ReactNode;
@@ -260,7 +262,8 @@ const menuGroups: MenuGroup[] = [
         key: "llm-playground",
         page: "llm-playground",
         route: "playground",
-        label: "shell.nav.items.playground",
+        label: null,
+        untranslatedLabel: productNames.playground,
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
       },
@@ -377,9 +380,10 @@ const menuGroups: MenuGroup[] = [
         page: "lens",
         label: (
           <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.lens" /> <BetaBadge />
+            {productNames.lens} <BetaBadge />
           </span>
         ),
+        untranslatedLabel: productNames.lens,
         icon: <Aperture {...ICON} />,
       },
       {
@@ -464,7 +468,8 @@ const menuGroups: MenuGroup[] = [
           {
             key: "transform-request",
             page: "transform-request",
-            label: "shell.nav.items.apiPlayground",
+            label: null,
+            untranslatedLabel: productNames.apiPlayground,
             icon: <Terminal {...ICON} />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
@@ -600,7 +605,7 @@ const prettify = (key: string): string =>
     .join(" ");
 
 export const labelText = (item: MenuItem): string =>
-  typeof item.label === "string" ? i18n.t(item.label as ParseKeys) : prettify(item.key);
+  item.untranslatedLabel ?? (typeof item.label === "string" ? i18n.t(item.label as ParseKeys) : prettify(item.key));
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
@@ -633,7 +638,8 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const { mode: pluginMode } = usePluginMode();
   const { t } = useTranslation();
   const term = useTerminology();
-  const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(labelText(item)) : item.label);
+  const labelOf = (item: MenuItem) =>
+    typeof item.label === "string" || item.label == null ? term(labelText(item)) : item.label;
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const logout = useLogout(accessToken);
