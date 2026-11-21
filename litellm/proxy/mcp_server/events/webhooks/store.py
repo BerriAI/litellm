@@ -172,7 +172,9 @@ class PrismaEventStore:
             )
             if value is not None
         }
-        records: Final = await self._subscriptions.find_many(where=where, take=query.limit, order={"created_at": "desc"})
+        records: Final = await self._subscriptions.find_many(
+            where=where, take=query.limit, order={"created_at": "desc"}
+        )
         return tuple(_row_from_record(record) for record in records)
 
     async def due_for_upstream_refresh(self, before: datetime) -> tuple[SubscriptionRow, ...]:

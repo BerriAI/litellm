@@ -68,7 +68,9 @@ async def authorize_row(row: SubscriptionRow, load: StoredCaller = stored_caller
     if caller is None:
         return None
     context: Final = OperationContext(_caller=caller)
-    server: Final = next((item for item in event_servers(await allowed_servers(context)) if item.server.server_id == row.server_id), None)
+    server: Final = next(
+        (item for item in event_servers(await allowed_servers(context)) if item.server.server_id == row.server_id), None
+    )
     if server is None or not server_allows_event(server.config, row.event_name):
         return None
     return caller if grant_allows(await event_grant(row.server_id, caller), row.event_name) else None
@@ -178,21 +180,32 @@ class DeliveryWorker:
             EventMetrics.count(row.server_id, name, "throttled")
             return self._gap(row, binding, occurrence.cursor)
         screened: Final = await screen_event(
-            occurrence, server_name=server.name if server is not None else row.server_id, gateway_name=name,
-            subscription_id=row.id, caller=caller,
+            occurrence,
+            server_name=server.name if server is not None else row.server_id,
+            gateway_name=name,
+            subscription_id=row.id,
+            caller=caller,
         )
         if isinstance(screened, Blocked):
             EventMetrics.count(row.server_id, name, "blocked")
             return self._gap(row, binding, occurrence.cursor)
         sealed: Final = seal_cursor(binding, occurrence.cursor, int(time.time()))
         cursor: Final = sealed.ok if isinstance(sealed, Ok) else None
-        legacy: Final = server is not None and isinstance(server.events, MCPServerEventsConfig) and server.events.legacy_webhook_id_equals_event_id
+        legacy: Final = (
+            server is not None
+            and isinstance(server.events, MCPServerEventsConfig)
+            and server.events.legacy_webhook_id_equals_event_id
+        )
         body: Final = occurrence.model_copy(
             update={"name": name, "data": screened.data, "cursor": cursor, "meta": None}
         ).model_dump_json(by_alias=True, exclude_none=True)
-        return Outgoing(body.encode(), occurrence.event_id if legacy else delivery.webhook_id, False, occurrence.event_id)
+        return Outgoing(
+            body.encode(), occurrence.event_id if legacy else delivery.webhook_id, False, occurrence.event_id
+        )
 
-    async def _send(self, row: SubscriptionRow, delivery: QueuedDelivery, outgoing: Outgoing, caller: UserAPIKeyAuth) -> None:
+    async def _send(
+        self, row: SubscriptionRow, delivery: QueuedDelivery, outgoing: Outgoing, caller: UserAPIKeyAuth
+    ) -> None:
         secret: Final = parse_secret(row.client_secret)
         if secret is None:
             await self._store.finish(delivery.delivery_id)
@@ -222,7 +235,14 @@ class DeliveryWorker:
         await self._store.finish(delivery.delivery_id)
         accepted: Final = status is not None and 200 <= status < 300
         updated: Final = (
-            row.model_copy(update={"last_delivery_at": self._clock(), "consecutive_failures": 0, "failed_since": None, "last_error": None})
+            row.model_copy(
+                update={
+                    "last_delivery_at": self._clock(),
+                    "consecutive_failures": 0,
+                    "failed_since": None,
+                    "last_error": None,
+                }
+            )
             if accepted
             else row
         )
@@ -270,10 +290,18 @@ class DeliveryWorker:
     async def terminate(self, row: SubscriptionRow, failure: EventsFailure) -> None:
         secret: Final = parse_secret(row.client_secret)
         if secret is not None:
-            body: Final = TerminatedEnvelope(
-                error={"code": int(failure.code), "message": failure.message, "data": dict(failure.data or {})}
-            ).model_dump_json().encode()
-            await self._post(row.client_url, body, signed_headers(secret, new_webhook_id("terminated"), int(time.time()), body, row.id))
+            body: Final = (
+                TerminatedEnvelope(
+                    error={"code": int(failure.code), "message": failure.message, "data": dict(failure.data or {})}
+                )
+                .model_dump_json()
+                .encode()
+            )
+            await self._post(
+                row.client_url,
+                body,
+                signed_headers(secret, new_webhook_id("terminated"), int(time.time()), body, row.id),
+            )
         await self._store.save(row.model_copy(update={"status": "terminated"}))
         await self._store.drop_deliveries(row.id)
         from litellm.proxy.mcp_server.events.webhooks.subscribe import end_upstream

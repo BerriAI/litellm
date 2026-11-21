@@ -160,4 +160,3 @@ class TerminatedEnvelope(_Wire):
 class VerificationEnvelope(_Wire):
     type: Literal["verification"] = "verification"
     challenge: str
-

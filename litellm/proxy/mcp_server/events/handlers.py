@@ -36,7 +36,9 @@ if TYPE_CHECKING:
 OperationScope = Callable[[ServerRequestContext], AbstractAsyncContextManager[OperationContext]]
 AuthorizationScope = Callable[[ServerRequestContext], AbstractAsyncContextManager["SubscriptionAuthorization"]]
 
-EVENT_METHODS: Final = frozenset({"events/list", "events/poll", "events/stream", "events/subscribe", "events/unsubscribe"})
+EVENT_METHODS: Final = frozenset(
+    {"events/list", "events/poll", "events/stream", "events/subscribe", "events/unsubscribe"}
+)
 _EXTENSION_MAP: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
 
 
@@ -52,7 +54,10 @@ def events_served(settings: EventsSettings, protocol_version: str | None, proxy_
 
 
 def gated_events_method(
-    method: str, protocol_version: str | None, proxy_mode: bool, settings: Callable[[], EventsSettings] = events_settings
+    method: str,
+    protocol_version: str | None,
+    proxy_mode: bool,
+    settings: Callable[[], EventsSettings] = events_settings,
 ) -> bool:
     return method in EVENT_METHODS and not events_served(settings(), protocol_version, proxy_mode)
 

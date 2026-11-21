@@ -109,7 +109,9 @@ async def post_callback(
     except httpx.TimeoutException:
         return Error("timeout")
     except httpx.ConnectError as error:
-        return Error("tls_error" if isinstance(error.__cause__, ssl.SSLError) or "SSL" in str(error) else "connection_refused")
+        return Error(
+            "tls_error" if isinstance(error.__cause__, ssl.SSLError) or "SSL" in str(error) else "connection_refused"
+        )
     except httpx.HTTPError:
         return Error("connection_refused")
 

@@ -203,4 +203,3 @@ async def send_test_event(
     if isinstance(response, Error):
         return TestDeliveryResult(delivered=False, error=response.error)
     return TestDeliveryResult(delivered=200 <= response.ok.status < 300, status=response.ok.status)
-

@@ -616,14 +616,14 @@ if MCP_AVAILABLE:
         disabled_capabilities,
         disabled_operations,
     )
+    from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
+    from litellm.proxy.mcp_server.events.webhooks.receiver import receive_webhook
+    from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker
     from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
         is_legacy_upstream_delegate,
     )
-    from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
-    from litellm.proxy.mcp_server.events.webhooks.receiver import receive_webhook
-    from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker
 
     ######################################################
     ############ MCP Tools List REST API Response Object #

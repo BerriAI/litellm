@@ -71,7 +71,9 @@ class StreamRoute:
         except anyio.WouldBlock:
             self._dropping = True
             cursor: Final = frame.params.get("cursor")
-            self._dropped_cursor = cursor if isinstance(cursor, str) else self._dropped_cursor  # rebind-ok: latest skipped position
+            self._dropped_cursor = (
+                cursor if isinstance(cursor, str) else self._dropped_cursor
+            )  # rebind-ok: latest skipped position
         except anyio.ClosedResourceError:
             return
 
@@ -92,12 +94,16 @@ class StreamRoute:
 class EventsClientSession(ClientSession):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, extensions={EVENTS_EXTENSION: {}}, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards MCPClient's session kwargs unchanged
-        self._event_routes: dict[RequestId, StreamRoute] = {}  # mutable-ok: live stream demux table owned by this session
+        self._event_routes: dict[
+            RequestId, StreamRoute
+        ] = {}  # mutable-ok: live stream demux table owned by this session
 
     def _intercept_notification(self, method: str, params: Mapping[str, object] | None) -> bool:
         if method in _STREAM_METHODS and params is not None:
             meta: Final = params.get("_meta")
-            subscription: Final = as_request_id(meta.get(SUBSCRIPTION_ID_META_KEY)) if isinstance(meta, Mapping) else None
+            subscription: Final = (
+                as_request_id(meta.get(SUBSCRIPTION_ID_META_KEY)) if isinstance(meta, Mapping) else None
+            )
             route: Final = self._event_routes.get(subscription) if subscription is not None else None
             if route is not None:
                 try:

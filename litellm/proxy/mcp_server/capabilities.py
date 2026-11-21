@@ -11,7 +11,6 @@ from mcp_types.methods import CLIENT_REQUESTS
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION
 from pydantic import TypeAdapter
 
-from litellm.types.mcp_server.events import EVENTS_EXTENSION, EVENTS_PROTOCOL_VERSION
 from litellm.types.mcp import (
     MCP_LEGACY_VERSIONS,
     MCPAdvertisedVersion,
@@ -21,6 +20,7 @@ from litellm.types.mcp import (
     MCPSpecVersion,
     MCPTransport,
 )
+from litellm.types.mcp_server.events import EVENTS_EXTENSION, EVENTS_PROTOCOL_VERSION
 
 GATEWAY_OPERATIONS: Final = frozenset(
     {

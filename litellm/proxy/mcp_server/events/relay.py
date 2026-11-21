@@ -396,7 +396,8 @@ class _PushRelay:
                 await self._relay(item)
             else:
                 await self._emit(
-                    "notifications/events/heartbeat", HeartbeatNotification(cursor=self._cursor).model_dump(by_alias=True)
+                    "notifications/events/heartbeat",
+                    HeartbeatNotification(cursor=self._cursor).model_dump(by_alias=True),
                 )
             if not self._ended and time.monotonic() >= self._next_check:
                 self._next_check = time.monotonic() + _RECHECK_SECONDS

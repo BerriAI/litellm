@@ -145,7 +145,12 @@ def _upstream_failure(error: MCPError) -> EventsFailure:
 
 
 def _upstream_params(
-    prepared: PreparedEvent, params: SubscribeEventsParams, url: str, secret: str, cursor: str | None, ttl_ms: int | None
+    prepared: PreparedEvent,
+    params: SubscribeEventsParams,
+    url: str,
+    secret: str,
+    cursor: str | None,
+    ttl_ms: int | None,
 ) -> JsonObject:
     return {
         "name": prepared.resolved.upstream_name,
@@ -223,14 +228,20 @@ async def subscribe(
         raw: Final = await call(
             prepared.ok.upstream.client,
             "events/subscribe",
-            _upstream_params(prepared.ok, params, callback_url(settings, sid), base.upstream_secret, opened.ok.upstream, ttl_ms),
+            _upstream_params(
+                prepared.ok, params, callback_url(settings, sid), base.upstream_secret, opened.ok.upstream, ttl_ms
+            ),
             routing_headers(prepared.ok.resolved.upstream_name, params.arguments, prepared.ok.descriptor),
         )
         upstream: Final = SubscribeEventsResult.model_validate(raw)
     except (MCPError, ValidationError) as error:
         if fresh:
             await events_store.delete(sid)
-        return Error(_upstream_failure(error) if isinstance(error, MCPError) else internal_error("Upstream returned an invalid events/subscribe result"))
+        return Error(
+            _upstream_failure(error)
+            if isinstance(error, MCPError)
+            else internal_error("Upstream returned an invalid events/subscribe result")
+        )
     upstream_refresh: Final = _parse_time(upstream.refresh_before)
     refresh_before: Final = client_grant(now, ttl_ms, upstream_refresh)
     sealed: Final = seal_cursor(binding, upstream.cursor, int(time.time()))
@@ -326,7 +337,6 @@ async def unsubscribe(
     return Ok(None)
 
 
-
 async def end_upstream(row: SubscriptionRow, settings: EventsSettings) -> None:
     from litellm.proxy.mcp_server.events.catalog import descriptors
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
@@ -343,7 +353,11 @@ async def end_upstream(row: SubscriptionRow, settings: EventsSettings) -> None:
         await call(
             target.client,
             "events/unsubscribe",
-            {"name": row.event_name, "arguments": dict(row.arguments), "delivery": {"url": callback_url(settings, row.id)}},
+            {
+                "name": row.event_name,
+                "arguments": dict(row.arguments),
+                "delivery": {"url": callback_url(settings, row.id)},
+            },
             routing_headers(row.event_name, row.arguments, descriptor),
         )
     except Exception:  # noqa: BLE001  # the upstream lapses at its own refreshBefore when unsubscribe fails

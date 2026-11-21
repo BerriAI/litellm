@@ -97,7 +97,9 @@ def resolve(name: str, servers: tuple[EventServer, ...]) -> ResolvedEvent | None
     return max(matches, key=lambda item: item[0])[1] if matches else None
 
 
-def offered_modes(descriptor: EventType, settings: EventsSettings, context: OperationContext) -> tuple[DeliveryMode, ...]:
+def offered_modes(
+    descriptor: EventType, settings: EventsSettings, context: OperationContext
+) -> tuple[DeliveryMode, ...]:
     webhook_ready: Final = settings.public_base_url is not None and principal_of(context.user_api_key_auth) is not None
     return tuple(mode for mode in descriptor.delivery if mode != "webhook" or webhook_ready)
 
