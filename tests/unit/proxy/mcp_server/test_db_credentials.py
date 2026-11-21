@@ -8,11 +8,12 @@ runs every write through ``encrypt_value_helper`` (nacl SecretBox) and
 keeps a plain-base64 fallback on read so existing rows continue to work.
 """
 
+import asyncio
 import base64
+import itertools
 import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, tzinfo
-from itertools import count
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -868,12 +869,42 @@ async def test_refusal_without_a_saved_oauth_grant_writes_nothing(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scopes", [("gist", "notifications"), ("gist", "gist"), ("gist", "notifications", "repo")])
+async def test_concurrent_refusals_preserve_each_missing_permission(
+    credentials_prisma: SimpleNamespace, scopes: tuple[str, ...]
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    original: Final = rows.rows[("alice", "srv-1")]
+    arrivals: Final = itertools.count(1)
+    all_waiting: Final = asyncio.Event()
+    update: Final = rows.update_many
+
+    async def simultaneous_update(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        if where["credential_b64"] == original.credential_b64:
+            if next(arrivals) == len(scopes):
+                all_waiting.set()
+            await all_waiting.wait()
+        return await update(data=data, where=where)
+
+    rows.update_many = simultaneous_update
+    await asyncio.wait_for(
+        asyncio.gather(*(record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", scope) for scope in scopes)),
+        timeout=5,
+    )
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert set(grant["needs_scopes"]) == set(scopes)
+    assert len(grant["needs_scopes"]) == len(set(scopes))
+    assert (grant["access_token"], grant["refresh_token"]) == ("at-1", "rt-1")
+
+
+@pytest.mark.asyncio
 async def test_refusal_never_overwrites_a_grant_saved_after_it_was_read(credentials_prisma: SimpleNamespace) -> None:
     rows: Final = credentials_prisma.db.litellm_mcpusercredentials
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old")
     read_before_the_save: Final = rows.rows[("alice", "srv-1")]
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new")
-    rows.find_unique = AsyncMock(return_value=read_before_the_save)
+    rows.find_unique = AsyncMock(side_effect=[read_before_the_save, rows.rows[("alice", "srv-1")]])
     await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
     del rows.find_unique
     grant: Final = await _saved_grant(credentials_prisma)
@@ -902,7 +933,7 @@ async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
     legacy: bool,
 ) -> None:
     fixed_now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    clock_ticks: Final = count()
+    clock_ticks: Final = itertools.count()
 
     class FrozenDateTime(datetime):
         @classmethod

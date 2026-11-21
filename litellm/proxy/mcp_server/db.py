@@ -1972,8 +1972,16 @@ async def get_user_oauth_credential(
 
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
     """Note on the saved grant that the provider refused a call for ``scope``, so the connect page sends the user
-    back to the provider. The next sign-in drops the note; a grant saved since the read is left alone."""
-    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    back to the provider. The next save of the grant drops the note; a grant saved since the read is left alone."""
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+    await _record_oauth_scope_refusal(prisma_client, row, scope)
+
+
+async def _record_oauth_scope_refusal(
+    prisma_client: PrismaClient,
+    row: "prisma_db_models.LiteLLM_MCPUserCredentials | None",
+    scope: str,
+) -> None:
     grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
     if row is None or grant is None:
         return
@@ -1981,13 +1989,28 @@ async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, 
     refused: Final = tuple(name for name in dict.fromkeys(scope.split() or ("",)) if name not in waiting)
     if not refused:
         return
-    await _user_credential_actions(prisma_client).update_many(
-        where={"user_id": user_id, "server_id": server_id, "credential_b64": row.credential_b64},
+    written: Final = await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64},
         data={
             "credential_b64": encrypt_value_helper(json.dumps({**grant, "needs_scopes": [*waiting, *refused]})),
             "updated_at": row.updated_at,
         },
     )
+    if written > 0:
+        return
+    latest: Final = await _db_find_user_credential_row(prisma_client, row.user_id, row.server_id, use_writer=True)
+    latest_grant: Final = None if latest is None else decode_oauth_payload(latest.credential_b64)
+    if latest is None or latest_grant is None or latest.credential_b64 == row.credential_b64:
+        return
+    connected_at: Final = grant.get("connected_at")
+    same_grant: Final = (
+        latest_grant.get("connected_at") == connected_at
+        if connected_at
+        else {key: value for key, value in latest_grant.items() if key != "needs_scopes"}
+        == {key: value for key, value in grant.items() if key != "needs_scopes"}
+    )
+    if same_grant:
+        await _record_oauth_scope_refusal(prisma_client, latest, scope)
 
 
 def _server_user_credential_item(

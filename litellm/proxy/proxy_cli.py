@@ -270,6 +270,7 @@ WORKER_APP: Final = "litellm_cli.main:proxy_worker_app"
 WORKER_LOG_CONFIG_ENV: Final = "LITELLM_WORKER_LOG_CONFIG"
 _LOG_CONFIG: Final = TypeAdapter[str | Mapping[str, object]](str | Mapping[str, object])
 _LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_GENERAL_SETTINGS: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter[object](object)
 
 
@@ -1737,6 +1738,7 @@ def run_server(
                 RUST_WRITER_CONNECTIONS_ENV_VAR,
                 ConnectionBudget,
                 UnsplittableConnectionLimit,
+                rust_writer_reserve,
             )
             from litellm.proxy.db.db_url_settings import (
                 DISABLE_PREPARED_STATEMENTS_ENV_VAR,
@@ -1749,6 +1751,7 @@ def run_server(
                 unsupported_db_scheme,
                 unsupported_db_scheme_message,
             )
+            from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
 
             for _db_env in ("DATABASE_URL", "DIRECT_URL"):
                 _candidate_url = os.getenv(_db_env)
@@ -1785,7 +1788,13 @@ def run_server(
             # writer where the config is applied on top.
             read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
             try:
-                writer_budget: Final = ConnectionBudget.of("DATABASE_URL", connection_url_params["connection_limit"])
+                writer_budget: Final = ConnectionBudget.of(
+                    "DATABASE_URL",
+                    connection_url_params["connection_limit"],
+                    rust_writer_reserve(
+                        spend_log_writer_runs_in_rust(_GENERAL_SETTINGS.validate_python(general_settings))
+                    ),
+                )
                 reader_budget: Final = (
                     ConnectionBudget.of(
                         "DATABASE_URL_READ_REPLICA",
