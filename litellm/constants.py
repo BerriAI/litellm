@@ -2240,7 +2240,7 @@ MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG: Final = get_env_int("MAX_PAYLOAD_SIZE_FOR_DEBUG_
 # Policy template enrichment
 MAX_COMPETITOR_NAMES: Final = get_env_int("MAX_COMPETITOR_NAMES", 100)
 COMPETITOR_LLM_TEMPERATURE: Final = get_env_float("COMPETITOR_LLM_TEMPERATURE", 0.3)
-DEFAULT_COMPETITOR_DISCOVERY_MODEL: Final = "gpt-4o-mini"
+DEFAULT_COMPETITOR_DISCOVERY_MODEL: Final = "gpt-6-luna"
 
 # Advisor tool orchestration
 # Providers that support advisor_20260301 natively (no LiteLLM orchestration needed).
