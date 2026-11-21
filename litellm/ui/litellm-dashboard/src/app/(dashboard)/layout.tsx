@@ -119,7 +119,15 @@ const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
 const PAGE_FRAME_CLASS_NAMES = { default: "" } as const;
 
-const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([["caching", "default"]]);
+const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
+  ["caching", "default"],
+  ["memory", "default"],
+  ["prompts", "default"],
+  ["router-settings", "default"],
+  ["ui-theme", "default"],
+  ["vector-stores", "default"],
+  ["workflows", "default"],
+]);
 
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
   useCloseMobileSidebarOn(navigationKey);
