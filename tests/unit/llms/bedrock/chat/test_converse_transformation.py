@@ -5865,6 +5865,13 @@ def test_a_model_that_cannot_force_the_json_tool_gets_native_output_without_thin
         ("us-gov-west-1/anthropic.claude-opus-5-5", None, True),
         ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, True),
         ("us-east-1/anthropic.claude-opus-5-5", None, True),
+        ("us.anthropic.claude-fable-5", None, True),
+        ("global.anthropic.claude-fable-5", {"reasoning_effort": "low"}, True),
+        ("eu.anthropic.claude-fable-5", None, False),
+        ("us.anthropic.claude-opus-4-7", {"thinking": {"type": "adaptive"}}, True),
+        ("global.anthropic.claude-opus-4-7", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-opus-4-7", None, False),
+        ("eu.anthropic.claude-opus-4-7", {"reasoning_effort": "low"}, False),
     ],
 )
 def test_native_output_follows_model_cost_map_for_bedrock_profiles(

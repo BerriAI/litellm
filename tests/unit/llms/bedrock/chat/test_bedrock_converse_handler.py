@@ -827,8 +827,9 @@ def _bedrock_claude_without_native_structured_output() -> str:
         f"bedrock/{model}"
         for model, info in litellm.model_cost.items()
         if info.get("litellm_provider") == "bedrock_converse"
-        and model.startswith("us.anthropic.claude")
+        and model.startswith("eu.anthropic.claude")
         and info.get("supports_native_structured_output") is False
+        and info.get("supports_bedrock_native_structured_output") is not True
         and info.get("supports_reasoning") is True
     )
 
