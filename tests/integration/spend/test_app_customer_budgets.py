@@ -366,9 +366,6 @@ def test_app_and_global_customer_budgets_enforce_independently_and_account_once(
             {"budget": {"max_budget": 2 * _COST}},
         )
         assert lowered.status_code == 200, lowered.text
-        updated: Final = AppGroup.model_validate_json(lowered.content)
-        assert updated.budget is not None and updated.budget.max_budget == 0.17
-        assert updated.budget_usage[0].spend == pytest.approx(3 * _COST)
         wire.drain()
         for key in (chat_key, search_key):
             _blocked_on_every_worker(app_gateway, key, model, customer)
@@ -514,6 +511,9 @@ def test_app_group_customer_and_app_caps_apply_independently_across_workers(
             "PATCH", f"/management/v1/app_groups/{group}", {"budget": {"max_budget": 0.17, "budget_duration": duration}}
         )
         assert lowered.status_code == 200, lowered.text
+        updated: Final = AppGroup.model_validate_json(lowered.content)
+        assert updated.budget is not None and updated.budget.max_budget == 0.17
+        assert updated.budget_usage[0].spend == pytest.approx(3 * _COST)
         wire.drain()
         _blocked_on_every_worker(app_gateway, search_key, model, other)
         assert not tuple(request for request in wire.drain() if request.method == "POST")
