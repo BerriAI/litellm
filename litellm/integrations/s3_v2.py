@@ -2,7 +2,8 @@ import asyncio
 import copy
 import json
 import os
-from collections.abc import Callable, Collection, Mapping
+import sys
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import Unpack
@@ -16,6 +17,7 @@ from litellm.constants import (
     DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY,
     DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
+    S3_SHUTDOWN_FLUSH_TIMEOUT_SECONDS,
     S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS,
 )
 from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
@@ -291,9 +293,17 @@ class S3StripBase64Files(CustomLoggerV2):
         return Patch().merge(Field.standard_logging_payload, {"messages": _STRIPPER.stripped(messages)})
 
 
-async def _periodic_flush(sink: "NativeS3Log", interval: float) -> None:
-    while True:
-        await asyncio.sleep(interval)
+async def _periodic_flush(sink: "NativeS3Log", interval: float, stop: asyncio.Event | None = None) -> None:
+    while stop is None or not stop.is_set():
+        if stop is None:
+            await asyncio.sleep(interval)
+        else:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+            else:
+                return
         try:
             batch_upload_failed(await sink.flush())
         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
@@ -380,8 +390,13 @@ class S3Logger(RustLogger):
         self.s3_region_name: Final[object] = params.get("s3_region_name") or settings.get("s3_region_name")
         self.sink: Final = sink
         self.s3_host: Final = host
+        self._stop_periodic_flush: Final = asyncio.Event()
         self.periodic_flush_task: Final = asyncio.create_task(
-            _periodic_flush(sink, _flush_interval(settings.get("s3_flush_interval", DEFAULT_S3_FLUSH_INTERVAL_SECONDS)))
+            _periodic_flush(
+                sink,
+                _flush_interval(settings.get("s3_flush_interval", DEFAULT_S3_FLUSH_INTERVAL_SECONDS)),
+                self._stop_periodic_flush,
+            )
         )
         super().__init__(sink.callback(), {Field.deprecated_kwargs: lambda _kwargs: None})
         self.v2_companion: Final = (
@@ -430,8 +445,26 @@ class S3Logger(RustLogger):
     def resolve_partition_granularity(self) -> S3PartitionGranularity:
         return "hour" if self.sink.partition_granularity() == "hour" else "day"
 
+    async def _flush_sink(self) -> bool:
+        failure: Final = await self.sink.flush()
+        batch_upload_failed(failure)
+        return failure is None
+
     async def flush_queue(self) -> None:
-        batch_upload_failed(await self.sink.flush())
+        _ = await self._flush_sink()
+
+    def stop_periodic_flush(self) -> None:
+        stop: Final[object] = getattr(self, "_stop_periodic_flush", None)
+        if isinstance(stop, asyncio.Event):
+            stop.set()
+
+    async def flush_for_shutdown(self) -> bool:
+        """Stop future periodic ticks and drain queued events for shutdown."""
+        self.stop_periodic_flush()
+        if type(self).flush_queue is S3Logger.flush_queue and "flush_queue" not in vars(self):
+            return await self._flush_sink()
+        await self.flush_queue()
+        return True
 
     async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
         try:
@@ -473,9 +506,121 @@ class S3Logger(RustLogger):
             return None
 
 
+def _s3_loggers_in(entries: object) -> Iterator[S3Logger]:
+    if isinstance(entries, Mapping):
+        for value in entries.values():  # pyright: ignore[reportUnknownVariableType]  # module-level callback caches are untyped
+            if isinstance(value, S3Logger):
+                yield value
+        return
+    if isinstance(entries, (list, tuple, set, frozenset)):
+        for item in entries:  # pyright: ignore[reportUnknownVariableType]  # callback lists are untyped globals
+            if isinstance(item, S3Logger):
+                yield item
+
+
+def _s3_logger_sources() -> tuple[object, ...]:
+    logging_module: Final = sys.modules.get("litellm.litellm_core_utils.litellm_logging")
+    audit_module: Final = sys.modules.get("litellm.proxy.management_helpers.audit_logs")
+    return (
+        getattr(litellm, "callbacks", None),
+        getattr(litellm, "success_callback", None),
+        getattr(litellm, "failure_callback", None),
+        getattr(litellm, "_async_success_callback", None),
+        getattr(litellm, "_async_failure_callback", None),
+        getattr(litellm, "input_callback", None),
+        getattr(litellm, "_async_input_callback", None),
+        getattr(litellm, "service_callback", None),
+        getattr(litellm, "audit_log_callbacks", None),
+        None if logging_module is None else getattr(logging_module, "_in_memory_loggers", None),
+        None if audit_module is None else getattr(audit_module, "_audit_log_callback_cache", None),
+    )
+
+
+def collect_active_s3_v2_loggers() -> tuple[S3Logger, ...]:
+    """Return every active ``S3Logger`` registered across callback lists and caches, deduplicated by identity."""
+    unique: Final[dict[int, S3Logger]] = {}  # mutable-ok: preserves first-seen order while deduplicating by identity
+    for source in _s3_logger_sources():
+        for logger in _s3_loggers_in(source):
+            _ = unique.setdefault(id(logger), logger)
+    return tuple(unique.values())
+
+
+def _live_periodic_task(logger: S3Logger, running_loop: asyncio.AbstractEventLoop) -> asyncio.Task[object] | None:
+    task: Final[object] = getattr(logger, "periodic_flush_task", None)
+    if not isinstance(task, asyncio.Task):
+        return None
+    if task.done() or task.get_loop() is not running_loop:
+        return None
+    return task  # pyright: ignore[reportUnknownVariableType]  # asyncio.Task lacks runtime type parameters
+
+
+async def _cancel_periodic_flush_tasks(loggers: Iterable[S3Logger]) -> None:
+    running_loop: Final = asyncio.get_running_loop()
+    for logger in loggers:
+        logger.stop_periodic_flush()
+    tasks_to_cancel: Final = tuple(
+        live for logger in loggers if (live := _live_periodic_task(logger, running_loop)) is not None
+    )
+    for task in tasks_to_cancel:
+        _ = task.cancel()
+    if tasks_to_cancel:
+        _ = await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+
+async def flush_s3_v2_loggers(
+    timeout_seconds: float = S3_SHUTDOWN_FLUSH_TIMEOUT_SECONDS,
+    *,
+    loggers: Iterable[S3Logger] | None = None,
+) -> bool:
+    """Drain every active ``S3Logger`` concurrently within one shared ``timeout_seconds`` deadline.
+
+    Returns ``True`` only when every discovered logger completed its final flush with no failed uploads
+    before the deadline.
+    """
+    active: Final[tuple[S3Logger, ...]] = collect_active_s3_v2_loggers() if loggers is None else tuple(loggers)
+    if not active:
+        return True
+
+    for logger in active:
+        logger.stop_periodic_flush()
+
+    async def _flush_one(logger: S3Logger) -> bool:
+        try:
+            return await logger.flush_for_shutdown()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001  # one failing S3 logger must not block draining sibling instances
+            verbose_logger.exception("Error flushing S3Logger on shutdown: %s", e)
+            return False
+
+    flush_tasks: Final[tuple[asyncio.Task[bool], ...]] = tuple(
+        asyncio.create_task(_flush_one(logger), name=f"s3-v2-shutdown-flush-{index}")
+        for index, logger in enumerate(active)
+    )
+    deadline_budget: Final = max(0.0, timeout_seconds)
+    try:
+        done, pending = await asyncio.wait(flush_tasks, timeout=deadline_budget)
+        if pending:
+            for pending_task in pending:
+                _ = pending_task.cancel()
+            _ = await asyncio.gather(*pending, return_exceptions=True)
+            verbose_logger.warning(
+                "Timed out flushing %d of %d S3Logger instance(s) on shutdown after %.2fs",
+                len(pending),
+                len(active),
+                deadline_budget,
+            )
+            return False
+        return all(not task.cancelled() and task.exception() is None and task.result() for task in done)
+    finally:
+        await _cancel_periodic_flush_tasks(active)
+
+
 __all__ = [
     "S3BatchUploadError",
     "S3Logger",
     "S3StripBase64Files",
+    "collect_active_s3_v2_loggers",
+    "flush_s3_v2_loggers",
     "legacy_should_log",
 ]
