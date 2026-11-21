@@ -16,6 +16,7 @@ from typing import Final, Literal, NoReturn
 from unittest.mock import MagicMock, call, patch
 
 import google.auth.exceptions
+import google.auth.transport.requests
 import pytest
 import requests
 import responses
@@ -2986,3 +2987,38 @@ async def test_evicted_credentials_finish_refresh_without_being_readmitted(
         assert (target, "target") not in vertex._credentials_project_mapping
         assert vertex.get_access_token(target, "target") == (f"token-{limit + 2}", "target")
         assert len(vertex._credentials_project_mapping) == limit
+
+
+def _timeout_sent_with_token_call(send_token_call: Callable[[], object]) -> object:
+    with responses.RequestsMock() as oauth:
+        oauth.add(
+            responses.POST, "https://oauth2.googleapis.com/token", json={"access_token": "token-1", "expires_in": 3600}
+        )
+        send_token_call()
+        return oauth.calls[0].request.req_kwargs["timeout"]
+
+
+@pytest.mark.parametrize("auth_timeout", [7, None], ids=["configured", "unset"])
+def test_a_credential_refresh_sends_its_token_call_with_the_configured_auth_timeout(auth_timeout: int | None) -> None:
+    vertex: Final = VertexBase(auth_timeout=auth_timeout)
+    credentials: Final = _authorized_user_cache_credentials("project-1")
+
+    sent: Final = _timeout_sent_with_token_call(lambda: vertex.get_access_token(credentials, None))
+
+    google_auth_default: Final = _timeout_sent_with_token_call(
+        lambda: google.auth.transport.requests.Request()("https://oauth2.googleapis.com/token", method="POST")
+    )
+    assert sent == (google_auth_default if auth_timeout is None else auth_timeout)
+
+
+def test_the_default_credentials_lookup_gets_the_bounded_transport_and_an_explicit_timeout_still_wins() -> None:
+    vertex: Final = VertexBase(auth_timeout=7)
+    with patch("google.auth.default", return_value=(MagicMock(), "project-1")) as google_default:
+        vertex._credentials_from_default_auth(["https://www.googleapis.com/auth/cloud-platform"])
+    request: Final = google_default.call_args.kwargs["request"]
+
+    assert _timeout_sent_with_token_call(lambda: request("https://oauth2.googleapis.com/token", method="POST")) == 7
+    assert (
+        _timeout_sent_with_token_call(lambda: request("https://oauth2.googleapis.com/token", method="POST", timeout=1))
+        == 1
+    )

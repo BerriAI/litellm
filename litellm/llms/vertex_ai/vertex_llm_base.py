@@ -5,6 +5,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 """
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -19,7 +20,7 @@ from urllib.parse import urlparse
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, VERTEX_AI_AUTH_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -84,6 +85,10 @@ GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials as GoogleCredentialsObject
     from google.auth.credentials import TokenState
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from google.auth.transport.requests import (
+        _Response as GoogleAuthResponse,  # pyright: ignore[reportPrivateUsage]  # what google-auth's Request.__call__ returns
+    )
 else:
     GoogleCredentialsObject = Any
 
@@ -132,9 +137,40 @@ def _is_other_version_of_key_file(
     )
 
 
+@functools.cache
+def _timeout_request_type() -> "Callable[[int], GoogleAuthRequest]":
+    from google.auth.transport.requests import Request
+
+    class _TimeoutRequest(Request):
+        def __init__(self, timeout: int) -> None:
+            super().__init__()
+            self._timeout: Final = timeout
+
+        def __call__(
+            self,
+            url: str,
+            method: str = "GET",
+            body: bytes | None = None,
+            headers: Mapping[str, str] | None = None,
+            timeout: int | None = None,
+            **kwargs: object,  # kwargs-ok: same signature as google-auth's Request.__call__, which forwards them to requests
+        ) -> "GoogleAuthResponse":
+            return super().__call__(  # pyright: ignore[reportUnknownMemberType]  # google-auth leaves url, body and headers unannotated
+                url,
+                method=method,
+                body=body,
+                headers=headers,
+                timeout=self._timeout if timeout is None else timeout,
+                **kwargs,
+            )
+
+    return _TimeoutRequest
+
+
 class VertexBase:
-    def __init__(self) -> None:
+    def __init__(self, auth_timeout: int | None = VERTEX_AI_AUTH_TIMEOUT_SECONDS) -> None:
         super().__init__()
+        self._auth_timeout: int | None = auth_timeout
         self.access_token: str | None = None
         self.refresh_token: str | None = None
         self._credentials: GoogleCredentialsObject | None = None
@@ -338,7 +374,9 @@ class VertexBase:
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
-        return google_auth.default(scopes=scopes)
+        if self._auth_timeout is None:
+            return google_auth.default(scopes=scopes)
+        return google_auth.default(scopes=scopes, request=self._auth_request())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]  # the same partly unannotated google-auth call as the line above, which the baseline already counts
 
     def get_default_vertex_location(self) -> str:
         return "us-central1"
@@ -423,14 +461,18 @@ class VertexBase:
         )
         return api_base
 
-    def refresh_auth(self, credentials: _VertexCredentialsObject) -> None:
+    def _auth_request(self) -> "GoogleAuthRequest":
         try:
             from google.auth.transport.requests import (
                 Request,
             )
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
+        if self._auth_timeout is None:
+            return Request()
+        return _timeout_request_type()(self._auth_timeout)
 
+    def refresh_auth(self, credentials: _VertexCredentialsObject) -> None:
         # ``credentials.refresh()`` is not safe to call concurrently on the
         # same credentials object, and this method is invoked from three
         # places that can run on different threads:
@@ -438,7 +480,7 @@ class VertexBase:
         #   - the async slow path (via ``asyncify`` in a worker thread)
         #   - the background proactive refresh task (via ``asyncify``)
         with self._credential_refresh_lock(credentials):
-            credentials.refresh(Request())
+            credentials.refresh(self._auth_request())
 
     def _credential_refresh_lock(self, credentials: _VertexCredentialsObject) -> threading.RLock:
         with self._credentials_cache_lock:
