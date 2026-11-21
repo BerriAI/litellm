@@ -48,6 +48,7 @@ from litellm.proxy.management_endpoints.sso.saml_sso import (
 )
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import SSOIdentityAssertion
+from litellm.redis.stores.auth_cache import AuthObject
 
 
 def _shared_cache(store: InMemoryCache | None = None) -> DualCache:
@@ -685,7 +686,7 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     cli_cache.set_cache(key=flow_key, value={"poll_secret_hash": "hash", "code_challenge": "pkce-challenge"})
     user_cache: Final = UserApiKeyCache()
     user_cache.set_cache(
-        key="alice@example.com",
+        key=AuthObject.user("alice@example.com"),
         value=LiteLLM_UserTable(user_id="alice@example.com", user_email="alice@example.com", teams=[]),
     )
     monkeypatch.setattr(proxy_server, "cli_sso_session_cache", cli_cache)

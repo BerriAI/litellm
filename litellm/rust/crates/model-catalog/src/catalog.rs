@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use indexmap::IndexMap;
+use encoding_rs::Encoding;
+use indexmap::{IndexMap, IndexSet};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
-use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::fallback::{CapabilityRules, FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
@@ -62,6 +63,7 @@ pub struct Catalog {
     store: Store<CatalogRows>,
     sections: Vec<Section>,
     fallback_generalizations: Option<FallbackGeneralizations>,
+    capability_rules: CapabilityRules,
 }
 
 /// Models and aliases, an alias served as its owner's row
@@ -69,6 +71,8 @@ pub struct Catalog {
 struct CatalogRows {
     entries: IndexMap<String, ModelEntry>,
     aliases: IndexMap<String, String>,
+    /// The aliases an `alias_of` row declared, whose own row can be rejected
+    pointers: IndexSet<String>,
 }
 
 impl CatalogRows {
@@ -141,8 +145,11 @@ impl ModelEntry {
 
 impl Catalog {
     pub fn parse(body: &[u8]) -> Result<Loaded<Self>, Error> {
-        let document = serde_json::from_slice::<Fields>(body)
-            .map_err(|error| Error::new("", Repr::Json(error)))?;
+        let document = match text_after_byte_order_mark(body) {
+            Some(text) => serde_json::from_str::<Fields>(&text),
+            None => serde_json::from_slice::<Fields>(body),
+        }
+        .map_err(|error| Error::new("", Repr::Json(error)))?;
 
         let mut problems = Vec::new();
         let mut sections = Vec::new();
@@ -165,16 +172,13 @@ impl Catalog {
                 }
             };
             let row = read_row(&fields);
-            let readable = row.problems.is_empty();
             problems.extend(
                 row.problems
                     .into_iter()
                     .map(|problem| problem.prepend(&name)),
             );
             if let Some(target) = row.alias_of {
-                if readable {
-                    pointer_rows.push((name.clone(), target));
-                }
+                pointer_rows.push((name.clone(), target));
                 sections.push(Section {
                     index,
                     key: name,
@@ -215,6 +219,7 @@ impl Catalog {
                 }
             }
         }
+        let mut pointers = IndexSet::new();
         for (alias, target) in pointer_rows {
             if !entries.contains_key(&target) {
                 problems.push(Error::from_key(&alias, Repr::AliasTargetMissing { target }));
@@ -227,6 +232,7 @@ impl Catalog {
                     },
                 ));
             } else {
+                pointers.insert(alias.clone());
                 aliases.insert(alias, target);
             }
         }
@@ -241,11 +247,20 @@ impl Catalog {
                     })
                     .ok()
             });
+        let capability_rules = fallback_generalizations
+            .as_ref()
+            .map(|generalizations| CapabilityRules::new(&generalizations.rules))
+            .unwrap_or_default();
         Ok(Loaded {
             value: Self {
-                store: Store::new(CatalogRows { entries, aliases }),
+                store: Store::new(CatalogRows {
+                    entries,
+                    aliases,
+                    pointers,
+                }),
                 sections,
                 fallback_generalizations,
+                capability_rules,
             },
             errors: problems,
         })
@@ -378,8 +393,16 @@ impl Catalog {
             .collect();
         let mut catalog = self;
         catalog.store.edit(|rows| {
-            rows.entries.retain(|name, _| !rejected.contains(name));
-            rows.aliases.retain(|_, owner| !rejected.contains(owner));
+            let CatalogRows {
+                entries,
+                aliases,
+                pointers,
+            } = rows;
+            entries.retain(|name, _| !rejected.contains(name));
+            aliases.retain(|alias, owner| {
+                !rejected.contains(owner) && !(pointers.contains(alias) && rejected.contains(alias))
+            });
+            pointers.retain(|alias| aliases.contains_key(alias));
         });
         catalog
             .sections
@@ -464,6 +487,10 @@ impl Catalog {
     pub fn fallback_rules(&self) -> Option<&[FallbackRule]> {
         Some(self.fallback_generalizations.as_ref()?.rules.as_slice())
     }
+
+    pub fn capability_rules(&self) -> &CapabilityRules {
+        &self.capability_rules
+    }
 }
 
 struct RowRead {
@@ -502,6 +529,11 @@ fn read_row(fields: &Fields) -> RowRead {
         alias_of: None,
         problems,
     }
+}
+
+fn text_after_byte_order_mark(body: &[u8]) -> Option<Cow<'_, str>> {
+    let (encoding, mark) = Encoding::for_bom(body)?;
+    encoding.decode_without_bom_handling_and_without_replacement(&body[mark..])
 }
 
 fn is_section(key: &str) -> bool {

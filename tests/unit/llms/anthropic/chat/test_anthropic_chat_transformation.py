@@ -18,6 +18,7 @@ import litellm
 from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
@@ -2711,6 +2712,48 @@ def test_transform_request_uses_deployment_max_output_tokens_before_catalog() ->
     assert catalog_default["max_tokens"] == catalog_max_output_tokens
     assert non_mapping_model_info["max_tokens"] == catalog_max_output_tokens
     assert requested["max_tokens"] == 654
+
+
+@pytest.mark.parametrize(
+    "config_class",
+    (AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig),
+    ids=("anthropic", "azure_ai", "bedrock_claude_platform"),
+)
+@pytest.mark.parametrize(
+    ("cost_map_rows", "expected_max_tokens"),
+    (
+        pytest.param({"{provider}/claude-unit-test@20990101": 1234}, 1234, id="provider-row-fills-unmapped-id"),
+        pytest.param(
+            {"claude-unit-test": 4321, "{provider}/claude-unit-test@20990101": 1234},
+            4321,
+            id="unversioned-row-before-provider-row",
+        ),
+        pytest.param({}, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, id="no-row-keeps-default"),
+    ),
+)
+def test_default_max_tokens_reads_unversioned_and_provider_rows_on_every_route(
+    monkeypatch: pytest.MonkeyPatch,
+    config_class: type[AnthropicConfig],
+    cost_map_rows: Mapping[str, int],
+    expected_max_tokens: int,
+) -> None:
+    config: Final = config_class()
+    for key, max_output_tokens in cost_map_rows.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            key.format(provider=config.custom_llm_provider),
+            {"max_output_tokens": max_output_tokens},
+        )
+
+    result: Final = config.transform_request(
+        model="claude-unit-test@20990101",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["max_tokens"] == expected_max_tokens
 
 
 def test_get_config_without_model_uses_fallback():
@@ -11672,16 +11715,16 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
 @pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
 def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
-    local_model_cost_map, model: str
+    local_model_cost_map: None, model: str
 ):
     """What get_supported_openai_params says about temperature/top_p must match what
-    map_openai_params does with them under drop_params, so a caller that pre-flights
-    from the list is never told a param is fine that the request path then drops."""
+    map_openai_params keeps for a value the model accepts. A model that removed sampling
+    params still accepts temperature=1 and no top_p, so that is the pair checked."""
     config = AnthropicConfig()
 
     supported = config.get_supported_openai_params(model=model)
     sent = config.map_openai_params(
-        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        non_default_params={"temperature": 1, "top_p": 0.5},
         optional_params={},
         model=model,
         drop_params=True,
@@ -11689,3 +11732,88 @@ def test_get_supported_params_reports_sampling_params_only_when_the_request_keep
 
     assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
     assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)
+
+
+_FIXED_SAMPLING_ROUTES: Final = (
+    "claude-sonnet-5-5",
+    "anthropic/claude-opus-4-8",
+    "vertex_ai/claude-sonnet-5-5",
+    "azure_ai/claude-opus-4-8",
+)
+
+
+def _mock_completion(model: str, temperature: float) -> ModelResponse:
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=temperature,
+        mock_response="ok",
+        api_key="sk-test",
+    )
+    assert isinstance(response, ModelResponse)
+    return response
+
+
+@pytest.mark.parametrize("model", _FIXED_SAMPLING_ROUTES)
+def test_completion_accepts_temperature_one_on_models_that_removed_sampling_params(
+    local_model_cost_map: None, model: str
+) -> None:
+    assert _mock_completion(model, temperature=1).choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize("model", _FIXED_SAMPLING_ROUTES)
+def test_completion_refuses_other_temperatures_naming_the_one_accepted_value(local_model_cost_map, model: str) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="Only temperature=1 is supported"):
+        _mock_completion(model, temperature=0.5)
+
+
+_TOOL_CALL_HISTORY_WITHOUT_THINKING_BLOCKS: Final = (
+    {"role": "user", "content": "Use the add tool to compute 2 + 3."},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "add", "arguments": '{"a": 2}'}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "5"},
+)
+
+
+@pytest.mark.parametrize(
+    ("thinking", "sent_thinking"),
+    [
+        pytest.param({"type": "adaptive"}, {"type": "adaptive"}, id="adaptive_is_kept"),
+        pytest.param({"type": "enabled", "budget_tokens": 2000}, None, id="budget_is_dropped"),
+    ],
+)
+def test_modify_params_keeps_adaptive_thinking_when_tool_call_history_has_no_thinking_blocks(
+    thinking: dict[str, object], sent_thinking: dict[str, object] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    request: Final = AnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[dict(message) for message in _TOOL_CALL_HISTORY_WITHOUT_THINKING_BLOCKS],
+        optional_params={"thinking": thinking, "max_tokens": 4096},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("thinking") == sent_thinking
+
+
+def test_transform_request_leaves_the_callers_extra_body_for_a_repeat_call() -> None:
+    optional_params: Final = {"max_tokens": 16, "extra_body": {"top_k": 5}}
+
+    requests: Final = tuple(
+        AnthropicConfig().transform_request(
+            model="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        for _ in range(2)
+    )
+
+    assert [request.get("top_k") for request in requests] == [5, 5]
+    assert all("extra_body" not in request for request in requests)

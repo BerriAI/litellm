@@ -482,6 +482,18 @@ def _logged_spend(call_id: str) -> float:
     return rows[0]["spend"]
 
 
+def _logged_token_cost(call_id: str) -> float:
+    rows: Final = read_rows(
+        'SELECT prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
+        "OR metadata->>'litellm_call_id'=%s",
+        (call_id, call_id, call_id),
+    )
+    assert len(rows) == 1, rows
+    prompt_tokens, completion_tokens = rows[0]["prompt_tokens"], rows[0]["completion_tokens"]
+    assert isinstance(prompt_tokens, int) and isinstance(completion_tokens, int), rows
+    return prompt_tokens * INPUT_COST_PER_TOKEN + completion_tokens * OUTPUT_COST_PER_TOKEN
+
+
 def _key_spend(key: str) -> float:
     rows: Final = read_rows(
         'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashlib.sha256(key.encode()).hexdigest(),)
@@ -849,13 +861,16 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
     stream_cost: Final = 9 * INPUT_COST_PER_TOKEN + 4 * OUTPUT_COST_PER_TOKEN
     costs: Final = [_logged_spend(call_id) for _, (_, _, _, call_id) in after]
     assert costs == [pytest.approx(stream_cost)] * len(after), costs
+    cut_off_costs: Final = [_logged_token_cost(call_id) for _, (_, _, _, call_id) in during]
+    assert min(cut_off_costs) > 0, cut_off_costs
+    expected_charge: Final = sum(cut_off_costs) + len(after) * stream_cost
     charged: Final = eventually(
         lambda: _key_spend(rig.keys[OUTAGE]) - spend_before,
-        lambda spend: spend == pytest.approx(len((*during, *after)) * stream_cost),
+        lambda spend: spend == pytest.approx(expected_charge),
         seconds=70,
         return_last_on_timeout=True,
     )
-    assert charged == pytest.approx(len((*during, *after)) * stream_cost), charged
+    assert charged == pytest.approx(expected_charge), (charged, cut_off_costs)
 
 
 def test_client_disconnect_stops_the_proxy_reading_the_upstream(rig: Rig) -> None:

@@ -1,11 +1,15 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+//! Claude on Vertex AI's `/v1/messages`: the Anthropic request reshaped for Vertex (version in
+//! the body, model in the URL, Vertex's betas and labels), sent with a Google access token to the
+//! project and region the call resolves.
+
+use crate::vertex_ai::common_utils::vertex_region;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
-    VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
-    get_vertex_ai_project_from_credentials, secret_names,
+    VertexConfig, get_vertex_ai_project, get_vertex_ai_project_from_credentials, secret_names,
+    vertex::vertex_location,
 };
 use litellm_host::interceptors::RetriedRequest;
-use litellm_http::request::{has_header, header_value, without_headers};
+use litellm_http::request::{header_value, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, VERSION_HEADER},
@@ -17,60 +21,58 @@ use serde_json::{Value, json};
 use crate::{
     Error,
     anthropic::{
-        common_utils::{merge_beta_headers, supports_effort_param},
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::{provider_feature_betas, transform_messages_request},
-        },
+        beta_gated_fields::strip_beta_gated_request,
+        beta_headers::BetaPolicy,
+        common_utils::{existing_betas, merge_beta_headers, supports_effort_param},
+        messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, provider_feature_betas},
     },
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, Headers, LoggedIn, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
-            transformation::BaseMessagesConfig,
+            tools::ToolCustomField,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
-    vertex_ai::common_utils::get_vertex_base_url,
+    vertex_ai::{
+        common_utils::{get_vertex_base_url, graft_default_vertex_path, join_api_base},
+        request_labels::with_partner_labels_header,
+    },
 };
 use litellm_llms_types::providers::vertex_ai::{
-    ANTHROPIC_VERSION, DEFAULT_LOCATION, RAW_PREDICT, STREAM_RAW_PREDICT,
+    ANTHROPIC_VERSION, RAW_PREDICT, STREAM_RAW_PREDICT,
 };
+use litellm_python_compat::urllib::urlsplit;
 
 const WEB_SEARCH_TOOL_PREFIX: &str = "web_search";
+const CONTENT_TYPE_HEADER: &str = "content-type";
+const JSON_CONTENT_TYPE: &str = "application/json";
 const VERSIONS_SERVED_AS_VERTEX_DEFAULT: [&str; 3] = ["", "2023-01-01", "2023-06-01"];
 const VERSIONS_VERTEX_ACCEPTS_IN_BODY: [&str; 2] = [ANTHROPIC_VERSION, "2026-10-21"];
 
 /// Claude on Vertex AI, Python's `VertexAIPartnerModelsAnthropicMessagesConfig`: the Anthropic
 /// payload addressed to a project and location, authenticated with a Google access token.
-pub struct VertexAiPartnerModelsAnthropicMessagesConfig;
+pub struct VertexAiMessagesConfig;
 
-pub const VERTEX_ANTHROPIC_MESSAGES_CONFIG: VertexAiPartnerModelsAnthropicMessagesConfig =
-    VertexAiPartnerModelsAnthropicMessagesConfig;
+pub const VERTEX_AI_MESSAGES_CONFIG: VertexAiMessagesConfig = VertexAiMessagesConfig;
 
-impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
-    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
-        }
-    }
-
-    fn retry_after_http_error(
+impl MessagesEndpoint for VertexAiMessagesConfig {
+    fn select_endpoint(
         &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        litellm_params: LitellmParams,
+        model: &str,
+        logged_in: LoggedIn,
+        supported_regions: &[String],
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> LitellmParams {
+        vertex_connection_params(
+            litellm_params,
+            model,
+            logged_in.project,
+            supported_regions,
+            env_lookup,
+        )
     }
 
     fn get_complete_url(
@@ -85,44 +87,22 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         let project = get_vertex_ai_project(&config, env_lookup)
             .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
             .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
-        let location = get_vertex_ai_location(&config, env_lookup)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        let location = vertex_region(vertex_location(&litellm_params.vertex, env_lookup), &[]);
         complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
     }
+}
 
-    fn transform_anthropic_messages_request(
-        &self,
-        request: MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(request, &context.keeping_display_updates())?;
-        let request = strip_cache_control_scope(normalize_system_role_messages(
-            request,
-            context
-                .thinking
-                .capabilities
-                .supports_mid_conversation_system,
-        ));
-        let accepts_effort = supports_effort_param(&context.thinking.capabilities);
-        Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                output_config: request
-                    .params
-                    .output_config
-                    .and_then(|config| sanitize_output_config(config, accepts_effort)),
-                ..request.params
-            },
-            ..request
-        })
-    }
-
+impl MessagesAuth for VertexAiMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         secret_names()
     }
 
-    /// A forwarded bearer is sent as is; otherwise a Google access token for the configured
-    /// credentials (`vertex_credentials`, `VERTEXAI_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS`,
-    /// then application default credentials) is acquired when the request is sent.
+    /// Python's `_finalize_vertex_messages_environment`: the call always logs in to Google as
+    /// `VertexBase.load_auth` does, from `vertex_credentials`, `VERTEXAI_CREDENTIALS`, then
+    /// application default credentials, and the token is set under the exact `Authorization` key,
+    /// replacing a caller's header of that spelling only. The exact `content-type` key is set to
+    /// JSON the same way, and the proxy's request labels replace the caller's
+    /// `X-Vertex-AI-Labels` once label fields are configured.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -132,25 +112,44 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         litellm_params: &LitellmParams,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, "authorization") {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
-        }
         Ok(ValidatedEnvironment {
-            headers,
+            headers: with_partner_labels_header(
+                with_exact_header(headers, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE),
+                &litellm_params.extra,
+            ),
             auth: AuthScheme::GcpAccessToken {
-                config: Box::new(VertexConfig::from_params(&litellm_params.vertex)),
+                params: Box::new(litellm_params.vertex.clone()),
             },
         })
     }
+}
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        merge_beta_headers(
-            without_headers(headers, &[VERSION_HEADER]),
-            vertex_feature_betas(request),
-        )
+impl MessagesDialect for VertexAiMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+    }
+
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ANTHROPIC_MESSAGES_CONFIG.tool_custom_field(model)
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        let request = ANTHROPIC_MESSAGES_CONFIG.transform_anthropic_messages_request(
+            request,
+            &context.warning_dropped_disabled_thinking(),
+        )?;
+        Ok(sanitize_vertex_anthropic_output_params(
+            request,
+            supports_effort_param(&context.thinking.capabilities),
+        ))
     }
 
     fn request_body(
@@ -159,38 +158,107 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         headers: &Headers,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
-        let version = vertex_version(
-            &request.model,
-            header_value(headers, VERSION_HEADER),
-            drop_params,
-        )?;
-        Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                extra: request
-                    .params
-                    .extra
-                    .into_iter()
-                    .chain([("anthropic_version".to_string(), json!(version))])
-                    .collect(),
-                ..request.params
-            },
-            ..request
-        })
+        let request = with_vertex_anthropic_version(request, headers, drop_params)?;
+        fold_output_format_into_output_config(request)
+    }
+
+    /// Python's Vertex beta set merged into the caller's betas, then the handler's
+    /// `update_headers_with_filtered_beta` over the `vertex_ai` row.
+    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+        let headers = without_headers(headers, &[VERSION_HEADER]);
+        BetaPolicy::Filter(BetaProvider::VertexAi)
+            .apply(merge_beta_headers(headers, vertex_feature_betas(request)))
+    }
+
+    /// Python's transform strips the thinking and system fields the final, filtered header does
+    /// not unlock, then normalizes system roles and drops `cache_control.scope`, all after the
+    /// betas were chosen from the request as sent.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        headers: Headers,
+        context: &MessagesTransformContext,
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        let request = strip_beta_gated_request(
+            request,
+            &existing_betas(&headers),
+            context.drops_unsupported_params,
+            BetaProvider::VertexAi,
+        );
+        let request = normalize_system_role_messages(
+            request,
+            context
+                .thinking
+                .capabilities
+                .supports_mid_conversation_system,
+            context.drops_unsupported_params,
+            BetaProvider::VertexAi,
+        );
+        Ok((strip_cache_control_scope(request), headers))
     }
 
     /// Vertex addresses the model in the URL and rejects it in the body.
-    fn wire_body(&self, mut body: Value) -> Value {
-        if let Value::Object(fields) = &mut body {
-            fields.remove("model");
-        }
-        body
+    fn wire_body(&self, body: Value) -> Value {
+        without_model(body)
     }
 }
 
-/// Python's `create_vertex_url` plus `_check_custom_proxy` for the Claude partner: the
-/// publisher path under the location host, or under a custom base that has no path of its
-/// own, else the custom base with the predict verb appended. A custom base also gets
-/// `alt=sse` when streaming.
+impl MessagesReply for VertexAiMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
+    }
+}
+
+/// The connection params Python's `get_complete_vertex_url` reads: the project the login
+/// resolved, and the region a model the model map lists `supported_regions` for is routed to.
+pub fn vertex_connection_params(
+    params: LitellmParams,
+    model: &str,
+    logged_in_project: Option<String>,
+    supported_regions: &[String],
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> LitellmParams {
+    let vertex_location = match supported_regions.is_empty() {
+        true => params.vertex.vertex_location.clone(),
+        false => {
+            let configured = vertex_location(&params.vertex, env_lookup);
+            let routed = vertex_region(configured.clone(), supported_regions);
+            if let Some(configured) = configured.filter(|configured| *configured != routed) {
+                warn_unsupported_region(model, &configured, supported_regions, &routed);
+            }
+            Some(routed)
+        }
+    };
+    LitellmParams {
+        vertex: VertexParams {
+            vertex_project: logged_in_project.or(params.vertex.vertex_project.clone()),
+            vertex_location,
+            ..params.vertex.clone()
+        },
+        ..params
+    }
+}
+
+/// `get_vertex_region`'s warning when it overrides a configured location the model does not
+/// support.
+fn warn_unsupported_region(model: &str, configured: &str, supported: &[String], routed: &str) {
+    litellm_tracing::warn!(
+        "Vertex AI model {model} is not served in {configured}, so the call goes to {routed} (served in {}).",
+        supported.join(", ")
+    );
+}
+
+/// Python's `get_complete_vertex_url` for the Claude partner: the publisher path joined to the
+/// location host, or `_check_custom_proxy` over a custom base. A base without a path gets the
+/// publisher path, a base that is only an API version gets it grafted after that version, and
+/// any other base gets the predict verb appended. A custom base also gets `alt=sse` in its
+/// query when streaming.
 pub fn complete_vertex_anthropic_url(
     api_base: Option<&str>,
     project: &str,
@@ -203,46 +271,121 @@ pub fn complete_vertex_anthropic_url(
     } else {
         RAW_PREDICT
     };
-    let path = format!(
-        "/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:{verb}"
+    let route = format!(
+        "v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:{verb}"
     );
-    let custom = api_base.map(str::trim).filter(|base| !base.is_empty());
-    let Some(custom) = custom else {
-        return Ok(format!("{}{path}", get_vertex_base_url(location)?));
+    let Some(custom) = api_base.filter(|base| !base.is_empty()) else {
+        return Ok(join_api_base(&get_vertex_base_url(location)?, &route));
     };
-    let custom = custom.trim_end_matches('/');
-    let authority_and_path = custom.split_once("://").map_or(custom, |(_, rest)| rest);
-    let base_path = authority_and_path
-        .find('/')
-        .map_or("", |index| &authority_and_path[index..]);
-    let url = match base_path {
-        "" => format!("{custom}{path}"),
-        "/v1" | "/v1beta1" => format!("{custom}{}", path.trim_start_matches("/v1")),
-        _ => format!("{custom}:{verb}"),
+    let default_url = join_api_base(custom, &route);
+    let base_path = urlsplit(custom).path;
+    // The `/v1` / `/v1beta1` branch deliberately keeps Python's doubled version segment
+    // (`/v1/v1/projects/...`) so existing gateway setups keep working.
+    let url = if base_path.is_empty() || base_path == "/" {
+        join_api_base(custom, urlsplit(&default_url).path)
+    } else if matches!(base_path.trim_end_matches('/'), "/v1" | "/v1beta1")
+        && urlsplit(&default_url).path.contains("/projects/")
+    {
+        graft_default_vertex_path(custom, &default_url)
+    } else {
+        format!("{}:{verb}", custom.trim_end_matches('/'))
     };
     if !stream {
         return Ok(url);
     }
-    Ok(match url.contains('?') {
-        true => format!("{url}&alt=sse"),
-        false => format!("{url}?alt=sse"),
-    })
+    let parsed = urlsplit(&url);
+    let query = match parsed.query.is_empty() {
+        true => "alt=sse".to_string(),
+        false => format!("{}&alt=sse", parsed.query),
+    };
+    Ok(parsed.with(parsed.path, &query))
 }
 
 /// Python's `sanitize_vertex_anthropic_output_params`: `effort` only reaches models whose
 /// capabilities accept it, a malformed `output_config` is dropped, and an emptied one is omitted.
-fn sanitize_output_config(
-    config: Recognized<OutputConfig>,
+fn sanitize_vertex_anthropic_output_params(
+    request: MessagesRequest,
     accepts_effort: bool,
-) -> Option<Recognized<OutputConfig>> {
-    let Recognized::Known(config) = config else {
-        return None;
+) -> MessagesRequest {
+    let output_config = match request.params.output_config {
+        Some(Recognized::Known(config)) => Some(OutputConfig {
+            effort: config.effort.filter(|_| accepts_effort),
+            ..config
+        })
+        .filter(|config| !config.is_empty())
+        .map(Recognized::Known),
+        Some(Recognized::Unrecognized(_)) | None => None,
     };
-    let sanitized = OutputConfig {
-        effort: config.effort.filter(|_| accepts_effort),
-        ..config
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            output_config,
+            ..request.params
+        },
+        ..request
+    }
+}
+
+/// Python's `headers[name] = value`: only a key spelled exactly `name` is replaced.
+fn with_exact_header(headers: Headers, name: &str, value: &str) -> Headers {
+    headers
+        .into_iter()
+        .filter(|(present, _)| present != name)
+        .chain([(name.to_string(), value.to_string())])
+        .collect()
+}
+
+/// Python's `_fold_output_format_into_output_config`, run after the version check as Python's
+/// transform does: an object `output_format` becomes `output_config.format`, winning over one
+/// already there and replacing a malformed `output_config`. Any other value is refused, since
+/// the shared transform already dropped it under `drop_params`.
+fn fold_output_format_into_output_config(
+    mut request: MessagesRequest,
+) -> Result<MessagesRequest, Error> {
+    let output_format = match request.params.output_format.take().map(OutputFormat::from) {
+        None => return Ok(request),
+        Some(OutputFormat::Object(format)) => format,
+        Some(OutputFormat::Other { python_type }) => {
+            return Err(Error::InvalidRequest(
+                crate::ErrorDetail::NonObjectVertexOutputFormat {
+                    model: request.model,
+                    actual: python_type,
+                },
+            ));
+        }
     };
-    (!sanitized.is_empty()).then_some(Recognized::Known(sanitized))
+    let config = match request.params.output_config {
+        Some(Recognized::Known(config)) => config,
+        Some(Recognized::Unrecognized(_)) | None => OutputConfig::default(),
+    };
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            output_config: Some(Recognized::Known(OutputConfig {
+                format: Some(Value::Object(output_format)),
+                ..config
+            })),
+            ..request.params
+        },
+        ..request
+    })
+}
+
+/// A caller's `output_format`: an object Vertex folds into `output_config.format`, or a value of
+/// another type, which Vertex refuses by its Python type name.
+#[derive(Clone, Debug, PartialEq)]
+enum OutputFormat {
+    Object(serde_json::Map<String, Value>),
+    Other { python_type: &'static str },
+}
+
+impl From<Value> for OutputFormat {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Object(format) => Self::Object(format),
+            other => Self::Other {
+                python_type: litellm_python_compat::json::type_name(&other),
+            },
+        }
+    }
 }
 
 fn has_web_search_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
@@ -256,15 +399,50 @@ fn has_web_search_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
 }
 
 /// Python's Vertex `validate_anthropic_messages_environment` beta set: the shared feature
-/// betas under Vertex's policy, plus the web search beta Vertex needs spelled out.
+/// betas under Vertex's policy, less structured outputs, which Python never derives for Vertex,
+/// plus the web search beta Vertex needs spelled out.
 fn vertex_feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
-    provider_feature_betas(request, BetaProvider::VertexAi).union(
-        has_web_search_tool(params.tools.as_deref())
-            .then_some(AnthropicBeta::WebSearch20250305)
-            .into_iter()
-            .collect(),
-    )
+    provider_feature_betas(request, BetaProvider::VertexAi)
+        .into_iter()
+        .filter(|beta| *beta != AnthropicBeta::StructuredOutputs20251113)
+        .chain(
+            has_web_search_tool(params.tools.as_deref())
+                .then_some(AnthropicBeta::WebSearch20250305),
+        )
+        .collect()
+}
+
+/// The version Vertex reads from the body, carried there as `anthropic_version`.
+fn with_vertex_anthropic_version(
+    request: MessagesRequest,
+    headers: &Headers,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    let version = vertex_version(
+        &request.model,
+        header_value(headers, VERSION_HEADER),
+        drop_params,
+    )?;
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            extra: request
+                .params
+                .extra
+                .into_iter()
+                .chain([("anthropic_version".to_string(), json!(version))])
+                .collect(),
+            ..request.params
+        },
+        ..request
+    })
+}
+
+fn without_model(mut body: Value) -> Value {
+    if let Value::Object(fields) = &mut body {
+        fields.remove("model");
+    }
+    body
 }
 
 fn vertex_version<'a>(
@@ -277,11 +455,9 @@ fn vertex_version<'a>(
         version if VERSIONS_VERTEX_ACCEPTS_IN_BODY.contains(&version) => Ok(version),
         _ if drop_params => Ok(ANTHROPIC_VERSION),
         version => Err(Error::InvalidRequest(
-            crate::ErrorDetail::UnsupportedParameter {
+            crate::ErrorDetail::UnsupportedVertexAnthropicVersion {
                 model: model.into(),
-                param: VERSION_HEADER.into(),
                 value: version.into(),
-                hint: String::new(),
             },
         )),
     }
@@ -316,7 +492,7 @@ mod tests {
         stream: bool,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        VERTEX_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+        VERTEX_AI_MESSAGES_CONFIG.get_complete_url(
             api_base,
             "claude-sonnet-4-5@20250929",
             litellm_params,
@@ -325,44 +501,69 @@ mod tests {
         )
     }
 
-    const PATH: &str = "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929";
+    const PATH: &str =
+        "/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929";
 
     #[rstest]
     #[case::regional(
         None,
         false,
-        "https://us-east5-aiplatform.googleapis.com",
-        ":rawPredict"
+        "https://us-east5-aiplatform.googleapis.com/v1{P}:rawPredict"
     )]
-    #[case::streaming(
+    #[case::regional_stream(
         None,
         true,
-        "https://us-east5-aiplatform.googleapis.com",
-        ":streamRawPredict"
+        "https://us-east5-aiplatform.googleapis.com/v1{P}:streamRawPredict"
     )]
-    #[case::custom_host_gets_the_default_path(
-        Some("https://proxy.example/"),
-        false,
-        "https://proxy.example",
-        ":rawPredict"
-    )]
-    #[case::custom_host_streaming_adds_alt_sse(
-        Some("https://proxy.example"),
+    #[case::empty_base_is_no_base(
+        Some(""),
         true,
-        "https://proxy.example",
-        ":streamRawPredict?alt=sse"
+        "https://us-east5-aiplatform.googleapis.com/v1{P}:streamRawPredict"
     )]
-    #[case::custom_versioned_base_is_grafted(
-        Some("https://proxy.example/v1"),
+    #[case::host(Some("https://h/"), false, "https://h/v1{P}:rawPredict")]
+    #[case::host_stream(Some("https://h"), true, "https://h/v1{P}:streamRawPredict?alt=sse")]
+    #[case::version_is_doubled(Some("https://h/v1"), false, "https://h/v1/v1{P}:rawPredict")]
+    #[case::version_with_slash(
+        Some("https://h:8080/v1/"),
+        true,
+        "https://h:8080/v1/v1{P}:streamRawPredict?alt=sse"
+    )]
+    #[case::beta_version(Some("https://h/v1beta1"), false, "https://h/v1beta1/v1{P}:rawPredict")]
+    #[case::version_with_query(
+        Some("https://h/v1?k=1"),
+        true,
+        "https://h/v1?k=1:streamRawPredict&alt=sse"
+    )]
+    #[case::host_with_query(Some("https://h?k=1"), false, "https://h?k=1/")]
+    #[case::host_slash_query(Some("https://h/?k=1"), true, "https://h?k=1/&alt=sse")]
+    #[case::own_path(
+        Some("https://h/custom/path/"),
         false,
-        "https://proxy.example",
-        ":rawPredict"
+        "https://h/custom/path:rawPredict"
     )]
-    fn the_url_is_the_publisher_path_under_the_host(
+    #[case::own_path_stream(
+        Some("https://h/custom/path"),
+        true,
+        "https://h/custom/path:streamRawPredict?alt=sse"
+    )]
+    #[case::own_path_query(Some("https://h/a?b"), true, "https://h/a?b:streamRawPredict&alt=sse")]
+    #[case::fragment_stream(
+        Some("https://h/a?b#c"),
+        true,
+        "https://h/a?b&alt=sse#c:streamRawPredict"
+    )]
+    // Approved difference: Python's urlparse reads `;x` as path params; the builder keeps it in
+    // the path, so the base is no longer a bare version and gets the verb.
+    #[case::version_params(
+        Some("https://h/v1;x"),
+        true,
+        "https://h/v1;x:streamRawPredict?alt=sse"
+    )]
+    #[case::upper_case_version(Some("https://h/V1"), false, "https://h/V1:rawPredict")]
+    fn the_url_matches_python(
         #[case] api_base: Option<&str>,
         #[case] stream: bool,
-        #[case] host: &str,
-        #[case] suffix: &str,
+        #[case] expected: &str,
     ) {
         assert_eq!(
             url(
@@ -372,26 +573,7 @@ mod tests {
                 &no_env
             )
             .unwrap(),
-            format!("{host}{PATH}{suffix}")
-        );
-    }
-
-    #[rstest]
-    #[case::not_streaming(false, "https://proxy.example/custom/path:rawPredict")]
-    #[case::streaming(true, "https://proxy.example/custom/path:streamRawPredict?alt=sse")]
-    fn a_custom_base_with_its_own_path_only_gets_the_verb(
-        #[case] stream: bool,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(
-            url(
-                Some("https://proxy.example/custom/path"),
-                &params(Some("proj"), Some("us-east5")),
-                stream,
-                &no_env
-            )
-            .unwrap(),
-            expected
+            expected.replace("{P}", PATH)
         );
     }
 
@@ -477,6 +659,51 @@ mod tests {
     }
 
     #[rstest]
+    #[case::login_project_and_listed_region(
+        Some("logged-in"),
+        &["us-east5"],
+        &[("VERTEXAI_LOCATION", "europe-west4")],
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/logged-in/locations/us-east5/"
+    )]
+    #[case::supported_location_kept(
+        Some("logged-in"),
+        &["us-east5", "europe-west4"],
+        &[("VERTEXAI_LOCATION", "europe-west4")],
+        "https://europe-west4-aiplatform.googleapis.com/v1/projects/logged-in/locations/europe-west4/"
+    )]
+    #[case::no_regions_keep_the_location(
+        None,
+        &[],
+        &[("VERTEXAI_LOCATION", "europe-west4")],
+        "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj/locations/europe-west4/"
+    )]
+    fn the_login_project_and_supported_regions_address_the_call(
+        #[case] logged_in: Option<&str>,
+        #[case] supported: &[&str],
+        #[case] env: &[(&str, &str)],
+        #[case] prefix: &str,
+    ) {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let supported: Vec<String> = supported.iter().map(|region| region.to_string()).collect();
+        let connection = vertex_connection_params(
+            params(Some("proj"), None),
+            "claude-sonnet-5-5@default",
+            logged_in.map(str::to_string),
+            &supported,
+            &lookup,
+        );
+        assert!(
+            url(None, &connection, false, &lookup)
+                .unwrap()
+                .starts_with(prefix)
+        );
+    }
+
+    #[rstest]
     fn without_a_project_anywhere_the_call_fails_before_sending() {
         let error = url(None, &LitellmParams::default(), false, &no_env).unwrap_err();
 
@@ -494,7 +721,7 @@ mod tests {
     }
 
     fn validated(forwarded: &[(&str, &str)]) -> ValidatedEnvironment {
-        VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        VERTEX_AI_MESSAGES_CONFIG
             .validate_environment(
                 forwarded
                     .iter()
@@ -510,25 +737,86 @@ mod tests {
     }
 
     #[rstest]
-    fn the_credential_is_a_google_access_token_for_the_configured_project() {
+    #[case::configured(
+        json!(["user_api_key_team_id"]),
+        vec![("X-Vertex-AI-Labels".to_string(), base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json!({"user_api_key_team_id": "t1"}).to_string()))]
+    )]
+    #[case::unset(json!(null), vec![("x-vertex-ai-labels".to_string(), "forged".to_string())])]
+    fn configured_label_fields_replace_the_callers_labels_header(
+        #[case] fields: Value,
+        #[case] expected: Headers,
+    ) {
+        let litellm_params = LitellmParams {
+            extra: [
+                ("vertex_request_label_fields".to_string(), fields),
+                (
+                    "litellm_metadata".to_string(),
+                    json!({"user_api_key_team_id": "t1"}),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..params(Some("proj"), None)
+        };
+        let headers = VERTEX_AI_MESSAGES_CONFIG
+            .validate_environment(
+                vec![("x-vertex-ai-labels".to_string(), "forged".to_string())],
+                None,
+                "claude-sonnet-4-5",
+                &MessagesOptionalParams::default(),
+                &litellm_params,
+                &no_env,
+            )
+            .unwrap()
+            .headers;
+        let labels: Headers = headers
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-vertex-ai-labels"))
+            .collect();
+        assert_eq!(labels, expected);
+    }
+
+    #[rstest]
+    #[case::no_caller_credential(&[])]
+    #[case::caller_bearer(&[("Authorization", "Bearer caller")])]
+    #[case::caller_lowercase_bearer(&[("authorization", "Bearer caller")])]
+    fn the_credential_is_always_a_google_access_token_for_the_configured_project(
+        #[case] forwarded: &[(&str, &str)],
+    ) {
         assert!(matches!(
-            validated(&[]).auth,
-            AuthScheme::GcpAccessToken { config } if config.project_id() == Some("proj")
+            validated(forwarded).auth,
+            AuthScheme::GcpAccessToken { params } if params.project().as_deref() == Some("proj")
         ));
     }
 
     #[rstest]
-    fn a_forwarded_bearer_is_sent_as_is() {
-        assert!(matches!(
-            validated(&[("Authorization", "Bearer caller")]).auth,
-            AuthScheme::Forwarded
-        ));
+    #[case::caller_json(&[("content-type", "application/json")], &[("content-type", "application/json")])]
+    #[case::caller_text_is_replaced(
+        &[("content-type", "text/plain"), ("x-trace", "1")],
+        &[("x-trace", "1"), ("content-type", "application/json")]
+    )]
+    #[case::another_casing_stays_beside_it(
+        &[("Content-Type", "text/plain")],
+        &[("Content-Type", "text/plain"), ("content-type", "application/json")]
+    )]
+    #[case::none_sent(&[], &[("content-type", "application/json")])]
+    fn the_exact_content_type_key_is_json(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] expected: &[(&str, &str)],
+    ) {
+        assert_eq!(
+            validated(forwarded).headers,
+            expected
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect::<Headers>()
+        );
     }
 
     #[rstest]
     fn default_headers_carry_no_anthropic_version() {
         assert_eq!(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
+            VERTEX_AI_MESSAGES_CONFIG.default_headers(),
             &[("content-type", "application/json")]
         );
     }
@@ -544,7 +832,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+            VERTEX_AI_MESSAGES_CONFIG.request_headers(
                 vec![
                     (name.to_string(), "2026-10-21".to_string()),
                     ("x-request-id".to_string(), "req-1".to_string()),
@@ -555,14 +843,27 @@ mod tests {
         );
     }
 
-    fn transformed(value: Value, context: &MessagesTransformContext) -> Value {
+    fn finalized(
+        value: Value,
+        headers: &[(&str, &str)],
+        context: &MessagesTransformContext,
+    ) -> Value {
         let request: MessagesRequest = serde_json::from_value(value).unwrap();
-        serde_json::to_value(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request, context)
-                .unwrap(),
-        )
-        .unwrap()
+        let transformed = VERTEX_AI_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, context)
+            .unwrap();
+        let headers = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let (finalized, _) = VERTEX_AI_MESSAGES_CONFIG
+            .finalize_request(transformed, headers, context)
+            .unwrap();
+        serde_json::to_value(finalized).unwrap()
+    }
+
+    fn transformed(value: Value, context: &MessagesTransformContext) -> Value {
+        finalized(value, &[], context)
     }
 
     #[rstest]
@@ -590,7 +891,7 @@ mod tests {
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         let body = serde_json::to_value(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            VERTEX_AI_MESSAGES_CONFIG
                 .request_body(request, &headers, drop_params)
                 .unwrap(),
         )
@@ -609,7 +910,7 @@ mod tests {
         }))
         .unwrap();
         let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
-        let Error::InvalidRequest(detail) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+        let Error::InvalidRequest(detail) = VERTEX_AI_MESSAGES_CONFIG
             .request_body(request, &headers, false)
             .unwrap_err()
         else {
@@ -624,6 +925,86 @@ mod tests {
         );
     }
 
+    fn body_with(fields: Value, headers: &[(&str, &str)]) -> Result<Value, Error> {
+        let mut request = json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        });
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let headers: Headers = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        VERTEX_AI_MESSAGES_CONFIG
+            .request_body(serde_json::from_value(request).unwrap(), &headers, false)
+            .map(|body| serde_json::to_value(body).unwrap())
+    }
+
+    #[rstest]
+    #[case::moved_into_output_config(
+        json!({"output_format": {"type": "json_schema"}}),
+        Some(json!({"format": {"type": "json_schema"}}))
+    )]
+    #[case::wins_over_an_existing_format(
+        json!({"output_format": {"type": "new"}, "output_config": {"effort": "high", "format": {"type": "old"}}}),
+        Some(json!({"effort": "high", "format": {"type": "new"}}))
+    )]
+    #[case::replaces_a_malformed_config(
+        json!({"output_format": {"type": "json_schema"}, "output_config": "not an object"}),
+        Some(json!({"format": {"type": "json_schema"}}))
+    )]
+    #[case::null_is_no_format(json!({"output_format": null, "output_config": {"effort": "low"}}), Some(json!({"effort": "low"})))]
+    #[case::absent(json!({}), None)]
+    fn output_format_folds_into_output_config(
+        #[case] fields: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        let body = body_with(fields, &[]).unwrap();
+        assert_eq!(body.get("output_format"), None);
+        assert_eq!(body.get("output_config").cloned(), expected);
+    }
+
+    #[rstest]
+    #[case::string(json!("text"), "str")]
+    #[case::list(json!([1]), "list")]
+    #[case::integer(json!(1), "int")]
+    #[case::float(json!(1.5), "float")]
+    #[case::boolean(json!(true), "bool")]
+    fn a_non_object_output_format_is_refused_with_pythons_text(
+        #[case] output_format: Value,
+        #[case] actual: &str,
+    ) {
+        let Err(Error::InvalidRequest(detail)) =
+            body_with(json!({"output_format": output_format}), &[])
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            format!(
+                "claude-sonnet-4-5 on vertex_ai needs `output_format` to be a JSON object, got {actual}. \
+                 To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            )
+        );
+    }
+
+    #[rstest]
+    fn an_unsupported_version_is_refused_before_the_output_format() {
+        assert!(matches!(
+            body_with(
+                json!({"output_format": "text"}),
+                &[("anthropic-version", "latest")]
+            ),
+            Err(Error::InvalidRequest(
+                crate::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
+            ))
+        ));
+    }
+
     #[rstest]
     fn the_body_carries_the_vertex_version_and_the_wire_drops_the_model() {
         let request: MessagesRequest = serde_json::from_value(json!({
@@ -633,9 +1014,9 @@ mod tests {
         }))
         .unwrap();
         let body = serde_json::to_value(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            VERTEX_AI_MESSAGES_CONFIG
                 .request_body(
-                    VERTEX_ANTHROPIC_MESSAGES_CONFIG
+                    VERTEX_AI_MESSAGES_CONFIG
                         .transform_anthropic_messages_request(
                             request,
                             &MessagesTransformContext::default(),
@@ -648,7 +1029,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(body["model"], json!("claude-sonnet-4-5@20250929"));
-        let wire = VERTEX_ANTHROPIC_MESSAGES_CONFIG.wire_body(body);
+        let wire = VERTEX_AI_MESSAGES_CONFIG.wire_body(body);
         assert_eq!(wire.get("model"), None);
         assert_eq!(wire["anthropic_version"], json!("vertex-2023-10-16"));
     }
@@ -719,11 +1100,154 @@ mod tests {
                 },
                 drop_params: false,
                 drops_unsupported_params: false,
+                ..MessagesTransformContext::default()
             },
         );
-        assert_eq!(body["system"], json!("be terse"));
+        assert_eq!(
+            body["system"],
+            json!([{"type": "text", "text": "be terse"}])
+        );
         assert_eq!(body["messages"][2]["role"], json!(role));
         assert_eq!(body["messages"].as_array().unwrap().len(), 4);
+    }
+
+    fn dropping_context(drops_unsupported_params: bool) -> MessagesTransformContext {
+        MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::default()
+        }
+    }
+
+    #[rstest]
+    #[case::string("be terse", Some(json!([{"type": "text", "text": "be terse"}])))]
+    #[case::empty_string("", None)]
+    fn the_system_string_is_sent_as_blocks_as_python_does(
+        #[case] system: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let body = transformed(
+            json!({"model": "claude-sonnet-4-5", "max_tokens": 16, "system": system, "messages": [{"role": "user", "content": "a"}]}),
+            &MessagesTransformContext::default(),
+        );
+        assert_eq!(body.get("system").cloned(), expected);
+    }
+
+    #[rstest]
+    #[case::dropped_under_drop_params(true, 2)]
+    #[case::kept_without_drop_params(false, 3)]
+    fn a_converted_system_turn_loses_its_tool_changes_under_drop_params(
+        #[case] drops_unsupported_params: bool,
+        #[case] converted_blocks: usize,
+    ) {
+        let body = transformed(
+            json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 16,
+                "messages": [
+                    {"role": "user", "content": "a"},
+                    {"role": "assistant", "content": "b"},
+                    {"role": "system", "content": [
+                        {"type": "text", "text": "reminder"},
+                        {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "t"}}
+                    ]},
+                    {"role": "user", "content": "c"}
+                ]
+            }),
+            &dropping_context(drops_unsupported_params),
+        );
+        assert_eq!(body["messages"][2]["role"], json!("user"));
+        assert_eq!(
+            body["messages"][2]["content"].as_array().unwrap().len(),
+            converted_blocks
+        );
+    }
+
+    fn reminder(system: Value) -> Value {
+        json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 64,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                system,
+                {"role": "user", "content": "go on"}
+            ]
+        })
+    }
+
+    fn mid_conversation_system(drops_unsupported_params: bool) -> MessagesTransformContext {
+        MessagesTransformContext {
+            thinking: ThinkingContext {
+                capabilities: MessagesModelCapabilities {
+                    supports_mid_conversation_system: true,
+                    ..MessagesModelCapabilities::default()
+                },
+                ..ThinkingContext::default()
+            },
+            drops_unsupported_params,
+            ..MessagesTransformContext::default()
+        }
+    }
+
+    #[rstest]
+    #[case::clear_at_without_its_beta(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[],
+        true,
+        json!({"role": "system", "content": "note"})
+    )]
+    #[case::clear_at_with_its_beta(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[("anthropic-beta", "mid-conversation-system-clear-at-2026-08-21")],
+        true,
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}})
+    )]
+    #[case::clear_at_kept_without_drop_params(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[],
+        false,
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}})
+    )]
+    #[case::tool_addition_without_its_beta(
+        json!({"role": "system", "content": [{"type": "text", "text": "note"}, {"type": "tool_addition", "tool": {"name": "t"}}]}),
+        &[("anthropic-beta", "context-1m-2025-08-07")],
+        true,
+        json!({"role": "system", "content": [{"type": "text", "text": "note"}]})
+    )]
+    fn fields_the_final_betas_do_not_unlock_are_stripped_under_drop_params(
+        #[case] system: Value,
+        #[case] headers: &[(&str, &str)],
+        #[case] drops_unsupported_params: bool,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            finalized(
+                reminder(system),
+                headers,
+                &mid_conversation_system(drops_unsupported_params)
+            )["messages"][2],
+            expected
+        );
+    }
+
+    #[rstest]
+    fn a_leading_system_turn_is_stripped_before_it_is_hoisted() {
+        let body = finalized(
+            json!({
+                "model": "claude-opus-5-5",
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "system", "content": [{"type": "text", "text": "be terse"}, {"type": "tool_addition", "tool": {"name": "t"}}]},
+                    {"role": "user", "content": "hi"}
+                ]
+            }),
+            &[],
+            &mid_conversation_system(true),
+        );
+        assert_eq!(
+            body["system"],
+            json!([{"type": "text", "text": "be terse"}])
+        );
     }
 
     fn with_output_config() -> MessagesTransformContext {
@@ -737,6 +1261,7 @@ mod tests {
             },
             drop_params: false,
             drops_unsupported_params: false,
+            ..MessagesTransformContext::default()
         }
     }
 
@@ -778,7 +1303,7 @@ mod tests {
         assert_eq!(body.get("output_config").cloned(), expected);
     }
 
-    fn betas(fields: Value) -> Vec<String> {
+    fn betas(sent: &[(&str, &str)], fields: Value) -> Vec<String> {
         let request: MessagesRequest = serde_json::from_value(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 16,
@@ -793,8 +1318,13 @@ mod tests {
             base
         })
         .unwrap();
-        VERTEX_ANTHROPIC_MESSAGES_CONFIG
-            .request_headers(Vec::new(), &request)
+        VERTEX_AI_MESSAGES_CONFIG
+            .request_headers(
+                sent.iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                    .collect(),
+                &request,
+            )
             .into_iter()
             .filter(|(name, _)| name == "anthropic-beta")
             .flat_map(|(_, value)| value.split(',').map(str::to_string).collect::<Vec<_>>())
@@ -835,7 +1365,181 @@ mod tests {
         &[]
     )]
     #[case::fast_mode_is_not_a_vertex_beta(json!({"speed": "fast"}), &[])]
+    #[case::structured_output_needs_no_vertex_beta(
+        json!({"output_format": {"type": "json_schema", "schema": {"type": "object"}}}),
+        &[]
+    )]
+    #[case::output_config_format_needs_no_vertex_beta(
+        json!({"output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}}}),
+        &[]
+    )]
     fn beta_headers_follow_the_vertex_policy(#[case] fields: Value, #[case] expected: &[&str]) {
-        assert_eq!(betas(fields), expected);
+        assert_eq!(betas(&[], fields), expected);
+    }
+
+    #[rstest]
+    #[case::supported_kept("context-1m-2025-08-07", &["context-1m-2025-08-07"])]
+    #[case::renamed_for_vertex("advanced-tool-use-2025-11-20", &["tool-search-tool-2025-10-19"])]
+    #[case::header_only_row_kept("prompt-caching-2024-07-31", &["prompt-caching-2024-07-31"])]
+    #[case::structured_outputs_kept("structured-outputs-2025-11-13", &["structured-outputs-2025-11-13"])]
+    #[case::unsupported_dropped("files-api-2025-04-14,mcp-client-2025-11-20", &[])]
+    #[case::unknown_dropped("not-a-beta-2099-01-01", &[])]
+    #[case::mixed(
+        " files-api-2025-04-14 , context-1m-2025-08-07,unknown ",
+        &["context-1m-2025-08-07"]
+    )]
+    fn caller_betas_are_filtered_through_the_vertex_row(
+        #[case] sent: &str,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(betas(&[("anthropic-beta", sent)], json!({})), expected);
+    }
+
+    #[rstest]
+    fn caller_and_feature_betas_are_filtered_together() {
+        assert_eq!(
+            betas(
+                &[(
+                    "anthropic-beta",
+                    "files-api-2025-04-14,context-1m-2025-08-07"
+                )],
+                json!({"tools": [{"type": "web_search_20250305", "name": "web_search"}]})
+            ),
+            &["context-1m-2025-08-07", "web-search-2025-03-05"]
+        );
+    }
+
+    #[rstest]
+    fn a_header_left_without_betas_is_removed() {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .unwrap();
+        assert_eq!(
+            VERTEX_AI_MESSAGES_CONFIG.request_headers(
+                vec![
+                    (
+                        "anthropic-beta".to_string(),
+                        "files-api-2025-04-14".to_string()
+                    ),
+                    ("x-trace".to_string(), "1".to_string()),
+                ],
+                &request,
+            ),
+            vec![("x-trace".to_string(), "1".to_string())]
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct Warnings(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl litellm_tracing::Sink for Warnings {
+        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+            *metadata.level() == litellm_tracing::Level::WARN
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.lock().unwrap().push(record.message.clone());
+        }
+    }
+
+    #[rstest]
+    #[case::vertex_ai_warns(
+        true,
+        vec!["Dropping `thinking={'type': 'disabled'}` for model=claude-sonnet-5-5@default: thinking is always on for this model and cannot be disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain thinking blocks, and those thinking tokens are billed as output tokens.".to_owned()]
+    )]
+    #[case::anthropic_stays_silent_as_on_main(false, vec![])]
+    fn a_disabled_thinking_drop_warns_as_python_on_vertex_ai_only(
+        #[case] vertex: bool,
+        #[case] expected: Vec<String>,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-5-5@default",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "disabled"},
+        }))
+        .unwrap();
+        let context = MessagesTransformContext {
+            thinking: ThinkingContext {
+                capabilities: MessagesModelCapabilities {
+                    thinking_always_on: true,
+                    ..MessagesModelCapabilities::default()
+                },
+                ..ThinkingContext::default()
+            },
+            ..MessagesTransformContext::default()
+        };
+        let warnings = Warnings::default();
+
+        let transformed = litellm_tracing::Logger::new(warnings.clone()).scope(|| match vertex {
+            true => {
+                VERTEX_AI_MESSAGES_CONFIG.transform_anthropic_messages_request(request, &context)
+            }
+            false => crate::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG
+                .transform_anthropic_messages_request(request, &context),
+        });
+
+        assert_eq!(transformed.unwrap().params.thinking, None);
+        assert_eq!(*warnings.0.lock().unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::unsupported(Some("us-east5"), vec!["Vertex AI model claude-fz-regional-5-5@default is not served in us-east5, so the call goes to europe-west1 (served in europe-west1, asia-southeast1).".to_owned()])]
+    #[case::supported(Some("asia-southeast1"), vec![])]
+    #[case::unconfigured(None, vec![])]
+    fn an_overridden_region_warns_as_get_vertex_region_does(
+        #[case] location: Option<&str>,
+        #[case] expected: Vec<String>,
+    ) {
+        let supported = ["europe-west1".to_owned(), "asia-southeast1".to_owned()];
+        let warnings = Warnings::default();
+        litellm_tracing::Logger::new(warnings.clone()).scope(|| {
+            vertex_connection_params(
+                params(Some("proj"), location),
+                "claude-fz-regional-5-5@default",
+                None,
+                &supported,
+                &no_env,
+            )
+        });
+        assert_eq!(*warnings.0.lock().unwrap(), expected);
+    }
+
+    /// The URL Python's `get_complete_vertex_url` builds for each base, location, model and
+    /// stream flag in `testdata/python_urls.json`, written by LiteLLM's Python.
+    #[rstest]
+    fn the_url_matches_python_s_for_every_normal_base() {
+        #[derive(serde::Deserialize)]
+        struct Row {
+            api_base: Option<String>,
+            location: String,
+            model: String,
+            stream: bool,
+            url: String,
+        }
+        let rows: Vec<Row> =
+            serde_json::from_str(include_str!("testdata/python_urls.json")).unwrap();
+        assert!(!rows.is_empty());
+        for row in rows {
+            assert_eq!(
+                complete_vertex_anthropic_url(
+                    row.api_base.as_deref(),
+                    "p",
+                    &row.location,
+                    &row.model,
+                    row.stream
+                )
+                .unwrap(),
+                row.url,
+                "{:?} {} {} stream={}",
+                row.api_base,
+                row.location,
+                row.model,
+                row.stream
+            );
+        }
     }
 }

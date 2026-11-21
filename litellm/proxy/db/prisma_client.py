@@ -75,6 +75,15 @@ if TYPE_CHECKING:
 
     class PrismaBatchSession(Protocol):
         @property
+        def litellm_customermembertable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_customerteamtable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_customerorganizationtable(self) -> PrismaBatchActions: ...
+
+        @property
         def litellm_agentstable(self) -> PrismaBatchActions: ...
 
         @property
@@ -1281,6 +1290,7 @@ class PrismaManager:
                     from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
+                    ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()  # pyright: ignore[reportUnknownMemberType]  # litellm-proxy-extras is an optional install
                     PrismaManager._raise_if_partitioned_spend_logs()
                     run_prisma(
                         [

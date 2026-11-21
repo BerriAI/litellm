@@ -11,28 +11,418 @@ use std::{
 use litellm_redis_client::commands;
 use litellm_redis_client::{Amount, Expiry, Operation, Ttl};
 use litellm_redis_store::{
-    Number, TierPolicy,
-    router_usage::{COUNTER_TTL, Counter, Kind, RouterUsage},
+    Number, RequestRedis, Send as RedisSend, TierPolicy,
+    router_usage::{COUNTER_TTL, Counter, Increment, Kind, RouterUsage, Scope},
 };
 use litellm_redis_testing::{RedisDeployment, Topology};
 use rstest::rstest;
-use support::{USAGE_POLICY as POLICY, connect, remote, usage, within};
+use support::{USAGE_POLICY as POLICY, connect, deployment_usage, remote, usage, within};
+use tokio::runtime::Handle;
+
+const DAY: Duration = Duration::from_secs(86_400);
 
 fn tpm_and_rpm(model: Option<&str>) -> [Counter; 2] {
     [Kind::Tpm, Kind::Rpm].map(|kind| Counter {
+        scope: Scope::GlobalRouter,
         deployment_id: "dep".to_owned(),
         model: model.map(str::to_owned),
-        minute: "12-34".to_owned(),
+        window: "12-34".to_owned(),
         kind,
     })
+}
+
+fn increment(counter: &Counter, amount: Number, ttl: Duration) -> Increment {
+    Increment {
+        counter: counter.clone(),
+        amount,
+        ttl: Some(ttl),
+    }
+}
+
+async fn ttl_of(raw: &litellm_redis_client::RedisClient, key: &str) -> Duration {
+    let Ttl::Expires(remaining) = raw.send(commands::ttl(key)).await.unwrap() else {
+        panic!("{key} has no TTL");
+    };
+    remaining
 }
 
 #[rstest]
 #[case::tpm(Kind::Tpm, "tpm")]
 #[case::rpm(Kind::Rpm, "rpm")]
+#[case::itpm(Kind::Itpm, "itpm")]
+#[case::otpm(Kind::Otpm, "otpm")]
+#[case::tpd(Kind::Tpd, "tpd")]
+#[case::rpd(Kind::Rpd, "rpd")]
 fn a_counter_kind_round_trips_through_its_key_segment(#[case] kind: Kind, #[case] segment: &str) {
     assert_eq!(<&str>::from(kind), segment);
     assert_eq!(segment.parse::<Kind>().unwrap(), kind);
+}
+
+#[rstest]
+#[case::global_router(Scope::GlobalRouter, "global_router")]
+#[case::deployment(Scope::Deployment, "deployment")]
+fn a_counter_scope_round_trips_through_its_spelling(#[case] scope: Scope, #[case] spelling: &str) {
+    assert_eq!(<&str>::from(scope), spelling);
+    assert_eq!(spelling.parse::<Scope>().unwrap(), scope);
+}
+
+#[rstest]
+#[tokio::test]
+async fn reads_deployment_counters_python_incremented_under_mains_keys(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let cases = deployment_usage();
+    for (case, delta) in cases.iter().zip([4.0, 1200.5]) {
+        raw.send(commands::incr_by_float(
+            case.key,
+            Amount::Float(delta),
+            Some(Expiry::Refresh(DAY)),
+        ))
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(
+        store
+            .get_many(&cases.map(|case| case.counter))
+            .await
+            .unwrap(),
+        vec![Some(Number::Int(4)), Some(Number::Float(1200.5))]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_declared_usage_read_rides_the_request_batch_and_backfills_memory(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let (client, trips) = support::connect_observed(&deployment);
+    let store = Arc::new(RouterUsage::new(Some(remote(client)), POLICY));
+    let cases = deployment_usage();
+    for (case, delta) in cases.iter().zip([2.0, 30.0]) {
+        raw.send(commands::incr_by_float(
+            case.key,
+            Amount::Float(delta),
+            Some(Expiry::Refresh(DAY)),
+        ))
+        .await
+        .unwrap();
+    }
+    let counters = cases.map(|case| case.counter);
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
+
+    let declared = store
+        .declare_get_many(RedisSend::PreCall(&request), &counters)
+        .unwrap()
+        .read;
+    assert!(trips.seen().is_empty());
+    request.flush_pre().await;
+    let read = declared.await.unwrap();
+
+    let one_mget = match topology {
+        Topology::Standalone => Operation::Pipeline { ops: 1 },
+        Topology::Cluster => Operation::Command("MGET"),
+    };
+    assert_eq!(trips.seen(), [one_mget]);
+    assert_eq!(read, vec![Some(Number::Int(2)), Some(Number::Int(30))]);
+    assert_eq!(
+        store.get_local_many(&counters).unwrap(),
+        vec![Some(Number::Int(2)), Some(Number::Int(30))]
+    );
+}
+
+// main's ArmedRead settles on the batch's reply: a prefetch the pick never takes still backfills
+// memory, and the throttle then keeps later reads off Redis
+#[rstest]
+#[tokio::test]
+async fn an_abandoned_usage_prefetch_still_backfills_memory_and_holds_the_throttle(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let (client, trips) = support::connect_observed(&deployment);
+    let store = Arc::new(RouterUsage::new(Some(remote(client)), POLICY));
+    let [rpm, tpd] = deployment_usage();
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(6.0),
+        Some(Expiry::Refresh(COUNTER_TTL)),
+    ))
+    .await
+    .unwrap();
+    let counters = [rpm.counter.clone(), tpd.counter.clone()];
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
+
+    drop(
+        store
+            .declare_get_many(RedisSend::PreCall(&request), &counters)
+            .unwrap(),
+    );
+    request.flush_pre().await;
+    litellm_redis_testing::eventually(async || store.get_local(&rpm.counter).unwrap()).await;
+    let trips_after_prefetch = trips.seen().len();
+    let read = store.get_many(&counters).await.unwrap();
+
+    assert_eq!(read, vec![Some(Number::Int(6)), None]);
+    assert_eq!(trips.seen().len(), trips_after_prefetch);
+}
+
+// main's `_take` releases a prefetch that does not cover the pick taking it, so the counters it
+// reserved are due again and the next read of them goes to Redis
+#[rstest]
+#[tokio::test]
+async fn a_released_usage_prefetch_lets_the_next_read_go_to_redis(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let (client, trips) = support::connect_observed(&deployment);
+    let store = Arc::new(RouterUsage::new(Some(remote(client)), POLICY));
+    let [rpm, tpd] = deployment_usage();
+    let counters = [rpm.counter.clone(), tpd.counter.clone()];
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
+
+    let declared = store
+        .declare_get_many(RedisSend::PreCall(&request), &counters)
+        .unwrap();
+    store.release(declared.reservation);
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(4.0),
+        Some(Expiry::Refresh(COUNTER_TTL)),
+    ))
+    .await
+    .unwrap();
+    let read = store.get_many(&counters).await.unwrap();
+
+    assert_eq!(read, vec![Some(Number::Int(4)), None]);
+    assert_eq!(trips.seen().len(), 1);
+}
+
+// The model rate limit check charges a request's rpm and rpd in one async_increment_cache_pipeline,
+// whose RedisCache pipeline refreshes each window with EXPIRE
+#[rstest]
+#[tokio::test]
+async fn a_pipeline_increment_is_one_round_trip_refreshing_each_window(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let (client, trips) = support::connect_observed(&deployment);
+    let store = RouterUsage::new(Some(remote(client)), POLICY);
+    let [rpm, tpd] = deployment_usage();
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(3.0),
+        Some(Expiry::Refresh(Duration::from_secs(10))),
+    ))
+    .await
+    .unwrap();
+
+    let totals = store
+        .increment_pipeline(&[
+            increment(&rpm.counter, Number::Int(1), COUNTER_TTL),
+            increment(&tpd.counter, Number::Int(1), DAY),
+        ])
+        .await;
+
+    assert_eq!(trips.seen(), [Operation::Pipeline { ops: 2 }]);
+    assert_eq!(totals, Some(vec![Number::Float(4.0), Number::Float(1.0)]));
+    assert!(within(ttl_of(&raw, rpm.key).await, 60));
+    assert!(within(ttl_of(&raw, tpd.key).await, 86_400));
+}
+
+// LowestTPMLoggingHandler_v2.async_log_success_event's async_increment_cache_post_call
+#[rstest]
+#[tokio::test]
+async fn a_post_call_increment_counts_in_memory_now_and_in_redis_at_flush_post(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let [rpm, _] = deployment_usage();
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(5.0),
+        Some(Expiry::Refresh(COUNTER_TTL)),
+    ))
+    .await
+    .unwrap();
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
+
+    store.increment_post_call(
+        &request,
+        &[increment(&rpm.counter, Number::Int(7), COUNTER_TTL)],
+    );
+    let before_flush: Option<String> = raw.send(commands::get(rpm.key)).await.unwrap();
+    request.flush_post().await;
+    let after_flush: Option<String> = raw.send(commands::get(rpm.key)).await.unwrap();
+
+    assert_eq!(store.get_local(&rpm.counter).unwrap(), Some(Number::Int(7)));
+    assert_eq!(before_flush, Some("5".to_owned()));
+    assert_eq!(after_flush, Some("12".to_owned()));
+}
+
+// BaseRoutingStrategy's periodic sync counts in memory first, then sends the queued increments
+// through redis_cache.async_increment_pipeline alone
+#[rstest]
+#[tokio::test]
+async fn a_remote_increment_answers_the_redis_totals_and_leaves_memory_alone(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let [rpm, _] = deployment_usage();
+    let queued = increment(&rpm.counter, Number::Int(2), COUNTER_TTL);
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(10.0),
+        Some(Expiry::Refresh(COUNTER_TTL)),
+    ))
+    .await
+    .unwrap();
+
+    let counted = store.increment_local(&queued).unwrap();
+    let totals = store
+        .increment_remote(std::slice::from_ref(&queued))
+        .await
+        .unwrap();
+
+    assert_eq!(counted, Number::Int(2));
+    assert_eq!(totals, Some(vec![Number::Float(12.0)]));
+    assert_eq!(store.get_local(&rpm.counter).unwrap(), Some(Number::Int(2)));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_remote_increment_is_none_without_redis_and_an_error_when_redis_fails() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let detached = RouterUsage::new(None, POLICY);
+    let attached = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let [rpm, _] = deployment_usage();
+    let queued = [increment(&rpm.counter, Number::Int(1), COUNTER_TTL)];
+    deployment.stop().await.unwrap();
+
+    assert_eq!(detached.increment_remote(&queued).await.unwrap(), None);
+    assert!(attached.increment_remote(&queued).await.is_err());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_remote_increment_of_nothing_is_none_as_mains_pipeline_returns(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+
+    assert_eq!(store.increment_remote(&[]).await.unwrap(), None);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_memory_count_past_i64_stays_above_the_limit_instead_of_wrapping_negative() {
+    let store = RouterUsage::new(None, POLICY);
+    let [tpm, _] = tpm_and_rpm(None);
+    store.increment(&tpm, Number::Int(1), COUNTER_TTL).await;
+
+    assert_eq!(
+        store
+            .increment(&tpm, Number::Int(i64::MAX), COUNTER_TTL)
+            .await,
+        Some(Number::Float(9_223_372_036_854_775_808.0))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_local_merge_replaces_the_memory_count_without_reaching_redis() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let (client, trips) = support::connect_observed(&deployment);
+    let store = RouterUsage::new(Some(remote(client)), POLICY);
+    let [rpm, tpd] = deployment_usage();
+
+    store
+        .increment_local(&increment(&rpm.counter, Number::Int(1), COUNTER_TTL))
+        .unwrap();
+    store.set_local(&rpm.counter, Number::Float(9.0)).unwrap();
+
+    assert_eq!(
+        store.get_local_many(&[rpm.counter, tpd.counter]).unwrap(),
+        vec![Some(Number::Float(9.0)), None]
+    );
+    assert!(trips.seen().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn current_usage_skips_redis_once_memory_reaches_the_limit() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let (client, trips) = support::connect_observed(&deployment);
+    let store = RouterUsage::new(Some(remote(client)), POLICY);
+    let [rpm, _] = deployment_usage();
+    store
+        .increment_local(&increment(&rpm.counter, Number::Int(5), COUNTER_TTL))
+        .unwrap();
+
+    let at_limit = store.current(&rpm.counter, Number::Int(5)).await.unwrap();
+    let skipped = trips.seen();
+    let below_limit = store.current(&rpm.counter, Number::Int(6)).await.unwrap();
+
+    assert_eq!(at_limit, Some(Number::Int(5)));
+    assert!(skipped.is_empty());
+    assert_eq!(below_limit, None, "Redis holds no count, and Redis wins");
+    assert_eq!(trips.seen(), [Operation::Command("GET")]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn current_usage_reads_none_on_a_failure_and_memory_once_the_breaker_opens() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let breaker = litellm_circuit_breaker::Breaker::new(
+        litellm_circuit_breaker::Config {
+            failure_threshold: 1,
+            recovery_timeout: Duration::from_secs(60),
+            ..litellm_circuit_breaker::Config::default()
+        },
+        Box::new(|_| {}),
+    );
+    let store = RouterUsage::new(
+        Some(remote(support::connect_guarded(&deployment, breaker))),
+        POLICY,
+    );
+    let [rpm, _] = deployment_usage();
+    store
+        .increment_local(&increment(&rpm.counter, Number::Int(2), COUNTER_TTL))
+        .unwrap();
+    deployment.stop().await.unwrap();
+
+    let failed = store.current(&rpm.counter, Number::Int(10)).await.unwrap();
+    let refused = store.current(&rpm.counter, Number::Int(10)).await.unwrap();
+
+    assert_eq!(failed, None);
+    assert_eq!(refused, Some(Number::Int(2)));
+}
+
+#[rstest]
+#[tokio::test]
+async fn current_usage_without_redis_is_the_memory_count() {
+    let store = RouterUsage::new(None, POLICY);
+    let [rpm, _] = deployment_usage();
+    store
+        .increment_local(&increment(&rpm.counter, Number::Int(3), COUNTER_TTL))
+        .unwrap();
+
+    assert_eq!(
+        store.current(&rpm.counter, Number::Int(10)).await.unwrap(),
+        Some(Number::Int(3))
+    );
 }
 
 #[rstest]
@@ -326,4 +716,70 @@ async fn a_failed_deployment_pipeline_keeps_the_memory_counts_as_integers() {
         store.get_many(&counters).await.unwrap(),
         [Some(Number::Int(5)), Some(Number::Int(1))]
     );
+}
+
+// The io-token check stashes a counter's fields and the store spells the key, so the key must stay
+// main's RouterCacheEnum.ITPM / OTPM spelling
+#[rstest]
+#[case::itpm(Kind::Itpm, "global_router:dep-1:bedrock/claude:itpm:12-34")]
+#[case::otpm(Kind::Otpm, "global_router:dep-1:bedrock/claude:otpm:12-34")]
+#[tokio::test]
+async fn io_token_counters_increment_under_mains_keys(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    #[case] kind: Kind,
+    #[case] key: &str,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let counter = Counter {
+        scope: Scope::GlobalRouter,
+        deployment_id: "dep-1".to_owned(),
+        model: Some("bedrock/claude".to_owned()),
+        window: "12-34".to_owned(),
+        kind,
+    };
+
+    store
+        .increment(&counter, Number::Int(8), COUNTER_TTL)
+        .await
+        .unwrap();
+
+    let written: Option<String> = raw.send(commands::get(key)).await.unwrap();
+    assert_eq!(written, Some("8".to_owned()));
+}
+
+#[rstest]
+#[tokio::test]
+async fn shared_usage_prefers_what_every_pod_counted_and_falls_back_to_memory() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let [rpm, tpd] = deployment_usage();
+    store
+        .increment_local(&increment(&rpm.counter, Number::Int(2), COUNTER_TTL))
+        .unwrap();
+    store
+        .increment_local(&increment(&tpd.counter, Number::Int(2), COUNTER_TTL))
+        .unwrap();
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(9.0),
+        Some(Expiry::Refresh(COUNTER_TTL)),
+    ))
+    .await
+    .unwrap();
+
+    let counted = store.shared_or_local(&rpm.counter).await.unwrap();
+    let absent = store.shared_or_local(&tpd.counter).await.unwrap();
+    deployment.stop().await.unwrap();
+    let failed = store.shared_or_local(&rpm.counter).await.unwrap();
+
+    assert_eq!(counted, Some(Number::Int(9)));
+    assert_eq!(
+        absent,
+        Some(Number::Int(2)),
+        "Redis has no count, so memory answers"
+    );
+    assert_eq!(failed, Some(Number::Int(2)));
 }

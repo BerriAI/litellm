@@ -5,6 +5,9 @@ import { TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION } from "@/components/team/team
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import type { Member } from "../networking";
 
+const KEY_GENERATE_ROUTE = "/key/generate";
+const SERVICE_ACCOUNT_KEY_GENERATE_ROUTE = "/key/service-account/generate";
+
 export type AnotherUserScope = "any_user" | "team_members" | "none";
 
 export interface TeamMembers {
@@ -20,6 +23,25 @@ export interface KeyOwnerViewer {
 
 export const administersTeam = (team: TeamMembers | null, userId: string | null): boolean =>
   userId !== null && isUserTeamAdminForSingleTeam(team?.members_with_roles ?? null, userId);
+
+export interface KeyCreationTeam extends TeamMembers {
+  readonly team_member_permissions?: readonly string[] | null;
+}
+
+export const canCreateKeyInTeam = (
+  team: KeyCreationTeam,
+  { userRole, userId }: Pick<KeyOwnerViewer, "userRole" | "userId">,
+  owner: string = "you",
+): boolean => {
+  if (isProxyAdminRole(userRole ?? "") || administersTeam(team, userId)) return true;
+  return (
+    userId !== null &&
+    team.members_with_roles?.some((member) => member.user_id === userId) === true &&
+    team.team_member_permissions?.includes(
+      owner === "service_account" ? SERVICE_ACCOUNT_KEY_GENERATE_ROUTE : KEY_GENERATE_ROUTE,
+    ) === true
+  );
+};
 
 export const anotherUserScope = ({
   userRole,

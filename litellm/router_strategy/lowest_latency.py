@@ -1,7 +1,7 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from functools import partial
 from math import ceil, isfinite
@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.deployment_pricing import deployment_backend_mod
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -64,6 +64,11 @@ def _ttft_seconds(elapsed: timedelta | float) -> float:
     if isinstance(elapsed, timedelta):
         return elapsed.total_seconds()
     return float(elapsed)
+
+
+def _caller_hung_up_on_speech(response_obj: object, metadata: Mapping[str, object]) -> bool:
+    """A streamed clip the caller hung up on lasted as long as they listened, not as long as the deployment took."""
+    return isinstance(response_obj, HttpxBinaryResponseContent) and metadata.get("client_disconnected") is True
 
 
 class LowestLatencyLoggingHandler(CustomLogger):
@@ -164,12 +169,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                if len(request_count_dict[id].get("latency_normalized", [])) < self.routing_args.max_latency_list_size:
-                    request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
-                else:
-                    request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][1:] + [
-                        final_value
-                    ]
+                if not _caller_hung_up_on_speech(response_obj, kwargs["litellm_params"][metadata_field]):
+                    if (
+                        len(request_count_dict[id].get("latency_normalized", []))
+                        < self.routing_args.max_latency_list_size
+                    ):
+                        request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
+                    else:
+                        request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][
+                            1:
+                        ] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -364,12 +373,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                if len(request_count_dict[id].get("latency_normalized", [])) < self.routing_args.max_latency_list_size:
-                    request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
-                else:
-                    request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][1:] + [
-                        final_value
-                    ]
+                if not _caller_hung_up_on_speech(response_obj, kwargs["litellm_params"][metadata_field]):
+                    if (
+                        len(request_count_dict[id].get("latency_normalized", []))
+                        < self.routing_args.max_latency_list_size
+                    ):
+                        request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
+                    else:
+                        request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][
+                            1:
+                        ] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:

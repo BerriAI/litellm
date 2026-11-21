@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_att
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
@@ -281,7 +282,7 @@ class SSEUsageParser:
             self._absorb_message_start(event)
         elif event_type == "message_delta":
             self._absorb_message_delta(event)
-        elif event_type == "response.completed":
+        elif event_type in ("response.completed", "response.incomplete"):
             self._absorb_response_completed(event)
         elif isinstance(event.get("usage"), Mapping):
             self._absorb_usage(event["usage"])
@@ -348,6 +349,32 @@ def hidden_cost(response: object) -> float | None:
         return None if cost is None else float(cost)
     except (TypeError, ValueError):
         return None
+
+
+def _cost_value(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    try:
+        cost: Final = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return cost if math.isfinite(cost) else None
+
+
+def response_cost(response: ModelResponse) -> float | None:
+    hidden: Final = json_object(getattr(response, "_hidden_params", None))
+    additional_headers: Final = json_object(hidden.get("additional_headers"))
+    gateway_cost: Final = _cost_value(additional_headers.get("llm_provider-x-litellm-response-cost"))
+    if gateway_cost is not None:
+        return gateway_cost
+    recorded_cost: Final = _cost_value(hidden.get("response_cost"))
+    if recorded_cost is not None:
+        return recorded_cost
+    try:
+        calculated_cost: Final[object] = litellm.completion_cost(completion_response=response)
+    except Exception:  # noqa: BLE001  # Price lookup raises bare Exception for unknown models.
+        return None
+    return _cost_value(calculated_cost)
 
 
 def extract_token(headers: Mapping[str, str]) -> str | None:

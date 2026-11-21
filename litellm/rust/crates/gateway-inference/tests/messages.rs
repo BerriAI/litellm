@@ -5,12 +5,14 @@ use axum::{
     http::Request,
 };
 use rstest::rstest;
-use serde_json::json;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, header, method, path},
 };
+
+const MESSAGE_SSE: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
 #[rstest]
 #[case::anthropic("anthropic/test-model", "/v1/messages", true)]
@@ -27,7 +29,7 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     let message = json!({"id": "msg_test", "type": "message", "role": "assistant",
         "model": "test-model", "content": [{"type": "text", "text": "hello"}],
         "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}});
-    let sse = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let sse = MESSAGE_SSE;
     let template = if streaming {
         ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
     } else {
@@ -75,6 +77,313 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     assert!(!requests[0].headers.contains_key("x-request-id"));
 }
 
+#[rstest]
+#[case::the_defaults_fill_what_the_client_omits(
+    json!({}),
+    json!({"temperature": 0.2, "top_p": 0.9, "top_k": 5, "max_tokens": 7, "stop_sequences": ["default"]}),
+)]
+#[case::client_values_win(
+    json!({"temperature": 0.7, "top_p": 0.8, "top_k": 6, "max_tokens": 16, "stop_sequences": ["client"]}),
+    json!({"temperature": 0.7, "top_p": 0.8, "top_k": 6, "max_tokens": 16, "stop_sequences": ["client"]}),
+)]
+#[case::a_client_null_clears_each_default(
+    json!({"temperature": null, "top_p": null, "top_k": null, "stop_sequences": null, "max_tokens": 16}),
+    json!({"max_tokens": 16}),
+)]
+#[tokio::test]
+async fn deployment_sampling_params_sit_under_the_client_body(
+    #[case] client_params: Value,
+    #[case] expected_params: Value,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_json(messages_request("test-model", expected_params)))
+        .respond_with(message_response())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({
+            "model": "anthropic/test-model",
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 5,
+            "max_tokens": 7,
+            "stop_sequences": ["default"],
+            "a_litellm_only_setting": "stays-out-of-the-provider-body",
+        }),
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request("public/model", client_params),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+#[rstest]
+#[case::max_tokens("max_tokens", json!(7))]
+#[case::metadata("metadata", json!({"user_id": "deployment-user"}))]
+#[case::stop_sequences("stop_sequences", json!(["default"]))]
+#[case::stream("stream", json!(false))]
+#[case::system("system", json!("Answer in one word."))]
+#[case::temperature("temperature", json!(0.2))]
+#[case::thinking("thinking", json!({"type": "enabled", "budget_tokens": 1024}))]
+#[case::tool_choice("tool_choice", json!({"type": "auto"}))]
+#[case::top_k("top_k", json!(5))]
+#[case::inference_geo("inference_geo", json!("us"))]
+#[case::top_p("top_p", json!(0.9))]
+#[case::mcp_servers(
+    "mcp_servers",
+    json!([{"type": "url", "url": "https://mcp.example.com/sse", "name": "example"}]),
+)]
+#[case::context_management(
+    "context_management",
+    json!({"edits": [{"type": "clear_tool_uses_20250919"}]}),
+)]
+#[case::compaction("compaction", json!({"type": "summarize"}))]
+#[case::container(
+    "container",
+    json!({"skills": [{"type": "anthropic", "skill_id": "pptx", "version": "latest"}]}),
+)]
+#[case::output_format(
+    "output_format",
+    json!({"type": "json_schema", "schema": {"type": "object", "properties": {}}}),
+)]
+#[case::speed("speed", json!("fast"))]
+#[case::output_config("output_config", json!({"effort": "low"}))]
+#[case::cache_control("cache_control", json!({"type": "ephemeral"}))]
+#[case::reasoning_effort("reasoning_effort", json!("low"))]
+#[case::safeguards(
+    "safeguards",
+    json!([{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]),
+)]
+#[case::service_tier("service_tier", json!("auto"))]
+#[case::thread("thread", json!({"type": "create"}))]
+#[tokio::test]
+async fn a_deployment_default_reaches_the_provider_as_the_same_client_value(
+    #[case] name: &str,
+    #[case] value: Value,
+) {
+    let required = required_params_besides(name);
+    let from_deployment = upstream_body(json!({name: value.clone()}), required.clone()).await;
+    let from_client = upstream_body(json!({}), with_param(required, name, value)).await;
+    let baseline = upstream_body(json!({}), json!({"max_tokens": 16})).await;
+
+    assert_eq!(from_deployment, from_client);
+    assert_ne!(from_deployment, baseline);
+}
+
+#[rstest]
+#[case::a_client_thinking_wins(
+    json!({"thinking": {"type": "enabled", "budget_tokens": 1024}}),
+    json!({"thinking": {"type": "disabled"}}),
+    json!({"thinking": {"type": "disabled"}}),
+)]
+#[case::a_client_null_clears_the_thinking_default(
+    json!({"thinking": {"type": "enabled", "budget_tokens": 1024}}),
+    json!({"thinking": null}),
+    json!({}),
+)]
+#[case::a_client_system_wins(
+    json!({"system": "From the deployment."}),
+    json!({"system": "From the client."}),
+    json!({"system": "From the client."}),
+)]
+#[case::a_client_null_clears_the_system_default(
+    json!({"system": "From the deployment."}),
+    json!({"system": null}),
+    json!({}),
+)]
+#[case::deployment_tools_come_before_client_tools(
+    json!({"tools": [tool("deployment_lookup")]}),
+    json!({"tools": [tool("client_lookup")]}),
+    json!({"tools": [tool("deployment_lookup"), tool("client_lookup")]}),
+)]
+#[case::deployment_tools_fill_omitted_tools(
+    json!({"tools": [tool("deployment_lookup")]}),
+    json!({}),
+    json!({"tools": [tool("deployment_lookup")]}),
+)]
+#[case::deployment_tools_replace_null_tools(
+    json!({"tools": [tool("deployment_lookup")]}),
+    json!({"tools": null}),
+    json!({"tools": [tool("deployment_lookup")]}),
+)]
+#[case::a_client_tool_choice_wins(
+    json!({"tools": [tool("deployment_lookup")], "tool_choice": {"type": "auto"}}),
+    json!({"tool_choice": {"type": "any"}}),
+    json!({"tools": [tool("deployment_lookup")], "tool_choice": {"type": "any"}}),
+)]
+#[case::extra_body_stays_out(
+    json!({"extra_body": {"deployment_only": true}}),
+    json!({}),
+    json!({}),
+)]
+#[case::an_unknown_key_stays_out(
+    json!({"a_litellm_only_setting": "stays-out-of-the-provider-body"}),
+    json!({}),
+    json!({}),
+)]
+#[case::deployment_tools_that_are_not_a_list_stay_out(
+    json!({"tools": tool("deployment_lookup")}),
+    json!({}),
+    json!({}),
+)]
+#[tokio::test]
+async fn a_deployment_param_reaches_the_provider_as_its_client_equivalent(
+    #[case] deployment_params: Value,
+    #[case] client_params: Value,
+    #[case] client_equivalent: Value,
+) {
+    assert_eq!(
+        upstream_body(
+            deployment_params,
+            with_param(client_params, "max_tokens", json!(16))
+        )
+        .await,
+        upstream_body(
+            json!({}),
+            with_param(client_equivalent, "max_tokens", json!(16))
+        )
+        .await,
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn deployment_tools_leave_client_tools_that_are_not_an_array_as_sent() {
+    let upstream = MockServer::start().await;
+    let app = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        deployment_params(json!({"tools": [tool("deployment_lookup")]})),
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request(
+            "public/model",
+            json!({"max_tokens": 16, "tools": tool("client_lookup")}),
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status(), 400);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_deployment_stream_default_streams_a_request_that_omits_stream() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_json(messages_request(
+            "test-model",
+            json!({"max_tokens": 16, "stream": true}),
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MESSAGE_SSE, "text/event-stream"))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        deployment_params(json!({"stream": true})),
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request("public/model", json!({"max_tokens": 16})),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    assert_eq!(
+        to_bytes(response.into_body(), 4096).await.unwrap(),
+        MESSAGE_SSE
+    );
+}
+
+async fn upstream_body(deployment: Value, client: Value) -> Value {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(message_response())
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_shaping(
+        "anthropic/test-model",
+        &upstream.uri(),
+        deployment_params(deployment),
+        json!({"capabilities": {
+            "supports_reasoning": true,
+            "supports_adaptive_thinking": true,
+            "supports_output_config": true,
+            "supports_speed": true,
+            "effort_tiers": {"low": true, "medium": true, "high": true},
+        }}),
+    );
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request("public/model", client),
+    )
+    .await;
+    assert_eq!(response.status(), 200, "{}", support::json(response).await);
+    upstream.received_requests().await.unwrap()[0]
+        .body_json()
+        .unwrap()
+}
+
+fn message_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": "msg_test", "type": "message", "role": "assistant", "model": "test-model",
+        "content": [{"type": "text", "text": "hello"}], "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }))
+}
+
+fn tool(name: &str) -> Value {
+    json!({"name": name, "description": "Looks something up.", "input_schema": {"type": "object"}})
+}
+
+fn required_params_besides(name: &str) -> Value {
+    match name {
+        "max_tokens" => json!({}),
+        _ => json!({"max_tokens": 16}),
+    }
+}
+
+fn with_param(params: Value, name: &str, value: Value) -> Value {
+    let mut with_param = params;
+    with_param[name] = value;
+    with_param
+}
+
+fn deployment_params(params: Value) -> Value {
+    let mut litellm_params = params;
+    litellm_params["model"] = json!("anthropic/test-model");
+    litellm_params
+}
+
+fn messages_request(model: &str, params: Value) -> Value {
+    let mut request = params;
+    request["model"] = json!(model);
+    request["messages"] = json!([{"role": "user", "content": "hi"}]);
+    request
+}
+
 #[tokio::test]
 async fn invalid_messages_stays_an_anthropic_error() {
     let response = support::post(
@@ -91,8 +400,9 @@ async fn invalid_messages_stays_an_anthropic_error() {
 
 const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";
 
-#[tokio::test]
-async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
+/// A stream of `public/model`, whose deployment retries `num_retries` times and whose provider
+/// sends one event and then drops the connection, never to answer again.
+async fn broken_stream(num_retries: u32) -> axum::response::Response {
     let base = support::truncating_upstream(FIRST_EVENT).await;
     let request = Request::post("/v1/messages")
         .header("content-type", "application/json")
@@ -102,11 +412,19 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
             .to_string(),
         ))
         .unwrap();
+    support::app_with_litellm_params(
+        "anthropic/test-model",
+        &base,
+        json!({"num_retries": num_retries}),
+    )
+    .oneshot(request)
+    .await
+    .unwrap()
+}
 
-    let response = support::app("anthropic/test-model", &base)
-        .oneshot(request)
-        .await
-        .unwrap();
+#[tokio::test]
+async fn a_stream_that_breaks_with_no_attempt_left_to_answer_ends_with_an_sse_error_frame() {
+    let response = broken_stream(0).await;
 
     assert_eq!(response.status(), 200);
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
@@ -120,6 +438,74 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
     assert_eq!(error["error"]["type"], "api_error");
 }
 
+#[tokio::test]
+async fn a_stream_that_breaks_before_content_and_is_not_answered_for_ends_on_an_error_answer() {
+    let response = broken_stream(1).await;
+
+    let routed: Vec<(&str, &str)> = [
+        "x-litellm-model-group",
+        "x-litellm-attempted-retries",
+        "x-litellm-attempted-fallbacks",
+    ]
+    .into_iter()
+    .filter_map(|name| Some((name, response.headers().get(name)?.to_str().ok()?)))
+    .collect();
+    assert_eq!(
+        (response.status().as_u16(), routed),
+        (
+            500,
+            vec![
+                ("x-litellm-model-group", "public/model"),
+                ("x-litellm-attempted-retries", "0"),
+                ("x-litellm-attempted-fallbacks", "0"),
+            ]
+        )
+    );
+    let error = support::json(response).await;
+    assert_eq!(
+        (&error["type"], &error["error"]["type"]),
+        (&json!("error"), &json!("api_error"))
+    );
+}
+
+/// The Python proxy answers a provider's 413 as a 400 `invalid_request_error`, and a 408 with
+/// the type `api_error`. The gateway answers what the provider said.
+#[rstest]
+#[case::too_large(413, "request_too_large")]
+#[case::timed_out(408, "timeout_error")]
+#[tokio::test]
+async fn a_providers_refusal_is_answered_with_its_own_status_and_error_type(
+    #[case] status: u16,
+    #[case] error_type: &str,
+) {
+    let upstream = MockServer::start().await;
+    let error = json!({"type": "error", "error": {"type": error_type, "message": "refused"}});
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(error.clone()))
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({
+            "model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16,
+        }).to_string()))
+        .unwrap();
+
+    let response = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({"num_retries": 0}),
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (response.status().as_u16(), support::json(response).await),
+        (status, error)
+    );
+}
+
 #[rstest]
 #[tokio::test]
 async fn hosted_provider_failure_preserves_status_body_and_request_id() {
@@ -129,7 +515,7 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(ResponseTemplate::new(429).set_body_json(error.clone()))
-        .expect(1)
+        .expect(3)
         .mount(&upstream)
         .await;
     let request = Request::post("/v1/messages")
@@ -152,10 +538,7 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
 
 #[rstest]
 #[case::messages("/v1/messages")]
-#[case::chat("/v1/chat/completions")]
-#[case::model_path("/engines/path-model/chat/completions")]
 #[case::ocr("/ocr")]
-#[case::transcription("/audio/transcriptions")]
 #[tokio::test]
 async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
     let upstream = MockServer::start().await;
@@ -211,9 +594,47 @@ async fn openrouter_receives_native_messages_headers_and_its_deployment_bearer(
     if streaming {
         assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), sse);
     } else {
-        assert_eq!(support::json(response).await, message);
+        let served = message
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| match name.as_str() {
+                "model" => (name.clone(), json!("public/model")),
+                _ => (name.clone(), value.clone()),
+            })
+            .collect();
+        assert_eq!(support::json(response).await, Value::Object(served));
     }
     let requests = upstream.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].headers.contains_key("x-api-key"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_body_is_read_as_json_whatever_the_content_type(
+    #[values(None, Some("application/json"), Some("text/plain"))] content_type: Option<&str>,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(message_response())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages");
+    let request = match content_type {
+        Some(content_type) => request.header("content-type", content_type),
+        None => request,
+    };
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(
+            request
+                .body(Body::from(
+                    messages_request("public/model", json!({"max_tokens": 16})).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
 }

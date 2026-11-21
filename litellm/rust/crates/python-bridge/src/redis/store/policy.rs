@@ -20,6 +20,7 @@ const MEMORY_TTL: FieldSpec<Option<Duration>> =
 pub(crate) struct RouterTierPolicies {
     pub(crate) cooldowns: TierPolicy,
     pub(crate) usage: TierPolicy,
+    pub(crate) default_in_memory_ttl: Option<Duration>,
 }
 
 pub(crate) fn router_tier_policies(py: Python<'_>) -> PyResult<RouterTierPolicies> {
@@ -40,6 +41,7 @@ fn project(snapshot: &Snapshot<'_>) -> Result<RouterTierPolicies, ProjectionErro
             tracked_reads,
             default_in_memory_ttl,
         },
+        default_in_memory_ttl,
     })
 }
 
@@ -108,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn a_set_default_in_memory_ttl_reaches_both_familys_backfill() {
+    fn a_set_default_in_memory_ttl_reaches_every_familys_backfill() {
         Python::initialize();
         Python::attach(|py| {
             let policies = projected(
@@ -122,6 +124,10 @@ mod tests {
             );
             assert_eq!(
                 policies.usage.default_in_memory_ttl,
+                Some(Duration::from_millis(7500))
+            );
+            assert_eq!(
+                policies.default_in_memory_ttl,
                 Some(Duration::from_millis(7500))
             );
         });

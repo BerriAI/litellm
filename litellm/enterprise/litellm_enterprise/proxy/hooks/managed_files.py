@@ -29,6 +29,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
+from litellm_enterprise.proxy.common_utils.managed_object_attribution import creator_billing_context
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
@@ -82,6 +83,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
+    canonical_provider_file_id,
     decode_model_from_file_id,
     ensure_batch_response_managed_file_ids,
     get_batch_id_from_unified_batch_id,
@@ -91,6 +93,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
+    provider_file_id_spellings,
     resolve_managed_output_file_model_name,
     validate_file_list_limit,
     validate_file_list_purpose,
@@ -597,14 +600,27 @@ async def _scoped_file_rows(
     return _SCOPED_FILE_ROWS.validate_python(rows)
 
 
-def _iter_provider_file_id_pairs(
-    rows: Sequence[_ManagedFileRow],
-    requested_provider_file_ids: frozenset[str],
-) -> Iterator[tuple[str, str]]:
+def _iter_canonical_provider_file_ids(rows: Sequence[_ManagedFileRow]) -> Iterator[tuple[str, str]]:
     for row in rows:
         for provider_file_id in row.flat_model_file_ids:
-            if provider_file_id in requested_provider_file_ids:
-                yield provider_file_id, row.unified_file_id
+            yield canonical_provider_file_id(provider_file_id), row.unified_file_id
+
+
+def _iter_requested_provider_file_id_spellings(provider_file_ids: Sequence[str]) -> Iterator[str]:
+    for provider_file_id in provider_file_ids:
+        yield from provider_file_id_spellings(provider_file_id)
+
+
+def _iter_provider_file_id_pairs(
+    rows: Sequence[_ManagedFileRow],
+    requested_provider_file_ids: Sequence[str],
+) -> Iterator[tuple[str, str]]:
+    unified_by_canonical_id: Final = dict(_iter_canonical_provider_file_ids(rows))
+    for requested_provider_file_id in requested_provider_file_ids:
+        if (
+            unified_file_id := unified_by_canonical_id.get(canonical_provider_file_id(requested_provider_file_id))
+        ) is not None:
+            yield requested_provider_file_id, unified_file_id
 
 
 def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
@@ -767,12 +783,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> None:
         verbose_logger.info(f"Storing LiteLLM Managed File object with id={file_id} in cache")
         storage_metadata: Final = _storage_metadata_of(file_object)
+        flat_model_file_ids: Final = [
+            canonical_provider_file_id(provider_file_id) for provider_file_id in model_mappings.values()
+        ]
         if file_object is not None:
             litellm_managed_file_object = LiteLLM_ManagedFileTable(
                 unified_file_id=file_id,
                 file_object=file_object,
                 model_mappings=model_mappings,
-                flat_model_file_ids=list(model_mappings.values()),
+                flat_model_file_ids=flat_model_file_ids,
                 created_by=resolve_resource_owner_id(user_api_key_dict),
                 team_id=user_api_key_dict.team_id,
                 updated_by=user_api_key_dict.user_id,
@@ -790,14 +809,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         db_data = {
             "unified_file_id": file_id,
             "model_mappings": json.dumps(model_mappings),
-            "flat_model_file_ids": list(model_mappings.values()),
+            "flat_model_file_ids": flat_model_file_ids,
             "created_by": resolve_resource_owner_id(user_api_key_dict),
             "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
         update_data = {
             "model_mappings": json.dumps(model_mappings),
-            "flat_model_file_ids": list(model_mappings.values()),
+            "flat_model_file_ids": flat_model_file_ids,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -908,11 +927,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
         end_user_id: Final = user_api_key_dict.end_user_id if file_purpose == "response" else None
+        billing_context: Final = creator_billing_context(user_api_key_dict) if persist_attribution else None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
                 **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
                 **({"end_user_id": end_user_id} if end_user_id else {}),
+                **({"creator_billing_context": Json(dict(billing_context))} if billing_context is not None else {}),
             }
             if persist_attribution
             else {}
@@ -1094,20 +1115,25 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         if self.prisma_client is None:
             return
-        managed_file = await _managed_file_table(self.prisma_client).find_first(
-            where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
+        spellings: Final = list(provider_file_id_spellings(file_id))
+        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
+            where={
+                "OR": [
+                    {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
+                    {"flat_model_file_ids": {"hasSome": spellings}},
+                ]
+            }
         )
-        if managed_file is None:
-            return
-        if not can_access_resource(
-            user_api_key_dict=user_api_key_dict,
-            created_by=managed_file.created_by,
-            resource_team_id=managed_file.team_id,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-            )
+        for managed_file in managed_files:
+            if not can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=managed_file.created_by,
+                resource_team_id=managed_file.team_id,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+                )
 
     async def store_batch_output_file_ownership(
         self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]
@@ -1139,7 +1165,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         for file_id in provider_file_ids:
             model_name = decode_model_from_file_id(file_id)
-            raw_file_id = get_original_file_id(file_id)
+            raw_file_id = canonical_provider_file_id(get_original_file_id(file_id))
             await self.store_batch_output_file(
                 unified_file_id=file_id,
                 provider_file_id=raw_file_id,
@@ -1629,7 +1655,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return MappingProxyType({})
 
         provider_file_ids_list: Final = [  # mutable-ok: Prisma hasSome requires a list
-            provider_file_id for provider_file_id in unique_provider_file_ids
+            *dict.fromkeys(_iter_requested_provider_file_id_spellings(unique_provider_file_ids))
         ]
         rows: Final = await _managed_file_table(self.prisma_client).find_many(
             where={  # mutable-ok: Prisma requires a plain dictionary for where
@@ -1641,10 +1667,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         return MappingProxyType(
             dict(
-                _iter_provider_file_id_pairs(
-                    rows,
-                    frozenset(unique_provider_file_ids),
-                )
+                _iter_provider_file_id_pairs(rows, unique_provider_file_ids)
             )
         )
 
