@@ -6,4 +6,4 @@
 - `generated/` comes from `litellm/scripts/generate_trace_types.py` using the Lens schemas pinned in `litellm/scripts/lens_assets/source.json`. Update the canonical Lens Rust contracts and import their schema outputs before regenerating. Never edit generated Python
 - Keep the pinned schema and fixture checksums current. CI verifies assets and regenerated Python without a Rust trace implementation in this repository
 - Independent gateway ClickHouse spend logging lives in `litellm/integrations/clickhouse`, using `litellm/rust_bridge/clickhouse.py` and the native spend writer
-- OTLP upload routes only return setup guidance. Keep their JSON/protobuf error encoding without restoring ingestion or a native trace fallback
+- `POST /v1/traces` takes an agent's own spans with a gateway key and forwards them to Lens unchanged. Nothing is stored or parsed on the gateway. `POST /v1/logs` only returns setup guidance. Keep the JSON/protobuf error encoding and do not add a native trace fallback

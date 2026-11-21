@@ -49,6 +49,7 @@ import {
   House,
   KeyRound,
   LayoutGrid,
+  Layers,
   Network,
   Palette,
   PiggyBank,
@@ -181,6 +182,7 @@ const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityCon
 const CUSTOMER_PORTAL_ADMIN_KEYS: ReadonlySet<string> = new Set([
   "customers",
   "apps",
+  "app-groups",
   "customer-access",
   "customer-settings",
 ]);
@@ -232,6 +234,13 @@ const customerPortalGroups: MenuGroup[] = [
         page: "apps",
         label: "apps.title",
         icon: <AppWindow {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
+        key: "app-groups",
+        page: "app-groups",
+        label: "apps.groups.title",
+        icon: <Layers {...ICON} />,
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
       {

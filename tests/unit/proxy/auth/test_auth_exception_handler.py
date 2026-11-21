@@ -47,6 +47,7 @@ from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.utils import PrismaClient, dequeue_spend_logs
 from litellm.responses.streaming_iterator import drain_logging_tasks
+from tests.unit.proxy.rust_auth_stores import native_database_failure
 
 
 class _EngineHttp500:
@@ -277,6 +278,8 @@ async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
         TimeoutError("timed out"),
         asyncio.TimeoutError(),
         OSError("network is unreachable"),
+        native_database_failure("unreachable"),
+        native_database_failure("capacity"),
         HTTPClientClosedError(),
         PrismaError("can't reach database server"),
         RawQueryError(

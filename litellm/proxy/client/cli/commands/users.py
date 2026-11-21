@@ -3,8 +3,11 @@ from typing import Final
 import click
 import rich
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_get
+
 from ... import UsersManagementClient
 from ._cli_context import cli_context_values
+from .auth import joined_names
 
 
 @click.group()
@@ -18,9 +21,9 @@ def list_users(ctx: click.Context):
     """List all users"""
     context: Final = cli_context_values(ctx)
     client: Final = UsersManagementClient(base_url=context["base_url"], api_key=context["api_key"])
-    users = client.list_users()
-    if isinstance(users, dict) and "users" in users:
-        users = users["users"]
+    listed: Final = client.list_users()
+    wrapped: Final = as_str_mapping(listed)
+    users: Final = wrapped["users"] if isinstance(wrapped, dict) and "users" in wrapped else listed
     if not users:
         click.echo("No users found.")
         return
@@ -32,12 +35,13 @@ def list_users(ctx: click.Context):
     table.add_column("Email", style="green")
     table.add_column("Role", style="magenta")
     table.add_column("Teams", style="yellow")
-    for user in users:
+    for user in iter_items(users):
+        row = require_get(user)
         table.add_row(
-            str(user.get("user_id", "")),
-            str(user.get("user_email", "")),
-            str(user.get("user_role", "")),
-            ", ".join(user.get("teams", []) or []),
+            str(row.get("user_id", "")),
+            str(row.get("user_email", "")),
+            str(row.get("user_role", "")),
+            joined_names(row.get("teams", []) or []),
         )
     console: Final = Console()
     console.print(table)

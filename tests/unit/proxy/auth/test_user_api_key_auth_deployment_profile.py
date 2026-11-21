@@ -28,8 +28,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through
+from litellm.redis.stores.auth_cache import AuthObject
 from tests.unit.proxy.auth._user_table import UserTable, user_store_over
 from tests.unit.proxy.rust_auth_stores import (
     FakeJwtKeyMappingStore,
@@ -134,11 +135,11 @@ def _cache(database_up: bool) -> UserApiKeyCache:
     if not database_up:
         return cache
     for team in TEAMS:
-        cache.set_cache(f"team_id:{team.team_id}", team, model_type=LiteLLM_TeamTable)
+        cache.set_cache(AuthObject.team(team.team_id), team, model_type=LiteLLM_TeamTable)
     for customer in CUSTOMERS:
-        cache.set_cache(end_user_cache_key(customer.user_id), customer, model_type=LiteLLM_EndUserTable)
+        cache.set_cache(AuthObject.end_user(customer.user_id), customer, model_type=LiteLLM_EndUserTable)
     cache.set_cache(
-        _hash(MAPPED_KEY),
+        AuthObject.virtual_key(_hash(MAPPED_KEY)),
         UserAPIKeyAuth(
             token=_hash(MAPPED_KEY), team_id="team-a", user_id="key-owner", models=[], team_models=["model-a"]
         ),
