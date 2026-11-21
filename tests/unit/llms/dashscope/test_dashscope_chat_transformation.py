@@ -212,6 +212,38 @@ class TestDashScopeConfig:
 
         assert optional_params["reasoning_effort"] == reasoning_effort
 
+    @pytest.mark.parametrize(
+        ("thinking_type", "expected_enable_thinking"),
+        [("enabled", True), ("disabled", False)],
+    )
+    @pytest.mark.parametrize("provider", ["dashscope", "qwen_ai_platform"])
+    @pytest.mark.parametrize("drop_params", [True, False])
+    def test_dashscope_maps_thinking_to_enable_thinking(
+        self, thinking_type: str, expected_enable_thinking: bool, provider: str, drop_params: bool
+    ) -> None:
+        result: Final = litellm.get_optional_params(
+            model="deepseek-v4.1-flash-1017",
+            custom_llm_provider=provider,
+            thinking={"type": thinking_type},
+            drop_params=drop_params,
+        )
+
+        assert result["extra_body"] == {"enable_thinking": expected_enable_thinking}
+        assert "thinking" not in result
+
+    @pytest.mark.parametrize("thinking_type", ["enabled", "disabled"])
+    def test_dashscope_explicit_thinking_takes_precedence(self, thinking_type: str) -> None:
+        result: Final = litellm.get_optional_params(
+            model="deepseek-v4.1-flash-1017",
+            custom_llm_provider="dashscope",
+            thinking={"type": thinking_type},
+            reasoning_effort="none" if thinking_type == "enabled" else "high",
+            drop_params=True,
+        )
+
+        assert result["extra_body"] == {"enable_thinking": thinking_type == "enabled"}
+        assert "reasoning_effort" not in result
+
     def test_dashscope_preserves_cache_control_in_tools(self):
         """DashScope should NOT strip cache_control from tools."""
         config = DashScopeChatConfig()

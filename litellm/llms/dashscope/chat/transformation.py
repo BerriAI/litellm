@@ -2,9 +2,12 @@
 Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, overload
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -12,13 +15,48 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import resolve_dashscope_openai_api_base
 
+_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
 
 class DashScopeChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns a list
         return [
             *super().get_supported_openai_params(model=model),
+            "thinking",
             "reasoning_effort",
         ]
+
+    def map_openai_params(
+        self,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: provider config overrides return mutable SDK parameter dictionaries
+        mapped: Final = _PARAMS.validate_python(
+            super().map_openai_params(
+                non_default_params=dict(non_default_params),
+                optional_params=dict(optional_params),
+                model=model,
+                drop_params=drop_params,
+            )
+        )
+        thinking: Final = as_str_mapping(mapped.get("thinking"))
+        thinking_type: Final = thinking.get("type") if thinking is not None else None
+        if thinking_type not in ("enabled", "disabled"):
+            return {key: value for key, value in mapped.items() if key != "thinking"}
+        excluded: Final = (
+            frozenset(("thinking", "reasoning_effort"))
+            if thinking_type == "disabled" or mapped.get("reasoning_effort") == "none"
+            else frozenset(("thinking",))
+        )
+        return {
+            **{key: value for key, value in mapped.items() if key not in excluded},
+            "extra_body": {
+                **(as_str_mapping(mapped.get("extra_body")) or {}),
+                "enable_thinking": thinking_type == "enabled",
+            },
+        }
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
