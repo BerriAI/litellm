@@ -1111,7 +1111,11 @@ class _FailureRecorder(CustomLogger):
         self.failures: tuple[object, ...] = ()
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
     ) -> None:
         self.failures = (*self.failures, kwargs.get("exception"))
 
@@ -1253,3 +1257,88 @@ def test_closing_a_sync_stream_while_another_task_reads_ends_that_read_without_r
     assert provider_stream.closed
     assert not provider_stream.read_after_close
     assert failure_recorder.failures == ()
+
+
+_RESPONSE_COMPLETED: Final = (
+    b'data: {"type": "response.completed", "response": {"id": "resp_1", "status": "completed", "output": []}}\n\n'
+)
+_PARALLEL_CALLS: Final = (
+    ("fc_a", "call_98145f1b9bdb40fc82c5b2415ed291a5", "read_file", '{"path": "notes/a.md"}'),
+    ("fc_b", "call_0c8a1d2e3f4b5a6978695a4b3c2d1e0f", "run_command", '{"cmd": ["ls", "-la"]}'),
+)
+
+
+class _ToolCallProviderStream(httpx.AsyncByteStream):
+    def __init__(self, sends_argument_deltas: bool, sends_arguments_done: bool) -> None:
+        self._sends_argument_deltas: Final = sends_argument_deltas
+        self._sends_arguments_done: Final = sends_arguments_done
+
+    def _call_events(self, output_index: int, item_id: str, call_id: str, name: str, arguments: str) -> Iterator[dict]:
+        item: Final = {"type": "function_call", "id": item_id, "call_id": call_id, "name": name}
+        yield {
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {**item, "arguments": "", "status": "in_progress"},
+        }
+        if self._sends_argument_deltas:
+            midpoint: Final = len(arguments) // 2
+            for piece in (arguments[:midpoint], arguments[midpoint:]):
+                yield {
+                    "type": "response.function_call_arguments.delta",
+                    "output_index": output_index,
+                    "item_id": item_id,
+                    "delta": piece,
+                }
+        if self._sends_arguments_done:
+            yield {
+                "type": "response.function_call_arguments.done",
+                "output_index": output_index,
+                "item_id": item_id,
+                "arguments": arguments,
+            }
+        yield {
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": {**item, "arguments": arguments, "status": "completed"},
+        }
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _RESPONSE_CREATED
+        for output_index, call in enumerate(_PARALLEL_CALLS):
+            for event in self._call_events(output_index, *call):
+                yield f"data: {json.dumps(event)}\n\n".encode()
+        yield _RESPONSE_COMPLETED
+
+
+def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple[str, str, str], ...]:
+    async def _run() -> list[Mapping[str, object]]:
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+        )
+        return [chunk async for chunk in AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")]
+
+    chunks: Final = asyncio.run(_run())
+    starts: Final = {c["index"]: c["content_block"] for c in chunks if c["type"] == "content_block_start"}
+    partial_json: Final = {
+        index: "".join(
+            c["delta"]["partial_json"] for c in chunks if c["type"] == "content_block_delta" and c["index"] == index
+        )
+        for index in starts
+    }
+    return tuple((starts[i]["id"], starts[i]["name"], partial_json[i]) for i in sorted(starts))
+
+
+@pytest.mark.parametrize(
+    ("sends_argument_deltas", "sends_arguments_done"),
+    [(False, True), (False, False), (True, True), (True, False)],
+    ids=["done_only", "output_item_done_only", "deltas_then_done", "deltas_without_done"],
+)
+def test_each_parallel_tool_use_streams_its_arguments_exactly_once(
+    sends_argument_deltas: bool, sends_arguments_done: bool
+):
+    tool_uses: Final = _streamed_tool_uses(_ToolCallProviderStream(sends_argument_deltas, sends_arguments_done))
+
+    assert tool_uses == tuple((call_id, name, arguments) for _, call_id, name, arguments in _PARALLEL_CALLS)
