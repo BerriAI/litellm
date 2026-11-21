@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.core_helpers import (
     subscript,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_mapping
+from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import holds_mcp_blocks
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     defs_unpacked,
     invalid_type_message,
@@ -422,7 +423,7 @@ def _hosted_web_tool_use(block: object) -> tuple[str, str, object] | None:
 
 def _server_tool_use_id(block: object) -> str | None:
     match block:
-        case {"type": "server_tool_use", "id": str() as call_id}:
+        case {"type": "server_tool_use" | "mcp_tool_use", "id": str() as call_id}:
             return call_id
         case _:
             return None
@@ -830,6 +831,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             function=ChatCompletionToolCallFunctionChunk(
                 name=anthropic_tool_content["name"],
                 arguments=json.dumps(anthropic_tool_content["input"]),
+                **(
+                    {"provider_specific_fields": {"server_name": server_name}}
+                    if anthropic_tool_content.get("type") == "mcp_tool_use"
+                    and isinstance(server_name := anthropic_tool_content.get("server_name"), str)
+                    else {}
+                ),
             ),
             index=index,
         )
@@ -2504,7 +2511,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
     def update_headers_with_optional_anthropic_beta(
-        self, headers: dict, optional_params: dict, messages: Sequence[object] = ()
+        self, headers: dict[str, str], optional_params: dict, messages: Sequence[object] = ()
     ) -> dict:
         """Update headers with optional anthropic beta."""
 
@@ -2516,6 +2523,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if requires_native_compaction_beta(self._resolved_provider, optional_params, messages):
             self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+        if holds_mcp_blocks(messages):
+            self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value)
 
         _tools: Final = optional_params.get("tools", [])
         for tool in _tools:
@@ -2716,6 +2725,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 messages=list(self._with_pdf_links_formatted(conversation)),
                 llm_provider=self._resolved_provider,
                 drop_params=drop_params,
+                replays_mcp_calls=self.runs_hosted_mcp(),
             )
         except Exception as e:
             conversion_field_error: Final = non_string_message_field_error(messages, e)
@@ -2970,7 +2980,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if content["type"] == "text":
                 text_content += content["text"]
             ## TOOL CALLING
-            elif content["type"] == "tool_use" or content["type"] == "server_tool_use":
+            elif content["type"] in ("tool_use", "server_tool_use", "mcp_tool_use"):
                 tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
                     anthropic_tool_content=content,
                     index=idx,

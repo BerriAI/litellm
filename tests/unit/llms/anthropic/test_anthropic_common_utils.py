@@ -30,10 +30,12 @@ import litellm
 from litellm.llms.anthropic.common_utils import (
     ToolsWithoutStrict,
     is_claude_tool_target,
+    message_dict_with_server_tool_calls_split_out,
     tools_without_strict,
     without_stale_tool_search_results,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
@@ -4909,3 +4911,75 @@ def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed
     litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
 
     assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
+
+
+def _mcp_tool_call(query: str) -> ChatCompletionAssistantToolCall:
+    return {
+        "id": "mcptoolu_01",
+        "type": "function",
+        "function": {"name": "lookup", "arguments": json.dumps({"query": query})},
+    }
+
+
+def test_split_out_moves_a_rewritten_mcp_tool_call_back_to_server_tool_calls() -> None:
+    masked: Final = _mcp_tool_call("<EMAIL>")
+    message: Final = {
+        "role": "assistant",
+        "content": "Done",
+        "tool_calls": [masked],
+        "provider_specific_fields": {"server_tool_calls": [_mcp_tool_call("alice@example.com")]},
+    }
+
+    assert message_dict_with_server_tool_calls_split_out(message) == {
+        "role": "assistant",
+        "content": "Done",
+        "tool_calls": None,
+        "provider_specific_fields": {"server_tool_calls": [masked]},
+    }
+
+
+def test_a_guardrail_rewrite_of_an_mcp_call_still_replays_the_mcp_block_pair() -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+    from litellm.llms.anthropic.common_utils import write_anthropic_server_tool_call_arguments
+    from litellm.types.utils import Message
+
+    mcp_tool_result: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcptoolu_01",
+        "is_error": False,
+        "content": [{"type": "text", "text": "Found one account."}],
+    }
+    message: Final = Message(
+        role="assistant",
+        content="Done.",
+        provider_specific_fields={
+            "server_tool_calls": [
+                {
+                    **_mcp_tool_call("alice@example.com"),
+                    "function": {
+                        **_mcp_tool_call("alice@example.com")["function"],
+                        "provider_specific_fields": {"server_name": "crm"},
+                    },
+                }
+            ],
+            "tool_results": [mcp_tool_result],
+        },
+    )
+
+    write_anthropic_server_tool_call_arguments(message, 0, json.dumps({"query": "<EMAIL>"}))
+    replayed: Final = anthropic_messages_pt(
+        messages=[{"role": "user", "content": "Find alice."}, message.model_dump()],
+        model="claude-sonnet-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert replayed[1]["content"][1:] == [
+        {
+            "type": "mcp_tool_use",
+            "id": "mcptoolu_01",
+            "name": "lookup",
+            "server_name": "crm",
+            "input": {"query": "<EMAIL>"},
+        },
+        mcp_tool_result,
+    ]

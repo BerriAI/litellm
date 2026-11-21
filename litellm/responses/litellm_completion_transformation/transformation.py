@@ -24,6 +24,7 @@ from typing import (
 from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch, ResponseOutputRefusal
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.response_output_item import McpCall
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -185,6 +186,14 @@ from .custom_tools import (
     validated_defer_loading,
     validated_tool_search_execution,
     without_malformed_tool_flags,
+)
+from .mcp_calls import (
+    McpToolUse,
+    deferred_mcp_calls,
+    holds_mcp_call_items,
+    mcp_calls_by_call_id,
+    replayed_mcp_call_message,
+    without_mcp_server_tool_calls,
 )
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
@@ -961,6 +970,17 @@ def _resolved_chat_config(model: str, custom_llm_provider: str | None) -> "BaseC
         return None
 
 
+def _route_replays_mcp_calls(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    chat_config: Final = _resolved_chat_config(model, custom_llm_provider)
+    return (
+        chat_config_builds_anthropic_request(chat_config)
+        and isinstance(chat_config, AnthropicConfig)
+        and chat_config.runs_hosted_mcp()
+    )
+
+
 def _routed_base_model(request_kwargs: Mapping[str, object]) -> object:
     base_model: Final = request_kwargs.get("base_model")
     if base_model:
@@ -1481,6 +1501,8 @@ class LiteLLMCompletionResponsesConfig:
             only_since_compaction=not native_compaction,
             replay_tool_search=holds_tool_search_items(request_input)
             and request_runs_tool_search(request_tools or (), model, custom_llm_provider),
+            replay_mcp_calls=holds_mcp_call_items(request_input)
+            and _route_replays_mcp_calls(model, custom_llm_provider),
             caller_input=numbered_input,
             route_fills_empty_user_turns=partial(
                 target_fills_empty_user_turns, model, custom_llm_provider, _routed_base_model(request_kwargs)
@@ -1575,6 +1597,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_tool_search: bool = False,
         caller_input: str | ResponseInputParam | None = None,
         route_fills_empty_user_turns: Callable[[], bool] | None = None,
+        replay_mcp_calls: bool = False,
         keep_tool_references: bool = False,
     ) -> list[
         AllMessageValues
@@ -1650,6 +1673,7 @@ class LiteLLMCompletionResponsesConfig:
             self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(
                 LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
             ),
+            replay_mcp_calls=replay_mcp_calls,
         )
         try:
             converted: Final = (
@@ -1733,6 +1757,7 @@ class LiteLLMCompletionResponsesConfig:
             item_cache_control=keeps_item_marks,
             client_response_ids=previous_response_client_ids,
             tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
+            replay_mcp_calls=_route_replays_mcp_calls(model, provider),
             stored_turns=stored_turns,
             empty_user_turn_text=(
                 None
@@ -1857,6 +1882,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_reasoning: bool = False,
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
+        replay_mcp_calls: bool = False,
         keep_tool_references: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
@@ -1885,6 +1911,7 @@ class LiteLLMCompletionResponsesConfig:
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
                         self_named_namespace_members=self_named_namespace_members,
+                        replay_mcp_calls=replay_mcp_calls,
                         keep_tool_references=keep_tool_references,
                     )
                 )
@@ -2599,6 +2626,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_reasoning: bool = False,
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
+        replay_mcp_calls: bool = False,
         keep_tool_references: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
@@ -2616,6 +2644,8 @@ class LiteLLMCompletionResponsesConfig:
         - ResponseReasoningItemParam
         - ItemReference
         """
+        if replay_mcp_calls and (mcp_call_message := replayed_mcp_call_message(input_item)) is not None:
+            return [mcp_call_message]
         if input_item.get("type") == "web_search_call":
             try:
                 search: Final = ResponseFunctionWebSearch.model_validate(input_item)
@@ -3432,6 +3462,7 @@ class LiteLLMCompletionResponsesConfig:
         | CustomToolCallOutputItem
         | OutputToolSearchCall
         | OutputToolSearchOutput
+        | McpCall
     ]:
         """
         Transform a Chat Completion tools into a Responses API tools.
@@ -3461,8 +3492,17 @@ class LiteLLMCompletionResponsesConfig:
         web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
             chat_completion_response
         )
+        mcp_calls: Final = mcp_calls_by_call_id(
+            tuple(message_field(choice, "message") for choice in chat_completion_response.choices)
+        )
         responses_tools: Final[
-            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]
+            list[
+                ResponseFunctionToolCall
+                | ResponseFunctionWebSearch
+                | CustomToolCallOutputItem
+                | OutputToolSearchCall
+                | McpCall
+            ]
         ] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
@@ -3473,7 +3513,7 @@ class LiteLLMCompletionResponsesConfig:
 
                 if (
                     server_tool_call := LiteLLMCompletionResponsesConfig._server_tool_call_item(
-                        tool_id, tool_name, tool_arguments, web_search_calls, tool_search
+                        tool_id, tool_name, tool_arguments, web_search_calls, tool_search, mcp_calls
                     )
                 ) is not None:
                     responses_tools.append(server_tool_call)
@@ -3533,7 +3573,11 @@ class LiteLLMCompletionResponsesConfig:
         tool_arguments: str,
         web_search_calls: Mapping[str, ResponseFunctionWebSearch],
         tool_search: ToolSearchRouting,
-    ) -> ResponseFunctionWebSearch | OutputToolSearchCall | None:
+        mcp_calls: Mapping[str, McpCall],
+    ) -> ResponseFunctionWebSearch | OutputToolSearchCall | McpCall | None:
+        mcp_call: Final = mcp_calls.get(tool_id)
+        if mcp_call is not None:
+            return mcp_call
         web_search_call: Final = web_search_calls.get(tool_id)
         if web_search_call is not None:
             return web_search_call
@@ -3741,6 +3785,7 @@ class LiteLLMCompletionResponsesConfig:
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         chat_completion_response: ModelResponse | dict,
+        requested_mcp_calls: Mapping[str, McpToolUse] = MappingProxyType({}),
     ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
@@ -3777,6 +3822,7 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response,
                 choices=getattr(chat_completion_response, "choices", []),
                 responses_api_request=responses_api_request,
+                requested_mcp_calls=requested_mcp_calls,
             ),
             parallel_tool_calls=echoed.get("parallel_tool_calls", False),
             temperature=echoed.get("temperature"),
@@ -3808,10 +3854,13 @@ class LiteLLMCompletionResponsesConfig:
         # Surface provider-specific fields (generic passthrough from any provider)
         response_hidden_params: Final = get_hidden_params(responses_api_response)
         provider_fields: Final = (
-            response_hidden_params.get("provider_specific_fields") if response_hidden_params is not None else None
+            as_str_mapping(response_hidden_params.get("provider_specific_fields"))
+            if response_hidden_params is not None
+            else None
         )
-        if provider_fields:
-            setattr(responses_api_response, "provider_specific_fields", provider_fields)
+        surfaced_provider_fields: Final = without_mcp_server_tool_calls(provider_fields) if provider_fields else None
+        if surfaced_provider_fields:
+            setattr(responses_api_response, "provider_specific_fields", surfaced_provider_fields)
 
         return responses_api_response
 
@@ -3820,6 +3869,7 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_response: ModelResponse,
         choices: list[Choices],
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
+        requested_mcp_calls: Mapping[str, McpToolUse] = MappingProxyType({}),
     ) -> list[
         GenericResponseOutputItem
         | OutputCodeInterpreterCall
@@ -3831,6 +3881,7 @@ class LiteLLMCompletionResponsesConfig:
         | OutputToolSearchCall
         | OutputToolSearchOutput
         | ResponseCompactionItem
+        | McpCall
     ]:
         responses_output: list[
             GenericResponseOutputItem
@@ -3843,6 +3894,7 @@ class LiteLLMCompletionResponsesConfig:
             | OutputToolSearchCall
             | OutputToolSearchOutput
             | ResponseCompactionItem
+            | McpCall
         ] = []
 
         responses_output.extend(LiteLLMCompletionResponsesConfig._extract_compaction_output_items(choices))
@@ -3850,14 +3902,17 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
+            deferred_mcp_calls(tuple(message_field(choice, "message") for choice in choices), requested_mcp_calls)
+        )
+        tool_output_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=chat_completion_response,
+            responses_api_request=responses_api_request,
+        )
+        responses_output.extend(item for item in tool_output_items if isinstance(item, McpCall))
+        responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
-        responses_output.extend(
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
-                chat_completion_response=chat_completion_response,
-                responses_api_request=responses_api_request,
-            )
-        )
+        responses_output.extend(item for item in tool_output_items if not isinstance(item, McpCall))
 
         # Convert server-side tool results (e.g. Anthropic code execution)
         # into code_interpreter_call output items, replacing the corresponding

@@ -4915,6 +4915,9 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._queued_web_search_call_ids = set()
         iterator._tool_search = tool_search_routing(None)
         iterator._tool_search_executions = MappingProxyType({})
+        iterator._mcp_calls = MappingProxyType({})
+        iterator._done_mcp_call_ids = frozenset()
+        iterator._requested_mcp_calls = MappingProxyType({})
         iterator.tool_call_provider_fields = False
         return iterator
 

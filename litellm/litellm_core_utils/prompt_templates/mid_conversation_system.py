@@ -39,6 +39,7 @@ from pydantic import ValidationError
 
 from litellm.litellm_core_utils.core_helpers import spread
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_MCP_TOOL_USE_ID_PREFIX,
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
     AnthropicMessagesSystemMessageParam,
@@ -63,7 +64,7 @@ _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _NO_IDS: Final[frozenset[str]] = frozenset()
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
-_RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
+_RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use", "mcp_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
@@ -299,6 +300,10 @@ def is_anthropic_server_tool_use(tool_id: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
 
 
+def is_anthropic_mcp_tool_use(tool_id: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
+
+
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 
@@ -312,16 +317,20 @@ def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResult
         return None
 
 
+def _answers_server_tool_use(result: object, tool_id: str) -> bool:
+    return message_field(result, "tool_use_id") == tool_id and (
+        tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) or message_field(result, "type") == "mcp_tool_result"
+    )
+
+
 def find_anthropic_server_tool_result(
     tool_id: str,
     web_search_results: object,
     tool_results: object,
 ) -> dict[str, object] | None:
-    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
-        return None
     candidates: Final = (*spread(web_search_results or ()), *spread(tool_results or ()))
     return next(
-        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        (result for result in candidates if _answers_server_tool_use(result, tool_id) and isinstance(result, dict)),
         None,
     )
 

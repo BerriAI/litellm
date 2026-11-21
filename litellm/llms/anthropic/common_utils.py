@@ -57,6 +57,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MCP_TOOL_USE_ID_PREFIX,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
@@ -77,7 +78,6 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
-    ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
@@ -2460,8 +2460,19 @@ class _TextBlock(LiteLLMBaseModel):
     text: str
 
 
+class _RawServerToolUse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["server_tool_use", "mcp_tool_use"]
+    id: str
+    name: str
+    input: Mapping[str, JsonValue]
+
+
 _WEB_SEARCH_TOOL_RESULT_ADAPTER: Final = TypeAdapter(_ReplayedWebSearchToolResult)
 _SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_ReplayedServerToolUse)
+_RAW_SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_RawServerToolUse)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchToolResult | None:
@@ -2491,6 +2502,44 @@ def anthropic_server_tool_call_params(message: object) -> tuple[ChatCompletionAs
         return _SERVER_TOOL_CALLS_ADAPTER.validate_python(fields.get("server_tool_calls", ()) if fields else ())
     except ValidationError:
         return ()
+
+
+def raw_server_tool_use_calls(message: object) -> tuple[tuple[int, ChatCompletionAssistantToolCall], ...]:
+    return tuple(
+        (block_idx, call)
+        for block_idx, block in enumerate(parts_of(message_field(message, "content")))
+        if (call := _raw_server_tool_use_call(block)) is not None
+    )
+
+
+def _raw_server_tool_use_call(block: object) -> ChatCompletionAssistantToolCall | None:
+    try:
+        use: Final = _RAW_SERVER_TOOL_USE_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+    return ChatCompletionAssistantToolCall(
+        id=use.id, type="function", function={"name": use.name, "arguments": json.dumps(use.input)}
+    )
+
+
+def write_raw_server_tool_use_inputs(message: object, arguments_by_block: Mapping[int, str]) -> None:
+    content: Final = message_field(message, "content")
+    if not arguments_by_block or not isinstance(message, dict) or not isinstance(content, list):
+        return
+    message["content"] = [  # rebind-ok: a guardrail rewrite must land on the request it scanned
+        _with_raw_server_tool_use_input(block, arguments_by_block.get(block_idx))
+        for block_idx, block in enumerate(parts_of(content))
+    ]
+
+
+def _with_raw_server_tool_use_input(block: object, arguments: str | None) -> object:
+    if arguments is None or not isinstance(block, dict):
+        return block
+    try:
+        rewritten_input: Final = _JSON_OBJECT.validate_json(arguments)
+    except ValidationError:
+        return block
+    return block if block.get("input") == rewritten_input else {**block, "input": rewritten_input}
 
 
 def anthropic_server_tool_calls(message: object) -> tuple[ChatCompletionMessageToolCall, ...]:
@@ -2526,7 +2575,13 @@ def _server_tool_call_param(tool_call: object) -> ChatCompletionAssistantToolCal
         call: Final = _SERVER_TOOL_CALL_ADAPTER.validate_python(tool_call)
     except ValidationError:
         return None
-    return call if _server_tool_call_id(call).startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) else None
+    return (
+        call
+        if _server_tool_call_id(call).startswith(
+            (ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX, ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
+        )
+        else None
+    )
 
 
 def message_dict_with_server_tool_calls_split_out(message: object) -> object:
@@ -2565,7 +2620,7 @@ def with_server_tool_call_arguments(
     return ChatCompletionAssistantToolCall(
         id=call["id"],
         type=call["type"],
-        function=ChatCompletionToolCallFunctionChunk(name=call["function"].get("name"), arguments=arguments),
+        function={**call["function"], "arguments": arguments},
     )
 
 
@@ -2688,7 +2743,19 @@ def without_anthropic_server_tool_calls(holder: Message, tool_ids: frozenset[str
             if fields.get("web_search_calls") is not None
             else {}
         ),
+        **{
+            key: _server_tool_results_without(fields[key], tool_ids)
+            for key in ("web_search_results", "tool_results")
+            if fields.get(key) is not None
+        },
     }
+
+
+def _server_tool_results_without(results: object, tool_ids: frozenset[str]) -> object:
+    items: Final = validated_object_list(results)
+    if items is None:
+        return results
+    return [result for result in items if message_field(result, "tool_use_id") not in tool_ids]
 
 
 def _web_search_calls_without(calls: object, tool_ids: frozenset[str]) -> object:

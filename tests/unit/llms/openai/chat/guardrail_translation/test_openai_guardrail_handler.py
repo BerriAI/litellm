@@ -24,10 +24,13 @@ from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
     Function,
     GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
 )
 
 
@@ -979,6 +982,56 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         await handler.process_input_messages(data, QueryRedactingGuardrail(guardrail_name="redact"))
 
         assistant: Final = data["messages"][1]
+        assert _tool_call_ids_names_and_arguments(assistant["provider_specific_fields"]["server_tool_calls"]) == [
+            ("srvtoolu_01Search", "web_search", '{"query": "[REDACTED]"}')
+        ]
+        assert _tool_call_ids_names_and_arguments(assistant["tool_calls"]) == [
+            ("toolu_01Weather", "get_weather", '{"city": "Paris"}')
+        ]
+
+    @pytest.mark.asyncio
+    async def test_input_guardrail_rewrite_of_raw_server_and_mcp_tool_use_blocks_lands_on_their_input(self):
+        handler: Final = OpenAIChatCompletionsHandler()
+        data: Final = {
+            "messages": [
+                {"role": "user", "content": "look up jane"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Checking."},
+                        {"type": "server_tool_use", "id": "srvtoolu_01Raw", "name": "web_fetch", "input": _FETCH_INPUT},
+                        {
+                            "type": "mcp_tool_use",
+                            "id": "mcptoolu_01Wiki",
+                            "name": "ask_question",
+                            "server_name": "deepwiki",
+                            "input": {"repoName": "jane/notes", "query": "where is jane"},
+                        },
+                        {
+                            "type": "mcp_tool_result",
+                            "tool_use_id": "mcptoolu_01Wiki",
+                            "is_error": False,
+                            "content": [{"type": "text", "text": "jane is in Paris"}],
+                        },
+                    ],
+                    "tool_calls": [_server_tool_call("toolu_01Weather", "get_weather", {"city": "Paris"})],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [_server_tool_call("srvtoolu_01Search", "web_search", _SEARCH_INPUT)]
+                    },
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data, QueryRedactingGuardrail(guardrail_name="redact"))
+
+        assistant: Final = data["messages"][1]
+        assert [(block["type"], block.get("input")) for block in assistant["content"]] == [
+            ("text", None),
+            ("server_tool_use", {"url": "[REDACTED]"}),
+            ("mcp_tool_use", {"repoName": "jane/notes", "query": "[REDACTED]"}),
+            ("mcp_tool_result", None),
+        ]
+        assert assistant["content"][2]["server_name"] == "deepwiki"
         assert _tool_call_ids_names_and_arguments(assistant["provider_specific_fields"]["server_tool_calls"]) == [
             ("srvtoolu_01Search", "web_search", '{"query": "[REDACTED]"}')
         ]
@@ -2776,3 +2829,280 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+_SECRET_ARGUMENTS = json.dumps({"api_key": "sk-secret-123"})
+_MCP_ARGUMENTS = json.dumps({"repoName": "facebook/react", "question": "sk-secret-123?"})
+
+
+def _mcp_server_call() -> dict[str, object]:
+    return {
+        "id": "mcptoolu_01Ask",
+        "type": "function",
+        "function": {"name": "ask_wiki_question", "arguments": _MCP_ARGUMENTS},
+    }
+
+
+def _secret_masked(call: Mapping[str, Any]) -> dict[str, Any]:
+    function = call["function"]
+    return {**call, "function": {**function, "arguments": function["arguments"].replace("sk-", "[MASKED]-")}}
+
+
+def _client_call(index: int) -> dict[str, object]:
+    return {
+        "id": f"call_{index}",
+        "type": "function",
+        "function": {"name": f"store_key_{index}", "arguments": _SECRET_ARGUMENTS},
+    }
+
+
+def _request_with_client_and_mcp_calls(client_count: int) -> dict[str, object]:
+    return {
+        "model": "claude",
+        "messages": [
+            {"role": "user", "content": "Store the key, then ask deepwiki."},
+            {
+                "role": "assistant",
+                "content": "Working on it.",
+                "tool_calls": [_client_call(index) for index in range(client_count)],
+                "provider_specific_fields": {"server_tool_calls": [_mcp_server_call()]},
+            },
+        ],
+    }
+
+
+def _response_with_client_and_mcp_calls(client_count: int) -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content="Working on it.",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id=f"call_{index}",
+                            type="function",
+                            function=Function(name=f"store_key_{index}", arguments=_SECRET_ARGUMENTS),
+                        )
+                        for index in range(client_count)
+                    ],
+                    provider_specific_fields={"server_tool_calls": [_mcp_server_call()]},
+                ),
+            )
+        ]
+    )
+
+
+class McpUnawareSecretMaskingGuardrail(CustomGuardrail):
+    """Masks the tool calls it recognizes and returns only those, dropping the Claude MCP calls."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        recognized = [
+            _secret_masked(call)
+            for call in inputs.get("tool_calls", [])
+            if not str(call.get("id")).startswith("mcptoolu_")
+        ]
+        return GenericGuardrailAPIInputs(texts=inputs.get("texts", []), tool_calls=recognized)
+
+
+class FirstToolCallDroppingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(texts=inputs.get("texts", []), tool_calls=inputs.get("tool_calls", [])[1:])
+
+
+class NoneToolCallsGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> dict[str, object]:
+        return {"texts": inputs.get("texts", []), "tool_calls": None}
+
+
+def _stream_chunk(calls_by_choice: list[tuple[int, dict[str, object]]]) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(index=index, delta=Delta(content=None, provider_specific_fields={"server_tool_calls": [call]}))
+            for index, call in calls_by_choice
+        ]
+    )
+
+
+class SecretMaskingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=[_secret_masked(call) for call in inputs.get("tool_calls", [])],
+        )
+
+
+class RecordingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_tool_calls: list[object] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_tool_calls = list(inputs.get("tool_calls", []))
+        return inputs
+
+
+class TestGuardrailToolCallListsAlongsideClaudeMcpCalls:
+    @pytest.mark.asyncio
+    async def test_output_masks_from_a_guardrail_that_returns_only_client_calls_still_apply(self):
+        response = _response_with_client_and_mcp_calls(client_count=1)
+
+        await OpenAIChatCompletionsHandler().process_output_response(
+            response, McpUnawareSecretMaskingGuardrail(guardrail_name="mask-secrets")
+        )
+
+        message = response.choices[0].message
+        assert json.loads(message.tool_calls[0].function.arguments) == {"api_key": "[MASKED]-secret-123"}
+        assert message.provider_specific_fields["server_tool_calls"] == [_mcp_server_call()]
+
+    @pytest.mark.asyncio
+    async def test_input_masks_from_a_guardrail_that_returns_only_client_calls_still_apply(self):
+        data = _request_with_client_and_mcp_calls(client_count=1)
+
+        await OpenAIChatCompletionsHandler().process_input_messages(
+            data, McpUnawareSecretMaskingGuardrail(guardrail_name="mask-secrets")
+        )
+
+        assistant = data["messages"][1]
+        assert [(call["id"], json.loads(call["function"]["arguments"])) for call in assistant["tool_calls"]] == [
+            ("call_0", {"api_key": "[MASKED]-secret-123"})
+        ]
+        assert assistant["provider_specific_fields"]["server_tool_calls"] == [_mcp_server_call()]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_count", [1, 2])
+    async def test_input_guardrail_that_drops_a_call_rejects_the_request_instead_of_moving_an_mcp_call(
+        self, client_count: int
+    ):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        data = _request_with_client_and_mcp_calls(client_count=client_count)
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await OpenAIChatCompletionsHandler().process_input_messages(
+                data, FirstToolCallDroppingGuardrail(guardrail_name="drop-first")
+            )
+
+    @pytest.mark.asyncio
+    async def test_output_guardrail_that_drops_a_call_leaves_the_client_calls_as_they_were(self):
+        response = _response_with_client_and_mcp_calls(client_count=2)
+
+        await OpenAIChatCompletionsHandler().process_output_response(
+            response, FirstToolCallDroppingGuardrail(guardrail_name="drop-first")
+        )
+
+        message = response.choices[0].message
+        assert [(call.id, call.function.name, call.function.arguments) for call in message.tool_calls] == [
+            ("call_0", "store_key_0", _SECRET_ARGUMENTS),
+            ("call_1", "store_key_1", _SECRET_ARGUMENTS),
+        ]
+        assert message.provider_specific_fields["server_tool_calls"] == [_mcp_server_call()]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_count", [0, 1])
+    async def test_input_guardrail_returning_no_tool_call_list_leaves_the_request_as_it_was(self, client_count: int):
+        data = _request_with_client_and_mcp_calls(client_count=client_count)
+        expected_messages = json.loads(json.dumps(data["messages"]))
+
+        await OpenAIChatCompletionsHandler().process_input_messages(
+            data, NoneToolCallsGuardrail(guardrail_name="none-tool-calls")
+        )
+
+        assert data["messages"] == expected_messages
+
+    @pytest.mark.asyncio
+    async def test_input_guardrail_returning_no_tool_call_list_on_a_text_only_request_does_not_fail(self):
+        data = {"model": "claude", "messages": [{"role": "user", "content": "hello"}]}
+
+        await OpenAIChatCompletionsHandler().process_input_messages(
+            data, NoneToolCallsGuardrail(guardrail_name="none-tool-calls")
+        )
+
+        assert data["messages"] == [{"role": "user", "content": "hello"}]
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_mask_reaches_mcp_call_arguments_in_a_stream_with_no_text(self):
+        chunks = [
+            _stream_chunk([(0, _mcp_server_call())]),
+            ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+        ]
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=SecretMaskingGuardrail(guardrail_name="mask-secrets"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        [call] = chunks[0].choices[0].delta.provider_specific_fields["server_tool_calls"]
+        assert call["id"] == "mcptoolu_01Ask"
+        assert json.loads(call["function"]["arguments"]) == {"repoName": "facebook/react", "question": "[MASKED]-secret-123?"}
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_mask_reaches_the_mcp_call_of_every_choice(self):
+        second_call = {**_mcp_server_call(), "id": "mcptoolu_02Ask"}
+        chunks = [
+            _stream_chunk([(0, _mcp_server_call()), (1, second_call)]),
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=0, delta=Delta(), finish_reason="stop"),
+                    StreamingChoices(index=1, delta=Delta(), finish_reason="stop"),
+                ]
+            ),
+        ]
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=SecretMaskingGuardrail(guardrail_name="mask-secrets"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert [
+            (call["id"], "sk-" in call["function"]["arguments"])
+            for choice in chunks[0].choices
+            for call in choice.delta.provider_specific_fields["server_tool_calls"]
+        ] == [("mcptoolu_01Ask", False), ("mcptoolu_02Ask", False)]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_scanning_only_tool_results_is_not_sent_replayed_mcp_calls(self):
+        guardrail = RecordingGuardrail(guardrail_name="tool-results-only")
+        guardrail.scan_only_tool_results = True
+        data = _request_with_client_and_mcp_calls(client_count=0)
+        data["messages"].append({"role": "tool", "tool_call_id": "call_0", "content": "stored"})
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data, guardrail)
+
+        assert guardrail.seen_tool_calls == []

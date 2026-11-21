@@ -1472,6 +1472,59 @@ class TestToolPermissionGuardrail:
 
         assert result.choices[0].message.provider_specific_fields["web_search_calls"] == []
 
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_removes_the_results_of_denied_server_tool_calls(self):
+        rewriting: Final = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        mcp_call: Final = {
+            "id": "mcptoolu_01Wiki",
+            "type": "function",
+            "function": {
+                "name": "read_wiki_structure",
+                "arguments": "{}",
+                "provider_specific_fields": {"server_name": "deepwiki"},
+            },
+        }
+        unrelated_result: Final = {"type": "code_execution_tool_result", "tool_use_id": "srvtoolu_01Kept", "content": {}}
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={
+                        "content": "Reading.",
+                        "tool_calls": [_ALLOWED_BASH_CALL],
+                        "provider_specific_fields": {
+                            "server_tool_calls": [_SERVER_WEB_SEARCH_CALL, mcp_call],
+                            "web_search_results": [
+                                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01Search", "content": []}
+                            ],
+                            "tool_results": [
+                                {
+                                    "type": "mcp_tool_result",
+                                    "tool_use_id": "mcptoolu_01Wiki",
+                                    "content": [{"type": "text", "text": "wiki page"}],
+                                },
+                                unrelated_result,
+                            ],
+                        },
+                    },
+                )
+            ]
+        )
+
+        with patch.object(rewriting, "should_run_guardrail", return_value=True):
+            result: Final = await rewriting.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+        fields: Final = result.choices[0].message.provider_specific_fields
+        assert (fields["server_tool_calls"], fields["web_search_results"]) == ([], [])
+        assert fields["tool_results"] == [unrelated_result]
+
     def test_modify_response_with_permission_errors_keeps_custom_tool_call_in_another_choice(self):
         denied_call = ChatCompletionMessageToolCall(
             id="call_bash", type="function", function=Function(name="Bash", arguments="{}")
@@ -3946,7 +3999,6 @@ class TestToolPermissionGuardrailAnthropicMessages:
         "reused-block-index": (*DENIED_CALL[:2], THINKING_AT_THE_SAME_INDEX),
         "cr-line-ends": tuple(frame.replace(b"\n", b"\r") for frame in DENIED_CALL),
         "behind-a-glued-crlf-ping": (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n' + b"".join(DENIED_CALL),),
-        "finished-mcp-call": tuple(frame.replace(b'"tool_use"', b'"mcp_tool_use"') for frame in DENIED_CALL),
         "behind-a-form-feed": tuple(
             b'data: {"type": "ping"}\x0c' + frame.split(b"\n", 1)[1] for frame in DENIED_CALL
         ),
@@ -4047,6 +4099,69 @@ class TestToolPermissionGuardrailAnthropicMessages:
             await self._drain(self.blocking, chunks)
 
         assert "deny_read" in str(exc_info.value)
+
+    MCP_CALL: Final = {"type": "mcp_tool_use", "id": "mcptoolu_01", "server_name": "deepwiki", "input": {"command": "ls"}}
+    MCP_RESULT: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcptoolu_01",
+        "is_error": False,
+        "content": [{"type": "text", "text": "wiki page"}],
+    }
+
+    def _finished_mcp_call(self, index: int, name: str) -> list[bytes]:
+        events: Final = (
+            {"type": "content_block_start", "index": index, "content_block": {**self.MCP_CALL, "name": name, "input": {}}},
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(self.MCP_CALL["input"])},
+            },
+            {"type": "content_block_stop", "index": index},
+            {"type": "content_block_start", "index": index + 1, "content_block": self.MCP_RESULT},
+            {"type": "content_block_stop", "index": index + 1},
+        )
+        return [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
+
+    def _ended_by_end_turn(self, chunks: list[bytes]) -> list[bytes]:
+        message_delta, message_stop = self._sse_chunks("Bash")[-2:]
+        return [*chunks, message_delta.replace(b'"tool_use"', b'"end_turn"'), message_stop]
+
+    def _mcp_blocks(self, chunks: list[bytes]) -> list[dict[str, object]]:
+        return [
+            block
+            for event in self._events(chunks)
+            if isinstance(block := event.get("content_block"), dict) and str(block.get("type")).startswith("mcp_tool_")
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cut_short", [False, True], ids=["end-turn", "upstream-error"])
+    async def test_finished_mcp_call_named_by_a_deny_rule_is_blocked(self, cut_short: bool):
+        delivered: Final = [*self._sse_chunks("Bash")[:4], *self._finished_mcp_call(1, "Read")]
+        chunks: Final = self._ended_by_upstream_error(delivered) if cut_short else self._ended_by_end_turn(delivered)
+
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await self._drain(self.blocking, chunks)
+
+        assert "deny_read" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_rewrite_drops_a_denied_mcp_call_and_its_result(self):
+        chunks: Final = self._ended_by_end_turn([*self._sse_chunks("Bash")[:4], *self._finished_mcp_call(1, "Read")])
+
+        out: Final = await self._drain(self.rewriting, chunks)
+
+        assert self._mcp_blocks(out) == []
+        assert b"Permission denied" in b"".join(out)
+
+    @pytest.mark.asyncio
+    async def test_rewrite_of_a_denied_client_call_keeps_the_allowed_mcp_call_and_its_result(self):
+        source: Final = self._sse_chunks("Read")
+        chunks: Final = [*source[:7], *self._finished_mcp_call(2, "Bash"), *source[7:]]
+
+        out: Final = await self._drain(self.rewriting, chunks)
+
+        assert self._mcp_blocks(out) == [{**self.MCP_CALL, "name": "Bash"}, self.MCP_RESULT]
+        assert self._tool_use_blocks(self._events(out)) == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("delivered_events", [5, 6], ids=["before-input", "full-input-before-stop"])

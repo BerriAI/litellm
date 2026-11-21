@@ -30380,6 +30380,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/ResponseCompactionItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/McpCall"
                       }
                     ]
                   },

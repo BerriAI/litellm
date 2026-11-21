@@ -38,7 +38,19 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, TypeVar, Union, cast, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import (
@@ -86,7 +98,10 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     decode_compaction_item,
     with_compaction_summary,
 )
-from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
+from litellm.responses.litellm_completion_transformation.custom_tools import (
+    serialize_tool_call_arguments,
+    without_malformed_tool_flags,
+)
 from litellm.responses.litellm_completion_transformation.reasoning_items import (
     thinking_block_texts,
     with_thinking_text,
@@ -149,6 +164,17 @@ class _CompactionSummaryPosition:
     output_index: int
 
 
+_McpCallTextField: TypeAlias = Literal["arguments", "output", "error"]
+_MCP_CALL_TEXT_FIELDS: Final[tuple[_McpCallTextField, ...]] = ("arguments", "output", "error")
+
+
+@dataclass(frozen=True, slots=True)
+class _McpCallTextPosition:
+    output_index: int
+    item_id: str
+    text_field: _McpCallTextField
+
+
 @dataclass(frozen=True, slots=True)
 class _ReasoningSummaryPosition:
     output_index: int
@@ -173,7 +199,7 @@ class _ProviderThinkingBlockPosition:
     block_index: int
 
 
-_AnswerPosition: TypeAlias = _MessageContentPosition | _CompactionSummaryPosition
+_AnswerPosition: TypeAlias = _MessageContentPosition | _CompactionSummaryPosition | _McpCallTextPosition
 _ReasoningPosition: TypeAlias = _ReasoningSummaryPosition | _ReasoningContentPosition | _ThinkingBlockPosition
 _OutputItemPosition: TypeAlias = _AnswerPosition | _ReasoningPosition
 _ReasoningTextPosition: TypeAlias = _ReasoningPosition | _ProviderThinkingBlockPosition
@@ -186,6 +212,30 @@ def _output_compaction_summary(item: object) -> str | None:
         return None
     block: Final = decode_compaction_item(stream_item_field(item, "encrypted_content"))
     return None if block is None else block.summary
+
+
+def _mcp_call_texts(item: object, output_index: int) -> tuple[tuple[_McpCallTextPosition, str], ...]:
+    item_id: Final = stream_item_field(item, "id")
+    if stream_item_field(item, "type") != "mcp_call" or not isinstance(item_id, str):
+        return ()
+    return tuple(
+        (_McpCallTextPosition(output_index, item_id, text_field), text)
+        for text_field in _MCP_CALL_TEXT_FIELDS
+        if isinstance(text := stream_item_field(item, text_field), str) and text
+    )
+
+
+def _mcp_call_input_text(item: Mapping[str, object], text_field: _McpCallTextField) -> object:
+    value: Final = item.get(text_field)
+    return serialize_tool_call_arguments(value) if text_field == "arguments" else value
+
+
+def _mcp_call_input_texts(item: Mapping[str, object]) -> tuple[tuple[int, str], ...]:
+    return tuple(
+        (field_index, text)
+        for field_index, text_field in enumerate(_MCP_CALL_TEXT_FIELDS)
+        if isinstance(text := _mcp_call_input_text(item, text_field), str) and text
+    )
 
 
 def _reasoning_output_texts(item: object, output_index: int) -> tuple[tuple[_ReasoningPosition, str], ...]:
@@ -429,6 +479,9 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
     _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
+_MCP_CALL_ARGUMENTS_EVENT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"response.mcp_call_arguments.delta": "delta", "response.mcp_call_arguments.done": "arguments"}
+)
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
 _TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
 _REASONING_SUMMARY_TEXT_EVENT_TYPES: Final = frozenset(
@@ -439,6 +492,7 @@ _STREAM_TEXT_EVENT_TYPES: Final = (
     _OUTPUT_TEXT_EVENT_TYPES | _REASONING_SUMMARY_TEXT_EVENT_TYPES | _REASONING_TEXT_EVENT_TYPES
 )
 _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
+_TOOL_RESULT_INPUT_ITEM_TYPES: Final = TOOL_CALL_OUTPUT_ITEM_TYPES | frozenset({"mcp_call"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
@@ -585,6 +639,16 @@ _RewriteKey: Final = TypeVar("_RewriteKey")
 
 def _delta_replacements(rewrites: Mapping[_RewriteKey, str]) -> Mapping[_RewriteKey, Iterator[str]]:
     return MappingProxyType({key: chain((rewritten,), repeat("")) for key, rewritten in rewrites.items()})
+
+
+def _mcp_call_arguments_rewrites(rewrites: Mapping[_OutputItemPosition, str]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            position.item_id: rewritten
+            for position, rewritten in rewrites.items()
+            if isinstance(position, _McpCallTextPosition) and position.text_field == "arguments"
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1017,7 +1081,7 @@ def scannable_instructions(data: Mapping[str, object], *, skip_system: bool = Fa
 
 
 def _input_item_role(item: object) -> str:
-    if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES:
+    if stream_item_field(item, "type") in _TOOL_RESULT_INPUT_ITEM_TYPES:
         return "tool"
     role: Final = item.get("role") if isinstance(item, Mapping) else None
     return role.lower() if isinstance(role, str) else ""
@@ -1556,6 +1620,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             texts_to_check.append(summary)
             task_mappings.append((msg_idx, None))
             return
+        if message.get("type") == "mcp_call":
+            mcp_call_texts: Final = _mcp_call_input_texts(message)
+            texts_to_check.extend(text for _, text in mcp_call_texts)
+            task_mappings.extend((msg_idx, field_index) for field_index, _ in mcp_call_texts)
+            return
         if message.get("type") in TOOL_CALL_OUTPUT_ITEM_TYPES:
             for content_idx, text in tool_output_texts(message):
                 texts_to_check.append(text)
@@ -1610,6 +1679,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             encrypted_content = _summarized_encrypted_content(item)
             if encrypted_content is not None:
                 _assignable(item)["encrypted_content"] = with_compaction_summary(encrypted_content, guardrail_response)
+                continue
+
+            if item.get("type") == "mcp_call" and content_idx_optional is not None:
+                _assignable(item)[_MCP_CALL_TEXT_FIELDS[content_idx_optional]] = guardrail_response
                 continue
 
             field = _scanned_text_field(item)
@@ -2209,10 +2282,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         rule."""
         delta_replacements: Final = _delta_replacements(rewrites_by_position)
         reasoning_rewrites: Final = _reasoning_stream_rewrites(rewrites_by_position)
+        mcp_arguments: Final = _mcp_call_arguments_rewrites(rewrites_by_position)
+        mcp_argument_deltas: Final = _delta_replacements(mcp_arguments)
         for event in stream_events:
             if not has_attributes(event, _StreamEventFields, "get"):
                 continue
             event_type = _stream_event_field(event, "type")
+            if self._sync_mcp_call_arguments_event(event, event_type, mcp_arguments, mcp_argument_deltas):
+                continue
             output_index = _stream_event_field(event, "output_index")
             content_index = _stream_event_field(event, "content_index")
             if _carries_whole_output_item(event) and isinstance(output_index, int):
@@ -2235,6 +2312,23 @@ class OpenAIResponsesHandler(BaseTranslation):
                 self._write_content_part_text(event.get("part"), rewrites_by_position[position])
 
     @staticmethod
+    def _sync_mcp_call_arguments_event(
+        event: _StreamEventFields,
+        event_type: object,
+        arguments_by_item_id: Mapping[str, str],
+        argument_deltas_by_item_id: Mapping[str, Iterator[str]],
+    ) -> bool:
+        field: Final = _MCP_CALL_ARGUMENTS_EVENT_FIELDS.get(event_type) if isinstance(event_type, str) else None
+        item_id: Final = _stream_event_field(event, "item_id")
+        if field is None or not isinstance(item_id, str) or item_id not in arguments_by_item_id:
+            return False
+        rewritten: Final = (
+            next(argument_deltas_by_item_id[item_id]) if field == "delta" else arguments_by_item_id[item_id]
+        )
+        OpenAIResponsesHandler._write_event_field(event, field, rewritten)
+        return True
+
+    @staticmethod
     def _sync_provider_fields_to_stream_events(stream_events: Sequence[object], response: object) -> None:
         earlier_responses: Final = tuple(
             earlier
@@ -2252,6 +2346,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         output_index: int,
         rewrites_by_position: Mapping[_OutputItemPosition, str],
     ) -> None:
+        if stream_item_field(item, "type") == "mcp_call":
+            for position, rewritten in rewrites_by_position.items():
+                if isinstance(position, _McpCallTextPosition) and position.item_id == stream_item_field(item, "id"):
+                    OpenAIResponsesHandler._write_event_field(item, position.text_field, rewritten)
+            return
         summary_rewrite: Final = rewrites_by_position.get(_CompactionSummaryPosition(output_index))
         if summary_rewrite is not None:
             OpenAIResponsesHandler._write_compaction_summary(item, summary_rewrite)
@@ -2499,10 +2598,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         reasoning_texts: Final = chain.from_iterable(
             _reasoning_output_texts(item, output_index) for output_index, item in enumerate(output_items)
         )
+        mcp_call_texts: Final = chain.from_iterable(
+            _mcp_call_texts(item, output_index) for output_index, item in enumerate(output_items)
+        )
         return StreamingScanKey(
             texts=(
                 *part_texts,
                 *summaries,
+                *(text for _, text in mcp_call_texts),
                 *(text for _, text in reasoning_texts),
                 *(text for _, text in _provider_thinking_texts(response)),
             ),
@@ -2606,6 +2709,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             task_mappings.append(_CompactionSummaryPosition(output_idx))
             return
 
+        mcp_call_texts: Final = _mcp_call_texts(output_item, output_idx)
+        if mcp_call_texts:
+            texts_to_check.extend(text for _, text in mcp_call_texts)
+            task_mappings.extend(position for position, _ in mcp_call_texts)
+            return
+
         # Handle both GenericResponseOutputItem and dict
         content: Sequence[object] | None = None
         if isinstance(output_item, BaseModel):
@@ -2666,6 +2775,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             match position:
                 case _CompactionSummaryPosition():
                     self._write_compaction_summary(output_item, guardrail_response)
+                case _McpCallTextPosition():
+                    self._write_event_field(output_item, position.text_field, guardrail_response)
                 case _MessageContentPosition():
                     self._write_part_text(
                         stream_item_items(output_item, "content"), position.content_index, guardrail_response

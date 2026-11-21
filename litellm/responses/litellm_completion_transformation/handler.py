@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.model_param_helper import embeds_thought_signatu
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
+from litellm.responses.litellm_completion_transformation.mcp_calls import requested_mcp_tool_uses
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -160,6 +161,9 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
             **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
+        requested_mcp_calls: Final = requested_mcp_tool_uses(
+            _REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request).get("messages")
+        )
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
@@ -167,6 +171,7 @@ class LiteLLMCompletionTransformationHandler:
                     chat_completion_response=litellm_completion_response,
                     request_input=bridged_input,
                     responses_api_request=echoed_request,
+                    requested_mcp_calls=requested_mcp_calls,
                 )
             )
 
@@ -183,6 +188,7 @@ class LiteLLMCompletionTransformationHandler:
                 tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
                     _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
                 ),
+                requested_mcp_calls=requested_mcp_calls,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
@@ -262,12 +268,16 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
+        requested_mcp_calls: Final = requested_mcp_tool_uses(
+            _REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request).get("messages")
+        )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                     chat_completion_response=litellm_completion_response,
                     request_input=request_input,
                     responses_api_request=responses_api_request,
+                    requested_mcp_calls=requested_mcp_calls,
                 )
             )
 
@@ -284,5 +294,6 @@ class LiteLLMCompletionTransformationHandler:
                 tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
                     _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
                 ),
+                requested_mcp_calls=requested_mcp_calls,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")

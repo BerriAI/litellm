@@ -60,6 +60,24 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, ModelResponse, ServerToolUse, Usage
+from tests.unit.llms.anthropic.anthropic_deferred_mcp_result import (
+    CLIENT_TOOL_CALL_ID,
+    CLIENT_TOOL_USE,
+    DEFERRED_MCP_FOLLOW_UP,
+    DEFERRED_MCP_PROMPT,
+    DEFERRED_MCP_SERVER,
+    DEFERRED_MCP_TOOL_RESULT,
+    LOCAL_TIME_OUTPUT,
+    LOCAL_TIME_TOOL,
+    MCP_TOOL_USE,
+    TURN_ONE_MESSAGE,
+    TURN_ONE_STREAM_EVENTS,
+    TURN_THREE_MESSAGE,
+    TURN_TWO_MESSAGE,
+    TURN_TWO_STREAM_EVENTS,
+    TURN_TWO_TEXT,
+    anthropic_sse,
+)
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -4048,6 +4066,301 @@ def test_server_tool_use_is_not_returned_as_a_client_tool_call(
     ]
     if not expected_tool_call_ids:
         assert choice.message.content == _PARIS_TEXT
+
+
+@pytest.mark.parametrize("tool_input", [{}, {"repo": "example/project"}])
+def test_mcp_tool_use_is_preserved_as_a_server_tool_call(tool_input: dict[str, str]) -> None:
+    mcp_result: Final[dict[str, object]] = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcptoolu_01Wiki",
+        "is_error": False,
+        "content": [{"type": "text", "text": "Repository overview"}],
+    }
+    choice: Final = _parsed_choice(
+        [
+            {
+                "type": "mcp_tool_use",
+                "id": mcp_result["tool_use_id"],
+                "name": "read_wiki_structure",
+                "server_name": "wiki",
+                "input": tool_input,
+            },
+            mcp_result,
+            _WEATHER_TOOL_USE,
+        ],
+        "tool_use",
+    )
+
+    assert [
+        (call["id"], call["function"].get("name"), json.loads(call["function"].get("arguments", "")))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [(mcp_result["tool_use_id"], "read_wiki_structure", tool_input)]
+    assert [call.id for call in choice.message.tool_calls or ()] == [_WEATHER_TOOL_USE["id"]]
+    assert message_field(choice.message.provider_specific_fields, "tool_results") == [mcp_result]
+    assert choice.finish_reason == "tool_calls"
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository overview and check the weather"},
+        choice.message.model_dump(),
+        {"role": "tool", "tool_call_id": _WEATHER_TOOL_USE["id"], "content": "18C"},
+    )
+    assert replayed[1]["content"] == [
+        {
+            "type": "mcp_tool_use",
+            "id": mcp_result["tool_use_id"],
+            "name": "read_wiki_structure",
+            "server_name": "wiki",
+            "input": tool_input,
+        },
+        mcp_result,
+        _WEATHER_TOOL_USE,
+    ]
+
+
+@pytest.mark.parametrize("native_content", [False, True], ids=["parsed_response", "native_blocks"])
+def test_mcp_tool_pairs_round_trip_with_interleaved_thinking(native_content: bool) -> None:
+    first_call: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcptoolu_01Wiki",
+        "name": "read_wiki_structure",
+        "server_name": "wiki",
+        "input": {"repo": "example/project"},
+    }
+    first_result: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": first_call["id"],
+        "is_error": False,
+        "content": [{"type": "text", "text": "Repository overview"}],
+    }
+    content: Final = [
+        {"type": "thinking", "thinking": "Read the first repository.", "signature": "sig_first"},
+        first_call,
+        first_result,
+        {"type": "thinking", "thinking": "Read the second repository.", "signature": "sig_second"},
+        {**first_call, "id": "mcptoolu_02Wiki", "server_name": "other_wiki"},
+        {**first_result, "tool_use_id": "mcptoolu_02Wiki"},
+        {"type": "text", "text": "Both repositories are documented."},
+    ]
+    message: Final = (
+        {"role": "assistant", "content": content}
+        if native_content
+        else _parsed_assistant_message(content, "end_turn").model_dump()
+    )
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read both repositories"},
+        message,
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == content
+
+
+@pytest.mark.parametrize("server_name", [None, ""])
+def test_mcp_pair_without_a_server_name_is_skipped_on_replay(server_name: str | None) -> None:
+    message: Final = _parsed_assistant_message(
+        [
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_01Wiki",
+                "name": "read_wiki_structure",
+                "input": {},
+                **({"server_name": server_name} if server_name is not None else {}),
+            },
+            {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_01Wiki", "content": []},
+            {"type": "text", "text": "Repository overview"},
+        ],
+        "end_turn",
+    )
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository"},
+        message.model_dump(),
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == [{"type": "text", "text": "Repository overview"}]
+
+
+@pytest.mark.parametrize("server_name", [None, ""])
+def test_unanswered_mcp_call_without_a_server_name_is_skipped_when_its_turn_is_continued(
+    server_name: str | None,
+) -> None:
+    message: Final = _parsed_assistant_message(
+        [
+            {"type": "text", "text": "Reading the wiki."},
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_01Wiki",
+                "name": "read_wiki_structure",
+                "input": {},
+                **({"server_name": server_name} if server_name is not None else {}),
+            },
+        ],
+        "pause_turn",
+    )
+
+    replayed: Final = _replayed({"role": "user", "content": "Read the repository"}, message.model_dump())
+
+    assert replayed[1]["content"] == [{"type": "text", "text": "Reading the wiki."}]
+
+
+_DEFERRED_MCP_CHAT_TOOLS: Final = [
+    {
+        "type": "mcp",
+        "server_label": DEFERRED_MCP_SERVER["name"],
+        "server_url": DEFERRED_MCP_SERVER["url"],
+        "require_approval": "never",
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": LOCAL_TIME_TOOL["name"],
+            "description": LOCAL_TIME_TOOL["description"],
+            "parameters": LOCAL_TIME_TOOL["input_schema"],
+        },
+    },
+]
+
+
+def _anthropic_reply(
+    message: Mapping[str, object], stream_events: tuple[Mapping[str, object], ...] | None
+) -> httpx.Response:
+    if stream_events is None:
+        return httpx.Response(200, json=message)
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=anthropic_sse(stream_events))
+
+
+def _chat_turn(messages: list[Mapping[str, object]], stream: bool) -> dict[str, object]:
+    if not stream:
+        response: Final = litellm.completion(
+            model="anthropic/claude-haiku-5-5", messages=messages, tools=_DEFERRED_MCP_CHAT_TOOLS, api_key="sk-ant-fake"
+        )
+        return response.choices[0].message.model_dump()
+    chunks: Final = list(
+        litellm.completion(
+            model="anthropic/claude-haiku-5-5",
+            messages=messages,
+            tools=_DEFERRED_MCP_CHAT_TOOLS,
+            stream=True,
+            api_key="sk-ant-fake",
+        )
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=chunks, messages=messages)
+    return assembled.choices[0].message.model_dump()
+
+
+def _as_replayed(message: dict[str, object], keeps_provider_fields: bool) -> dict[str, object]:
+    if keeps_provider_fields:
+        return message
+    return {key: value for key, value in message.items() if key != "provider_specific_fields"}
+
+
+def _sent_assistant_turns(route: respx.Route, call_index: int) -> list[object]:
+    sent: Final = json.loads(route.calls[call_index].request.content)
+    return [message["content"] for message in sent["messages"] if message["role"] == "assistant"]
+
+
+_TURN_TWO_TEXT_BLOCK: Final = {"type": "text", "text": TURN_TWO_TEXT}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize(
+    ("turn_one_keeps_fields", "turn_two_keeps_fields", "expected_turn_three"),
+    [
+        pytest.param(
+            True,
+            True,
+            [[MCP_TOOL_USE, CLIENT_TOOL_USE], [DEFERRED_MCP_TOOL_RESULT, _TURN_TWO_TEXT_BLOCK]],
+            id="fields_kept",
+        ),
+        pytest.param(True, False, [[CLIENT_TOOL_USE], [_TURN_TWO_TEXT_BLOCK]], id="turn_two_fields_dropped"),
+        pytest.param(False, True, [[CLIENT_TOOL_USE], [_TURN_TWO_TEXT_BLOCK]], id="turn_one_fields_dropped"),
+        pytest.param(False, False, [[CLIENT_TOOL_USE], [_TURN_TWO_TEXT_BLOCK]], id="fields_dropped"),
+    ],
+)
+def test_a_deferred_mcp_result_is_sent_back_only_with_the_mcp_call_it_answers(
+    respx_mock: respx.MockRouter,
+    stream: bool,
+    turn_one_keeps_fields: bool,
+    turn_two_keeps_fields: bool,
+    expected_turn_three: list[list[Mapping[str, object]]],
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            _anthropic_reply(TURN_ONE_MESSAGE, TURN_ONE_STREAM_EVENTS if stream else None),
+            _anthropic_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS if stream else None),
+            _anthropic_reply(TURN_THREE_MESSAGE, None),
+        ]
+    )
+    first_turn: Final = [{"role": "user", "content": DEFERRED_MCP_PROMPT}]
+    second_turn: Final = [
+        *first_turn,
+        _as_replayed(_chat_turn(first_turn, stream), turn_one_keeps_fields),
+        {"role": "tool", "tool_call_id": CLIENT_TOOL_CALL_ID, "content": LOCAL_TIME_OUTPUT},
+    ]
+    turn_two: Final = _chat_turn(second_turn, stream)
+    _chat_turn(
+        [
+            *second_turn,
+            _as_replayed(turn_two, turn_two_keeps_fields),
+            {"role": "user", "content": DEFERRED_MCP_FOLLOW_UP},
+        ],
+        False,
+    )
+
+    assert turn_two["tool_calls"] is None
+    assert message_field(turn_two["provider_specific_fields"], "tool_results") == [DEFERRED_MCP_TOOL_RESULT]
+    assert _sent_assistant_turns(route, 1) == [
+        [MCP_TOOL_USE, CLIENT_TOOL_USE] if turn_one_keeps_fields else [CLIENT_TOOL_USE]
+    ]
+    assert _sent_assistant_turns(route, 2) == expected_turn_three
+
+
+def test_a_paused_mcp_call_and_the_result_its_resumed_turn_returns_are_both_sent_back() -> None:
+    call: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcptoolu_01Wiki",
+        "name": "read_wiki_structure",
+        "server_name": "wiki",
+        "input": {"repo": "example/project"},
+    }
+    result: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": call["id"],
+        "is_error": False,
+        "content": [{"type": "text", "text": "Repository overview"}],
+    }
+    answer: Final = {"type": "text", "text": "The repository is documented."}
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository"},
+        _parsed_assistant_message([call], "pause_turn").model_dump(),
+        _parsed_assistant_message([result, answer], "end_turn").model_dump(),
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == [call, result, answer]
+
+
+def test_a_streamed_deferred_mcp_result_reaches_the_client_in_a_chunk(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS)
+    )
+
+    chunks: Final = litellm.completion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": DEFERRED_MCP_PROMPT}],
+        tools=_DEFERRED_MCP_CHAT_TOOLS,
+        stream=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert [
+        tool_results
+        for chunk in chunks
+        if (tool_results := message_field(chunk.choices[0].delta.provider_specific_fields, "tool_results"))
+    ][:1] == [[DEFERRED_MCP_TOOL_RESULT]]
 
 
 def _replayed(*messages: Mapping[str, object]) -> list[AllAnthropicPassThroughMessageValues]:
@@ -11144,6 +11457,62 @@ def test_claude_routes_without_the_mcp_connector_send_no_tools_when_drop_params_
     assert "tools" not in mapped
     assert "mcp_servers" not in mapped
     assert "tool_choice" not in mapped
+
+
+_HISTORY_MCP_CALL: Final = {
+    "type": "mcp_tool_use",
+    "id": "mcptoolu_01Wiki",
+    "name": "read_wiki_structure",
+    "server_name": "deepwiki",
+    "input": {"repoName": "facebook/react"},
+}
+_HISTORY_MCP_RESULT: Final = {
+    "type": "mcp_tool_result",
+    "tool_use_id": "mcptoolu_01Wiki",
+    "is_error": False,
+    "content": [{"type": "text", "text": "1 React Repository Overview"}],
+}
+_HISTORY_MCP_ANSWER: Final = {"type": "text", "text": "The wiki has one page."}
+
+
+def _sent_mcp_history_turn(config_class: type[AnthropicConfig], native_content: bool) -> object:
+    content: Final = [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER]
+    sent: Final = config_class().transform_request(
+        model="claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "List the wiki pages of facebook/react."},
+            (
+                {"role": "assistant", "content": content}
+                if native_content
+                else _parsed_assistant_message(content, "end_turn").model_dump()
+            ),
+            {"role": "user", "content": "Which page covers the reconciler?"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    return sent["messages"][1]["content"]
+
+
+@pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
+@pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
+def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class, native_content):
+    sent: Final = _sent_mcp_history_turn(config_class, native_content)
+
+    assert sent == (
+        [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER]
+        if native_content
+        else [_HISTORY_MCP_ANSWER, _HISTORY_MCP_CALL, _HISTORY_MCP_RESULT]
+    )
+
+
+@pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_send_only_the_text_of_an_mcp_turn_from_history(
+    config_class, route, native_content
+):
+    assert _sent_mcp_history_turn(config_class, native_content) == [_HISTORY_MCP_ANSWER]
 
 
 _KEPT_SEARCH_CALL: Final = {
