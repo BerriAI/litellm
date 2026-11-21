@@ -12,6 +12,8 @@ import respx
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.dynamoai import DynamoAIGuardrails
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -61,8 +63,8 @@ async def test_dynamoai_blocks_content_with_block_action():
         # Mock should_run_guardrail to return True
         guardrail.should_run_guardrail = MagicMock(return_value=True)
 
-        # Test that the guardrail raises ValueError for blocked content
-        with pytest.raises(ValueError, match="violation\\(s\\) detected") as exc_info:
+        # Test that the guardrail raises GuardrailRaisedException for blocked content
+        with pytest.raises(GuardrailRaisedException, match="violation\\(s\\) detected") as exc_info:
             await guardrail.async_pre_call_hook(
                 data=request_data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -75,6 +77,8 @@ async def test_dynamoai_blocks_content_with_block_action():
     assert "Guardrail failed" in error_message
     assert "TOXICITY POLICY" in error_message.upper()
     assert "BLOCK" in error_message.upper()
+    assert exc_info.value.blocked_content is True
+    assert is_guardrail_intervention(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -171,7 +175,7 @@ async def test_post_call_hook_sends_the_assistant_text_to_dynamoai_and_allows_a_
 async def test_post_call_hook_raises_when_dynamoai_blocks_the_assistant_text(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(_ANALYZE_URL).respond(json=_BLOCK_VERDICT)
 
-    with pytest.raises(ValueError, match="Guardrail failed") as blocked:
+    with pytest.raises(GuardrailRaisedException, match="Guardrail failed") as blocked:
         await _post_call_guardrail().async_post_call_success_hook(
             data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "hi"}]},
             user_api_key_dict=UserAPIKeyAuth(),
