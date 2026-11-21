@@ -4085,6 +4085,10 @@ async def test_streaming_masking_re_emits_anthropic_sse_with_sanitized_text():
     body = b"".join(delivered)
     assert b"[REDACTED]" in body
     assert b"4111-1111-1111-1111" not in body
+    delivered_events = [json.loads(line[6:]) for line in body.decode().split("\n") if line.startswith("data: ")]
+    upstream_events = [json.loads(chunk.decode().split("data: ", 1)[1]) for chunk in _ANTHROPIC_SSE_CHUNKS]
+    assert delivered_events[0] == upstream_events[0], "message_start reaches the client as the upstream sent it"
+    assert delivered_events[-2:] == upstream_events[-2:], "the turn ends with the upstream usage and stop"
 
 
 @pytest.mark.asyncio

@@ -436,6 +436,16 @@ def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     )
 
 
+def anthropic_sse_events(all_chunks: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    """The data of every event the stream sent, in order."""
+    return _parsed_sse_events(_joined_sse_stream(all_chunks) or "")
+
+
+def is_sse_error_event(event: Mapping[str, object]) -> bool:
+    """Whether an event is an error in either wire form, the Anthropic ``error`` event or a ``{"error": ...}`` payload."""
+    return event.get("type") == "error" or isinstance(event.get("error"), Mapping)
+
+
 def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
     return next(
         (
@@ -514,6 +524,4 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     if sse_stream is None:
         return False
     events: Final = _parsed_sse_events(sse_stream)
-    return len(events) > 0 and all(
-        event.get("type") == "error" or isinstance(event.get("error"), Mapping) for event in events
-    )
+    return len(events) > 0 and all(is_sse_error_event(event) for event in events)

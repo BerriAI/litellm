@@ -2491,6 +2491,10 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
     assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
     assert joined.count("event: message_start") == 1
     assert joined.count("event: message_stop") == 1
+    delivered_events = [json.loads(line[6:]) for line in joined.split("\n") if line.startswith("data: ")]
+    upstream_events = [json.loads(chunk.decode().split("data: ", 1)[1]) for chunk in byte_chunks]
+    assert delivered_events[0] == upstream_events[0], "message_start reaches the client as the upstream sent it"
+    assert delivered_events[-2:] == upstream_events[-2:], "the turn ends with the upstream usage and stop"
 
 
 @pytest.mark.asyncio
