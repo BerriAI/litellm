@@ -601,7 +601,7 @@ def _ledger_backed(
 
 async def _log_and_commit(exporter: LensExporter, request: Mapping[str, object]) -> None:
     """Logs a request, then reports the accepted ledger delivery that confirms it with the fixture's accounting."""
-    await _log_and_commit(exporter, request)
+    await exporter.async_log_success_event(request, None, None, None)
     request_id: Final = _request_id(request, None)
     assert request_id is not None
     exporter.ledger_committed(
