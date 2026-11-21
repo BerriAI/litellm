@@ -1773,15 +1773,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     @staticmethod
     def _responses_input_file_id(part: Mapping[str, object]) -> str | None:
         part_type: Final = part.get("type")
+        if part_type not in ("input_file", "input_image"):
+            return None
         if part_type == "input_file":
             file_id: Final = part.get("file_id")
             if isinstance(file_id, str) and file_id:
                 return file_id
-            url = part.get("file_url")
-        elif part_type == "input_image":
-            url = part.get("image_url")
-        else:
-            return None
+        url: Final = part.get("file_url" if part_type == "input_file" else "image_url")
         return url if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
