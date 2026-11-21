@@ -93,6 +93,20 @@ def test_transform_request_passes_remote_url_through_untouched():
     assert body["image_url"] == "https://example.com/depth.png"
 
 
+@pytest.mark.parametrize("image", [None, []])
+def test_transform_request_requires_an_image(image):
+    with pytest.raises(litellm.BadRequestError, match="input image") as exc_info:
+        FalAIFluxLoraDepthEditConfig().transform_image_edit_request(
+            model=MODEL,
+            prompt="follow the depth map",
+            image=image,
+            image_edit_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+
+
 def test_transform_request_rejects_two_images():
     with pytest.raises(ValueError, match="exactly one control image"):
         FalAIFluxLoraDepthEditConfig().transform_image_edit_request(
