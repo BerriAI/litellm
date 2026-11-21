@@ -1215,6 +1215,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     ORJSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -13955,6 +13956,9 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     return {key: value for key, value in form_data.items() if key != "file"}
 
 
+PLAIN_TEXT_TRANSCRIPTION_FORMATS: Final = frozenset({"text", "srt", "vtt"})
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -13962,7 +13966,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -13973,7 +13980,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -13994,6 +14004,7 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
+        requested_response_format: Final = form_data.get("response_format")
         data = {**_form_fields_without_file(form_data), **data}
 
         # Include original request and headers in the data
@@ -14127,6 +14138,11 @@ async def audio_transcriptions(
                 media_type="text/event-stream",
                 headers=response_headers,
             )
+
+        if requested_response_format in PLAIN_TEXT_TRANSCRIPTION_FORMATS and isinstance(
+            response, TranscriptionResponse
+        ):
+            return PlainTextResponse(content=response.text or "", headers=response_headers)
 
         fastapi_response.headers.update(response_headers)
 
