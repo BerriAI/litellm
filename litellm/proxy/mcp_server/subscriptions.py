@@ -602,9 +602,17 @@ class GatewaySubscriptions:
                 self._upstream_slots.release()
 
         async with _listener_admission(targets), anyio.create_task_group() as group:
-            honored: Final = tuple(
-                [SubscriptionFilter.model_validate(await group.start(relay, target)) for target in targets]
-            )
+            honored_list: list[SubscriptionFilter] = [SubscriptionFilter() for _ in targets]
+            async with anyio.create_task_group() as start_group:
+
+                async def start_relay(idx: int, target: SubscriptionTarget) -> None:
+                    filter_result = await group.start(relay, target)
+                    honored_list[idx] = SubscriptionFilter.model_validate(filter_result)
+
+                for idx, target in enumerate(targets):
+                    start_group.start_soon(start_relay, idx, target)
+
+            honored: Final = tuple(honored_list)
             notifications: Final = SubscriptionFilter(
                 tools_list_changed=any(item.tools_list_changed for item in honored) or None,
                 prompts_list_changed=any(item.prompts_list_changed for item in honored) or None,
