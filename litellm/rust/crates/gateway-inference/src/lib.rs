@@ -1,12 +1,13 @@
 //! The proxy's inference endpoints as an axum [`Router`] a server mounts.
 //!
-//! Authentication, rate limiting and logging are the mounting server's layers; this crate
-//! routes a public model name through `litellm-router-core` (pick, retries, fallbacks, cooldowns)
-//! and runs the core route on each attempt.
+//! Authentication is the mounting server's layer; this crate routes a public model name through
+//! `litellm-router-core` (pick, retries, fallbacks, cooldowns), runs the core route on each
+//! attempt, and tells the host's callback hooks what happened to the call (`hooks.rs`).
 
 mod caching;
 mod error;
 mod headers;
+mod hooks;
 pub mod messages;
 mod model_restamp;
 mod ocr;
@@ -30,6 +31,7 @@ use litellm_secrets::source::SecretSource;
 
 pub use error::{BodyError, Ended, Error};
 pub use headers::ExposedHeader;
+pub use hooks::{CallHooks, CallType, HookError, Refusal, ServedCall};
 pub use litellm_redis_store::RouterTiers;
 pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 pub use routing::Host;
