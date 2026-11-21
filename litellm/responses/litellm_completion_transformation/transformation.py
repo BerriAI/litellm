@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from itertools import accumulate, chain, groupby
+from itertools import accumulate, chain, groupby, takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -72,6 +72,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_present_non_string,
     is_unhashable_value_behind,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    EMPTY_TEXT_PLACEHOLDER,
+    continues_empty_user_turns,
+    is_empty_user_message,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     is_anthropic_tool_search_use,
     message_field,
@@ -115,6 +120,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    ChatCompletionToolReferenceObject,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     IncompleteDetails,
@@ -186,12 +192,14 @@ from .tool_search import (
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    chat_config_builds_anthropic_request,
     has_client_tool_search,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    provider_chat_config,
     request_runs_tool_search,
     route_runs_tool_search,
     tool_search_call_ids,
@@ -286,6 +294,8 @@ if TYPE_CHECKING:
     from openai.types.responses.response_apply_patch_tool_call import (
         ResponseApplyPatchToolCall,
     )
+
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE: Final = InMemoryCache()
@@ -469,8 +479,16 @@ def _attribute_fields(value: object) -> dict[str, object]:
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
 
 
+def _decode_tool_output_part(part: Mapping[str, object], keep_tool_references: bool) -> ToolMessageContentPart | None:
+    match part:
+        case {"type": "tool_reference", "tool_name": str(tool_name)} if keep_tool_references and tool_name:
+            return ChatCompletionToolReferenceObject(type="tool_reference", tool_name=tool_name)
+        case _:
+            return decode_responses_media(part)
+
+
 def tool_output_to_chat_content(
-    output: object,
+    output: object, *, keep_tool_references: bool = False
 ) -> str | list[ToolMessageContentPart]:
     if output is None:
         return ""
@@ -494,7 +512,7 @@ def tool_output_to_chat_content(
                     text_acc.append(txt)
                     if txt:
                         normalized_blocks.append({"type": "text", "text": txt})
-            elif (media := decode_responses_media(part)) is not None:
+            elif (media := _decode_tool_output_part(part, keep_tool_references)) is not None:
                 normalized_blocks.append(media)
 
         if any(b.get("type") != "text" for b in normalized_blocks):
@@ -879,6 +897,80 @@ def _input_to_read(
     if native_compaction:
         return with_answered_turns_after_newest_compaction(input)
     return input
+
+
+def _empty_user_turn(last_input_item: object, text: str) -> GenericChatCompletionMessage:
+    cache_control: Final = _input_item_cache_control(as_str_mapping(last_input_item) or {})
+    if cache_control is None:
+        return GenericChatCompletionMessage(role="user", content=text)
+    return GenericChatCompletionMessage(role="user", content=text, cache_control=cache_control)
+
+
+def _last_input_item(input_items: str | ResponseInputParam) -> object:
+    if isinstance(input_items, str):
+        return {"role": "user", "content": input_items}
+    if isinstance(input_items, dict):
+        return input_items
+    return input_items[-1] if input_items else None
+
+
+def restored_empty_user_turn(
+    input_items: str | ResponseInputParam,
+    messages: Sequence[object],
+    keeps_cache_mark: bool,
+    route_fills_empty_user_turns: Callable[[], bool],
+    text: str = "",
+) -> tuple[GenericChatCompletionMessage, ...]:
+    last_input_item: Final = _last_input_item(input_items)
+    if message_field(last_input_item, "role") != "user":
+        return ()
+    if not messages or message_field(messages[-1], "role") != "assistant" or not route_fills_empty_user_turns():
+        return ()
+    return (_empty_user_turn(last_input_item if keeps_cache_mark else None, text),)
+
+
+def empty_user_turn_replay_text(user_continue_message: object) -> str:
+    return "" if continues_empty_user_turns(user_continue_message) else EMPTY_TEXT_PLACEHOLDER
+
+
+def without_blank_user_tail(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
+    blank_tail: Final = sum(1 for _ in takewhile(is_empty_user_message, reversed(messages)))
+    return messages[: len(messages) - blank_tail]
+
+
+def _resolved_chat_config(model: str, custom_llm_provider: str | None) -> "BaseConfig | None":
+    try:
+        return provider_chat_config(model, custom_llm_provider)
+    except litellm.BadRequestError:
+        return None
+
+
+def _routed_base_model(request_kwargs: Mapping[str, object]) -> object:
+    base_model: Final = request_kwargs.get("base_model")
+    if base_model:
+        return base_model
+    model_info: Final = routed_model_info(request_kwargs.get("model_info"))
+    return None if model_info is None else model_info.get("base_model")
+
+
+def target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, base_model: object) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.bedrock.common_utils import bedrock_converse_rejects_assistant_prefill
+    from litellm.utils import is_explicitly_disabled_factory
+
+    chat_config: Final = _resolved_chat_config(model, custom_llm_provider)
+    if isinstance(chat_config, AmazonConverseConfig):
+        return bedrock_converse_rejects_assistant_prefill(model, base_model if isinstance(base_model, str) else None)
+    return chat_config_builds_anthropic_request(chat_config) and is_explicitly_disabled_factory(
+        model, custom_llm_provider, "supports_assistant_prefill"
+    )
+
+
+def target_refuses_blank_text(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    chat_config: Final = _resolved_chat_config(model, custom_llm_provider)
+    return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
 
 
 def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
@@ -1374,6 +1466,12 @@ class LiteLLMCompletionResponsesConfig:
             replay_tool_search=holds_tool_search_items(request_input)
             and request_runs_tool_search(request_tools or (), model, custom_llm_provider),
             caller_input=numbered_input,
+            route_fills_empty_user_turns=partial(
+                target_fills_empty_user_turns, model, custom_llm_provider, _routed_base_model(request_kwargs)
+            ),
+            keep_tool_references=chat_config_builds_anthropic_request(
+                _resolved_chat_config(model, custom_llm_provider)
+            ),
         )
         malformed_field_error: Final = (
             _first_invalid_input_type(
@@ -1460,6 +1558,8 @@ class LiteLLMCompletionResponsesConfig:
         only_since_compaction: bool = False,
         replay_tool_search: bool = False,
         caller_input: str | ResponseInputParam | None = None,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
+        keep_tool_references: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1516,7 +1616,12 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
-        dumped_input: Final = with_compaction_items_as_params(input)
+        input_items: Final = (
+            cast(ResponseInputParam, [input])  # cast-ok: the bridge accepts single objects absent from SDK list types
+            if isinstance(input, dict)
+            else input
+        )
+        dumped_input: Final = with_compaction_items_as_params(input_items)
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
         sent_input: Final = _without_item_keys(
             read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)
@@ -1525,6 +1630,7 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
+            keep_tool_references=keep_tool_references,
             self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(
                 LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
             ),
@@ -1546,6 +1652,10 @@ class LiteLLMCompletionResponsesConfig:
                 raise
             raise call_id_error from error
         messages.extend(converted)
+        if route_fills_empty_user_turns is not None:
+            messages.extend(
+                restored_empty_user_turn(sent_input, messages, item_cache_control, route_fills_empty_user_turns)
+            )
 
         return messages
 
@@ -1584,6 +1694,7 @@ class LiteLLMCompletionResponsesConfig:
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
         stored_turns: StoredTurns | None = None,
+        request_input: str | ResponseInputParam | None = None,
     ) -> dict[str, object]:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1598,12 +1709,21 @@ class LiteLLMCompletionResponsesConfig:
             drops_unsupported_params(request_kwargs.get("drop_params")),
             routed_model_info(request_kwargs.get("model_info")),
         )
+        route_fills_empty_user_turns: Final = partial(
+            target_fills_empty_user_turns, model, provider, _routed_base_model(request_kwargs)
+        )
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
             client_response_ids=previous_response_client_ids,
             tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             stored_turns=stored_turns,
+            empty_user_turn_text=(
+                None
+                if request_input is None or not target_refuses_blank_text(model, provider)
+                else empty_user_turn_replay_text(request_kwargs.get("user_continue_message"))
+            ),
+            keep_tool_references=chat_config_builds_anthropic_request(_resolved_chat_config(model, provider)),
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -1623,20 +1743,6 @@ class LiteLLMCompletionResponsesConfig:
             if any(_holds_stored_tool_search(message) for message in stored_messages)
             else stored_messages
         )
-        session_messages: Final = (
-            _replayed_messages_for_cache_points(
-                replayed_messages,
-                _OBJECT_LIST_ADAPTER.validate_python(_messages),
-                _item_mark_rules(
-                    model,
-                    provider,
-                    _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []),
-                    request_kwargs,
-                ),
-            )
-            if keeps_item_marks
-            else replayed_messages
-        )
         instructions_end: Final = 1 if instructions else 0
         carried_instructions: Final = None if instructions else chat_completion_session.get("instructions")
         leading_system_messages: Final = (
@@ -1648,20 +1754,45 @@ class LiteLLMCompletionResponsesConfig:
         # If session messages are empty (e.g., no database in test environment),
         # we still need to process the new input messages
         # Store original _messages before combining for safety check
-        original_new_messages: Final = _messages.copy() if _messages else []
+        original_new_messages: Final = _OBJECT_LIST_ADAPTER.validate_python(_messages)
 
         new_messages: Final = (
             with_stored_calls_the_input_answers(_messages[instructions_end:], session_history)
             if input_replaces_history
             else _messages[instructions_end:]
         )
-        combined_messages = [*leading_system_messages, *session_messages, *new_messages]
+        request_tools: Final = _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or [])
+        mark_rules: Final = _item_mark_rules(model, provider, request_tools, request_kwargs)
+        messages_before_restore: Final = _OBJECT_LIST_ADAPTER.validate_python(
+            (*leading_system_messages, *replayed_messages, *new_messages)
+        )
+        restored_turn: Final = (
+            ()
+            if request_input is None
+            else restored_empty_user_turn(
+                request_input,
+                messages_before_restore,
+                keeps_item_marks,
+                route_fills_empty_user_turns,
+            )
+        )
+        request_messages: Final = (*new_messages, *restored_turn)
+        marked_request_messages: Final = (
+            _request_messages_for_cache_points(request_messages, mark_rules) if keeps_item_marks else request_messages
+        )
+        session_messages: Final = (
+            _replayed_messages_for_cache_points(
+                replayed_messages, (*_messages[:instructions_end], *marked_request_messages), mark_rules
+            )
+            if keeps_item_marks
+            else replayed_messages
+        )
+        combined_messages = [*leading_system_messages, *session_messages, *marked_request_messages]
 
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
-        tools: Final = _OBJECT_LIST_ADAPTER.validate_python(litellm_completion_request.get("tools") or [])
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=tools
+            messages=combined_messages, tools=request_tools
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -1690,8 +1821,8 @@ class LiteLLMCompletionResponsesConfig:
                         f"Please ensure function_call_output has a valid call_id from a previous response. "
                         f"Original request: previous_response_id={previous_response_id}"
                     ),
-                    model=litellm_completion_request.get("model", ""),
-                    llm_provider=litellm_completion_request.get("custom_llm_provider", ""),
+                    model=model,
+                    llm_provider=provider or "",
                 )
 
         litellm_completion_request["messages"] = combined_messages
@@ -1710,6 +1841,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_reasoning: bool = False,
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
+        keep_tool_references: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1737,6 +1869,7 @@ class LiteLLMCompletionResponsesConfig:
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
                         self_named_namespace_members=self_named_namespace_members,
+                        keep_tool_references=keep_tool_references,
                     )
                 )
 
@@ -2450,6 +2583,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_reasoning: bool = False,
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
+        keep_tool_references: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2495,7 +2629,7 @@ class LiteLLMCompletionResponsesConfig:
             # handle executed tool call results
             return (
                 LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
-                    tool_call_output=input_item
+                    tool_call_output=input_item, keep_tool_references=keep_tool_references
                 )
             )
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
@@ -2703,7 +2837,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
-        tool_call_output: Mapping[str, object],
+        tool_call_output: Mapping[str, object], *, keep_tool_references: bool = False
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
@@ -2714,7 +2848,9 @@ class LiteLLMCompletionResponsesConfig:
         if not call_id:
             return []
 
-        tool_content: Final = tool_output_to_chat_content(tool_call_output.get("output"))
+        tool_content: Final = tool_output_to_chat_content(
+            tool_call_output.get("output"), keep_tool_references=keep_tool_references
+        )
         output_cache_control: Final = _input_item_cache_control(tool_call_output)
         tool_output_message: Final = (
             ChatCompletionToolMessage(role="tool", content=tool_content, tool_call_id=str(call_id))

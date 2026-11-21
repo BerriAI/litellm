@@ -20,11 +20,8 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    AUTH_OBJECTS_TARGET,
-    UserApiKeyCache,
-    budget_windows_absent_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.proxy_server import budget_windows_absent_cache_key
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
@@ -256,12 +253,14 @@ async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_a
     user_id: Final = budget_windows_absent_cache_key("key", "alice")
     cache: Final = UserApiKeyCache()
     cache.set_cache(user_id, {"user_id": user_id, "models": ["gpt-4o"]})
-    cache.budget_windows_absent_cache.set_cache(key=user_id, value=True)
+    no_window_markers: Final = InMemoryCache()
+    no_window_markers.set_cache(user_id, True)
 
     pubsub: Final = _QueuePubSub(initial_messages=[_invalidation_message(user_id)])
     subscriber: Final = AuthCacheInvalidationSubscriber(
         redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
         user_api_key_cache=cache,
+        evicted_caches=(no_window_markers,),
     )
     subscriber.start()
     try:
@@ -270,7 +269,32 @@ async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_a
         await subscriber.stop()
 
     assert cache.get_cache(user_id) is None
-    assert cache.budget_windows_absent_cache.get_cache(key=user_id) is None
+    assert no_window_markers.get_cache(user_id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_value_broadcast_leaves_the_evicted_caches_alone_and_writes_the_additional_ones() -> None:
+    hook_state: Final = InMemoryCache()
+    hook_state.set_cache("spend:key:k-1", "hook copy")
+    spend_copy: Final = InMemoryCache()
+    spend_copy.set_cache("spend:key:k-1", 9.0)
+    pubsub: Final = _QueuePubSub(
+        initial_messages=[{"type": "message", "data": json.dumps({"cache_key": "spend:key:k-1", "new_value": 0.0})}]
+    )
+    subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=UserApiKeyCache(),
+        additional_in_memory_caches=(spend_copy,),
+        evicted_caches=(hook_state,),
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert hook_state.get_cache("spend:key:k-1") == "hook copy"
+    assert spend_copy.get_cache("spend:key:k-1") == 0.0
 
 
 @pytest.mark.asyncio

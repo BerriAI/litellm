@@ -346,6 +346,17 @@ def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
     return response.json()
 
 
+def list_input_items_query_params(
+    after: str | None, before: str | None, include: Sequence[str] | None, limit: int, order: Literal["asc", "desc"]
+) -> dict[str, object]:
+    optional: Final = (("after", after), ("before", before), ("include[]", list(include) if include else None))
+    return {
+        **{key: value for key, value in optional if value is not None},
+        "limit": limit,
+        "order": order,
+    }
+
+
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -499,7 +510,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         'none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
-        params: Final = dict(response_api_optional_params)
+        drops_o_series_temperature: Final = (
+            self.custom_llm_provider == LlmProviders.OPENAI
+            and (drop_params or litellm.drop_params)
+            and "temperature" in response_api_optional_params
+            and response_api_optional_params["temperature"] not in (None, 1)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+        )
+        params: Final = {
+            key: value
+            for key, value in response_api_optional_params.items()
+            if key != "temperature" or not drops_o_series_temperature
+        }
 
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
@@ -1318,18 +1340,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
-        params: Final[dict[str, object]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if include:
-            params["include"] = ",".join(include)
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
-        return url, params
+        return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
 
     def transform_list_input_items_response(
         self,

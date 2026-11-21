@@ -8,7 +8,7 @@ _apply_process_defaults()
 import threading
 import os
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import (
     Any,
     Callable,
@@ -216,6 +216,8 @@ bedrock_request_metadata_fields: Optional[Sequence[str]] = (
     None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
 vertex_request_label_fields: Optional[Sequence[str]] = None
+bedrock_session_tag_fields: Optional[Sequence[str]] = None
+bedrock_session_name_fields: Optional[Sequence[str]] = None
 store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -425,6 +427,7 @@ autorouter_presets_url: str = os.getenv(
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
 )
 suppress_debug_info: bool = False
+include_litellm_headers: bool = True
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None
@@ -861,7 +864,7 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             pass
         elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.add(key)
-        elif value.get("litellm_provider") == "bedrock_converse":
+        elif value.get("litellm_provider") == "bedrock_converse" and not is_bedrock_pricing_only_model(key):
             bedrock_converse_models.add(key)
         elif value.get("litellm_provider") == "deepinfra":
             deepinfra_models.add(key)
@@ -1217,7 +1220,7 @@ model_list = list(
 model_list_set = set(model_list)
 
 
-def _build_models_by_provider() -> dict:
+def _build_models_by_provider() -> dict[str, Collection[str]]:
     return {
         "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
         "text-completion-openai": open_ai_text_completion_models,
@@ -1356,7 +1359,7 @@ def _build_models_by_provider() -> dict:
     }
 
 
-models_by_provider: dict = _build_models_by_provider()
+models_by_provider: dict[str, Collection[str]] = _build_models_by_provider()
 
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {
@@ -1776,6 +1779,9 @@ if TYPE_CHECKING:
     )
     from .llms.parallel_ai.decisions.transformation import (
         ParallelAIDecisionsConfig as ParallelAIDecisionsConfig,
+    )
+    from .llms.litellm_proxy.decisions.transformation import (
+        LiteLLMProxyDecisionsConfig as LiteLLMProxyDecisionsConfig,
     )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,

@@ -736,21 +736,24 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def _detect_transcription_session_from_backend(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _detect_transcription_session_from_backend(self, event_obj: Mapping[str, object]) -> None:
         """Flag transcription-only sessions from backend session events."""
-        try:
-            event_type: Final = event_obj.get("type", "")
-            if event_type in (
-                "transcription_session.created",
-                "transcription_session.updated",
-            ):
+        match event_obj:
+            case {"type": "transcription_session.created" | "transcription_session.updated"}:
                 self._is_transcription_session = True
-            elif event_type in ("session.created", "session.updated"):
-                session: Final = cast(dict, event_obj).get("session", {}) or {}
-                if session.get("type") == "transcription":
-                    self._is_transcription_session = True
-        except (AttributeError, TypeError):
-            pass
+            case {"type": "session.created" | "session.updated", "session": {"type": "transcription"}}:
+                self._is_transcription_session = True
+            case _:
+                return
+
+    async def send_synthetic_session_created(self, event: Mapping[str, object]) -> None:
+        event_obj: Final = dict(event)
+        event_str: Final = json.dumps(event_obj)
+        self.store_message(event_str)
+        self._detect_transcription_session_from_backend(event_obj)
+        await self.websocket.send_text(event_str)
+        self.session_created_sent_to_client = True
+        verbose_logger.debug("Sent synthetic session.created to client to unblock connection")
 
     def _capture_transcription_usage(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """
@@ -784,6 +787,9 @@ class RealTimeStreaming:
     def _flush_unbilled_transcription_usage(self) -> None:
         if self.provider_config is None:
             return
+        unbilled_response: Final = self.provider_config.unbilled_response_on_session_close(self.model)
+        if unbilled_response is not None:
+            self.store_message(unbilled_response)
         usage: Final = self.provider_config.unbilled_usage_on_session_close(self.model)
         if usage is None:
             return
@@ -1870,8 +1876,6 @@ class RealTimeStreaming:
         """
         event_type: Final = event_obj.get("type")
 
-        self._detect_transcription_session_from_backend(event_obj)
-
         # Send session.created to the client FIRST so it stays in sync, then inject
         # the disable-auto-response session.update; otherwise a backend error could
         # reach the client before it sees session.created.
@@ -1939,6 +1943,7 @@ class RealTimeStreaming:
                     verbose_logger.debug("Realtime: not forwarding an error caused by a guardrail event: %s", event)
                     continue
 
+                self._detect_transcription_session_from_backend(event)
                 self._capture_translation_output_audio(event)
                 if await self._handle_raw_backend_message(event, raw_response):
                     continue

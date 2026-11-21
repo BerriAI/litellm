@@ -1,10 +1,22 @@
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypeVar, cast
+from typing import Annotated, Any, Final, TypeAlias, TypeVar, cast
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import (
+    AllowInfNan,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    JsonValue,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    ValidationError,
+)
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
@@ -116,11 +128,20 @@ _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "r
 _TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
 _JSON_MIME_TYPE: Final = "application/json"
 _TEXT_MIME_TYPE: Final = "text/plain"
-_ADAPTER_SCALAR_CONFIG_KEYS: Final = frozenset({"temperature", "maxOutputTokens", "topP", "stopSequences"})
 _RESPONSE_FORMAT_CONFIG_KEYS: Final = frozenset({*_RESPONSE_MIME_TYPE_KEYS, *_RESPONSE_SCHEMA_KEYS})
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
+_COMPLETION_PARAM_CONFIG_KEYS: Final = (
+    ("temperature", ("temperature",)),
+    ("max_tokens", ("maxOutputTokens", "max_output_tokens")),
+    ("top_p", ("topP", "top_p")),
+    ("stop", ("stopSequences", "stop_sequences")),
+)
+_ADAPTER_SCALAR_CONFIG_KEYS: Final = frozenset(chain.from_iterable(keys for _, keys in _COMPLETION_PARAM_CONFIG_KEYS))
+_COMPLETION_PARAM_CONFIG_KEY_NAMES: Final = MappingProxyType(
+    {param: "/".join(keys) for param, keys in _COMPLETION_PARAM_CONFIG_KEYS}
+)
 _ADAPTER_DEFAULT_GENERATION_CONFIG: Final[Mapping[str, JsonValue]] = MappingProxyType(
-    {"responseModalities": ["TEXT"], "candidateCount": 1}
+    {"responseModalities": ["TEXT"], "response_modalities": ["TEXT"], "candidateCount": 1, "candidate_count": 1}
 )
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
@@ -148,6 +169,56 @@ def _adapter_honors(key: str, value: object, keeps_response_format: bool) -> boo
 
 def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object | None:
     return next((config[key] for key in keys if config.get(key) is not None), None)
+
+
+_INTEGER_STRING: Final = re.compile(r"[+-]?\d+")
+_NUMBER_STRING: Final = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def _google_int(value: object) -> object:
+    if isinstance(value, str) and _INTEGER_STRING.fullmatch(value):
+        return int(value)
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _google_float(value: object) -> object:
+    if isinstance(value, str) and _NUMBER_STRING.fullmatch(value):
+        return float(value)
+    return value
+
+
+_GoogleInt: TypeAlias = Annotated[StrictInt, BeforeValidator(_google_int)]
+_GoogleFloat: TypeAlias = Annotated[StrictFloat, AllowInfNan(False), BeforeValidator(_google_float)]
+
+
+class _CompletionConfigParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    temperature: _GoogleFloat | None = None
+    max_tokens: _GoogleInt | None = None
+    top_p: _GoogleFloat | None = None
+    stop: StrictStr | Sequence[StrictStr] | None = None
+
+
+def _completion_params(config: Mapping[str, object], model: str, llm_provider: str | None) -> Mapping[str, JsonValue]:
+    sent: Final = MappingProxyType(
+        {
+            param: value
+            for param, keys in _COMPLETION_PARAM_CONFIG_KEYS
+            if (value := _first_present(config, keys)) is not None
+        }
+    )
+    try:
+        return MappingProxyType(_CompletionConfigParams.model_validate(sent).model_dump(exclude_none=True))
+    except ValidationError as error:
+        issue: Final = error.errors()[0]
+        raise BadRequestError(
+            message=f"generationConfig {_COMPLETION_PARAM_CONFIG_KEY_NAMES[str(issue['loc'][0])]}: {issue['msg']}",
+            model=model,
+            llm_provider=llm_provider,
+        ) from error
 
 
 def _asks_for_plain_text(config: Mapping[str, object]) -> bool:
@@ -514,9 +585,11 @@ class GoogleGenAIAdapter:
         messages: Final = self._transform_contents_to_messages(contents_list, system_instruction=system_instruction)
 
         # Create base request as dict (which is compatible with ChatCompletionRequest)
+        config_fields: Final = _validated(_CONFIG_FIELDS, config) or {}
         completion_request: Final[_JsonDict] = {
             "model": model,
             "messages": messages,
+            **_completion_params(config_fields, model, litellm_params.custom_llm_provider if litellm_params else None),
         }
 
         #########################################################
@@ -531,20 +604,6 @@ class GoogleGenAIAdapter:
         # - tool_choice
         #########################################################
 
-        # Add config parameters if provided
-        if config:
-            # Map common Google GenAI config parameters to OpenAI equivalents
-            if "temperature" in config:
-                completion_request["temperature"] = config["temperature"]
-            if "maxOutputTokens" in config:
-                completion_request["max_tokens"] = config["maxOutputTokens"]
-            if "topP" in config:
-                completion_request["top_p"] = config["topP"]
-            if "topK" in config:
-                # OpenAI doesn't have direct topK, but we can pass it as extra
-                pass
-            if "stopSequences" in config:
-                completion_request["stop"] = config["stopSequences"]
         response_format: Final = _translate_response_format(config)
         if response_format is not None and _deployment_supports_response_format(
             model, litellm_params.custom_llm_provider if litellm_params else None

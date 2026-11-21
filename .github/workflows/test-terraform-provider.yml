@@ -13,6 +13,7 @@ on:
     paths:
       - "litellm/deploy/terraform/provider/**"
       - "litellm/proxy/**"
+      - "litellm/integrations/lens/proxy/**"
       - "litellm/enterprise/**"
       - ".github/actions/cache-go-build/**"
       - ".github/workflows/test-terraform-provider.yml"

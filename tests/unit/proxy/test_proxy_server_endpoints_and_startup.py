@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import dataclasses
+import gc
 import importlib
+import itertools
 import json
 import logging
 import os
@@ -9,6 +11,7 @@ import re
 import sys
 import time
 import types
+import weakref
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +23,11 @@ from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open
 import fastapi.routing
 import httpx
 import pytest
+import redis
+import redis.asyncio
 import yaml
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
@@ -33,12 +40,14 @@ from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     ModelCostMapReloaded,
     ModelCostMapReloadResult,
     install_model_cost_map,
 )
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
     LitellmUserRoles,
@@ -54,15 +63,15 @@ from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendUpdateQueue
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
-from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.proxy.spend_tracking import legacy_spend_counters
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
-from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
@@ -611,16 +620,6 @@ def test_login_v3_returns_json_on_proxy_exception(monkeypatch):
     assert data["error"]["type"] == "auth_error"
 
 
-def test_fallback_login_has_no_deprecation_banner(client_no_auth):
-    response = client_no_auth.get("/fallback/login")
-
-    assert response.status_code == 200
-    html = response.text
-    assert '<div class="deprecation-banner">' not in html
-    assert "Deprecated:" not in html
-    assert "<form" in html
-
-
 def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_auth):
     response = client_no_auth.post("/v1/completions", json={"model": "vllm_embed_model"})
 
@@ -679,37 +678,49 @@ def test_get_logo_url_returns_empty_when_unset(client_no_auth, monkeypatch):
     assert response.json() == {"logo_url": ""}
 
 
-def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
-    # Ensure the route returns the HTML form instead of redirecting
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
-        lambda *args, **kwargs: "http://test/redirect",
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
-        lambda *args, **kwargs: False,
-    )
-    # Mock premium_user to bypass enterprise check (prevents 403 Forbidden)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.premium_user",
-        True,
-    )
-    monkeypatch.setenv("UI_USERNAME", "admin")
+def _without_sso(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env", lambda: None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
+    for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+        monkeypatch.delenv(name, raising=False)
 
-    response = client_no_auth.get("/sso/key/generate")
 
-    assert response.status_code == 200
-    html = response.text
-    assert '<div class="deprecation-banner">' in html
-    assert "Deprecated:" in html
+def test_sso_key_generate_without_sso_opens_the_dashboard_login_page_and_keeps_return_to(client_no_auth, monkeypatch):
+    _without_sso(monkeypatch)
+    client_no_auth.cookies.clear()
+
+    response = client_no_auth.get(
+        "/sso/key/generate", params={"return_to": "/mcp/authorize?client_id=abc"}, follow_redirects=False
+    )
+    client_no_auth.cookies.clear()
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui/login")
+    assert "litellm_cp_return_to=" in response.headers["set-cookie"]
+
+
+def test_sso_key_generate_without_sso_resumes_a_signed_in_browser_without_a_login_page(client_no_auth, monkeypatch):
+    import jwt
+
+    _without_sso(monkeypatch)
+    session = jwt.encode(
+        {"user_id": "u-1", "key": "sk-ui-key", "login_method": "username_password", "exp": 4102444800},
+        "sk-test-master",
+        algorithm="HS256",
+    )
+    client_no_auth.cookies.clear()
+
+    response = client_no_auth.get(
+        "/sso/key/generate",
+        params={"return_to": "/mcp/authorize?client_id=abc"},
+        headers={"cookie": f"token={session}"},
+        follow_redirects=False,
+    )
+    client_no_auth.cookies.clear()
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/login/resume")
+    assert "litellm_cp_return_to=" in response.headers["set-cookie"]
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
@@ -1666,6 +1677,8 @@ class MockPrisma:
         self.proxy_logging_obj = proxy_logging_obj
         self.http_client = http_client
         self.writer_db = MagicMock()
+        self.spend_log_transactions = []
+        self._spend_log_transactions_lock = asyncio.Lock()
 
     async def connect(self):
         pass
@@ -1842,6 +1855,68 @@ async def test_proxy_startup_refuses_a_fips_mode_reference_to_an_unset_variable(
             pass
 
 
+_HEX_KEY: Final = "sk-" + bytes(range(32)).hex()
+
+
+def _boot_in_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
+) -> None:
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": master_key, "fips_mode": True})
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: True)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "master_key, environment, refusal",
+    [
+        (_HEX_KEY, {"LITELLM_SALT_KEY": "thirteen-byte"}, r"but LITELLM_SALT_KEY is too short"),
+        ("sk-a-safe-master-key", {}, r"but LITELLM_SALT_KEY is not set"),
+        (_HEX_KEY, {}, r"but LITELLM_SALT_KEY is not set"),
+    ],
+    ids=["13-byte-salt-key-and-hex-master-key", "20-byte-master-key-and-no-salt-key", "hex-master-key-and-no-salt-key"],
+)
+async def test_proxy_startup_refuses_fips_mode_without_a_salt_key_of_at_least_112_bits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str], refusal: str
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError, fips_mode_active
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_in_fips_mode(monkeypatch, tmp_path, master_key, environment)
+
+    with pytest.raises(FipsModeError, match=refusal):
+        async with proxy_startup_event(FastAPI()):
+            pass
+    assert fips_mode_active() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "master_key, environment",
+    [
+        ("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}),
+        ("sk-a-safe-master-key", {"LITELLM_SALT_KEY": "fourteen-bytes"}),
+    ],
+    ids=["hex-salt-key-and-13-byte-master-key", "14-byte-salt-key-and-20-byte-master-key"],
+)
+async def test_proxy_startup_starts_fips_mode_with_a_salt_key_of_at_least_112_bits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
+) -> None:
+    from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_in_fips_mode(monkeypatch, tmp_path, master_key, environment)
+
+    try:
+        async with proxy_startup_event(FastAPI()):
+            started_in_fips_mode: Final = fips_mode_active()
+    finally:
+        enforce_fips_mode({})
+    assert started_in_fips_mode is True
+
+
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext
@@ -1905,6 +1980,8 @@ async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_delet
 class _PrismaClientWhoseDatabaseRejectsQueries:
     def __init__(self) -> None:
         self.disconnect_calls = 0
+        self.spend_log_transactions: list[dict[str, object]] = []
+        self._spend_log_transactions_lock = asyncio.Lock()
 
     async def disconnect(self) -> None:
         self.disconnect_calls += 1
@@ -8504,6 +8581,51 @@ async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_r
     assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
+_CACHES_SPLIT_FROM_THE_AUTH_CACHE: Final = (
+    "hook_cache",
+    "mcp_state_cache",
+    "jwks_cache",
+    "ui_settings_cache",
+    "sso_flow_cache",
+    "budget_windows_absent_cache",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_max_size(name, monkeypatch):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    for index in range(250):
+        cache.set_cache(key=f"entry-{index}", value=index, local_only=True)
+    assert cache.get_cache(key="entry-0", local_only=True) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _CACHES_SPLIT_FROM_THE_AUTH_CACHE)
+async def test_a_cache_split_from_the_auth_cache_still_follows_user_api_key_cache_ttl(name, monkeypatch, tmp_path):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\ngeneral_settings:\n  user_api_key_cache_ttl: 7\n")
+    cache = DualCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server_module, name, cache)
+
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert (cache.default_in_memory_ttl, cache.default_redis_ttl) == (7.0, 7.0)
+
+
 @pytest.mark.asyncio
 async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
     """Blanking the field in the dashboard deletes the key, so the cache must fall
@@ -9034,7 +9156,7 @@ async def test_prepare_spend_counter_increment_reseeds_from_db_on_counter_miss(m
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
 
-    pending = await ps._prepare_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_spend_counter_increment(
         counter_key="spend:team:team-9",
         source_cache_key="team_id:team-9",
         increment=1.5,
@@ -9167,10 +9289,8 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
 
 @pytest.mark.asyncio
 async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
-    from litellm.proxy.proxy_server import (
-        _apply_spend_counter_increments,
-        _prepare_window_spend_counter_increment,
-    )
+    from litellm.proxy.proxy_server import _apply_spend_counter_increments
+    from litellm.proxy.spend_tracking.legacy_spend_counters import _prepare_window_spend_counter_increment
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -9222,7 +9342,7 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory(monkeyp
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
     monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
 
-    pending = await ps._prepare_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_spend_counter_increment(
         counter_key=counter_key,
         source_cache_key="team_id:team-stale-local",
         increment=1.5,
@@ -9250,7 +9370,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory(monke
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
 
-    pending = await ps._prepare_window_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key=counter_key,
         entity_type="Key",
         entity_id="key-window-stale-local",
@@ -9296,7 +9416,7 @@ async def test_window_spend_counter_seed_asks_the_store_to_increment_a_lost_seed
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     monkeypatch.setattr(ps, "prisma_client", fake_prisma)
 
-    await ps._prepare_window_spend_counter_increment(
+    await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key=counter_key,
         entity_type="Key",
         entity_id="key-window-concurrent-seed",
@@ -9314,7 +9434,7 @@ async def test_window_spend_counter_seed_asks_the_store_to_increment_a_lost_seed
 
 @pytest.mark.asyncio
 async def test_window_spend_counter_skips_invalid_window_start():
-    from litellm.proxy.proxy_server import _prepare_window_spend_counter_increment
+    from litellm.proxy.spend_tracking.legacy_spend_counters import _prepare_window_spend_counter_increment
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
 
@@ -9396,7 +9516,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(mo
     monkeypatch.setattr(ps, "spend_counter_store", counter_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
     with patch(
-        "litellm.proxy.proxy_server._prepare_spend_counter_increment",
+        "litellm.proxy.spend_tracking.legacy_spend_counters._prepare_spend_counter_increment",
         new=AsyncMock(side_effect=assert_reservation_not_finalized_yet),
     ):
         await ps.increment_spend_counters(
@@ -9677,10 +9797,8 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     import asyncio as _asyncio
 
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import (
-        _prepare_spend_counter_increment,
-        get_current_spend,
-    )
+    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.spend_tracking.legacy_spend_counters import _prepare_spend_counter_increment
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_key = "spend:team_member:user-1:team-cross-path"
@@ -12020,6 +12138,150 @@ def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists
     assert callback_name not in _runtime_callback_names()
 
 
+async def _shut_down(logger: GenericAPILogger) -> None:
+    logger.shutdown()
+    await logger._flush_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_keys", "kept_keys"),
+    [
+        (("success_callback",), ()),
+        (("success_callback", "failure_callback"), ("failure_callback",)),
+        (("success_callback", "failure_callback"), ("success_callback",)),
+    ],
+)
+async def test_db_config_sync_unregisters_a_generic_api_callback_after_its_headers_rotate(
+    monkeypatch: pytest.MonkeyPatch, configured_keys: tuple[str, ...], kept_keys: tuple[str, ...]
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    pc: Final = ps.ProxyConfig()
+    configured: Final = {"litellm_settings": {key: ["sink_logger"] for key in configured_keys}}
+
+    pc._add_callbacks_from_db_config(configured)
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc._add_callbacks_from_db_config(configured)
+    pc._add_callbacks_from_db_config({"litellm_settings": {key: ["sink_logger"] for key in kept_keys}})
+
+    def registered_authorizations(*list_names: str) -> list[str]:
+        callbacks: Final = itertools.chain.from_iterable(getattr(litellm, list_name) for list_name in list_names)
+        return [callback.headers["Authorization"] for callback in callbacks if isinstance(callback, GenericAPILogger)]
+
+    authorization_by_event: Final = {
+        "success_callback": registered_authorizations("success_callback", "_async_success_callback"),
+        "failure_callback": registered_authorizations("failure_callback", "_async_failure_callback"),
+    }
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert authorization_by_event == {key: ["Bearer new"] if key in kept_keys else [] for key in authorization_by_event}
+
+
+@pytest.mark.asyncio
+async def test_db_config_sync_frees_the_generic_api_logger_a_header_rotation_retired(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    pc: Final = ps.ProxyConfig()
+    configured: Final = {"litellm_settings": {"success_callback": ["sink_logger"]}}
+
+    pc._add_callbacks_from_db_config(configured)
+    retired: Final = weakref.ref(logger_cache["sink_logger"])
+    retired_flush: Final = logger_cache["sink_logger"]._flush_task
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc._add_callbacks_from_db_config(configured)
+    await asyncio.wait_for(retired_flush, timeout=5)
+    gc.collect()
+
+    await _shut_down(logger_cache["sink_logger"])
+    assert retired() is None
+
+
+@pytest.mark.asyncio
+async def test_db_config_sync_unregisters_a_generic_api_callback_rotated_between_syncs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    pc: Final = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["sink_logger"]}})
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    litellm.logging_callback_manager.add_litellm_success_callback("sink_logger")
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+
+    still_registered: Final = tuple(
+        callback
+        for callback in itertools.chain(litellm.success_callback, litellm._async_success_callback)
+        if isinstance(callback, GenericAPILogger)
+    )
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert still_registered == ()
+
+
+@pytest.mark.asyncio
+async def test_db_config_sync_keeps_a_file_callback_that_rotated_while_the_database_registered_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    litellm.logging_callback_manager.add_litellm_success_callback("sink_logger")
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc: Final = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["sink_logger"]}})
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+
+    still_registered: Final = tuple(
+        callback.headers["Authorization"]
+        for callback in itertools.chain(litellm.success_callback, litellm._async_success_callback)
+        if isinstance(callback, GenericAPILogger)
+    )
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert still_registered == ("Bearer new",)
+
+
 def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as ps
     from litellm.utils import add_custom_logger_callback_to_specific_event
@@ -13309,6 +13571,31 @@ def test_init_cache_redis_backend_reuses_cache_backend_over_environment():
     assert usage_cache is redis_backend
     assert usage_cache.init_kwargs["host"] == "cache-params-host"
     assert spend_redis is redis_backend
+
+
+def test_init_cache_accepts_default_redis_ttl_for_a_redis_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    server: Final = FakeServer()
+
+    class Pool(redis.asyncio.BlockingConnectionPool):
+        def __init__(self, **kwargs: object) -> None:  # kwargs-ok: forwarded to the redis pool
+            super().__init__(connection_class=FakeConnection, server=server, **kwargs)
+
+    monkeypatch.setattr(redis, "Redis", FakeRedis)
+    monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "default_redis_ttl", None)
+    with (
+        _patched_coordination_redis_module_state(
+            spend_cache=DualCache(), config_cache=types.SimpleNamespace(redis_cache=None)
+        ),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+    ):
+        proxy_server_module.ProxyConfig()._init_cache(
+            cache_params={"type": "redis", "host": "redis.invalid", "port": "6379", "default_redis_ttl": 600}
+        )
+
+    assert litellm.cache is not None
+    assert litellm.cache.cache.default_ttl == 600
 
 
 class _EnvBuiltClusterCache(RedisClusterCache):
