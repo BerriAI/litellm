@@ -389,6 +389,41 @@ def _missing_customer_header(headers: Mapping[str, str], required: tuple[str, ..
     return next((header for header in required if header.lower() not in present), None)
 
 
+def _route_requires_customer_headers(route: str) -> bool:
+    return RouteChecks.runs_inference_checks(route) and not RouteChecks.is_info_route(route)
+
+
+async def missing_required_customer_header(
+    headers: Mapping[str, object],
+    route: str,
+    authenticated: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> str | None:
+    """The first header this route's required-customer-header policy needs that the request lacks, or None."""
+    from litellm.proxy import proxy_server
+
+    if not _route_requires_customer_headers(route):
+        return None
+    team: Final = (
+        await get_team_object(
+            team_id=authenticated.team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        )
+        if authenticated.team_id is not None and authenticated.team_id != UI_TEAM_ID
+        else None
+    )
+    return _missing_customer_header(
+        _REQUEST_HEADERS_ADAPTER.validate_python(headers),
+        _required_customer_headers(
+            (
+                getattr(proxy_server, "general_settings", None),
+                getattr(team, "metadata", None),
+                getattr(authenticated, "metadata", None),
+            )
+        ),
+    )
+
+
 def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
     from litellm.proxy.litellm_pre_call_utils import (
         _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
@@ -1527,11 +1562,11 @@ async def common_checks(
         _required_customer_headers(
             (
                 general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
-                team_object.metadata if team_object is not None else None,  # pyright: ignore[reportUnknownMemberType]  # LiteLLM_TeamTable.metadata is a bare dict
-                valid_token.metadata if valid_token is not None else None,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a bare dict
+                getattr(team_object, "metadata", None),
+                getattr(valid_token, "metadata", None),
             )
         )
-        if RouteChecks.runs_inference_checks(route) and not RouteChecks.is_info_route(route)
+        if _route_requires_customer_headers(route)
         else ()
     )
     missing_customer_header: Final = (

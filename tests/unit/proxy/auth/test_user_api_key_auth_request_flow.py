@@ -12587,3 +12587,49 @@ async def test_preflight_logging_drops_unsafe_or_unparsable_bodies(
     )
     assert await _small_preflight_failure_json(request) == {}
     assert receive.await_count == reads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("with_required_header", [False, True])
+async def test_a_request_missing_a_required_customer_header_registers_no_customer(
+    monkeypatch: pytest.MonkeyPatch, route: str, with_required_header: bool
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    from tests.unit.proxy.management_helpers.test_apps import AppDatabase
+
+    database: Final = AppDatabase()
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": MagicMock(db=database, writer_db=database, tx=database.tx),
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+        "general_settings": {
+            "disable_budget_reservation": True,
+            "customer_org_alias_header": "X-Tenant-ID",
+            "required_customer_headers": ["X-User-ID"],
+        },
+        "llm_model_list": None,
+        "user_model": None,
+    }.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "query_string": b"",
+            "headers": [(b"x-tenant-id", b"new-customer"), *([(b"x-user-id", b"member")] if with_required_header else [])],
+        }
+    )
+    auth: Final = UserAPIKeyAuth(token="sk-test-master", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    if with_required_header:
+        assert await _authorize_authenticated_request(auth, request, {"model": "test-model"}, route, "sk-test-master") is None
+        assert tuple(database.litellm_customerorganizationtable.rows) == ("new-customer",)
+        return
+    with pytest.raises(ProxyException) as rejected:
+        await _authorize_authenticated_request(auth, request, {"model": "test-model"}, route, "sk-test-master")
+    assert rejected.value.code == "403"
+    assert "Missing required customer header X-User-ID" in rejected.value.message
+    assert tuple(database.litellm_customerorganizationtable.rows) == ()

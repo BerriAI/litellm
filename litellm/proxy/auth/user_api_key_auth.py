@@ -3239,7 +3239,7 @@ async def _authorize_authenticated_request_checks(
                     with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                         hierarchy: Final = await resolve_registered_customer(
                             customer_identity,
-                            partial(registration_refusal, prisma_client, user_api_key_auth_obj),
+                            partial(registration_refusal, prisma_client, user_api_key_auth_obj, request_headers, route),
                             lambda register, register_organization: resolve_customer_hierarchy(
                                 identity=customer_identity,
                                 prisma_client=prisma_client,
