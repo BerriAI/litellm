@@ -524,6 +524,7 @@ if TYPE_CHECKING:
         JudgeCheck as JudgeCheck,
         PredicateCheck as PredicateCheck,
         aagent_eval as aagent_eval,
+        aagent_eval_attempt as aagent_eval_attempt,
         agent_eval as agent_eval,
     )
 

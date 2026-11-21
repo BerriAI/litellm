@@ -66,6 +66,24 @@ def _positive_timeout(name: str, value: float) -> None:
         raise ValueError(f"{name} must be finite and greater than zero")
 
 
+def _settings(
+    max_turns: int | None,
+    timeout: float,
+    setup_timeout: float,
+    sandbox: SandboxFactory,
+    metadata: Mapping[str, object] | None,
+    api_base: str | None,
+    api_key: str | None,
+) -> _Settings:
+    if max_turns is not None:
+        _positive_integer("max_turns", max_turns)
+    _positive_timeout("timeout", timeout)
+    _positive_timeout("setup_timeout", setup_timeout)
+    copied_metadata: Final = MappingProxyType(dict(metadata or {}))
+    json.dumps(dict(copied_metadata), allow_nan=False)
+    return _Settings(max_turns, timeout, setup_timeout, sandbox, copied_metadata, api_base, api_key)
+
+
 def _validate_task(task: EvalTask) -> None:
     if task.workspace is not None and not Path(task.workspace).is_dir():
         raise ValueError(f"task {task.id!r} workspace must be an existing directory")
@@ -245,6 +263,53 @@ async def _attempt(
         return replace(outcome, status=EvalStatus.ERROR, detail=close_error) if close_error else outcome
 
 
+async def _run_attempt(
+    task: EvalTask,
+    target: EvalTarget,
+    trial: int,
+    suite_id: str,
+    settings: _Settings,
+) -> EvalRun:
+    started: Final = time.perf_counter()
+    run_id: Final = uuid.uuid4().hex
+    metadata: Final = MappingProxyType(
+        {
+            **settings.metadata,
+            "agent_eval_suite": suite_id,
+            "agent_eval_run": run_id,
+            "agent_eval_task": task.id,
+            "agent_eval_target": target.name,
+            "agent_eval_trial": trial,
+        }
+    )
+    try:
+        outcome: Final = await _attempt(task, target, metadata, settings)
+    except Exception as error:  # noqa: BLE001  # Workspace cleanup failures become error rows.
+        failed: Final = _failure("workspace cleanup", error)
+        return EvalRun(
+            run_id,
+            task.id,
+            target.name,
+            trial,
+            failed.status,
+            None,
+            None,
+            time.perf_counter() - started,
+            failed.detail,
+        )
+    return EvalRun(
+        run_id,
+        task.id,
+        target.name,
+        trial,
+        outcome.status,
+        outcome.result,
+        outcome.check,
+        time.perf_counter() - started,
+        outcome.detail,
+    )
+
+
 async def _run(
     task: EvalTask,
     target: EvalTarget,
@@ -254,44 +319,31 @@ async def _run(
     settings: _Settings,
 ) -> EvalRun:
     async with semaphore:
-        started: Final = time.perf_counter()
-        run_id: Final = uuid.uuid4().hex
-        metadata: Final = MappingProxyType(
-            {
-                **settings.metadata,
-                "agent_eval_suite": suite_id,
-                "agent_eval_run": run_id,
-                "agent_eval_task": task.id,
-                "agent_eval_target": target.name,
-                "agent_eval_trial": trial,
-            }
-        )
-        try:
-            outcome: Final = await _attempt(task, target, metadata, settings)
-        except Exception as error:  # noqa: BLE001  # Workspace cleanup failures must not abort the suite.
-            failed: Final = _failure("workspace cleanup", error)
-            return EvalRun(
-                run_id,
-                task.id,
-                target.name,
-                trial,
-                failed.status,
-                None,
-                None,
-                time.perf_counter() - started,
-                failed.detail,
-            )
-        return EvalRun(
-            run_id,
-            task.id,
-            target.name,
-            trial,
-            outcome.status,
-            outcome.result,
-            outcome.check,
-            time.perf_counter() - started,
-            outcome.detail,
-        )
+        return await _run_attempt(task, target, trial, suite_id, settings)
+
+
+async def aagent_eval_attempt(
+    task: EvalTask,
+    target: EvalTarget,
+    *,
+    trial: int = 1,
+    suite_id: str | None = None,
+    max_turns: int | None = None,
+    timeout: float = 300,
+    setup_timeout: float = 120,
+    sandbox: SandboxFactory = local,
+    metadata: Mapping[str, object] | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> EvalRun:
+    """Run and grade one independent attempt for a caller that owns scheduling and persistence."""
+    _positive_integer("trial", trial)
+    if suite_id is not None and not suite_id.strip():
+        raise ValueError("suite_id must be a non-empty string")
+    _validate_task(task)
+    settings: Final = _settings(max_turns, timeout, setup_timeout, sandbox, metadata, api_base, api_key)
+    await _validate_targets((target,), settings)
+    return await _run_attempt(task, target, trial, suite_id or uuid.uuid4().hex, settings)
 
 
 async def aagent_eval(
@@ -311,10 +363,6 @@ async def aagent_eval(
     """Compare harness/model targets on independent, graded task attempts."""
     _positive_integer("trials", trials)
     _positive_integer("max_concurrency", max_concurrency)
-    if max_turns is not None:
-        _positive_integer("max_turns", max_turns)
-    _positive_timeout("timeout", timeout)
-    _positive_timeout("setup_timeout", setup_timeout)
     task_items: Final = tuple(tasks)
     target_items: Final = tuple(targets)
     if not task_items or not target_items:
@@ -325,9 +373,7 @@ async def aagent_eval(
         raise ValueError("target labels must be unique")
     for task in task_items:
         _validate_task(task)
-    copied_metadata: Final = MappingProxyType(dict(metadata or {}))
-    json.dumps(dict(copied_metadata), allow_nan=False)
-    settings: Final = _Settings(max_turns, timeout, setup_timeout, sandbox, copied_metadata, api_base, api_key)
+    settings: Final = _settings(max_turns, timeout, setup_timeout, sandbox, metadata, api_base, api_key)
     await _validate_targets(target_items, settings)
     suite_id: Final = uuid.uuid4().hex
     semaphore: Final = asyncio.Semaphore(max_concurrency)
