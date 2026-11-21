@@ -287,6 +287,13 @@ def get_supported_openai_params(
             )
 
             return SonioxAudioTranscriptionConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "zoom_ai":
+        if request_type == "transcription":
+            from litellm.llms.zoom_ai.audio_transcription.transformation import (
+                ZoomAIAudioTranscriptionConfig,
+            )
+
+            return ZoomAIAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider in litellm._custom_providers:
         if request_type == "chat_completion":
             provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
