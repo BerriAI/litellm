@@ -13,10 +13,10 @@ import re
 import traceback
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Final
+from typing import Annotated, ClassVar, Final
 
 import httpx
-from pydantic import ConfigDict, PositiveInt, TypeAdapter
+from pydantic import BeforeValidator, ConfigDict, PositiveInt, TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -39,10 +39,17 @@ from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
+
+def _reject_bool(value: object) -> object:
+    if isinstance(value, bool):
+        raise ValueError("expected a byte count, got a boolean")
+    return value
+
+
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_MAX_MESSAGE_BYTES: Final[TypeAdapter[int | None]] = TypeAdapter(
-    PositiveInt | None, config=ConfigDict(title="sqs_max_message_bytes")
+_MAX_MESSAGE_BYTES: Final[TypeAdapter[int]] = TypeAdapter(
+    Annotated[PositiveInt, BeforeValidator(_reject_bool)], config=ConfigDict(title="sqs_max_message_bytes")
 )
 _BASE64_INLINE_PATTERN: Final = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
@@ -253,10 +260,8 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         self.sqs_strip_base64_files = (
             litellm.aws_sqs_callback_params.get("sqs_strip_base64_files", False) or sqs_strip_base64_files
         )
-        configured_max_message_bytes: Final = _MAX_MESSAGE_BYTES.validate_python(
-            litellm.aws_sqs_callback_params.get("sqs_max_message_bytes")
-        )
-        self.sqs_max_message_bytes: int = (
+        configured_max_message_bytes: Final = litellm.aws_sqs_callback_params.get("sqs_max_message_bytes")
+        self.sqs_max_message_bytes: int = _MAX_MESSAGE_BYTES.validate_python(
             sqs_max_message_bytes if configured_max_message_bytes is None else configured_max_message_bytes
         )
 

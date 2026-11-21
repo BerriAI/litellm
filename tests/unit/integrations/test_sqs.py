@@ -423,12 +423,21 @@ async def test_async_send_message_applies_the_size_limit_to_the_encrypted_messag
     assert decrypted == _chat_payload_without_model_map_value_and_tools()
 
 
+_HONORED_LIMIT: Final = _size(_chat_payload_without_model_map_value())
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [_HONORED_LIMIT, str(_HONORED_LIMIT), "os.environ/UNIT_SQS_MAX_MESSAGE_BYTES"],
+    ids=["int", "numeric_string", "env_var"],
+)
 @pytest.mark.asyncio
 async def test_sqs_max_message_bytes_from_proxy_callback_params_is_honored(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, configured: int | str
 ) -> None:
     expected: Final = _chat_payload_without_model_map_value()
-    monkeypatch.setattr("litellm.aws_sqs_callback_params", {"sqs_max_message_bytes": str(_size(expected))})
+    monkeypatch.setenv("UNIT_SQS_MAX_MESSAGE_BYTES", str(_HONORED_LIMIT))
+    monkeypatch.setattr("litellm.aws_sqs_callback_params", {"sqs_max_message_bytes": configured})
     route: Final = respx_mock.post(_QUEUE_URL).mock(return_value=httpx.Response(200))
     logger: Final = _sqs_logger(monkeypatch, sqs_max_message_bytes=_size(_chat_payload()))
 
@@ -437,13 +446,35 @@ async def test_sqs_max_message_bytes_from_proxy_callback_params_is_honored(
     assert json.loads(_sent_message_body(route)) == expected
 
 
-@pytest.mark.parametrize("configured", [0, -1, "not-a-number"])
+@pytest.mark.parametrize(
+    ("callback_params", "constructor_value"),
+    [
+        ({"sqs_max_message_bytes": 0}, 262144),
+        ({"sqs_max_message_bytes": -1}, 262144),
+        ({"sqs_max_message_bytes": "not-a-number"}, 262144),
+        ({"sqs_max_message_bytes": True}, 262144),
+        ({"sqs_max_message_bytes": False}, 262144),
+        ({}, 0),
+        ({}, -1),
+        ({}, True),
+    ],
+    ids=[
+        "callback_zero",
+        "callback_negative",
+        "callback_not_a_number",
+        "callback_true",
+        "callback_false",
+        "constructor_zero",
+        "constructor_negative",
+        "constructor_true",
+    ],
+)
 def test_sqs_logger_rejects_an_invalid_max_message_bytes_at_startup(
-    monkeypatch: pytest.MonkeyPatch, configured: object
+    monkeypatch: pytest.MonkeyPatch, callback_params: dict[str, object], constructor_value: int
 ) -> None:
-    monkeypatch.setattr("litellm.aws_sqs_callback_params", {"sqs_max_message_bytes": configured})
+    monkeypatch.setattr("litellm.aws_sqs_callback_params", callback_params)
     with pytest.raises(ValueError, match="sqs_max_message_bytes"):
-        _sqs_logger(monkeypatch, sqs_max_message_bytes=262144)
+        _sqs_logger(monkeypatch, sqs_max_message_bytes=constructor_value)
 
 
 @pytest.mark.asyncio
