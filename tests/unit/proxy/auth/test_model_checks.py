@@ -2052,7 +2052,6 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
         ("azure", "gpt5_series"),
         ("azure", "responses"),
         ("azure", "responses/o_series"),
-        ("vertex_ai", "gemini"),
         ("huggingface", "together"),
         ("huggingface", "hf-inference"),
         ("huggingface", "novita"),
@@ -2137,7 +2136,9 @@ def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: st
         ("bedrock", "agentcore"),
         ("vertex_ai", "agent_engine"),
         ("vertex_ai", "bge"),
-        ("vertex_ai", "gemini/unknown-org-route-missing-org"),
+        ("vertex_ai", "gemma"),
+        ("vertex_ai", "partner_models"),
+        ("vertex_ai", "model_garden"),
         ("vertex_ai", "us-central1"),
         ("azure", "unknown-org-route-missing-org"),
     ],
@@ -2158,6 +2159,28 @@ def test_wildcard_over_a_segment_the_provider_sends_inside_the_model_id_lists_no
 
     assert bare_listing
     assert routed_listing == []
+
+
+@pytest.mark.parametrize("route", ["gemini", "gemini/unknown-org-route-missing-org"])
+@pytest.mark.parametrize("api_base", [None, "https://tenant-resource.example.test"])
+def test_vertex_gemini_route_lists_only_the_catalog_ids_the_gemini_api_serves(route: str, api_base: str | None) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with _registered_chat_models(
+        {
+            "vertex_ai/gemini-route-model-g": "vertex_ai-language-models",
+            "vertex_ai/claude-route-model-c": "vertex_ai-anthropic_models",
+            "vertex_ai/route-publisher/route-model-p": "vertex_ai-llama_models",
+        }
+    ):
+        listed: Final = get_known_models_from_wildcard(
+            "vertex_ai/*", LiteLLM_Params(model=f"vertex_ai/{route}/*", api_base=api_base)
+        )
+
+    assert "vertex_ai/gemini-route-model-g" in listed
+    assert "vertex_ai/claude-route-model-c" not in listed
+    assert "vertex_ai/route-publisher/route-model-p" not in listed
 
 
 @pytest.mark.parametrize(
@@ -2312,7 +2335,6 @@ def test_wildcard_over_an_unknown_org_behind_the_providers_own_api_base_lists_no
         ("azure", "responses"),
         ("bedrock", "converse"),
         ("bedrock", "us-east-1"),
-        ("vertex_ai", "gemini"),
     ],
 )
 def test_routing_segment_behind_the_providers_own_api_base_lists_the_bare_wildcard_ids(

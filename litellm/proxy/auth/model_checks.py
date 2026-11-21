@@ -33,7 +33,8 @@ from litellm.llms.bedrock.common_utils import (
     get_bedrock_cross_region_inference_regions,
 )
 from litellm.llms.fireworks_ai.common_utils import FIREROUTER
-from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute
+from litellm.llms.vertex_ai.common_utils import uses_vertex_gemini_api
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, dispatched_model
 from litellm.proxy.common_utils.token_count_settings import cost_map_entry
@@ -473,15 +474,6 @@ def _bedrock_routing_segments() -> Iterable[str]:
     )
 
 
-_VERTEX_AI_ROUTES_NAMING_AN_ACCOUNT_RESOURCE: Final = frozenset(
-    (VertexAIModelRoute.AGENT_ENGINE, VertexAIModelRoute.BGE)
-)
-
-
-def _vertex_ai_routing_segments() -> Iterable[str]:
-    return (route.value for route in VertexAIModelRoute if route not in _VERTEX_AI_ROUTES_NAMING_AN_ACCOUNT_RESOURCE)
-
-
 def _azure_routing_segments() -> Iterable[str]:
     return (
         route.removesuffix("/")
@@ -496,7 +488,6 @@ def _azure_routing_segments() -> Iterable[str]:
 _ROUTING_SEGMENTS_BY_PROVIDER: Final[Mapping[str, Callable[[], Iterable[str]]]] = MappingProxyType(
     {
         LlmProviders.BEDROCK.value: _bedrock_routing_segments,
-        LlmProviders.VERTEX_AI.value: _vertex_ai_routing_segments,
         LlmProviders.AZURE.value: _azure_routing_segments,
     }
 )
@@ -508,7 +499,9 @@ def _known_routing_segments(provider: str) -> frozenset[str]:
     return frozenset(routing_segments()) if routing_segments is not None else frozenset()
 
 
-def _names_only_known_routing_segments(provider: str, routing_prefix: str) -> bool:
+def _call_strips_routing_prefix(provider: str, routing_prefix: str) -> bool:
+    if provider == LlmProviders.VERTEX_AI.value:
+        return VertexGeminiConfig.is_model_gemini_spec_model(routing_prefix)
     return frozenset(routing_prefix.removesuffix("/").split("/")) <= _known_routing_segments(provider)
 
 
@@ -516,7 +509,7 @@ def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
     route: Final = f"{provider}/{routing_prefix}"
     return (
         provider not in _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
-        and not _names_only_known_routing_segments(provider, routing_prefix)
+        and not _call_strips_routing_prefix(provider, routing_prefix)
         and route not in _ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
         and not route.startswith(_ROUTE_PREFIXES_THE_CATALOG_LOOKUP_CANNOT_PARSE)
     )
@@ -560,11 +553,17 @@ def _bedrock_ids_an_arn_route_can_reach(routing_prefix: str, provider_model_ids:
             return ()
 
 
+def _names_a_gemini_api_model(model_id: str) -> bool:
+    return "/" not in model_id and uses_vertex_gemini_api(model_id)
+
+
 def _model_ids_a_route_can_reach(
     provider: str, routing_prefix: str, provider_model_ids: tuple[str, ...]
 ) -> tuple[str, ...]:
     if provider == LlmProviders.BEDROCK.value:
         return _bedrock_ids_an_arn_route_can_reach(routing_prefix, provider_model_ids)
+    if provider == LlmProviders.VERTEX_AI.value and VertexGeminiConfig.is_model_gemini_spec_model(routing_prefix):
+        return tuple(filter(_names_a_gemini_api_model, provider_model_ids))
     if not f"{provider}/{routing_prefix}".startswith(_FIREWORKS_ROUTER_ROUTES):
         return provider_model_ids
     return tuple(
