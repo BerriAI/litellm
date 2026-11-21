@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import chain, filterfalse, repeat
+from itertools import chain, filterfalse, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
@@ -398,6 +398,139 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
     if original is None:
         return tool
     return {**tool, "function": {**function, "name": original}}
+
+
+def _is_native_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return is_provider_native_tool_dict(tool) or (
+        isinstance(tool_type, str) and tool_type not in ("custom", "function") and "input_schema" not in tool
+    )
+
+
+def _apply_tool_field_edits(original: object, before: object, after: object) -> object:
+    if before == after:
+        return original
+    source: Final = as_str_mapping(original)
+    prior: Final = as_str_mapping(before)
+    returned: Final = as_str_mapping(after)
+    if source is None or prior is None or returned is None:
+        return after
+    return {
+        **{key: value for key, value in source.items() if key not in prior or key in returned},
+        **{
+            key: _apply_tool_field_edits(source.get(key), prior.get(key), value)
+            for key, value in returned.items()
+            if key not in prior or prior[key] != value
+        },
+    }
+
+
+def _rewrite_original_tool(
+    original: AllAnthropicToolsValues, before: ChatCompletionToolParam, after: ChatCompletionToolParam
+) -> AllAnthropicToolsValues:
+    if before == after:
+        return original
+    original_fields: Final = as_str_mapping(original) or {}
+    if original_fields.get("type") == "function":
+        return cast(AllAnthropicToolsValues, after)  # cast-ok: caller supplied an OpenAI-format tool
+    prior: Final = as_str_mapping(before.get("function")) or {}
+    returned: Final = as_str_mapping(after.get("function")) or {}
+    fields: Final = (("description", "description"), ("parameters", "input_schema"), ("strict", "strict"))
+    changed: Final = tuple((source, target) for source, target in fields if prior.get(source) != returned.get(source))
+    replaced: Final = frozenset(target for _, target in changed)
+    return cast(  # cast-ok: retain original tool fields and overlay only changed function fields
+        AllAnthropicToolsValues,
+        {
+            **{key: value for key, value in original_fields.items() if key not in replaced},
+            **{
+                target: _apply_tool_field_edits(original_fields.get(target), prior.get(source), returned[source])
+                for source, target in changed
+                if source in returned
+            },
+        },
+    )
+
+
+def _tool_name_indices(tools: Sequence[Mapping[str, object]]) -> dict[str | None, tuple[int, ...]]:
+    ordered: Final = sorted(
+        enumerate(tools), key=lambda item: ((name := anthropic_tool_name(item[1])) is None, name or "")
+    )
+    return {
+        name: tuple(index for index, _ in group)
+        for name, group in groupby(ordered, key=lambda item: anthropic_tool_name(item[1]))
+    }
+
+
+def _pair_tool_group(
+    before: Sequence[Mapping[str, object]],
+    after: Sequence[Mapping[str, object]],
+    prior: Sequence[int],
+    returned: Sequence[int],
+) -> tuple[tuple[int, int], ...]:
+    candidates: Final = {index: tuple(other for other in returned if before[index] == after[other]) for index in prior}
+    exact: Final = {
+        index: matches[occurrence]
+        for position, index in enumerate(prior)
+        if (matches := candidates[index])
+        and (occurrence := sum(before[index] == before[other] for other in prior[:position])) < len(matches)
+    }
+    used: Final = frozenset(exact.values())
+    remaining: Final = tuple(
+        zip(
+            (index for index in prior if index not in exact),
+            (other for other in returned if other not in used),
+        )
+    )
+    return (*exact.items(), *remaining)
+
+
+def _pair_tool_indices(
+    before: Sequence[Mapping[str, object]], after: Sequence[Mapping[str, object]]
+) -> tuple[tuple[int, int], ...]:
+    before_indices: Final = {anthropic_tool_name(tool): index for index, tool in enumerate(before)}
+    after_indices: Final = {anthropic_tool_name(tool): index for index, tool in enumerate(after)}
+    if len(before_indices) == len(before) and len(after_indices) == len(after):
+        return tuple((index, after_indices[name]) for name, index in before_indices.items() if name in after_indices)
+    prior_groups: Final = _tool_name_indices(before)
+    returned_groups: Final = _tool_name_indices(after)
+    return tuple(
+        chain.from_iterable(
+            _pair_tool_group(before, after, prior, returned_groups.get(name, ()))
+            for name, prior in prior_groups.items()
+        )
+    )
+
+
+def _reconcile_tools(
+    originals: Sequence[AllAnthropicToolsValues],
+    scanned: Sequence[ChatCompletionToolParam],
+    returned: Sequence[ChatCompletionToolParam],
+) -> Sequence[AllAnthropicToolsValues]:
+    custom_originals: Final = tuple((index, tool) for index, tool in enumerate(originals) if not _is_native_tool(tool))
+    original_to_scanned: Final = {
+        custom_originals[index][0]: other
+        for index, other in _pair_tool_indices(tuple(tool for _, tool in custom_originals), scanned)
+    }
+    scanned_to_returned: Final = dict(_pair_tool_indices(scanned, returned))
+    rewritten: Final = {
+        index: scanned_to_returned[other]
+        for index, other in original_to_scanned.items()
+        if other in scanned_to_returned
+    }
+    used: Final = frozenset(rewritten.values())
+    config: Final = AnthropicConfig()
+    additions: Final = tuple(tool for index, tool in enumerate(returned) if index not in used)
+    converted: Final = tuple(config.map_tool_helper(tool)[0] for tool in additions)
+    return [
+        *(
+            _rewrite_original_tool(tool, scanned[original_to_scanned[index]], returned[rewritten[index]])
+            if index in rewritten
+            else tool
+            for index, tool in enumerate(originals)
+            if index not in original_to_scanned or index in rewritten
+        ),
+        *(tool for tool in converted if tool is not None),
+    ]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
@@ -909,7 +1042,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             if isinstance(body_model, str) and body_model
             else (request_model if isinstance(request_model, str) else "")
         )
-        translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
+        original_tools: Final = cast(  # cast-ok: tools are supplied in the Anthropic request's tool format
+            Sequence[AllAnthropicToolsValues], list_field(data, "tools")
+        )
+        translation_source: Final = {
+            **{key: value for key, value in data.items() if key != "system"},
+            "model": model,
+            **({"tools": [tool for tool in original_tools if not _is_native_tool(tool)]} if original_tools else {}),
+        }
         chat_completion_compatible_request: Final = self._translate_to_openai(
             translation_source, keep_cache_control=keep_cache_control
         )
@@ -990,6 +1130,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             original_tool_names: Final = _original_tool_names(
                 cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
             )
+            original_scanned_tools: Final = deepcopy(tools_to_check)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data if request_data is None else request_data,
@@ -999,28 +1140,22 @@ class AnthropicMessagesHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
-            if guardrailed_tools is not None:
-                # Convert tools back from OpenAI format to Anthropic format
-                anthropic_config: Final = AnthropicConfig()
-                anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
-                for tool in guardrailed_tools:
-                    converted_tool, mcp_server = anthropic_config.map_tool_helper(
-                        _with_original_name(tool, original_tool_names.declared)
-                    )
-                    if converted_tool is not None:
-                        anthropic_tools.append(converted_tool)
-                    # Note: MCP servers are handled separately in the main transformation
+            if guardrailed_tools is not None and guardrailed_tools != original_scanned_tools:
+                restored_before: Final = [
+                    _with_original_name(tool, original_tool_names.declared) for tool in original_scanned_tools
+                ]
+                restored_after: Final = [
+                    _with_original_name(tool, original_tool_names.declared) for tool in guardrailed_tools
+                ]
+                anthropic_tools: Final = _reconcile_tools(original_tools, restored_before, restored_after)
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
-                        request_tools=data.get("tools"),
+                        request_tools=original_tools,
                         returned_tools=anthropic_tools,
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else [
-                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
-                        *anthropic_tools,
-                    ]
+                    else anthropic_tools
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")

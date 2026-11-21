@@ -8,7 +8,8 @@ with guardrail transformations, specifically testing edge cases with empty choic
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
 
@@ -1999,11 +2000,246 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[0]["type"] == "tool_search_tool_regex_20251119"
         assert tools[0]["name"] == "tool_search_tool_regex"
 
-        # Second tool should be converted to Anthropic custom tool format
-        assert tools[1]["type"] == "custom"
+        assert "type" not in tools[1]
+        assert tools[1]["defer_loading"] is True
         assert tools[1]["name"] == "get_weather"
         assert tools[1]["description"] == "Get the weather at a specific location"
         assert "input_schema" in tools[1]
+
+
+class AnthropicToolEditingGuardrail(CustomGuardrail):
+    def __init__(self, mode: str):
+        super().__init__(guardrail_name="tool-fields")
+        self.mode: Final = mode
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools: Final = inputs.get("tools", [])
+        assert all(tool.get("type") == "function" for tool in tools)
+        assert all(not tool["function"]["name"].startswith("litellm_unnamed_tool_") for tool in tools)
+        if self.mode == "echo":
+            return inputs
+        if self.mode == "copy":
+            return deepcopy(inputs)
+        if self.mode == "texts-only":
+            return {"texts": inputs.get("texts", [])}
+        if self.mode in ("description", "duplicate-reverse-edit"):
+            tools[0]["function"]["description"] = "Read [MASKED] data"
+        if self.mode == "duplicate-edit-last":
+            tools[1]["function"]["description"] = "Read [MASKED] data"
+        if self.mode == "duplicate-reverse-edit":
+            return {**inputs, "tools": list(reversed(tools))}
+        if self.mode == "duplicate-remove-last":
+            return {**inputs, "tools": [tools[0], *tools[2:]]}
+        if self.mode == "schema":
+            tools[0]["function"]["parameters"] = {"type": "object", "properties": {"safe": {"type": "string"}}}
+        if self.mode == "schema-inplace":
+            tools[0]["function"]["parameters"]["properties"]["safe"] = {"type": "string"}
+        if self.mode == "remove":
+            return {**inputs, "tools": tools[1:]}
+        if self.mode == "empty":
+            return {**inputs, "tools": []}
+        if self.mode in ("add", "duplicate-add", "native-add"):
+            return {
+                **inputs,
+                "tools": [
+                    *tools,
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": {"add": "Added", "duplicate-add": "Read", "native-add": "web_search"}[self.mode],
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    },
+                ],
+            }
+        return inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", ("echo", "copy", "texts-only", "description", "schema", "schema-inplace", "remove", "empty", "add")
+)
+@pytest.mark.parametrize("long_name", (False, True), ids=("short-name", "long-name"))
+async def test_guardrail_preserves_original_tool_dicts_except_explicit_edits(mode: str, long_name: bool) -> None:
+    custom: Final = {
+        "name": "Read" + ("_long" * 20 if long_name else ""),
+        "description": "Read private data",
+        "input_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "ReadInput",
+            "type": "object",
+            "properties": {},
+        },
+        "defer_loading": True,
+        "cache_control": {"type": "ephemeral"},
+        "strict": True,
+        "input_examples": [{}],
+        "allowed_callers": ["direct"],
+    }
+    native: Final = [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 1},
+        {"type": "mcp_toolset", "mcp_server_name": "github"},
+        {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        {"type": "code_execution_20250825", "name": "code_execution"},
+        {"type": "future_server_tool", "settings": {"mode": "safe"}},
+        {"googleSearch": {}},
+    ]
+    untouched: Final = {**custom, "name": "Untouched", "type": "custom"}
+    tools: Final = [custom, *native, untouched]
+    original: Final = deepcopy(tools)
+    data: Final = {
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "Read a file"}],
+        "tools": tools,
+    }
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
+    )
+    rewritten: Final = {
+        **custom,
+        **({"description": "Read [MASKED] data"} if mode == "description" else {}),
+        **(
+            {"input_schema": {"type": "object", "properties": {"safe": {"type": "string"}}}} if mode == "schema" else {}
+        ),
+        **(
+            {"input_schema": {**custom["input_schema"], "properties": {"safe": {"type": "string"}}}}
+            if mode == "schema-inplace"
+            else {}
+        ),
+    }
+    expected: Final = [
+        *([rewritten] if mode not in ("remove", "empty") else []),
+        *native,
+        *([untouched] if mode != "empty" else []),
+        *(
+            [{"name": "Added", "input_schema": {"type": "object", "properties": {}}, "type": "custom"}]
+            if mode == "add"
+            else []
+        ),
+    ]
+    assert result["tools"] == expected
+    assert tools == original
+    if mode in ("echo", "copy", "texts-only"):
+        assert result["tools"] is tools
+    if mode != "empty":
+        assert result["tools"][-1 if mode != "add" else -2] is untouched
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "copy",
+        "description",
+        "duplicate-edit-last",
+        "duplicate-reverse-edit",
+        "remove",
+        "duplicate-remove-last",
+        "empty",
+        "duplicate-add",
+    ),
+)
+@pytest.mark.parametrize("openai_format", (False, True))
+async def test_repeated_tool_names_keep_each_schema_and_apply_each_guardrail_edit(
+    mode: str, openai_format: bool
+) -> None:
+    custom: Final = [
+        {
+            "name": "Read",
+            "description": "Read private data",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "defer_loading": True,
+        },
+        {
+            "name": "Read",
+            "description": "Read public data",
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    def formatted(tool: dict[str, object]) -> dict[str, object]:
+        return (
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"],
+                },
+            }
+            if openai_format
+            else tool
+        )
+
+    native: Final = {"type": "web_search_20250305", "name": "web_search"}
+    tools: Final = [formatted(custom[0]), native, formatted(custom[1])]
+    expected_custom: Final = [
+        {
+            **tool,
+            **(
+                {"description": "Read [MASKED] data"}
+                if (index == 0 and mode in ("description", "duplicate-reverse-edit"))
+                or (index == 1 and mode == "duplicate-edit-last")
+                else {}
+            ),
+        }
+        for index, tool in enumerate(custom)
+    ]
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data={"messages": [{"role": "user", "content": "Read a file"}], "tools": tools},
+        guardrail_to_apply=AnthropicToolEditingGuardrail(mode),
+    )
+    assert result["tools"] == [
+        *([formatted(expected_custom[0])] if mode not in ("remove", "empty") else []),
+        native,
+        *([formatted(expected_custom[1])] if mode not in ("duplicate-remove-last", "empty") else []),
+        *(
+            [{"name": "Read", "input_schema": {"type": "object", "properties": {}}, "type": "custom"}]
+            if mode == "duplicate-add"
+            else []
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_guardrail_addition_with_native_name_preserves_both_tool_definitions() -> None:
+    native: Final = {"type": "web_search_20250305", "name": "web_search"}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data={"messages": [{"role": "user", "content": "Read a file"}], "tools": [native]},
+        guardrail_to_apply=AnthropicToolEditingGuardrail("native-add"),
+    )
+    assert result["tools"] == [
+        native,
+        {"name": "web_search", "input_schema": {"type": "object", "properties": {}}, "type": "custom"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("echo", "empty", "add"))
+async def test_scan_only_tool_results_preserves_unscanned_tools_and_accepts_injection(mode: str) -> None:
+    tools: Final = [{"name": "Read", "input_schema": {"type": "object"}, "defer_loading": True}]
+    data: Final = {
+        "tools": tools,
+        "messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]}],
+    }
+    guardrail: Final = AnthropicToolEditingGuardrail(mode)
+    guardrail.scan_only_tool_results = True
+    result: Final = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+    assert result["tools"] == [
+        *tools,
+        *(
+            [{"name": "Added", "input_schema": {"type": "object", "properties": {}}, "type": "custom"}]
+            if mode == "add"
+            else []
+        ),
+    ]
 
 
 class ToolAppendingGuardrail(CustomGuardrail):
