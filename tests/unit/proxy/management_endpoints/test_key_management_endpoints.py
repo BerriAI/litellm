@@ -117,6 +117,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 from litellm.types.utils import CredentialItem
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
@@ -7841,6 +7842,24 @@ async def test_bulk_update_keys_explicit_null_still_clears_the_field(monkeypatch
 
     assert written["max_budget"] is None
     assert not {"team_id", "budget_id"} & written.keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["max_budget", "budget_duration"])
+async def test_bulk_update_keys_explicit_null_cannot_remove_a_capped_limit(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(max_budget=500.0, budget_duration="60d", tpm_limit=1000),
+    )
+    response, prisma = await _run_bulk_update_on_one_key(monkeypatch, {field: None})
+
+    assert response.successful_updates == []
+    assert [update.key for update in response.failed_updates] == [_BULK_UPDATE_TOKEN]
+    assert f"{field} cannot be removed" in response.failed_updates[0].failed_reason
+    prisma.update_data.assert_not_awaited()
 
 
 @pytest.mark.asyncio

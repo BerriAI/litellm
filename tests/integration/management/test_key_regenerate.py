@@ -1,5 +1,7 @@
 import pytest
 
+from litellm.proxy.utils import hash_token
+
 from tests.integration._support.actors import TEAM_ALPHA, TEAM_BETA, Actor
 from tests.integration._support.actors import create_scratch_key, owned_settings_client
 
@@ -150,3 +152,31 @@ async def test_key_regenerate_enforces_upperbound_key_params(
         )
     assert over.status_code == 400, over.text
     assert within.status_code == 200, within.text
+
+
+async def test_key_regenerate_explicit_null_cannot_remove_capped_limit(
+    gateway_client, db, resources, actors, tmp_path
+):
+    admin = actors.keys[Actor.PROXY_ADMIN]
+    headers = {"Authorization": f"Bearer {admin.cleartext}"}
+    limited = await create_scratch_key(
+        gateway_client, admin.cleartext, resources.prefix, user_id=admin.user_id, key_alias=f"{resources.prefix}-limited"
+    )
+    unlimited = await create_scratch_key(
+        gateway_client, admin.cleartext, resources.prefix, user_id=admin.user_id, key_alias=f"{resources.prefix}-unlimited"
+    )
+    seeded = await gateway_client.post("/key/update", headers=headers, json={"key": limited, "duration": "1h"})
+    assert seeded.status_code == 200, seeded.text
+
+    with owned_settings_client(
+        gateway_client, tmp_path, {"upperbound_key_generate_params": {"duration": "2h"}}
+    ) as client:
+        removed = await client.post("/key/regenerate", headers=headers, json={"key": limited, "duration": None})
+        nothing_stored = await client.post(
+            "/key/regenerate", headers=headers, json={"key": unlimited, "duration": None}
+        )
+
+    assert removed.status_code == 400, removed.text
+    assert nothing_stored.status_code == 200, nothing_stored.text
+    row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(limited)})
+    assert row is not None and row.expires is not None

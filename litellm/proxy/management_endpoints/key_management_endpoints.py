@@ -250,6 +250,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     KeySearchWhere,
     SuccessfulKeyUpdate,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
@@ -1422,6 +1423,7 @@ async def validate_team_id_used_in_service_account_request(
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
+    existing_key_row: LiteLLM_VerificationToken | None = None,
 ) -> None:
     """
     Enforce upperbound limits on key parameters.
@@ -1453,6 +1455,8 @@ def _enforce_upperbound_key_params(
     if upperbound is None:
         return
 
+    if existing_key_row is not None:
+        _reject_removing_capped_limit(data, upperbound, existing_key_row)
     _enforce_duration_upperbound(data, "duration", data.duration, upperbound.duration, fill_defaults=fill_defaults)
     _enforce_numeric_upperbound(data, "max_budget", data.max_budget, upperbound.max_budget, fill_defaults=fill_defaults)
     _enforce_numeric_upperbound(
@@ -1466,6 +1470,40 @@ def _enforce_upperbound_key_params(
     _enforce_numeric_upperbound(data, "rpm_limit", data.rpm_limit, upperbound.rpm_limit, fill_defaults=fill_defaults)
     _enforce_duration_upperbound(
         data, "budget_duration", data.budget_duration, upperbound.budget_duration, fill_defaults=fill_defaults
+    )
+
+
+def _reject_removing_capped_limit(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    upperbound: LiteLLM_UpperboundKeyGenerateParams,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> None:
+    capped_fields: Final = (
+        ("duration", data.duration, upperbound.duration, existing_key_row.expires),
+        ("max_budget", data.max_budget, upperbound.max_budget, existing_key_row.max_budget),
+        (
+            "max_parallel_requests",
+            data.max_parallel_requests,
+            upperbound.max_parallel_requests,
+            existing_key_row.max_parallel_requests,
+        ),
+        ("tpm_limit", data.tpm_limit, upperbound.tpm_limit, existing_key_row.tpm_limit),
+        ("rpm_limit", data.rpm_limit, upperbound.rpm_limit, existing_key_row.rpm_limit),
+        ("budget_duration", data.budget_duration, upperbound.budget_duration, existing_key_row.budget_duration),
+    )
+    removed: Final = next(
+        (
+            (key, cap)
+            for key, value, cap, stored in capped_fields
+            if value is None and cap is not None and stored is not None and key in data.model_fields_set
+        ),
+        None,
+    )
+    if removed is None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={"error": f"{removed[0]} cannot be removed, max limit set in config - max_value={removed[1]}"},
     )
 
 
@@ -3588,7 +3626,7 @@ async def _process_single_key_update(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
 
     # Enforce upperbound key params on update (don't fill defaults)
-    _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
+    _enforce_upperbound_key_params(update_key_request, fill_defaults=False, existing_key_row=existing_key_row)
 
     # Get team object and check team limits if team_id is provided
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -4399,7 +4437,7 @@ async def update_key_fn(
         await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=data)
 
         # Enforce upperbound key params on update (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, existing_key_row=existing_key_row)
         raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
             data=data,
@@ -6561,7 +6599,7 @@ async def _execute_virtual_key_regeneration(
         if update_request is not None:
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, existing_key_row=key_in_db)
         raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
             data=data,
