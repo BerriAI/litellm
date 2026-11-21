@@ -78,7 +78,34 @@ async def stored_caller(row: SubscriptionRow) -> Reauthorization:
         return Unavailable(error.message)
     except Exception as error:  # noqa: BLE001  # a transient lookup failure delays delivery instead of ending the subscription
         return Unavailable(str(error))
-    return Revoked("key") if _key_revoked(key) else Authorized(key)
+    if _key_revoked(key):
+        return Revoked("key")
+    try:
+        return Authorized(await with_team_org(key, _team_org))
+    except Exception as error:  # noqa: BLE001  # a transient lookup failure delays delivery instead of ending the subscription
+        return Unavailable(str(error))
+
+
+async def _team_org(team_id: str) -> str | None:
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    team: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=True,
+    )
+    return team.organization_id if team is not None else None
+
+
+async def with_team_org(key: UserAPIKeyAuth, team_org: Callable[[str], Awaitable[str | None]]) -> UserAPIKeyAuth:
+    """The org ceiling a request would apply: the key's own org, else its team's, as the request path inherits it."""
+    if key.org_id is not None or key.team_id is None:
+        return key
+    org_id: Final = await team_org(key.team_id)
+    return key.model_copy(update={"org_id": org_id}) if org_id is not None else key
 
 
 async def authorize_row(

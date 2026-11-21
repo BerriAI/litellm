@@ -13,6 +13,7 @@ from litellm.proxy.mcp_server.events.webhooks.reauth import (
     Unavailable,
     _key_revoked,  # pyright: ignore[reportPrivateUsage]  # the key-state rule is the unit under test
     admitted_user,
+    with_team_org,
     authorize_row,
 )
 from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow
@@ -123,3 +124,20 @@ async def test_a_keyless_subscription_follows_the_live_user(
     reload: Callable[[str], Awaitable[UserAPIKeyAuth]], expected: Reauthorization
 ) -> None:
     assert await admitted_user("u-1", reload) == expected
+
+
+async def _team_in_org(team_id: str) -> str | None:
+    return {"team-1": "org-1"}.get(team_id)
+
+
+@pytest.mark.parametrize(
+    ("key", "org"),
+    (
+        (UserAPIKeyAuth(api_key="sk-a", team_id="team-1"), "org-1"),
+        (UserAPIKeyAuth(api_key="sk-a", team_id="team-1", org_id="org-own"), "org-own"),
+        (UserAPIKeyAuth(api_key="sk-a", team_id="team-none"), None),
+        (UserAPIKeyAuth(api_key="sk-a"), None),
+    ),
+)
+async def test_a_stored_key_gets_the_org_ceiling_its_requests_get(key: UserAPIKeyAuth, org: str | None) -> None:
+    assert (await with_team_org(key, _team_in_org)).org_id == org

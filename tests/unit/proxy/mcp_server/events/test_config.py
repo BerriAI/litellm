@@ -56,8 +56,14 @@ def test_a_server_serves_events_only_when_enabled_on_the_modern_protocol(
         (("build.*",), "build.failed", True),
         (("build.*",), "deploy.done", False),
         (("deploy.done", "build.failed"), "build.failed", True),
-        ((), "build.failed", False),
     ),
 )
 def test_allowed_events_globs(patterns: tuple[str, ...] | None, name: str, allowed: bool) -> None:
     assert server_allows_event(MCPServerEventsConfig(enabled=True, allowed_events=patterns), name) is allowed
+
+
+def test_an_empty_allowlist_is_rejected_so_it_cannot_be_read_as_allow_all_later() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MCPServerEventsConfig(enabled=True, allowed_events=())

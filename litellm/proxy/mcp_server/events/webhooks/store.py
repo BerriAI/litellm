@@ -168,9 +168,7 @@ def _record_from_row(row: SubscriptionRow) -> Mapping[str, object]:
 
 
 def pending_row(row: SubscriptionRow) -> SubscriptionRow:
-    return row.model_copy(
-        update={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL}
-    )
+    return row.model_copy(update={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL})
 
 
 class _RawQueries(Protocol):
@@ -194,7 +192,8 @@ class PrismaEventStore:
 
         data: Final = dict(_record_from_row(pending_row(row)))
         replaced: Final = await self._subscriptions.update_many(
-            where={"id": row.id, "status": "terminated"}, data={key: value for key, value in data.items() if key != "id"}
+            where={"id": row.id, "status": "terminated"},
+            data={key: value for key, value in data.items() if key != "id"},
         )
         if replaced:
             return True
@@ -228,7 +227,9 @@ class PrismaEventStore:
             data={"last_delivery_at": at, "consecutive_failures": 0, "failed_since": None, "last_error": None},
         )
 
-    async def mark_failed(self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int) -> None:
+    async def mark_failed(
+        self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int
+    ) -> None:
         await self._raw.query_raw(
             'UPDATE "LiteLLM_MCPEventSubscription" SET '
             '"consecutive_failures" = "consecutive_failures" + 1, "last_error" = $2, '

@@ -17,9 +17,13 @@ from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, parse_s
 from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow, SubscriptionStatus
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import CallbackFailure
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.proxy.mcp_server.events.access import EventGrant
+from litellm.types.mcp_server.events import EventType
+from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
-from .fakes import runtime, server
+DEPLOY_DONE: Final = EventType(name="deploy.done", delivery=("poll",))
+
+from .fakes import BUILD_FAILED, runtime, server
 from .webhooks.memory_store import MemoryStore
 
 ALICE: Final = UserAPIKeyAuth(api_key="sk-alice", user_id="alice")
@@ -191,3 +195,26 @@ async def test_a_revoked_key_ends_its_subscriptions_and_notifies_only_while_even
     await terminate_key_subscriptions((ALICE.token, None), notify=notify, services=services)
     assert (store.rows["sub_a"].status, store.rows["sub_b"].status) == ("terminated", "active")
     assert [json.loads(body)["type"] for _, body, _ in callback.sent] == envelopes
+
+
+@pytest.mark.parametrize(
+    ("config", "grant", "names"),
+    (
+        (MCPServerEventsConfig(enabled=True), None, ["build.failed", "deploy.done"]),
+        (MCPServerEventsConfig(enabled=True, allowed_events=("build.*",)), None, ["build.failed"]),
+        (MCPServerEventsConfig(enabled=True), (frozenset({"deploy.done"}),), ["deploy.done"]),
+    ),
+)
+@pytest.mark.asyncio
+async def test_event_types_list_only_what_the_server_publishes_and_the_caller_is_granted(
+    config: MCPServerEventsConfig, grant: EventGrant, names: list[str]
+) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    events_runtime: Final = runtime((server(events=config),), (BUILD_FAILED, DEPLOY_DONE), grant=grant)
+    services: Final = AdminServices(store=None, runtime=events_runtime, post=Callback().post, lookup=_lookup)
+    app.dependency_overrides[user_api_key_auth] = lambda: ALICE
+    app.dependency_overrides[admin_services] = lambda: services
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw") as client:
+        response = await client.get("/events/types", params={"server_id": "srv-ci"})
+    assert [item["name"] for item in response.json()] == names

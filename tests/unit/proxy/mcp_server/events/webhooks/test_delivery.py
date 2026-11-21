@@ -205,7 +205,6 @@ async def test_a_failure_after_connecting_never_retries_another_address(error: h
     assert attempts == ["93.184.216.34"]
 
 
-
 @pytest.mark.parametrize("url", ("https://hook.example:notaport/x", "https://hook.example:99999/x"))
 @pytest.mark.asyncio
 async def test_a_malformed_port_is_refused_without_resolving(url: str) -> None:

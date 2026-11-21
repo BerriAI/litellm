@@ -87,7 +87,11 @@ class MCPServerEventsConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = False
-    allowed_events: tuple[str, ...] | None = None
+    allowed_events: tuple[str, ...] | None = Field(
+        default=None,
+        min_length=1,
+        description="Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+    )
     min_poll_interval_ms: int = Field(default=1000, ge=0)
     legacy_webhook_id_equals_event_id: bool = False
 

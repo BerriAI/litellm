@@ -23261,3 +23261,9 @@ def test_the_server_listing_row_carries_the_events_config(events):
     )
 
     assert MCPServerManager().build_mcp_server_table(server).events == events
+
+
+def test_a_yaml_server_with_an_unreadable_events_block_loads_with_events_off():
+    from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
+
+    assert _stored_events_config({"enabled": True, "allowed_events": []}) is None

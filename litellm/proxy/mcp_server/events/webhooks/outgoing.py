@@ -87,7 +87,9 @@ async def _event(context: DeliveryContext, occurrence: EventOccurrence, runtime:
         }
     ).model_dump_json(by_alias=True, exclude_none=True)
     webhook_id: Final = occurrence.event_id if _legacy_webhook_id(context.server) else context.delivery.webhook_id
-    return Outgoing(body.encode(), webhook_id, False, occurrence.event_id, sealed.ok if isinstance(sealed, Ok) else None)
+    return Outgoing(
+        body.encode(), webhook_id, False, occurrence.event_id, sealed.ok if isinstance(sealed, Ok) else None
+    )
 
 
 async def build_outgoing(context: DeliveryContext, runtime: EventsRuntime) -> Outgoing | None:
