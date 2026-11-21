@@ -11,7 +11,9 @@ use litellm_llms::{
         transformation::TextractDetectTextConfig,
     },
     azure_ai::ocr::{
-        cohere_parse_transformation::{AZURE_COHERE_PARSE_PATH, AzureAICohereParseConfig},
+        cohere_parse_transformation::{
+            AZURE_COHERE_DEDICATED_PARSE_PATH, AZURE_COHERE_PARSE_PATH, AzureAICohereParseConfig,
+        },
         document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
         transformation::{AZURE_AI_OCR_PATH, AzureAiOcrConfig},
     },
@@ -225,7 +227,9 @@ pub fn passthrough_response(
         .collect();
     let is_ocr_endpoint = match config {
         OcrConfigKind::AzureAi => segments == AZURE_AI_OCR_PATH,
-        OcrConfigKind::AzureCohere => segments == AZURE_COHERE_PARSE_PATH,
+        OcrConfigKind::AzureCohere => {
+            segments == AZURE_COHERE_PARSE_PATH || segments == AZURE_COHERE_DEDICATED_PARSE_PATH
+        }
         OcrConfigKind::AzureDocumentIntelligence => {
             segments == AzureDocumentIntelligenceOcrConfig::analyze_path(provider.model)?
         }
@@ -609,6 +613,7 @@ mod tests {
     #[case("azure_ai/mistral-document-ai-2512", "providers/mistral/azure/ocr")]
     #[case("azure_ai/mistral-document-ai-2512", "/providers/mistral/azure/ocr/")]
     #[case("azure_ai/Cohere-parse-v5", "providers/cohere/v2/parse")]
+    #[case("azure_ai/Cohere-parse-v5", "v2/parse")]
     #[case(
         "azure_ai/doc-intelligence/prebuilt-layout",
         "documentintelligence/documentModels/prebuilt-layout:analyze"
