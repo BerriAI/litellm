@@ -62,6 +62,7 @@ from litellm.constants import (
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     PROVIDER_REQUEST_ID_HEADERS,
     REALTIME_METERED_USAGE_KEY,
     REDACTED_BY_LITELLM,
@@ -8918,6 +8919,18 @@ def _finalized_cost_of(logging_obj: object) -> FinalizedCost | None:
     return finalized if isinstance(finalized, FinalizedCost) else None
 
 
+_UNTYPED: Final = TypeAdapter(object)
+
+
+def _export_deployment_id(model_id: object, metadata: object, logged_api_key: object) -> str | None:
+    if isinstance(model_id, str) and model_id:
+        return model_id
+    if logged_api_key != LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME:
+        return None
+    probed: Final = _METADATA_MAPPING.validate_python(metadata).get("health_check_deployment_id")
+    return probed if isinstance(probed, str) else None
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: object,
@@ -9213,6 +9226,11 @@ def get_standard_logging_object_payload(
             api_base=StandardLoggingPayloadSetup.strip_trailing_slash(litellm_params.get("api_base", "")) or "",
             model_group=_model_group,
             model_id=_model_id,
+            deployment_id=_export_deployment_id(
+                _UNTYPED.validate_python(_model_id),
+                _UNTYPED.validate_python(metadata),
+                clean_metadata["user_api_key_hash"],
+            ),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             user_agent=clean_metadata.get("user_agent", None),
             messages=(
