@@ -51,9 +51,11 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         """
-        All OpenAI Image Edits params are supported
+        All OpenAI Image Edits params are supported, except that gpt-image
+        models always return base64 and reject response_format, so it is
+        left out for them, same as image generation already does.
         """
-        return [
+        supported_params: Final = [
             "image",
             "prompt",
             "background",
@@ -70,6 +72,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             "extra_body",
             "timeout",
         ]
+        model_name: Final = model.split("/")[-1]
+        if model_name.startswith("gpt-image"):
+            return [param for param in supported_params if param != "response_format"]
+        return supported_params
 
     def map_openai_params(
         self,
