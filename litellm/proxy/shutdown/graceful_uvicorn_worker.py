@@ -1,6 +1,7 @@
 from uvicorn.workers import UvicornWorker
 
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE
+from litellm.proxy.middleware.guard_middleware import server_proxy_header_overrides
 
 
 def build_graceful_shutdown_uvicorn_worker(
@@ -15,6 +16,7 @@ def build_graceful_shutdown_uvicorn_worker(
                 "h11_max_incomplete_event_size": (
                     max_request_header_size if max_request_header_size is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE
                 ),
+                **server_proxy_header_overrides(),
             }
             super().__init__(*args)
 
