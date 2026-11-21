@@ -22,6 +22,7 @@ from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 DatabaseURLSettings.from_env().apply_to_env()
 
+from litellm.proxy.common_utils.openapi_route import is_proxy_documentation_route
 from litellm.proxy.proxy_server import app
 
 from litellm.runtime.backend.routes.allowlist import (
@@ -40,7 +41,7 @@ def _is_backend_route(route) -> bool:
         # The dashboard UI static mounts are served by the dedicated UI container.
         # Only Mounts in the backend allowlist (e.g. swagger docs) remain on backend.
         return path in BACKEND_MOUNT_PATHS
-    if path in BACKEND_EXACT_PATHS:
+    if path in BACKEND_EXACT_PATHS or is_proxy_documentation_route(route):
         return True
     return any(path.startswith(prefix) for prefix in BACKEND_PATH_PREFIXES)
 

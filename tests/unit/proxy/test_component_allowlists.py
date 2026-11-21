@@ -93,7 +93,7 @@ _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
 from gateway.main import _gateway_lifespan, _is_gateway_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
-from litellm.runtime.backend.main import _backend_lifespan
+from litellm.runtime.backend.main import _backend_lifespan, _is_backend_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
@@ -308,11 +308,29 @@ def test_backend_serves_metrics_after_startup_when_enabled(enabled: bool) -> Non
             assert "litellm_postgres_failed_requests_total 2.0\n" in response.text
 
 
-def test_gateway_drops_ui_and_swagger_mounts():
-    """UI static and swagger Mounts must still be trimmed from the gateway."""
-    for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/swagger"):
+def test_gateway_drops_admin_ui_mounts():
+    for path in ("/ui", "/_next", "/litellm-asset-prefix/_next"):
         assert not _is_gateway_route(Mount(path, app=make_asgi_app())), \
             f"Mount {path} must not be served by the gateway"
+
+
+@pytest.mark.parametrize("keep_route", (_is_backend_route, _is_gateway_route))
+def test_component_keeps_both_documentation_asset_mounts(keep_route):
+    docs_mounts = {route.path: route for route in app.router.routes if isinstance(route, Mount)}
+    for path in ("/scalar", "/swagger"):
+        assert keep_route(docs_mounts[path])
+
+
+@pytest.mark.parametrize("keep_route", (_is_backend_route, _is_gateway_route))
+def test_component_keeps_custom_documentation_paths(keep_route):
+    from litellm.proxy.scalar_reference import mount_scalar_reference
+    from litellm.proxy.swagger_reference import mount_swagger_ui
+
+    docs_app = FastAPI(docs_url=None, redoc_url=None, openapi_url="/custom-schema.json")
+    mount_scalar_reference(docs_app, "/custom-scalar")
+    mount_swagger_ui(docs_app, "/custom-swagger")
+    kept_paths = {route.path for route in docs_app.routes if keep_route(route)}
+    assert {"/custom-schema.json", "/custom-scalar", "/custom-swagger"} <= kept_paths
 
 
 def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():

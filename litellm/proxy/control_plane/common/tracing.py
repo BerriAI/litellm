@@ -239,12 +239,12 @@ class Telemetry:
     http_capture_headers_server_request: tuple[str, ...] | None = None
     http_capture_headers_sanitize_fields: tuple[str, ...] = SENSITIVE_HTTP_HEADERS
 
-    def instrument(self, app: FastAPI) -> None:
+    def instrument(self, app: FastAPI, *, documentation_paths: tuple[str, ...] = ()) -> None:
         if self.provider is None:
             return
         from opentelemetry.instrumentation import fastapi  # pyright: ignore[reportMissingTypeStubs]  # untyped contrib
 
-        paths: Final = (*UNTRACED_PATHS, app.docs_url, app.openapi_url)
+        paths: Final = (*UNTRACED_PATHS, app.docs_url, app.openapi_url, *documentation_paths)
         excluded_urls: Final = ",".join(f"^https?://[^/]+{re.escape(path)}$" for path in paths if path is not None)
         fastapi.FastAPIInstrumentor.instrument_app(  # pyright: ignore[reportUnknownMemberType]  # untyped contrib
             app,

@@ -370,6 +370,8 @@ def test_server_exclusions_match_only_the_exact_url_path() -> None:
 
     assert client.get("/api/v1/docs").status_code == 200
     assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
+    assert client.get("/api/v1/swagger").status_code == 200
+    assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
     assert client.get("/api/v1/openapi.json").status_code == 200
     assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
     reply: Final = client.get(
