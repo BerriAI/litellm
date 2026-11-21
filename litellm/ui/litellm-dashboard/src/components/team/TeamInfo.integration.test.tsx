@@ -410,9 +410,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     return await screen.findByLabelText("Default Budget (USD)");
   };
 
@@ -432,6 +431,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
   it.each([
     ["members", "Members", true],
+    ["member-defaults", "Member Defaults", true],
+    ["member-defaults", "Member Defaults", false],
     ["member-permissions", "Member Permissions", true],
     ["settings", "Settings", true],
     ["settings", "Settings", false],
@@ -719,9 +720,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     const { rerender } = renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     const input = await screen.findByLabelText("Default Budget (USD)");
 
     await submitNewDefault(user, input, "20");
@@ -748,9 +748,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     const { rerender } = renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     const input = await screen.findByLabelText("Default Budget (USD)");
 
     await submitNewDefault(user, input, "20");
@@ -805,10 +804,9 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
-    await screen.findByPlaceholderText("Max spend ($)");
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
+    await screen.findByPlaceholderText("Max Budget");
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
@@ -833,10 +831,9 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
-    fireEvent.change(await screen.findByPlaceholderText("Max spend ($)"), { target: { value: "7" } });
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
+    fireEvent.change(await screen.findByPlaceholderText("Max Budget"), { target: { value: "7" } });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
@@ -856,9 +853,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4o", "claude-haiku-4-5"]} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await user.click(screen.getAllByRole("button", { name: /add model budget/i })[0]);
     await user.click(screen.getByPlaceholderText("Select model"));
 
@@ -871,9 +867,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4o", "claude-haiku-4-5"]} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await user.click(screen.getAllByRole("button", { name: /add model budget/i })[0]);
     await user.click(screen.getByPlaceholderText("Select model"));
 
@@ -1031,8 +1026,10 @@ describe("TeamInfoView - vector stores from access groups", () => {
       />,
     );
 
-    expect(await screen.findByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveTextContent(
-      "Parks knowledge base (store-a) (access group)",
+    await waitFor(() =>
+      expect(screen.getByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveTextContent(
+        "Parks knowledge base (store-a) (access group)",
+      ),
     );
     expect(screen.queryByText("No vector stores configured")).not.toBeInTheDocument();
 

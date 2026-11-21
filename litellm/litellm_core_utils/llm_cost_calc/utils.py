@@ -15,11 +15,13 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
 )
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -53,6 +55,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_IMAGE_TOKEN_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -766,7 +769,9 @@ def _get_token_base_cost(
     # For image generation models that don't have output_cost_per_token,
     # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
     if completion_base_cost == 0.0:
-        output_image_cost: Final = get_cost_per_unit(model_info, "output_cost_per_image_token", None)
+        output_image_cost: Final = get_cost_per_unit(
+            model_info, get_service_tier_cost_key("output_cost_per_image_token", service_tier), None
+        )
         if output_image_cost is not None:
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
@@ -2142,10 +2147,21 @@ def calculate_image_response_cost_from_usage(
         # or an object; read it tolerantly like the output side below, so image
         # input tokens are priced at input_cost_per_image_token instead of
         # silently falling back to the text rate.
+        input_text_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
+        input_image_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
+        input_cached_tokens: Final = _get_token_detail_value(input_tokens_details, "cached_tokens") or 0
+        cached_details: Final[object] = (
+            _IMAGE_TOKEN_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
+            if isinstance(input_tokens_details, dict)
+            else getattr(input_tokens_details, "cached_tokens_details", None)
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
-            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
-            cached_tokens=0,
+            text_tokens=input_text_tokens,
+            image_tokens=input_image_tokens,
+            cached_tokens=input_cached_tokens,
+            cached_tokens_details=(
+                CachedTokensDetails.model_validate(cached_details) if cached_details is not None else None
+            ),
         )
 
     completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)
@@ -2207,7 +2223,7 @@ def calculate_image_response_web_search_cost(
     if usage is None:
         return 0.0
 
-    web_search_requests: Final = getattr(usage, "web_search_requests", None)
+    web_search_requests: Final = attribute_or_none(usage, "web_search_requests")
     if not web_search_requests:
         return 0.0
 

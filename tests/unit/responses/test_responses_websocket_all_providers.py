@@ -1300,43 +1300,131 @@ class TestWebSocketErrorHandling:
     """Test error handling in WebSocket mode"""
 
     @pytest.mark.asyncio
-    async def test_managed_handler_handles_invalid_json(self):
-        """Test that invalid JSON in response.create is handled gracefully"""
-        from unittest.mock import AsyncMock, MagicMock
-
+    async def test_managed_handler_handles_invalid_json(self) -> None:
         from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.responses.streaming_iterator import (
-            ManagedResponsesWebSocketHandler,
-        )
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
 
-        mock_websocket = MagicMock()
-        mock_websocket.send_text = AsyncMock()
-        mock_websocket.recv = AsyncMock(return_value="invalid json {{{")
-
-        mock_logging_obj = Logging(
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
             model="test-model",
-            messages=[],
-            stream=True,
-            call_type="aresponses",
-            start_time=0,
-            litellm_call_id="test-id",
-            function_id="test-func",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
         )
 
-        handler = ManagedResponsesWebSocketHandler(
-            websocket=mock_websocket,
-            model="test-model",
-            logging_obj=mock_logging_obj,
-        )
-
-        # Process invalid JSON
         await handler._process_response_create("invalid json {{{")
 
-        # Should have sent an error event
-        mock_websocket.send_text.assert_called_once()
-        error_event = mock_websocket.send_text.call_args[0][0]
-        assert "error" in error_event
-        assert "Invalid JSON" in error_event
+        websocket.send_text.assert_called_once()
+        error_event: Final = json.loads(websocket.send_text.call_args[0][0])
+        assert error_event["status"] == 400
+        assert error_event["error"]["type"] == "invalid_request_error"
+        assert "Invalid JSON" in error_event["error"]["message"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("provider_answer", "expected_status"),
+        [
+            (httpx.Response(400, json={"error": {"message": "bad input", "type": "invalid_request_error"}}), 400),
+            (httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}), 429),
+            (httpx.Response(503, json={"error": {"message": "overloaded", "type": "server_error"}}), 503),
+            (httpx.ConnectError("connection refused"), 500),
+        ],
+        ids=["400", "429", "503", "transport-error"],
+    )
+    async def test_provider_failure_frame_carries_the_http_status_the_failure_raised(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        provider_answer: httpx.Response | httpx.ConnectError,
+        expected_status: int,
+    ) -> None:
+        """Codex ignores error frames without a top-level status and hangs until its idle timeout."""
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        provider: Final = respx_mock.post("https://provider.test/v1/responses").mock(side_effect=[provider_answer])
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="openai/gpt-6.2-sol",
+            logging_obj=Logging(
+                model="openai/gpt-6.2-sol",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            api_key="sk-fake",
+            api_base="https://provider.test/v1",
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert provider.call_count == 1
+        websocket.send_text.assert_called_once()
+        error_event: Final = json.loads(websocket.send_text.call_args[0][0])
+        assert (error_event["type"], error_event["status"], error_event["error"]["type"]) == (
+            "error",
+            expected_status,
+            "server_error",
+        )
+
+    @pytest.mark.asyncio
+    async def test_unexpected_failure_reaching_run_sends_a_500_frame(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        class _BrokenQuotaStore:
+            async def enforce_project_io_token_quota_for_frame(
+                self,
+                user_api_key_dict: UserAPIKeyAuth | None,
+                requested_model: str | None,
+                estimated_input_tokens: int,
+                estimated_output_tokens: int,
+            ) -> None:
+                raise RuntimeError("quota store down")
+
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=json.dumps({"type": "response.create", "input": "hi"}),
+            quota_callbacks=[_BrokenQuotaStore()],
+        )
+
+        await handler.run()
+
+        websocket.send_text.assert_called_once()
+        assert json.loads(websocket.send_text.call_args[0][0]) == {
+            "type": "error",
+            "status": 500,
+            "error": {"type": "server_error", "message": "Internal server error: quota store down"},
+        }
 
 
 class TestWebSocketProjectQuotaEnforcement:
@@ -1694,7 +1782,7 @@ def _guard_blocking(word: str):
     return guard
 
 
-def _guard_recording(bill_refusal: MagicMock):
+def _guard_recording(bill_refusal: AsyncMock):
     from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
@@ -2513,7 +2601,7 @@ class TestWebSocketTurnAdmission:
         assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [json.loads(first)]
         assert turn_admission.await_count == 1
         assert [(status, error["type"]) for status, error in _errors(websocket)] == [
-            (None, "invalid_request_error"),
+            (400, "invalid_request_error"),
             (429, "rate_limit_exceeded"),
         ]
 
@@ -2562,20 +2650,20 @@ class TestWebSocketTurnAdmission:
         assert answered == ["one"]
         assert turn_admission.await_count == 1
         assert [(status, error["type"]) for status, error in _errors(websocket)] == [
-            (None, "invalid_request_error"),
+            (400, "invalid_request_error"),
             (429, "rate_limit_exceeded"),
         ]
 
 
     @pytest.mark.asyncio
-    async def test_native_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(self):
+    async def test_native_relay_bills_a_refused_turn_and_returns_it_as_the_close_time_failure(self):
         from unittest.mock import AsyncMock
 
         from litellm.exceptions import RateLimitError
 
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
@@ -2592,8 +2680,40 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.bidirectional_forward()
 
         assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
         assert close_time_failure is refusal
+
+    @pytest.mark.asyncio
+    async def test_native_relay_forwards_no_later_turn_until_the_refused_turn_is_billed(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.exceptions import RateLimitError
+
+        first, second, third = _turn_frames()
+        events: Final[list[str]] = []
+
+        async def bill_refusal(rejection: Exception) -> None:
+            await asyncio.sleep(0.01)
+            events.append("billed")
+
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock(side_effect=lambda frame: events.append(json.loads(frame)["input"]))
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=asyncio.Event().wait)
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(second, third),
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            frame_guard=_guard_recording(AsyncMock(side_effect=bill_refusal)),
+            turn_admission=AsyncMock(
+                side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), {}]
+            ),
+        )
+
+        _ = await handler.bidirectional_forward()
+
+        assert events == ["one", "billed", "three"]
 
     @pytest.mark.asyncio
     async def test_a_refused_turn_is_recorded_even_when_the_relay_is_cancelled_while_answering_it(self):
@@ -2603,7 +2723,7 @@ class TestWebSocketTurnAdmission:
 
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
@@ -2624,10 +2744,10 @@ class TestWebSocketTurnAdmission:
         with pytest.raises(asyncio.CancelledError):
             await relay
 
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
 
     @pytest.mark.asyncio
-    async def test_managed_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(
+    async def test_managed_relay_bills_a_refused_turn_and_returns_it_as_the_close_time_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         from unittest.mock import AsyncMock
@@ -2651,7 +2771,7 @@ class TestWebSocketTurnAdmission:
         monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         handler: Final = ManagedResponsesWebSocketHandler(
             websocket=_ClientSocket(second, third),
             model="test-model",
@@ -2672,7 +2792,7 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.run()
 
         assert answered == ["one", "three"]
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
         assert close_time_failure is refusal
 
     @pytest.mark.asyncio
@@ -3644,8 +3764,9 @@ class TestNativeWebSocketGuardrailMasking:
         assert msg["response"]["model"] == "auth-model"
         assert msg["model"] == "auth-model"
 
+    @pytest.mark.parametrize("event_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
-    async def test_unmask_response_event_completed(self):
+    async def test_unmask_response_event_completed(self, event_type):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
             request_data={
@@ -3656,7 +3777,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         event = json.dumps(
             {
-                "type": "response.completed",
+                "type": event_type,
                 "response": {
                     "output": [
                         {
@@ -3934,8 +4055,9 @@ class TestNativeWebSocketGuardrailMasking:
             "<EMAIL_ADDRESS_1>": "alice@example.com"
         }
 
+    @pytest.mark.parametrize("terminal_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
-    async def test_backend_to_client_suppresses_deltas_and_masks_completed(self):
+    async def test_backend_to_client_suppresses_deltas_and_masks_the_terminal_event(self, terminal_type):
         from unittest.mock import AsyncMock
 
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
@@ -3951,7 +4073,7 @@ class TestNativeWebSocketGuardrailMasking:
                 ),
                 json.dumps(
                     {
-                        "type": "response.completed",
+                        "type": terminal_type,
                         "response": {
                             "output": [
                                 {
@@ -3985,7 +4107,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         websocket.send_text.assert_awaited_once()
         forwarded = json.loads(websocket.send_text.await_args[0][0])
-        assert forwarded["type"] == "response.completed"
+        assert forwarded["type"] == terminal_type
         assert (
             forwarded["response"]["output"][0]["content"][0]["text"]
             == "contact <EMAIL_ADDRESS_1>"
@@ -4515,6 +4637,37 @@ class TestNativeWebSocketUrlConstruction:
         assert qs.get("model") == [
             "gpt-4o-mini"
         ], f"Expected model in URL, got: {captured_urls[0]}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("api_base", "sends_tls_settings"),
+        [("http://127.0.0.1:8000/v1", False), ("https://api.openai.com/v1", True)],
+    )
+    async def test_backend_socket_gets_tls_settings_only_for_a_tls_api_base(
+        self, api_base: str, sends_tls_settings: bool
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        backend_connect: Final = MagicMock(side_effect=Exception("stop"))
+        client_ws: Final = MagicMock(close=AsyncMock())
+
+        with patch("websockets.connect", backend_connect):
+            await BaseLLMHTTPHandler().async_responses_websocket(
+                model="gpt-4o-mini",
+                websocket=client_ws,
+                logging_obj=MagicMock(),
+                responses_api_provider_config=OpenAIResponsesAPIConfig(),
+                api_base=api_base,
+                api_key="sk-test",
+            )
+
+        assert backend_connect.call_count == 1, backend_connect.call_args_list
+        ssl_setting: Final = backend_connect.call_args.kwargs["ssl"]
+        assert (ssl_setting is not None) is sends_tls_settings, (
+            f"websockets rejects any ssl value on a ws:// URL, got ssl={ssl_setting!r} for {api_base}"
+        )
 
     @pytest.mark.asyncio
     async def test_ws_url_preserves_existing_params_and_adds_model(self):

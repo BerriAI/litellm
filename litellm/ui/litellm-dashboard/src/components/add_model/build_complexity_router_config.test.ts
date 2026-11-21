@@ -6,6 +6,7 @@ import {
   getKeywordTierRulesError,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
+  getHeuristicFirstContextLimitError,
   getReminderMarkersError,
   getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
@@ -882,6 +883,17 @@ describe("classifier prompt and fallback", () => {
     });
   });
 
+  it.each([{}, { system_prompt: "x" }])(
+    "normalizeClassifierLlmConfig keeps an operator's classifier output cap through %o",
+    (extra) => {
+      const base = { model: "m", timeout_ms: 1, ...extra };
+      expect(normalizeClassifierLlmConfig({ ...base, max_output_tokens: 64 })).toEqual({
+        ...base,
+        max_output_tokens: 64,
+      });
+    },
+  );
+
   it.each([{}, { system_prompt: "x" }])("normalizeClassifierLlmConfig carries vision through %o", (extra) => {
     const base = { model: "m", timeout_ms: 1, ...extra };
     const vision = { enabled: true, max_images: 2 };
@@ -1217,6 +1229,23 @@ describe("heuristic_first", () => {
     classifierFallback: "default_model",
   };
 
+  it("persists the conversation limit only for heuristic-first routing", () => {
+    const params = { ...heuristicFirstParams, heuristicFirstMaxContextTokens: 8000 };
+    expect(buildComplexityRouterConfig(params).heuristic_first_max_context_tokens).toBe(8000);
+    expect(buildComplexityRouterConfig(heuristicFirstParams).heuristic_first_max_context_tokens).toBeUndefined();
+    expect(
+      buildComplexityRouterConfig({ ...params, classifierType: "llm" }).heuristic_first_max_context_tokens,
+    ).toBeUndefined();
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity])("rejects invalid conversation limit %s", (limit) => {
+    expect(getHeuristicFirstContextLimitError(limit)).toBe("Conversation limit must be a positive whole number");
+  });
+
+  it.each([undefined, 1, 8000])("accepts optional conversation limit %s", (limit) => {
+    expect(getHeuristicFirstContextLimitError(limit)).toBeNull();
+  });
+
   it("emits heuristic_first_max_tier", () => {
     const config = buildComplexityRouterConfig(heuristicFirstParams);
     expect(config.classifier_type).toBe("heuristic_first");
@@ -1326,6 +1355,15 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     ]);
   });
 
+  it.each([undefined, null, 1, 64, 8192])("preserves classifier output cap %s when saving edited tiers", (cap) => {
+    const classifierLlmConfig = {
+      model: "classifier",
+      timeout_ms: 3000,
+      ...(cap !== undefined && { max_output_tokens: cap }),
+    };
+    expect(build({ classifierLlmConfig }).classifier_llm_config).toEqual(classifierLlmConfig);
+  });
+
   it("forces the LLM classifier even when the form still holds heuristic, which the backend rejects", () => {
     expect(build({ classifierType: "heuristic" }).classifier_type).toBe("llm");
   });
@@ -1419,6 +1457,7 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       customDimensions: [{ id: "row-1", name: "sqlDdl", weight: 0.4, keywords: ["orbitmesh"] }],
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
+      heuristicFirstMaxContextTokens: 8000,
       hybridBoundaryMargin: 0.03,
       localHeuristic: "heuristic",
       customTechnicalKeywords: ["kubernetes"],
@@ -1427,7 +1466,12 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       stallEscalationRepeatThreshold: 3,
     };
     // custom_dimensions only ever ship when the scorer decides, so "llm" cannot prove it emits.
-    const emittingType = ["heuristic_first_max_tier", "custom_dimensions", "local_heuristic"].includes(key)
+    const emittingType = [
+      "heuristic_first_max_tier",
+      "heuristic_first_max_context_tokens",
+      "custom_dimensions",
+      "local_heuristic",
+    ].includes(key)
       ? "heuristic_first"
       : "llm";
     const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;

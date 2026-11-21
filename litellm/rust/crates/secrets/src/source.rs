@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use futures_util::future::{BoxFuture, try_join_all};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 
 use crate::{Error, SecretResolver};
 use litellm_secret_value::SecretValue;
@@ -44,7 +44,7 @@ impl EnvironmentSecrets {
     pub fn python_compatible(client: litellm_http::Client) -> Self {
         Self(SecretResolver::new_python_compatible(
             Arc::new(crate::SecretManagerState::default()),
-            Arc::new(litellm_core_utils::settings::ProcessEnvironment),
+            Arc::new(litellm_env::ProcessEnvironment),
             crate::OidcResolver::new(client),
         ))
     }

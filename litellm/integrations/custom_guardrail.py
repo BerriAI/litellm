@@ -1,3 +1,4 @@
+import contextlib
 import contextvars
 import copy
 import hashlib
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     redact_nested_match_and_regex_keys,
     require_attributes,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DEFAULT_GUARDRAIL_STREAM_SCOPE,
@@ -172,6 +174,12 @@ def _strict_guardrail_modes_enabled() -> bool:
 
 class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
+
+
+class _PostCallSuccessHook(Protocol):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: "UserAPIKeyAuth", response: LLMResponseTypes
+    ) -> object: ...
 
 
 def get_session_id_from_request_data(request_data: Mapping[str, object]) -> str | None:
@@ -401,6 +409,8 @@ class CustomGuardrail(CustomLogger):
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
+    scan_tool_descriptions_as_text: bool | None = None
+    scan_tool_calls_as_text: bool | None = None
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -873,7 +883,7 @@ class CustomGuardrail(CustomLogger):
 
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: list[GuardrailEventHooks] | list[str],
-            supported_event_hooks: list[GuardrailEventHooks],
+            supported_event_hooks: Sequence[GuardrailEventHooks],
         ) -> None:
             for hook in event_hook:
                 if isinstance(hook, str):
@@ -1095,6 +1105,9 @@ class CustomGuardrail(CustomLogger):
             ) from e
         return unified_guardrail
 
+    def _post_call_success_hook_target(self) -> _PostCallSuccessHook:
+        return self._deployment_hook_target()
+
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
     ) -> dict | None:
@@ -1185,17 +1198,17 @@ class CustomGuardrail(CustomLogger):
 
     async def async_post_call_success_deployment_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> LLMResponseTypes | None:
+    ) -> object:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
         if not self.runs_post_call_deployment_hook(request_data):
             return None
 
-        target: Final = self._deployment_hook_target()
+        target: Final = self._post_call_success_hook_target()
         try:
             if target is not self:
                 request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
@@ -1207,19 +1220,14 @@ class CustomGuardrail(CustomLogger):
         finally:
             if target is not self:
                 request_data.pop("guardrail_to_apply", None)
-            self._record_deployment_hook_run(
-                cast("dict[str, object]", request_data)  # cast-ok: proxy request payloads are str-keyed
-            )
+            self._record_deployment_hook_run(request_data)
 
         returned: Final = result if self._is_valid_response_type(result) else None
         if target is self:
             return returned
         checked: Final = returned if returned is not None else response
         marker: Final = self._post_call_check_marker(checked)
-        _record_guardrail_marker(
-            cast("dict[str, object]", request_data),  # cast-ok: proxy request payloads are str-keyed
-            marker,
-        )
+        _record_guardrail_marker(request_data, marker)
         _write_response_marker(checked, marker)
         return returned
 
@@ -1332,12 +1340,19 @@ class CustomGuardrail(CustomLogger):
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
                     verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
             else:
-                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                with contextlib.suppress(UnappliableRequestRewrite):
+                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return False
+
+    def supports_scan_tool_calls_as_text(self) -> bool:
+        return False
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.
@@ -1347,6 +1362,12 @@ class CustomGuardrail(CustomLogger):
         ``scan_only_tool_results`` is rejected at initialization instead of
         silently scanning nothing on every request.
         """
+        return True
+
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return False
+
+    def scans_each_text_separately(self) -> bool:
         return True
 
     def structured_messages_cover_full_request(self) -> bool:
@@ -1989,7 +2010,13 @@ def log_guardrail_information(func):
     async def async_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
@@ -2029,7 +2056,13 @@ def log_guardrail_information(func):
     def sync_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)

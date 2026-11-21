@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secrets::{Error, OidcResolver, Secret, SecretManagerState, SecretResolver};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,

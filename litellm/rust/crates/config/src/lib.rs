@@ -1,27 +1,42 @@
+mod auth;
+mod environment;
 mod error;
-mod includes;
+mod layer;
 mod mcp;
 mod model;
+mod pass_through;
 mod redis;
+mod routes;
 mod settings;
 mod value;
 
-use std::{fmt, path::Path};
-
 use serde::Deserialize;
 
+pub use auth::{
+    ClaimPath, JwtAuthSettings, JwtIssuerConfig, JwtLitellmRoleMap, JwtRoutingOverride,
+    LitellmRole, OneOrMany, RbacRole, RoleMapping, RolePermissions, RoutingPath, ScopeMapping,
+    UnregisteredJwtClientBehavior,
+};
+pub use environment::{Environment, Flag};
 pub use error::Error;
-pub use litellm_router_types::{LitellmParams, Spelled};
+pub use layer::Origins;
+pub use litellm_router_types::{
+    LitellmParams, RouterSettings, RoutingGroupSpec, RoutingStrategy, Spelled,
+};
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
+pub use pass_through::{PassThroughEndpoint, PassThroughGuardrail};
 pub use redis::{CacheSettings, RedisSettings};
+pub use routes::RouteList;
 pub use settings::{
-    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
-    TracingStoreSettings,
+    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, TracingSettings,
+    TracingStoreSettings, UserHeaderMapping,
 };
 pub use value::{AdditionalFields, Object, Value};
 
-#[derive(Clone, Default, Deserialize)]
+pub const ENV_REFERENCE_PREFIX: &str = "os.environ/";
+
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub model_list: Box<[Model]>,
@@ -48,49 +63,19 @@ pub struct Config {
     pub policies: Object,
     pub policy_attachments: Box<[Object]>,
     pub include: Box<[String]>,
+    /// Which keys the environment set, once `with_environment` has put it under this config.
+    #[serde(skip)]
+    pub origins: Origins,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
 
-impl fmt::Debug for Config {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Config")
-            .field("model_list", &self.model_list)
-            .field("general_settings", &self.general_settings)
-            .field("router_settings", &self.router_settings)
-            .field("litellm_settings", &self.litellm_settings)
-            .field("environment_variables", &self.environment_variables)
-            .field("callback_settings", &self.callback_settings)
-            .field("assistant_settings", &self.assistant_settings)
-            .field("default_vertex_config", &self.default_vertex_config)
-            .field("mcp_servers", &self.mcp_servers)
-            .field("credential_list", &self.credential_list)
-            .field("guardrails", &self.guardrails)
-            .field("prompts", &self.prompts)
-            .field("sandbox_tools", &self.sandbox_tools)
-            .field("search_tools", &self.search_tools)
-            .field("files_settings", &self.files_settings)
-            .field("finetune_settings", &self.finetune_settings)
-            .field("mcp_tools", &self.mcp_tools)
-            .field("vector_store_registry", &self.vector_store_registry)
-            .field("worker_registry", &self.worker_registry)
-            .field("agents", &self.agents)
-            .field("agent_list", &self.agent_list)
-            .field("policies", &self.policies)
-            .field("policy_attachments", &self.policy_attachments)
-            .field("include", &self.include)
-            .field("additional_fields", &self.additional_fields.keys())
-            .finish()
-    }
-}
-
 impl Config {
     pub fn from_yaml(yaml: &str) -> Result<Self, Error> {
-        Ok(serde_yaml_ng::from_str(yaml)?)
+        Self::from_value(litellm_yaml::from_str(yaml)?)
     }
 
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Ok(serde_yaml_ng::from_value(includes::load(path.as_ref())?)?)
+    pub fn from_value(document: Value) -> Result<Self, Error> {
+        Ok(serde_yaml_ng::from_value(document)?)
     }
 }

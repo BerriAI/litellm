@@ -3,6 +3,7 @@ from typing import ClassVar, Final
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,7 +20,7 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.exceptions import AuthenticationError
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, keyword_arguments
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -52,6 +53,7 @@ from ...common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unsignable_thinking_blocks_for_claude,
     tools_without_custom_field,
 )
 from .mid_conversation_system import (
@@ -66,6 +68,12 @@ DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 _CALLER_CREDENTIAL_HEADERS: Final = frozenset({"x-api-key", "authorization"})
 
 _MESSAGE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _AnthropicMessagesResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _carries_caller_credential(headers: Mapping[str, str]) -> bool:
@@ -358,7 +366,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -381,7 +389,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,
@@ -440,7 +448,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: out-param
         optional_params: dict,  # mutable-ok: out-param
-        messages: list[object],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
+        messages: Sequence[object],
     ) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
@@ -779,12 +787,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else unstripped_native_request(anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
         )
         log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
+        base_model: Final = getattr(litellm_params, "base_model", None)
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                drop_non_string_tool_result_texts(
-                    _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
-                    getattr(litellm_params, "drop_params", None),
-                )
+            messages=strip_unsignable_thinking_blocks_for_claude(
+                strip_encrypted_reasoning_blocks_from_anthropic_messages(
+                    drop_non_string_tool_result_texts(
+                        _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
+                        getattr(litellm_params, "drop_params", None),
+                    )
+                ),
+                model=model,
+                base_model=base_model if isinstance(base_model, str) else None,
             ),
             max_tokens=max_tokens,
             model=model,
@@ -811,10 +824,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         try:
-            raw_response_json: Final[AnthropicMessagesResponse] = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
-        response: Final = AnthropicMessagesResponse(**raw_response_json)
+        response: Final = AnthropicMessagesResponse(
+            **_AnthropicMessagesResponseFields(**keyword_arguments(raw_response_json, AnthropicMessagesResponse))
+        )
         return _ensure_stop_sequence(response)
 
     def get_async_streaming_response_iterator(

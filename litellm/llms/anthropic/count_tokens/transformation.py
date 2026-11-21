@@ -185,6 +185,16 @@ def _needs_chat_translation(translate_contentless_turns: bool, message: Mapping[
     return (translate_contentless_turns and _is_contentless_chat_turn(message)) or not _is_plain_message(message)
 
 
+def _is_system_role(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _counts_blank_text_as_chat_sends_it(messages: Sequence[Mapping[str, object]]) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.factory import carries_empty_text
+
+    return any(map(carries_empty_text, messages)) and not any(map(_has_non_chat_user_block, messages))
+
+
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:
     from litellm.litellm_core_utils.prompt_templates.factory import is_flat_responses_tool
 
@@ -327,6 +337,18 @@ def _translated_chat_request(
     )
 
 
+def _fields_with_system_lifted(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> AnthropicCountFields:
+    request: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(
+        {"messages": messages, "system": system, **({"tools": tools} if tools else {})}
+    )
+    conversation, lifted = _lift_leading_system(request["messages"], request.get("system"))
+    return AnthropicCountFields(messages=conversation, system=lifted, tools=request.get("tools"), options={})
+
+
 def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
     if "role" not in message:
         return f"Message {index} must have a 'role' field"
@@ -367,16 +389,21 @@ def anthropic_fields_for_chat_tool_use(
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    messages_are_converse_turns: bool = False,
     *,
     translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
-    if (
+    lifts_system: Final = messages_are_converse_turns and any(map(_is_system_role, messages))
+    counts_untranslated: Final = (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(partial(_needs_chat_translation, translate_contentless_turns), messages))
-    ):
-        return None
+        and (messages_are_converse_turns or not _counts_blank_text_as_chat_sends_it(messages))
+        and not (lifts_system and all(map(_is_system_role, messages)))
+    )
+    if counts_untranslated:
+        return _fields_with_system_lifted(messages, system, tools) if lifts_system else None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)
     if untranslatable is not None:
         return untranslatable
@@ -486,13 +513,21 @@ async def anthropic_count_fields(
     messages_format: TokenCountMessagesFormat,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    messages_are_converse_turns: bool = False,
     *,
     translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     if messages_format != "openai":
         return None
     return await asyncify(anthropic_fields_for_chat_tool_use)(
-        model, messages, system, tools, translator, chat_params, translate_contentless_turns=translate_contentless_turns
+        model,
+        messages,
+        system,
+        tools,
+        translator,
+        chat_params,
+        messages_are_converse_turns,
+        translate_contentless_turns=translate_contentless_turns,
     )
 
 

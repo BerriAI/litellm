@@ -61,8 +61,19 @@ pub enum MessagesBody {
 pub struct MessagesShaping {
     #[serde(default)]
     pub capabilities: MessagesModelCapabilities,
+    #[serde(default)]
+    pub vertex: VertexShaping,
     #[serde(flatten)]
     pub settings: MessagesSettings,
+}
+
+/// What a Python host knows of a Claude on Vertex AI call that the login and URL depend on.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VertexShaping {
+    /// The model map's `supported_regions`, which Python's `VertexBase.get_vertex_region`
+    /// routes the call by.
+    #[serde(default)]
+    pub supported_regions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -105,9 +116,14 @@ pub struct MessagesSettings {
     #[serde(skip)]
     pub module_api_key: Option<SecretValue>,
     #[serde(default)]
+    pub base_model: Option<String>,
+    #[serde(default)]
     pub detached_drain_timeout: Option<f64>,
     #[serde(default)]
     pub detached_drain_limit: Option<usize>,
+    /// Python's async client retries a request whose connection failed to open, once.
+    #[serde(default)]
+    pub connect_retry: bool,
 }
 
 impl MessagesSettings {
@@ -197,6 +213,7 @@ mod tests {
             "drops_unsupported_params": true
         }),
         MessagesShaping {
+            vertex: VertexShaping::default(),
             settings: MessagesSettings {
                 drop_params: true,
                 reasoning_auto_summary: true,

@@ -25,6 +25,13 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => mockUseUISettings(),
 }));
 
+const licensedAdmin = {
+  userId: "admin-user",
+  userRole: "Admin",
+  isViewOnly: false,
+  premiumUser: true,
+};
+
 // Stub modals and the detail page to keep tests focused on the list page
 vi.mock("./ProjectModals/CreateProjectModal", () => ({
   CreateProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="create-modal" /> : null),
@@ -86,9 +93,31 @@ describe("ProjectsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseTeams.mockReturnValue({ data: [], isLoading: false });
-    mockUseAuthorized.mockReturnValue({ userId: "admin-user", userRole: "Admin", isViewOnly: false });
+    mockUseAuthorized.mockReturnValue(licensedAdmin);
     mockUseUISettings.mockReturnValue({ data: { values: {} } });
   });
+
+  it.each([
+    { premiumUser: false, searchParams: "" },
+    { premiumUser: null, searchParams: "" },
+    { premiumUser: false, searchParams: "?project=proj-1" },
+    { premiumUser: null, searchParams: "?project=proj-1" },
+  ])(
+    "shows the Enterprise notice with premiumUser=$premiumUser at '$searchParams'",
+    ({ premiumUser, searchParams }) => {
+      const authorization = { ...licensedAdmin, premiumUser };
+      mockUseAuthorized.mockReturnValue(authorization);
+      mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+
+      renderWithProviders(<ProjectsPage />, { searchParams });
+
+      expect(screen.getByText(/This is a LiteLLM Enterprise feature/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "here" })).toHaveAttribute("href", "https://www.litellm.ai/#pricing");
+      expect(screen.queryByRole("button", { name: /create project/i })).not.toBeInTheDocument();
+      expect(screen.queryByText("Alpha Project")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("project-detail")).not.toBeInTheDocument();
+    },
+  );
 
   it("should render the Projects heading", () => {
     mockUseProjects.mockReturnValue({ data: [], isLoading: false });
@@ -116,7 +145,8 @@ describe("ProjectsPage", () => {
       visible: true,
     },
   ])("should gate 'Create Project' for $who", ({ role, isViewOnly, fields, visible }) => {
-    mockUseAuthorized.mockReturnValue({ userId: "team-admin", userRole: role, isViewOnly });
+    const authorization = { ...licensedAdmin, userId: "team-admin", userRole: role, isViewOnly };
+    mockUseAuthorized.mockReturnValue(authorization);
     mockUseUISettings.mockReturnValue({ data: { values: { team_admin_editable_team_fields: fields } } });
     mockUseTeams.mockReturnValue({
       data: [{ team_id: "team-1", members_with_roles: [{ user_id: "team-admin", role: "admin" }] }],
@@ -128,7 +158,8 @@ describe("ProjectsPage", () => {
   });
 
   it("should hide 'Create Project' from a team member who administers no team even when the setting grants projects", () => {
-    mockUseAuthorized.mockReturnValue({ userId: "member", userRole: "Internal User", isViewOnly: false });
+    const authorization = { ...licensedAdmin, userId: "member", userRole: "Internal User" };
+    mockUseAuthorized.mockReturnValue(authorization);
     mockUseUISettings.mockReturnValue({ data: { values: { team_admin_editable_team_fields: ["projects"] } } });
     mockUseTeams.mockReturnValue({
       data: [{ team_id: "team-1", members_with_roles: [{ user_id: "member", role: "user" }] }],
