@@ -1,11 +1,12 @@
 import json
+from typing import Final
 
 import httpx
 import pytest
 import respx
 
 from litellm import embedding
-from litellm.llms.azure_ai.embed.handler import _foundry_models_route_base
+from litellm.llms.azure_ai.embed.handler import _embedding_api_base
 
 EMBEDDING_PAYLOAD = {
     "object": "list",
@@ -40,7 +41,19 @@ EMBEDDING_PAYLOAD = {
         ),
         (
             "https://my-resource.openai.azure.com",
-            "https://my-resource.openai.azure.com",
+            "https://my-resource.openai.azure.com/openai/v1",
+        ),
+        (
+            "https://my-resource.cognitiveservices.azure.com/openai/",
+            "https://my-resource.cognitiveservices.azure.com/openai/v1",
+        ),
+        (
+            "https://my-resource.openai.azure.com/openai/?api-version=2024-10-21",
+            "https://my-resource.openai.azure.com/openai/v1",
+        ),
+        (
+            "https://my-foundry.services.ai.azure.com/openai",
+            "https://my-foundry.services.ai.azure.com/openai/v1",
         ),
         (
             "https://Mistral-serverless.eastus2.models.ai.azure.com",
@@ -49,8 +62,8 @@ EMBEDDING_PAYLOAD = {
         (None, None),
     ],
 )
-def test_foundry_models_route_base(api_base, expected):
-    assert _foundry_models_route_base(api_base) == expected
+def test_embedding_api_base(api_base, expected):
+    assert _embedding_api_base(api_base) == expected
 
 
 @respx.mock
@@ -67,6 +80,34 @@ def test_azure_ai_embedding_calls_foundry_models_route():
     )
 
     assert route.call_count == 1
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2]]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://my-resource.openai.azure.com/openai/",
+        "https://my-resource.openai.azure.com",
+        "https://my-resource.cognitiveservices.azure.com",
+        "https://my-resource.openai.azure.com/openai/?api-version=2024-10-21",
+    ],
+)
+@respx.mock
+def test_azure_ai_embedding_on_azure_openai_resource_calls_v1_route(api_base: str) -> None:
+    host: Final = httpx.URL(api_base).host
+    route: Final = respx.post(f"https://{host}/openai/v1/embeddings").mock(
+        return_value=httpx.Response(200, json=EMBEDDING_PAYLOAD)
+    )
+
+    response: Final = embedding(
+        model="azure_ai/embedding-deployment",
+        input=["hello world"],
+        api_base=api_base,
+        api_key="fake-key",
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content)["model"] == "embedding-deployment"
     assert [item["embedding"] for item in response.data] == [[0.1, 0.2]]
 
 
