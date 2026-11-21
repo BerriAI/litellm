@@ -3388,6 +3388,21 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
 async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
     monkeypatch: pytest.MonkeyPatch, model: str, billed_prompt_tokens: int
 ):
+    counted: Final = await _count_the_paris_weather_turn(monkeypatch, model)
+
+    assert counted.count_source == "local_estimate"
+    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+@pytest.mark.asyncio
+async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(monkeypatch: pytest.MonkeyPatch):
+    govcloud: Final = await _count_the_paris_weather_turn(monkeypatch, "bedrock_mantle/us-gov-west-1/xai.grok-4.3")
+    commercial: Final = await _count_the_paris_weather_turn(monkeypatch, "bedrock_mantle/xai.grok-4.3")
+
+    assert govcloud.total_tokens == commercial.total_tokens
+
+
+async def _count_the_paris_weather_turn(monkeypatch: pytest.MonkeyPatch, model: str) -> TokenCountResponse:
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
@@ -3400,12 +3415,8 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
             ]
         ),
     )
-
-    counted: Final = await count_request_tokens(
+    return await count_request_tokens(
         request=TokenCountRequest(
             model="billed", messages=[{"role": "user", "content": "What is the weather in Paris?"}]
         )
     )
-
-    assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
