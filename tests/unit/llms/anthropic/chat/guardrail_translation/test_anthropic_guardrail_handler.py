@@ -3386,16 +3386,15 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         [MockPassThroughGuardrail(guardrail_name="test"), ToolsCopyingGuardrail(guardrail_name="test")],
         ids=["same-tools-handed-back", "equal-copy-handed-back"],
     )
-    async def test_unchanged_tools_are_not_rewritten(self, guardrail):
+    async def test_unchanged_tools_are_not_rewritten(self, guardrail: CustomGuardrail) -> None:
         assert await self._tools_after(guardrail) == self._sent_tools()
 
     @pytest.mark.parametrize("in_place", [True, False], ids=["edited-in-place", "edited-on-a-copy"])
-    async def test_only_the_tool_the_guardrail_changed_is_rewritten(self, in_place):
+    async def test_only_the_tool_the_guardrail_changed_is_rewritten(self, in_place: bool) -> None:
         tools: Final = await self._tools_after(ToolDescriptionMaskingGuardrail(tool_name="Read", in_place=in_place))
 
         assert tools[:-1] == self._sent_tools()[1:]
-        assert (tools[-1]["name"], tools[-1]["description"]) == ("Read", "[MASKED]")
-        assert tools[-1]["input_schema"] == self._READ["input_schema"]
+        assert tools[-1] == {**self._READ, "type": "custom", "description": "[MASKED]"}
 
     async def test_a_tool_the_guardrail_removed_stays_removed_and_the_rest_are_not_rewritten(self):
         tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write"))
