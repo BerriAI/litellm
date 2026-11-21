@@ -10,6 +10,7 @@ import responses
 
 from litellm.proxy.client.exceptions import NotFoundError, UnauthorizedError
 from litellm.proxy.client.keys import KeysManagementClient
+from litellm.types.proxy.management_endpoints.key_requests import GenerateKeyRequest
 
 
 @pytest.fixture
@@ -244,6 +245,14 @@ def test_generate_request_full(client):
         "budget_id": "budget789",
         "config": {"max_parallel_requests": 5},
     }
+
+
+def test_generate_max_budget_sets_the_key_spend_limit(client):
+    request = client.generate(max_budget=25.0, return_request=True)
+
+    parsed = GenerateKeyRequest(**request.json)
+    assert parsed.max_budget == 25.0
+    assert not parsed.spend
 
 
 @responses.activate
