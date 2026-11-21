@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 import openai
-from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai import AsyncOpenAI, AsyncStream, Omit, OpenAI, Stream
 from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
@@ -23,7 +23,7 @@ from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -79,6 +79,7 @@ from .common_utils import (
     model_dump_provider_response,
     upstream_error_response,
 )
+from .speech_usage_stream import speech_response_with_usage, with_usage_stream
 from .workload_identity import (
     build_async_openai_client,
     build_openai_client,
@@ -384,9 +385,9 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
-_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str] | None)
+_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str | InstanceOf[Omit]] | None)
 _EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
-_NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
+_NO_EXTRA_HEADERS: Final[Mapping[str, str | Omit]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 _CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
     types.MappingProxyType({"security": types.MappingProxyType({"bearer_auth": True})})
@@ -1705,7 +1706,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: str,
         voice: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         organization: str | None,
@@ -1759,13 +1760,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        params: Final = speech_create_params(model, voice, input, optional_params)
+        params: Final = speech_create_params(model, voice, input, with_usage_stream(model, optional_params))
         raw_response: Final = (
             sync_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
             if stream
             else sync_client.audio.speech.create(**params).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        speech_response: Final = speech_response_with_usage(raw_response, model, optional_params)
         set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
@@ -1774,7 +1775,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: str,
         voice: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         organization: str | None,
@@ -1810,13 +1811,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        params: Final = speech_create_params(model, voice, input, optional_params)
+        params: Final = speech_create_params(model, voice, input, with_usage_stream(model, optional_params))
         raw_response: Final = (
             (await openai_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
             if stream
             else (await openai_client.audio.speech.create(**params)).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        speech_response: Final = speech_response_with_usage(raw_response, model, optional_params)
         set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 

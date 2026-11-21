@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 from collections.abc import Callable, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -22,6 +23,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -40,6 +42,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -584,9 +587,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
             assert active_mcp_request_ctx_var.get() is request
             raise asyncio.CancelledError
 
-    with patch(
-        "litellm.proxy.mcp_server.server.get_or_extract_auth_context", AsyncMock(return_value=auth)
-    ):
+    with patch("litellm.proxy.mcp_server.server.get_or_extract_auth_context", AsyncMock(return_value=auth)):
         with pytest.raises(asyncio.CancelledError):
             await cancelled_operation()
     assert server.active_mcp_session_var.get() is previous_session
@@ -1224,6 +1225,113 @@ async def test_tool_operation_preserves_failure_messages_and_request_trace(failu
     dispatch.assert_awaited_once()
     assert dispatch.await_args.kwargs["litellm_trace_id"] == "operation-trace"
     assert dispatch.await_args.kwargs["litellm_session_id"] == "operation-trace"
+
+
+@pytest.mark.asyncio
+async def test_tool_operation_raises_upstream_url_elicitation_required_with_data() -> None:
+    from mcp import MCPError
+    from mcp.types import URL_ELICITATION_REQUIRED, CallToolRequest, CallToolRequestParams
+
+    from litellm.proxy.mcp_server import operations
+
+    data: Final = {"elicitations": [{"mode": "url", "elicitationId": "el-1", "url": "https://consent.example.invalid"}]}
+    dispatch: Final = AsyncMock(side_effect=MCPError(code=URL_ELICITATION_REQUIRED, message="consent", data=data))
+    with patch.object(operations, "call_mcp_tool", dispatch), pytest.raises(MCPError) as raised:
+        await GatewayOperations().execute(
+            CallToolRequest(params=CallToolRequestParams(name="catalog-tool", arguments={})), prepare_context()
+        )
+    assert raised.value.error.code == URL_ELICITATION_REQUIRED
+    assert raised.value.error.message == "consent"
+    assert raised.value.error.data == data
+
+
+class _ShoutingOutputGuardrail(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return {**inputs, "texts": [text.upper() for text in inputs.get("texts", [])]}
+
+
+@pytest.fixture
+def shouting_output_guardrail(monkeypatch: pytest.MonkeyPatch):
+    shout: Final = _ShoutingOutputGuardrail(
+        guardrail_name="shout", event_hook=GuardrailEventHooks.post_mcp_call, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [shout])
+    yield
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_url_elicitation_output_guardrail_rewrites_only_message_strings_and_keeps_each_in_its_own_entry(
+    shouting_output_guardrail: None,
+) -> None:
+    from datetime import datetime
+
+    from mcp import MCPError
+    from mcp.types import URL_ELICITATION_REQUIRED, CallToolResult
+
+    from litellm.proxy.mcp_server import operations
+
+    async def refuse() -> CallToolResult:
+        raise MCPError(
+            code=URL_ELICITATION_REQUIRED,
+            message="consent for a",
+            data={
+                "elicitations": [
+                    {
+                        "mode": "url",
+                        "elicitationId": "el-a",
+                        "url": "https://consent.example.invalid/a",
+                        "message": "a",
+                    },
+                    "bare",
+                    {"mode": "url", "elicitationId": "el-b", "url": "https://consent.example.invalid/b"},
+                    {"mode": "url", "message": 7},
+                    {"message": "e", "url": "https://consent.example.invalid/e"},
+                ],
+                "note": "kept",
+            },
+        )
+
+    with pytest.raises(MCPError) as raised:
+        await operations._relay_guarded_url_elicitation(
+            refuse(),
+            logging_obj=None,
+            original_auth=None,
+            guardrail_auth=None,
+            request_data={},
+            start_time=datetime(2026, 1, 1),
+        )
+    assert "consent for a" not in "".join(traceback.format_exception(raised.value))
+    assert raised.value.error.model_dump(exclude_none=True) == {
+        "code": URL_ELICITATION_REQUIRED,
+        "message": "CONSENT FOR A",
+        "data": {
+            "elicitations": [
+                {"mode": "url", "elicitationId": "el-a", "url": "https://consent.example.invalid/a", "message": "A"},
+                "bare",
+                {"mode": "url", "elicitationId": "el-b", "url": "https://consent.example.invalid/b"},
+                {"mode": "url", "message": 7},
+                {"message": "E", "url": "https://consent.example.invalid/e"},
+            ],
+            "note": "kept",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_operation_keeps_other_upstream_error_codes_as_error_results() -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, CallToolRequest, CallToolRequestParams
+
+    from litellm.proxy.mcp_server import operations
+
+    dispatch: Final = AsyncMock(side_effect=MCPError(code=INVALID_PARAMS, message="bad arguments"))
+    with patch.object(operations, "call_mcp_tool", dispatch):
+        result: Final = await GatewayOperations().execute(
+            CallToolRequest(params=CallToolRequestParams(name="catalog-tool", arguments={})), prepare_context()
+        )
+    assert result.is_error is True
+    assert result.content[0].text == "Error: bad arguments"
 
 
 @pytest.mark.asyncio
@@ -2240,9 +2348,15 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
         patch.object(operations, "_execute_handle_list_tools", side_effect=tools),
         patch.object(operations, "_execute_list_prompts", return_value=ListPromptsResult(prompts=[])),
         patch.object(operations, "_execute_list_resources", return_value=ListResourcesResult(resources=[])),
-        patch.object(operations, "_execute_list_resource_templates", return_value=ListResourceTemplatesResult(resource_templates=[])),
+        patch.object(
+            operations,
+            "_execute_list_resource_templates",
+            return_value=ListResourceTemplatesResult(resource_templates=[]),
+        ),
         patch.object(operations, "_mcp_server_rate_limit_rejection", return_value=None),
-        patch.object(subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)) as targets,
+        patch.object(
+            subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)
+        ) as targets,
     ):
         context = prepare_context(UserAPIKeyAuth(user_id="scoped"), protocol_version="2026-07-28")
         result = await asyncio.wait_for(GatewayOperations().execute(DiscoverRequest(), context), 0.5)

@@ -29,6 +29,7 @@ from litellm.proxy.management_endpoints.key_budget_change import (
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import _validate_update_key_data
 from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 _OWNER: Final = "owner-1"
 _TEAM_ADMIN: Final = "team-admin"
@@ -241,8 +242,9 @@ async def _update(
     )
     prisma: Final = MagicMock()
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    prisma.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(rows={} if team is None else {team.team_id: team}))
+    )
     prisma.writer_db.litellm_budgettable.find_unique = AsyncMock(
         return_value=LiteLLM_BudgetTable(budget_id=data.budget_id)
     )

@@ -17,6 +17,7 @@ import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overv
 import { dailyActivityAggregatedCall } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { ErrorState } from "@/components/shared/ErrorState";
+import CustomerSurchargeBreakdown from "./CustomerSurchargeBreakdown";
 import {
   EMPTY_DAILY_ACTIVITY_METADATA,
   EMPTY_DAILY_ACTIVITY_RESPONSE,
@@ -53,10 +54,7 @@ export default function CustomerUsageOverview({ customerId }: { customerId: stri
   return (
     <section className="space-y-3" aria-label={t("customerPortal.usage.title")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">{t("customerPortal.usage.title")}</h2>
-          <p className="text-xs text-muted-foreground">{t("customerPortal.usage.description")}</p>
-        </div>
+        <h2 className="text-sm font-semibold">{t("customerPortal.usage.title")}</h2>
         <AdvancedDatePicker
           value={dateValue}
           presetShortLabel={preset}
@@ -75,6 +73,9 @@ export default function CustomerUsageOverview({ customerId }: { customerId: stri
             requestCountsPending={usage.isPending}
             budget={null}
             showBudgetHint={false}
+            spendDetails={
+              <CustomerSurchargeBreakdown spend={totals.spend} surcharge={data.metadata?.total_customer_margin_spend} />
+            }
           />
           <UsageBreakdownChart results={results} loading={usage.isPending} />
         </>

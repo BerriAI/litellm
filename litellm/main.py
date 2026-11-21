@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
@@ -255,6 +255,7 @@ from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
+    keyword_arguments,
     normalize_drop_params,
     safe_deep_copy,
     without,
@@ -287,6 +288,7 @@ from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.common_utils import default_azure_api_version
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
@@ -1088,12 +1090,19 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-async def _async_streaming(response, model, custom_llm_provider, litellm_params: Mapping[str, object]):
+async def _awaited_stream(pending: Awaitable[object]) -> object:
+    return await pending
+
+
+async def _async_streaming(
+    response: object, model, custom_llm_provider, litellm_params: Mapping[str, object]
+) -> AsyncIterator[object]:
     try:
         print_verbose(f"received response in _async_streaming: {response}")
-        if asyncio.iscoroutine(response):
-            response = await response
-        async for line in response:
+        resolved: Final = await _awaited_stream(response) if asyncio.iscoroutine(response) else response
+        async for line in (  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # untyped stream
+            resolved
+        ):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
@@ -1618,7 +1627,11 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
     api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
     api_version = (
-        api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION") or litellm.AZURE_DEFAULT_API_VERSION
+        api_version
+        or litellm.api_version
+        or default_azure_api_version(
+            api_base if isinstance(api_base, str) else None, get_secret_str("AZURE_API_VERSION")
+        )
     )
 
     api_key = (
@@ -2978,14 +2991,19 @@ def _complete_custom_openai(
         if is_app_session:
             headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
+    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
     request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
+    attribution_source: Final = (
+        provider_config if provider_config is not None else JSONProviderRegistry.get(custom_llm_provider)
+    )
+    attribution_client: Final = (
+        client if isinstance(client, (openai.OpenAI, openai.AsyncOpenAI)) and not use_base_llm_http_handler else None
+    )
     outbound_headers: Final = (
         request_headers
-        if provider_config is None
-        else with_attribution_headers(provider_config.get_attribution_headers(), request_headers)
+        if attribution_source is None
+        else with_attribution_headers(attribution_source.get_attribution_headers(), request_headers, attribution_client)
     )
-
-    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
 
     if extra_headers is not None and not use_base_llm_http_handler:
         optional_params["extra_headers"] = extra_headers
@@ -7458,8 +7476,7 @@ def embedding(
             api_version = (
                 api_version
                 or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-                or litellm.AZURE_DEFAULT_API_VERSION
+                or default_azure_api_version(api_base, get_secret_str("AZURE_API_VERSION"))
             )
 
             azure_ad_token: Final = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
@@ -8943,6 +8960,9 @@ async def atranscription(
                 sync_calculated_duration: Final = calculate_request_duration(file)
                 if sync_calculated_duration is not None:
                     response.set_audio_transcription_duration(sync_calculated_duration)
+                    response.report_duration_usage_when_provider_sent_none(sync_calculated_duration)
+            else:
+                response.report_duration_usage_when_provider_sent_none(existing_duration)
 
         return response
     except Exception as e:
@@ -9178,6 +9198,7 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
+            custom_llm_provider=custom_llm_provider,
         )
     elif custom_llm_provider == "nvidia_riva":
         # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
@@ -9291,6 +9312,9 @@ def transcription(
                 )
         elif calculated_duration is not None:
             response.set_audio_transcription_duration(calculated_duration)
+            response.report_duration_usage_when_provider_sent_none(calculated_duration)
+    elif isinstance(response, TranscriptionResponse):
+        response.report_duration_usage_when_provider_sent_none(getattr(response, "duration", None))
 
     return response
 
@@ -9987,7 +10011,11 @@ def config_completion(**kwargs):
     if litellm.config_path is not None:
         config_args: Final = read_config_args(litellm.config_path)
         # overwrite any args passed in with config args
-        return completion(**kwargs, **config_args)
+        forwarded: Final = keyword_arguments(
+            config_args,
+            completion,  # pyright: ignore[reportUnknownArgumentType]  # completion has untyped params
+        )
+        return completion(**kwargs, **_ForwardedCompletionParams(**forwarded))
     else:
         raise ValueError(
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
@@ -10007,7 +10035,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: 
 async def acount_tokens(
     model: str,
     messages: list[dict[str, object]] | None = None,
-    tools: list[dict[str, Any]] | None = None,
+    tools: list[dict[str, object]] | None = None,
     system: str | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
