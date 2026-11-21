@@ -1,11 +1,43 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {
-    "trace_ref": {
-      "default": "",
-      "type": "string"
-    }
-  },
   "title": "TraceSpanRequest",
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "organization_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "team_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "api_key_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "trace_ref": {
+      "type": "string",
+      "default": ""
+    }
+  }
 }

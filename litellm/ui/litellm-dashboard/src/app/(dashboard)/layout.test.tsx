@@ -178,7 +178,10 @@ describe("(dashboard) Layout", () => {
     expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
   });
 
-  it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
+  it.each([
+    ["logs", "true"],
+    ["lens", "false"],
+  ])("sets the sidebar for %s and expands it again after leaving", async (segment, collapsed) => {
     const dashboard = () => (
       <AuthProvider>
         <Layout>
@@ -190,9 +193,9 @@ describe("(dashboard) Layout", () => {
     pendingUiConfig.resolve();
     expect(await screen.findByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
 
-    vi.mocked(usePathname).mockReturnValue("/ui/logs");
+    vi.mocked(usePathname).mockReturnValue(`/ui/${segment}`);
     rerender(dashboard());
-    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", collapsed);
 
     vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
     rerender(dashboard());

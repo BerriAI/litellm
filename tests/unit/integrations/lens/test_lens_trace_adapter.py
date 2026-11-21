@@ -1,19 +1,91 @@
 import json
+from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
+from typing import Final
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import litellm
 from litellm.integrations.lens.lens_trace_adapter import (
     AgentCall,
     ToolExchange,
+    _LensTraceLogger,
     agent_call,
     agent_name,
+    export_traces,
     tool_exchanges,
     user_task,
 )
+from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM, LensLoggingPolicy
+from litellm.integrations.lens.remote import LensConnection
+from litellm.integrations.otel import logger as otel_logger_module
+from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.plumbing.providers import build_tracer_provider
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.utils import CaptureMessageContent, ModelResponse
 
 _LS = ToolExchange(call_id="call-ls", name="Bash", arguments='{"command": "ls"}', result="a.txt")
 _PWD = ToolExchange(call_id="call-pwd", name="Bash", arguments='{"command": "pwd"}', result="/work")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True), ids=("disabled", "enabled"))
+@pytest.mark.parametrize("failed", (False, True), ids=("success", "failure"))
+async def test_first_passthrough_call_exports_only_when_enabled_and_lifespan_unregisters_it(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool, failed: bool
+) -> None:
+    callback_lists: Final = (
+        "callbacks",
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    )
+    for name in callback_lists:
+        monkeypatch.setattr(litellm, name, [])
+    spans: Final = InMemorySpanExporter()
+    monkeypatch.setattr(otel_logger_module, "build_tracer_provider", partial(build_tracer_provider, exporter=spans))
+    at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with export_traces(LensConnection("http://lens.test", "fixture")):
+        logging_obj: Final = Logging(
+            model="test-model",
+            messages=[{"role": "user", "content": "First passthrough request"}],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=at,
+            litellm_call_id="cold-passthrough",
+            function_id="cold-passthrough",
+        )
+        logging_obj.update_environment_variables(
+            litellm_params={LENS_LOGGING_POLICY_PARAM: LensLoggingPolicy(enabled=enabled), "metadata": {}},
+            optional_params={},
+        )
+        logging_obj.pre_call(input={}, api_key="", additional_args={})
+        logging_obj.model_call_details["api_call_start_time"] = at
+        if failed:
+            await logging_obj.dispatch_failure_handlers(
+                RuntimeError("Controlled upstream failure"), "", prefer_async_handlers=True
+            )
+        else:
+            await logging_obj.dispatch_success_handlers(
+                result=ModelResponse(
+                    id="cold-passthrough-response",
+                    model="test-model",
+                    choices=[{"message": {"role": "assistant", "content": "Ready"}, "finish_reason": "stop"}],
+                ),
+                start_time=at,
+                end_time=at,
+                prefer_async_handlers=True,
+            )
+        assert len(spans.get_finished_spans()) == int(enabled)
+
+    assert all(not getattr(litellm, name) for name in callback_lists)
 
 
 @pytest.mark.parametrize(
@@ -186,6 +258,120 @@ def test_a_model_call_payload_gives_the_agent_and_its_new_tool_results() -> None
 @pytest.mark.parametrize("payload", [None, "text", {"metadata": "broken"}])
 def test_an_unreadable_payload_names_no_agent_and_no_tool_result(payload: object) -> None:
     assert agent_call(payload) == AgentCall()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", (False, True), ids=("success", "failure"))
+@pytest.mark.parametrize("enabled", (False, True), ids=("disabled", "enabled"))
+async def test_lens_control_applies_to_model_and_tool_spans_without_disabling_other_telemetry(
+    failed: bool, enabled: bool
+) -> None:
+    config: Final = OpenTelemetryV2Config(exporter="in_memory")
+    lens_spans: Final = InMemorySpanExporter()
+    other_spans: Final = InMemorySpanExporter()
+    lens: Final = _LensTraceLogger(config=config, tracer_provider=build_tracer_provider(config, exporter=lens_spans))
+    other: Final = OpenTelemetryV2(config=config, tracer_provider=build_tracer_provider(config, exporter=other_spans))
+    at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {
+        "api_call_start_time": at,
+        "litellm_params": {
+            "litellm_session_id": "session-policy",
+            "metadata": {
+                "user_api_key_auth": UserAPIKeyAuth(metadata={"lens_enabled": enabled}),
+                "lens_enabled": not enabled,
+            },
+        },
+        "standard_logging_object": {
+            "id": "response-policy",
+            "litellm_call_id": "call-policy",
+            "call_type": "acompletion",
+            "model": "test-model",
+            "custom_llm_provider": "openai",
+            "status": "failure" if failed else "success",
+            "metadata": {"user_agent": "codex"},
+            "messages": [
+                {"role": "assistant", "tool_calls": [{"id": "call-ls", "function": {"name": "Bash"}}]},
+                {"role": "tool", "tool_call_id": "call-ls", "content": "a.txt"},
+            ],
+            "response": {"id": "response-policy", "choices": [{"finish_reason": "stop"}]},
+        },
+    }
+    lens.log_pre_api_call("test-model", [], kwargs)
+    other.log_pre_api_call("test-model", [], kwargs)
+    lens_callback: Final = lens.async_log_failure_event if failed else lens.async_log_success_event
+    other_callback: Final = other.async_log_failure_event if failed else other.async_log_success_event
+    await lens_callback(kwargs, None, at, at)
+    await other_callback(kwargs, None, at, at)
+    assert len(lens_spans.get_finished_spans()) == (2 if enabled else 0)
+    assert len(other_spans.get_finished_spans()) == 1
+    lens.tracer_provider.shutdown()
+    other.tracer_provider.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", (False, True), ids=("success", "failure"))
+@pytest.mark.parametrize("call_type", ("call_mcp_tool", "list_mcp_tools"))
+@pytest.mark.parametrize(
+    ("key_value", "team_value", "enabled"),
+    ((None, None, True), (None, False, False), (False, True, False), (True, False, True)),
+    ids=("configured-default", "team-off", "key-off", "key-overrides-team"),
+)
+async def test_mcp_policy_blocks_lens_tool_content_without_disabling_other_telemetry(
+    failed: bool, call_type: str, key_value: bool | None, team_value: bool | None, enabled: bool
+) -> None:
+    config: Final = OpenTelemetryV2Config(exporter="in_memory", capture_message_content=CaptureMessageContent.SPAN_ONLY)
+    lens_spans: Final = InMemorySpanExporter()
+    other_spans: Final = InMemorySpanExporter()
+    lens: Final = _LensTraceLogger(config=config, tracer_provider=build_tracer_provider(config, exporter=lens_spans))
+    other: Final = OpenTelemetryV2(config=config, tracer_provider=build_tracer_provider(config, exporter=other_spans))
+    at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_auth": UserAPIKeyAuth(
+                    metadata={"lens_enabled": key_value}, team_metadata={"lens_enabled": team_value}
+                ),
+                "lens_enabled": True,
+            }
+        },
+        "standard_logging_object": {
+            "litellm_call_id": "mcp-policy",
+            "call_type": call_type,
+            "status": "failure" if failed else "success",
+            "metadata": {
+                "spend_logs_metadata": {"mcp_operation": "list_tools"},
+                **(
+                    {
+                        "mcp_tool_call_metadata": {
+                            "name": "search_documents",
+                            "arguments": {"query": "MCP argument content"},
+                            "result": {"text": "MCP result content"},
+                        }
+                    }
+                    if call_type == "call_mcp_tool"
+                    else {}
+                ),
+            },
+        },
+    }
+    lens_callback: Final = lens.async_log_failure_event if failed else lens.async_log_success_event
+    other_callback: Final = other.async_log_failure_event if failed else other.async_log_success_event
+    await lens_callback(kwargs, None, at, at)
+    await other_callback(kwargs, None, at, at)
+
+    assert len(lens_spans.get_finished_spans()) == int(enabled)
+    assert len(other_spans.get_finished_spans()) == 1
+    expected_content: Final = (
+        ('{"query": "MCP argument content"}', '{"text": "MCP result content"}')
+        if call_type == "call_mcp_tool"
+        else (None, None)
+    )
+    assert tuple(
+        (span.attributes.get("gen_ai.tool.call.arguments"), span.attributes.get("gen_ai.tool.call.result"))
+        for span in lens_spans.get_finished_spans()
+    ) == (expected_content,) * int(enabled)
+    lens.tracer_provider.shutdown()
+    other.tracer_provider.shutdown()
 
 
 def _recorded_payload(agent: str) -> dict[str, object]:

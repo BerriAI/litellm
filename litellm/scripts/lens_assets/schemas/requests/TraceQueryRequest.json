@@ -1,14 +1,46 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
+  "title": "TraceQueryRequest",
+  "type": "object",
   "properties": {
+    "organization_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "team_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "api_key_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
     "sql": {
       "type": "string"
     }
   },
+  "additionalProperties": false,
   "required": [
     "sql"
-  ],
-  "title": "TraceQueryRequest",
-  "type": "object"
+  ]
 }

@@ -1,3 +1,6 @@
+import { LensControls, LensTabTrigger } from "@/components/lens/LensControls";
+import { readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
+import { lensEntityHref } from "@/components/lens/entityLinks";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -1360,6 +1363,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const { team_info: info } = teamData;
 
+  const updateLensPolicy = async (policy: LensPolicy): Promise<void> => {
+    if (!accessToken || !canEditAsProxyAdmin) return;
+    const metadata = { ...info.metadata, lens_enabled: policy };
+    await fetchClient.PATCH("/team/{team_id}", {
+      params: { path: { team_id: teamId } },
+      body: { metadata: { lens_enabled: policy } },
+    });
+    const updatedTeam = { ...teamData, team_info: { ...info, metadata } };
+    setTeamData(updatedTeam);
+    onUpdate(updatedTeam);
+    void invalidateTeamQueries(queryClient);
+  };
+
   const teamAdminSchemaFields =
     teamEditAccess.kind === "team_admin"
       ? teamAdminDeclaredFields(teamMetadataSchemaFields, teamEditAccess.proxyControlledMetadataKeys)
@@ -1652,6 +1668,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       key: TEAM_INFO_TAB_KEYS.ACTIVITY,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.ACTIVITY]),
       children: <ResourceActivity scope="team" id={teamId} />,
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.LENS,
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.LENS]),
+      children: (
+        <LensControls
+          kind="team"
+          policy={readLensPolicy(info.metadata)}
+          canEdit={canEditAsProxyAdmin}
+          href={lensEntityHref({ kind: "team", teamId })}
+          onPolicyChange={updateLensPolicy}
+        />
+      ),
     },
     {
       key: TEAM_INFO_TAB_KEYS.MY_USER,
@@ -2808,11 +2837,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }}
       >
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-          {tabItems.map(({ key, label }) => (
-            <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
-              {label}
-            </TabsTrigger>
-          ))}
+          {tabItems.map(({ key, label }) =>
+            key === TEAM_INFO_TAB_KEYS.LENS ? (
+              <LensTabTrigger key={key} />
+            ) : (
+              <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
+                {label}
+              </TabsTrigger>
+            ),
+          )}
         </TabsList>
         {tabItems.map(({ key, children }) => (
           <TabsContent key={key} value={key} keepMounted={hasVisited(key)}>

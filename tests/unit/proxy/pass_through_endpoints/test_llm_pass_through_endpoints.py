@@ -3384,7 +3384,7 @@ class TestForwardHeaders:
         # Mock the request body
         mock_request_body = {"test": "data"}
 
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Custom headers that should be merged with user headers
         custom_headers = {
@@ -3481,7 +3481,7 @@ class TestForwardHeaders:
         mock_request.query_params = {}
 
         mock_request_body = {"test": "data"}
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Only these custom headers should be sent
         custom_headers = {

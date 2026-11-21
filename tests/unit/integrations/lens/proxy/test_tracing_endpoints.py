@@ -36,6 +36,7 @@ from litellm.integrations.lens.generated.responses import TraceSQLResponse
 from litellm.integrations.lens.generated.types import TraceScope
 from litellm.integrations.lens.proxy import tracing_endpoints
 from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
+from litellm.integrations.lens.proxy.workspace_scope import TraceWorkspaceFilters, get_workspace_key_lookup
 from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
 from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgent, TraceAgentList
@@ -125,6 +126,21 @@ SPAN_ERROR_RESPONSE: Final = {
     "total_chars": 10,
     "next_cursor": None,
 }
+CONVERSATION_RESPONSE: Final = {
+    "turns": [
+        {
+            "trace_id": "earlier-trace",
+            "trace_ref": "earlier-run",
+            "span_id": "earlier-span",
+            "start_time": "2026-01-01T00:00:00Z",
+            "input": "earlier input",
+            "output": "earlier output",
+            "input_ui": {"kind": "text", "text": "earlier input"},
+            "output_ui": {"kind": "text", "text": "earlier output"},
+        }
+    ],
+    "next_cursor": "more-turns",
+}
 NOW_MS: Final = 1_800_000_000_000
 
 
@@ -198,6 +214,7 @@ def receiver(client) -> MagicMock:
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
+    fake.get_conversation = AsyncMock(return_value=None)
     fake.list_agents = AsyncMock(return_value=TraceAgentList(agents=()))
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
     return fake
@@ -243,6 +260,128 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
         end_ms=2,
         cursor="abc",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN))
+@pytest.mark.parametrize("key_hashes", (("selected-key",), ()))
+@pytest.mark.parametrize(
+    ("endpoint", "operation", "result"),
+    (
+        ("/v1/traces", "list", {"data": [], "next_cursor": None}),
+        ("/v1/traces/agents", "query", {"data": []}),
+        ("/v1/traces/t1", "trace", TRACE_RESPONSE),
+        ("/v1/traces/t1/conversation", "conversation", CONVERSATION_RESPONSE),
+        ("/v1/traces/t1/spans/s1", "span", SPAN_DETAIL_RESPONSE),
+        ("/v1/traces/t1/spans/s1/error", "span_error", SPAN_ERROR_RESPONSE),
+    ),
+)
+async def test_workspace_filters_reach_lens_without_replacing_authenticated_scope(
+    client: TestClient,
+    role: LitellmUserRoles,
+    endpoint: str,
+    operation: str,
+    result: Mapping[str, JsonValue],
+    key_hashes: tuple[str, ...],
+) -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json=result)
+
+    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ("permitted-team",)
+
+    async def key_lookup(filters: TraceWorkspaceFilters) -> tuple[str, ...]:
+        assert filters == TraceWorkspaceFilters("requested-org", "requested-team", "requested-project", "requested-key")
+        return key_hashes
+
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="reader", user_role=role)
+    client.app.dependency_overrides[get_log_team_lookup] = lambda: lookup
+    client.app.dependency_overrides[get_workspace_key_lookup] = lambda: key_lookup
+    client.app.dependency_overrides[tracing_endpoints.current_time_ms] = lambda: NOW_MS
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as worker:
+        tracing: Final = TraceReceiver(LensTraceStorage(RemoteTraceStore(worker)))
+        client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
+        ) as gateway:
+            response: Final = await gateway.get(
+                endpoint,
+                params={
+                    "organization_id": "requested-org",
+                    "team_id": "requested-team",
+                    "project_id": "requested-project",
+                    "api_key_hash": "requested-key",
+                    "start_ms": 123,
+                    "end_ms": 456,
+                },
+            )
+    assert response.status_code == 200, response.text
+    forwarded: Final = json.loads(requests.get_nowait().content)
+    assert requests.empty()
+    assert forwarded["operation"] == operation
+    assert forwarded["parameters" if operation == "query" else "scope"] == {
+        "all_teams": 1 if role == LitellmUserRoles.PROXY_ADMIN else 0,
+        "user_id": "" if role == LitellmUserRoles.PROXY_ADMIN else "reader",
+        "team_ids": [] if role == LitellmUserRoles.PROXY_ADMIN else ["permitted-team"],
+        "filter_team_id": "requested-team",
+        "filter_api_key_hash": "requested-key",
+        "filter_api_key_hashes_mode": "only",
+        "filter_api_key_hashes": list(key_hashes),
+        **({"start_ms": 123, "end_ms": 456, "limit": AGENT_TRACING_AGENT_LIST_LIMIT} if operation == "query" else {}),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exists", (True, False))
+async def test_conversation_transport_preserves_scoped_reference_and_continuation(
+    client: TestClient, exists: bool
+) -> None:
+    def accept(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/read"
+        assert json.loads(request.content) == {
+            "operation": "conversation",
+            "scope": {
+                "all_teams": 0,
+                "user_id": "user",
+                "team_ids": [],
+                "filter_team_id": "selected-team",
+                "filter_api_key_hash": "selected-key",
+            },
+            "trace_id": "t1",
+            "trace_ref": "selected-run",
+            "cursor": "previous-page",
+            "page_size": 7,
+        }
+        return httpx.Response(200, content=json.dumps(CONVERSATION_RESPONSE if exists else None))
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as worker:
+        tracing: Final = TraceReceiver(LensTraceStorage(RemoteTraceStore(worker)))
+        client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
+        ) as gateway:
+            response: Final = await gateway.get(
+                "/v1/traces/t1/conversation",
+                params={
+                    "team_id": "selected-team",
+                    "api_key_hash": "selected-key",
+                    "trace_ref": "selected-run",
+                    "cursor": "previous-page",
+                    "page_size": 7,
+                },
+            )
+    assert response.status_code == (200 if exists else 404), response.text
+    assert response.json() == (CONVERSATION_RESPONSE if exists else {"detail": "Trace t1 not found"})
+
+
+@pytest.mark.parametrize("query", ("page_size=0", "page_size=51", "cursor=" + "x" * 513))
+def test_conversation_rejects_unbounded_parameters(client: TestClient, receiver: MagicMock, query: str) -> None:
+    response: Final = client.get(f"/v1/traces/t1/conversation?{query}")
+    assert response.status_code == 422, response.text
+    receiver.get_conversation.assert_not_awaited()
 
 
 def test_list_traces_defaults_to_last_24h(client, receiver):
@@ -421,6 +560,10 @@ async def test_agent_picker_reads_through_worker_with_authenticated_scope(
         "parameters": {
             **expected_scope,
             "team_ids": list(expected_scope["team_ids"]),
+            "filter_team_id": "",
+            "filter_api_key_hash": "",
+            "filter_api_key_hashes_mode": "all",
+            "filter_api_key_hashes": [],
             "start_ms": 123,
             "end_ms": 456,
             "limit": AGENT_TRACING_AGENT_LIST_LIMIT,
@@ -604,6 +747,7 @@ def test_trace_read_routes_ignore_unknown_query_parameters(client: TestClient, r
     (
         ("/v1/traces", "list_traces"),
         ("/v1/traces/t1", "get_trace"),
+        ("/v1/traces/t1/conversation", "get_conversation"),
         ("/v1/traces/t1/spans/s1", "get_span"),
         ("/v1/traces/t1/spans/s1/error", "get_span_error"),
     ),
@@ -677,21 +821,31 @@ def test_invalid_cursor_is_a_client_error(client: TestClient, receiver: MagicMoc
 )
 def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKeyAuth) -> None:
     storage: Final = MagicMock(spec=LensTraceStorage)
+    key_lookup: Final = AsyncMock(return_value=())
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    client.app.dependency_overrides[get_workspace_key_lookup] = lambda: key_lookup
     for path in (
         "/v1/traces",
         "/v1/traces/t1",
+        "/v1/traces/t1/conversation",
         "/v1/traces/t1/spans/s1",
         "/v1/traces/t1/spans/s1/error",
         "/v1/traces/query/help",
     ):
-        response: Final = client.get(path)
+        response: Final = client.get(path, params={"project_id": "project"})
         assert response.status_code == 403, response.text
-    query: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
+    query: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces", "project_id": "project"})
     assert query.status_code == 403, query.text
-    for read in (storage.list_traces, storage.get_trace, storage.get_span, storage.get_span_error):
+    key_lookup.assert_not_awaited()
+    for read in (
+        storage.list_traces,
+        storage.get_trace,
+        storage.get_conversation,
+        storage.get_span,
+        storage.get_span_error,
+    ):
         read.assert_not_called()
     storage.query_sql.assert_not_called()
     storage.query_help.assert_not_called()
@@ -835,6 +989,47 @@ def test_sql_query_returns_empty_data(client: TestClient, receiver: MagicMock) -
 
     assert result.status_code == 200, result.text
     assert result.json() == {"data": []}
+
+
+@pytest.mark.parametrize("key_hashes", (("selected-key",), ()))
+def test_sql_queries_enforce_workspace_filters_outside_user_sql(
+    client: TestClient, receiver: MagicMock, key_hashes: tuple[str, ...]
+) -> None:
+    async def lookup(filters: TraceWorkspaceFilters) -> tuple[str, ...]:
+        assert filters == TraceWorkspaceFilters("org", "team", "project", "key")
+        return key_hashes
+
+    client.app.dependency_overrides[get_workspace_key_lookup] = lambda: lookup
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.storage.query_sql = AsyncMock(return_value=TraceSQLResponse(data=()))
+    result: Final = client.post(
+        "/v1/traces/query",
+        json={
+            "sql": "SELECT * FROM otel_traces",
+            "organization_id": "org",
+            "team_id": "team",
+            "project_id": "project",
+            "api_key_hash": "key",
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert result.json() == {"data": []}
+    receiver.storage.query_sql.assert_awaited_once_with(
+        "SELECT * FROM otel_traces",
+        {
+            "kind": "scoped",
+            "scope": {
+                "all_teams": 0,
+                "user_id": "user",
+                "team_ids": (),
+                "filter_team_id": "team",
+                "filter_api_key_hash": "key",
+                "filter_api_key_hashes_mode": "only",
+                "filter_api_key_hashes": key_hashes,
+            },
+        },
+        "test-secret",
+    )
 
 
 def test_sql_query_openapi_declares_a_closed_response_object(client: TestClient) -> None:
