@@ -1464,13 +1464,15 @@ def _retry_attempt_records(litellm_params: Mapping[str, object] | None) -> tuple
         bucket = cast("Mapping[str, object]", metadata)  # cast-ok: untyped router dict
         records = bucket.get("previous_models")
         hops = bucket.get("failed_fallback_attempts")
-        failed_hops = hops if isinstance(hops, (list, tuple)) else ()
+        failed_hops: Sequence[object] = (
+            cast("Sequence[object]", hops) if isinstance(hops, (list, tuple)) else ()  # cast-ok: untyped router tuple
+        )
         if isinstance(records, (list, tuple)):
             return tuple(
                 cast("Mapping[str, object]", record)  # cast-ok: RetryAttemptRecord TypedDict, read with .get
                 for record in (
                     *cast("Sequence[object]", records),  # cast-ok: untyped router tuple
-                    *cast("Sequence[object]", failed_hops),  # cast-ok: untyped router tuple
+                    *failed_hops,
                 )
                 if isinstance(record, dict)
             )
