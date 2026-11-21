@@ -292,11 +292,19 @@ def _chat_batch_row(**body_extra: object) -> bytes:
     return json.dumps({"custom_id": "r-0", "method": "POST", "url": "/v1/chat/completions", "body": body}).encode()
 
 
+def _responses_batch_row(**body_extra: object) -> bytes:
+    body: Final = {"model": "gemini-2.5-flash", "input": "Say hi", **body_extra}
+    return json.dumps({"custom_id": "r-0", "method": "POST", "url": "/v1/responses", "body": body}).encode()
+
+
 class TestBatchRowServiceTier:
-    @pytest.mark.parametrize("service_tier", ["priority", "flex", "standard"])
-    def test_a_sent_tier_is_a_400_without_drop_params(self, service_tier: str) -> None:
+    @pytest.mark.parametrize("row_builder", [_chat_batch_row, _responses_batch_row], ids=["chat", "responses"])
+    @pytest.mark.parametrize("service_tier", ["priority", "flex", "SERVICE_TIER_FLEX"])
+    def test_a_sent_tier_is_a_400_without_drop_params(
+        self, row_builder: Callable[..., bytes], service_tier: str
+    ) -> None:
         with pytest.raises(VertexAIError, match="do not support `service_tier`") as exc_info:
-            _upload_batch_row(_chat_batch_row(service_tier=service_tier), {})
+            _upload_batch_row(row_builder(service_tier=service_tier), {})
         assert exc_info.value.status_code == 400
 
     @pytest.mark.parametrize(
@@ -304,8 +312,9 @@ class TestBatchRowServiceTier:
         [
             (_chat_batch_row(service_tier="priority", drop_params=True), {}),
             (_chat_batch_row(service_tier="priority"), {"drop_params": True}),
+            (_responses_batch_row(service_tier="priority", drop_params=True), {}),
         ],
-        ids=["row", "deployment"],
+        ids=["row", "deployment", "responses-row"],
     )
     def test_drop_params_on_the_row_or_deployment_uploads_the_row_without_a_tier(
         self, row: bytes, litellm_params: dict[str, object]
@@ -315,8 +324,8 @@ class TestBatchRowServiceTier:
         assert "serviceTier" not in uploaded["request"]
         assert uploaded["request"]["contents"] == [{"role": "user", "parts": [{"text": "Say hi"}]}]
 
-    @pytest.mark.parametrize("service_tier", ["auto", "default"])
-    def test_a_provider_default_tier_uploads_the_row(self, service_tier: str) -> None:
+    @pytest.mark.parametrize("service_tier", ["auto", "default", "standard", "SERVICE_TIER_STANDARD"])
+    def test_a_tier_without_a_vertex_header_uploads_the_row(self, service_tier: str) -> None:
         uploaded: Final = json.loads(_upload_batch_row(_chat_batch_row(service_tier=service_tier), {}))
 
         assert "serviceTier" not in uploaded["request"]
