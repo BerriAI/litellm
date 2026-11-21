@@ -1823,3 +1823,34 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
     }
     assert response["candidates"][0]["content"]["parts"] == [{"text": '{"park_name": "EPCOT"}'}]
     assert "text" not in response
+
+
+
+def test_parallel_same_name_function_calls_get_unique_fifo_ids():
+    adapter = GoogleGenAIAdapter()
+    contents = [
+        {"role": "user", "parts": [{"text": "read a and b"}]},
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"name": "read_file", "args": {"path": "a"}}},
+                {"functionCall": {"name": "read_file", "args": {"path": "b"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {"functionResponse": {"name": "read_file", "response": {"content": "A"}}},
+                {"functionResponse": {"name": "read_file", "response": {"content": "B"}}},
+            ],
+        },
+    ]
+    messages = adapter._transform_contents_to_messages(contents)
+    assistant_msg = messages[1]
+    tool_calls = assistant_msg["tool_calls"]
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["id"] != tool_calls[1]["id"]
+    assert tool_calls[0]["id"] == "call_read_file"
+    assert tool_calls[1]["id"] == "call_read_file_2"
+    assert messages[2]["role"] == "tool" and messages[2]["tool_call_id"] == tool_calls[0]["id"]
+    assert messages[3]["role"] == "tool" and messages[3]["tool_call_id"] == tool_calls[1]["id"]
