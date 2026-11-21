@@ -17,6 +17,7 @@ import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.caching.caching import Cache
+from litellm.exceptions import MidStreamFallbackError
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -3441,11 +3442,12 @@ async def test_cached_stream_rejects_a_response_without_choices(
     )
 
     assert isinstance(replay, CustomStreamWrapper)
-    with pytest.raises(litellm.APIError, match="no 'choices'"):
+    with pytest.raises(MidStreamFallbackError, match="no 'choices'") as error:
         if call_type == CallTypes.acompletion.value:
             await anext(replay)
         else:
             next(replay)
+    assert isinstance(error.value.original_exception, litellm.APIError)
 
 
 def test_sync_set_cache_skips_response_without_output():
