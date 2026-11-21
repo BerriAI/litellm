@@ -7,7 +7,7 @@ import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/co
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
 import { toast } from "@/lib/toast";
-import { Info, TriangleAlert, X } from "lucide-react";
+import { Info, ScrollText, TriangleAlert, X } from "lucide-react";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./PolicyTable";
 import PolicyInfoView from "./policy_info";
@@ -454,7 +454,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       <PageContent>
         <PageTabs value={activeTab} onValueChange={setActiveTab}>
           <PageHeader>
-            <PageHeaderTitle>{t("shell.nav.items.policies")}</PageHeaderTitle>
+            <PageHeaderTitle>
+              <ScrollText />
+              {t("shell.nav.items.policies")}
+            </PageHeaderTitle>
             <PageHeaderDescription>{t("shell.pageDescriptions.policies")}</PageHeaderDescription>
             <PageHeaderControls className="flex-wrap">
               {activeTab === "policies" && (

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { TabsContent } from "@/components/ui/tabs";
 import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
-import { ChevronDown, Code, Plus } from "lucide-react";
+import { ChevronDown, Code, Plus, Shield } from "lucide-react";
 import { getGuardrailsList } from "@/components/networking";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -107,7 +107,10 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
       <PageContent>
         <PageTabs value={activeTab} onValueChange={setActiveTab}>
           <PageHeader>
-            <PageHeaderTitle>{t("shell.nav.items.guardrails")}</PageHeaderTitle>
+            <PageHeaderTitle>
+              <Shield />
+              {t("shell.nav.items.guardrails")}
+            </PageHeaderTitle>
             <PageHeaderDescription>{t("shell.pageDescriptions.guardrails")}</PageHeaderDescription>
             <PageHeaderControls className="flex-wrap">
               {isAdmin && activeTab === "guardrails" && (

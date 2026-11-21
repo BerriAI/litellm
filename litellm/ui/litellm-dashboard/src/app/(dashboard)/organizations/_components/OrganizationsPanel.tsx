@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import React, { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { Building2 } from "lucide-react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import { organizationDeleteCall } from "@/components/networking";
@@ -125,7 +126,10 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
     <Page>
       <PageContent>
         <PageHeader>
-          <PageHeaderTitle>{t("shell.nav.items.organizations")}</PageHeaderTitle>
+          <PageHeaderTitle>
+            <Building2 />
+            {t("shell.nav.items.organizations")}
+          </PageHeaderTitle>
           <PageHeaderDescription>{t("organizations.panel.listHint")}</PageHeaderDescription>
           {(userRole === "Admin" || userRole === "Org Admin") && (
             <PageHeaderControls>

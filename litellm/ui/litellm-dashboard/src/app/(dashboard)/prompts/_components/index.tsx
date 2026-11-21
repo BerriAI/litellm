@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 
-import { Plus, Upload } from "lucide-react";
+import { FileText, Plus, Upload } from "lucide-react";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "@/components/networking";
 import PromptTable from "./PromptTable";
 import PromptInfoView from "./prompt_info";
@@ -167,7 +167,10 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       ) : (
         <PageContent>
           <PageHeader>
-            <PageHeaderTitle>{t("shell.nav.items.prompts")}</PageHeaderTitle>
+            <PageHeaderTitle>
+              <FileText />
+              {t("shell.nav.items.prompts")}
+            </PageHeaderTitle>
             <PageHeaderDescription>{t("shell.pageDescriptions.prompts")}</PageHeaderDescription>
             <PageHeaderControls className="flex-wrap">
               {canModify && (

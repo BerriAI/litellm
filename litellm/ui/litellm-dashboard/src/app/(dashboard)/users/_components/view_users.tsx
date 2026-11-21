@@ -2,6 +2,7 @@ import { parseAsString, useQueryState } from "nuqs";
 import { useResetDetailState } from "@/hooks/useUrlTab";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { User } from "lucide-react";
 
 import BulkEditUserModal from "./BulkEditUsers";
 import BulkCreateUsersButton from "@/components/bulk_create_users_button";
@@ -329,7 +330,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       <PageContent>
         <PageTabs defaultValue="users">
           <PageHeader>
-            <PageHeaderTitle>{t("shell.nav.items.internalUsers")}</PageHeaderTitle>
+            <PageHeaderTitle>
+              <User />
+              {t("shell.nav.items.internalUsers")}
+            </PageHeaderTitle>
             <PageHeaderDescription>{t("shell.pageDescriptions.users")}</PageHeaderDescription>
             <PageHeaderControls className="flex-wrap">
               <div className="flex flex-wrap gap-2">
