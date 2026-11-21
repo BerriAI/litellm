@@ -8,7 +8,7 @@ import type { components } from "@/lib/http/schema";
 import { generatedKey, projectToolResult, type ResultKind } from "./toolResults";
 import {
   buildUsageChart,
-  formatUsageChartContext,
+  formatUsageChartToolContext,
   usageChartRequestSchema,
   usageChartSource,
   type UsageChart,
@@ -146,7 +146,7 @@ export function createLiteAdminOperations(context: OperationContext) {
       if (!chart)
         return { success: false, message: "No recorded data is available for this chart. Explain that in text." };
       context.onChart(chart);
-      return { success: true, chart: { ...chart, ...formatUsageChartContext(chart, i18n.getFixedT("en")) } };
+      return { success: true, chart: { ...chart, ...formatUsageChartToolContext(chart) } };
     },
   };
   const renderChart = zodFunction(chartDefinition);

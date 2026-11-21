@@ -81,7 +81,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
   const { t, i18n } = useTranslation();
   const title = displayConversationTitle(conv, t);
   const [editing, setEditing] = useState(false);
-  const [editValue, setEditValue] = useState(title);
+  const [editValue, setEditValue] = useState(conv.title);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -93,20 +93,20 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
 
   const startEditing = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditValue(title);
+    setEditValue(conv.title);
     setEditing(true);
   };
 
   const commitRename = () => {
     const trimmed = editValue.trim();
-    if (trimmed && trimmed !== title) {
+    if (trimmed && trimmed !== conv.title) {
       onRename(conv.id, trimmed);
     }
     setEditing(false);
   };
 
   const cancelEditing = () => {
-    setEditValue(title);
+    setEditValue(conv.title);
     setEditing(false);
   };
 

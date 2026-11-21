@@ -79,6 +79,28 @@ export function usageChartSource(
   return { report: report.data, period: { start: start_date, end: end_date }, scope };
 }
 
+const toolScopeLabels = {
+  gateway: "Gateway usage",
+  allTeams: "All teams",
+  allTags: "All tags",
+  yours: "Your usage",
+  permittedTeams: "Your permitted team usage",
+} satisfies Record<Extract<UsageScope, string>, string>;
+
+export function formatUsageChartToolContext({ period, scope }: UsageChartContext) {
+  const scopeLabel =
+    typeof scope === "string"
+      ? toolScopeLabels[scope]
+      : [
+          scope.userId && `User ${scope.userId}`,
+          scope.teamIds && `Teams ${scope.teamIds}`,
+          scope.tags && `Tags ${scope.tags}`,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+  return { scope: scopeLabel, period: `${period.start} to ${period.end} (UTC)` };
+}
+
 export function formatUsageChartContext({ period, scope }: UsageChartContext, t: TFunction) {
   const scopeLabel =
     typeof scope === "string"

@@ -8,7 +8,6 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ParsedMessage } from "./prettyMessagesTypes";
-import { messageRoleLabel } from "./prettyMessagesUtils";
 import { SimpleMessageBlock } from "./SimpleMessageBlock";
 
 interface HistoryTreeProps {
@@ -40,7 +39,7 @@ export function HistoryTree({ messages }: HistoryTreeProps) {
         {messages.map((msg, index) => (
           <SimpleMessageBlock
             key={index}
-            label={messageRoleLabel(msg.role, t)}
+            label={msg.role.toUpperCase()}
             content={msg.content}
             toolCalls={msg.toolCalls}
             isCompact={true}

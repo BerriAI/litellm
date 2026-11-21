@@ -9925,8 +9925,7 @@
       "stopFailed": "Could not stop the run. Reconnect and try Stop again."
     },
     "chatHistory": {
-      "newConversation": "New conversation",
-      "imageConversation": "Image conversation"
+      "newConversation": "New conversation"
     },
     "imageHelpers": {
       "generatedImageName": "Generated image {{number}}"
@@ -15239,12 +15238,6 @@
       },
       "inputCard": {
         "copied": "Input copied"
-      },
-      "messageRoles": {
-        "system": "SYSTEM",
-        "user": "USER",
-        "assistant": "ASSISTANT",
-        "tool": "TOOL"
       },
       "outputCard": {
         "copied": "Output copied",

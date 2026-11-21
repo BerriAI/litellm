@@ -2,7 +2,6 @@
  * Utility functions for parsing and formatting messages for pretty view
  */
 
-import type { ParseKeys, TFunction } from "i18next";
 import {
   MessageRole,
   ParsedMessage,
@@ -12,18 +11,6 @@ import {
   ToolCall,
 } from "./prettyMessagesTypes";
 import i18n from "@/i18n/i18n";
-
-const MESSAGE_ROLE_LABELS = new Map<string, ParseKeys>([
-  ["system", "logs.detail.messageRoles.system"],
-  ["user", "logs.detail.messageRoles.user"],
-  ["assistant", "logs.detail.messageRoles.assistant"],
-  ["tool", "logs.detail.messageRoles.tool"],
-]);
-
-export const messageRoleLabel = (role: string, t: TFunction): string => {
-  const key = MESSAGE_ROLE_LABELS.get(role);
-  return key ? t(key) : role.toUpperCase();
-};
 
 type UnknownRecord = Record<string, unknown>;
 

@@ -9925,8 +9925,7 @@
       "stopFailed": "无法停止运行。请重新连接后再次点击“停止”。"
     },
     "chatHistory": {
-      "newConversation": "新对话",
-      "imageConversation": "图像对话"
+      "newConversation": "新对话"
     },
     "imageHelpers": {
       "generatedImageName": "生成的图像 {{number}}"
@@ -15239,12 +15238,6 @@
       },
       "inputCard": {
         "copied": "输入已复制"
-      },
-      "messageRoles": {
-        "system": "系统",
-        "user": "用户",
-        "assistant": "助手",
-        "tool": "工具"
       },
       "outputCard": {
         "copied": "输出已复制",

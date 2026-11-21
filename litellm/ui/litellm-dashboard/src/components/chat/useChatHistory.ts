@@ -1,6 +1,5 @@
 import { v4 as uuid } from "uuid";
 import { useCallback, useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
 import { AssistantMessageUpdate, ChatMessage, Conversation } from "./types";
 import { DEFAULT_CONVERSATION_TITLE, isDefaultConversationTitle } from "./conversationTitle";
 import {
@@ -77,7 +76,6 @@ export function useChatHistory(
   renameConversation: (id: string, newTitle: string) => void;
   setActiveConversationId: (id: string | null) => void;
 } {
-  const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[]>(
     () => loadFromStorage(storageKeyFor(userId)).conversations,
   );
@@ -194,36 +192,31 @@ export function useChatHistory(
     return id;
   }, []);
 
-  const appendMessage = useCallback(
-    (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => {
-      const newMessage: ChatMessage = {
-        ...message,
-        id: uuid(),
-        timestamp: Date.now(),
-      };
+  const appendMessage = useCallback((conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => {
+    const newMessage: ChatMessage = {
+      ...message,
+      id: uuid(),
+      timestamp: Date.now(),
+    };
 
-      setConversations((prev) => {
-        const updated = prev.map((conv) => {
-          if (conv.id !== conversationId) return conv;
-          const updatedMessages = [...conv.messages, newMessage];
-          const title =
-            newMessage.role === "user" && isDefaultConversationTitle(conv)
-              ? generateTitle(
-                  newMessage.content || newMessage.attachments?.[0]?.name || t("chat.chatHistory.imageConversation"),
-                )
-              : undefined;
-          return {
-            ...conv,
-            ...(title === undefined ? {} : { title, hasCustomTitle: true }),
-            messages: updatedMessages,
-            updatedAt: Date.now(),
-          };
-        });
-        return trimConversations(updated);
+    setConversations((prev) => {
+      const updated = prev.map((conv) => {
+        if (conv.id !== conversationId) return conv;
+        const updatedMessages = [...conv.messages, newMessage];
+        const title =
+          newMessage.role === "user" && isDefaultConversationTitle(conv)
+            ? generateTitle(newMessage.content || newMessage.attachments?.[0]?.name || "Image conversation")
+            : undefined;
+        return {
+          ...conv,
+          ...(title === undefined ? {} : { title, hasCustomTitle: true }),
+          messages: updatedMessages,
+          updatedAt: Date.now(),
+        };
       });
-    },
-    [t],
-  );
+      return trimConversations(updated);
+    });
+  }, []);
 
   const updateLastAssistantMessage = useCallback((conversationId: string, updates: AssistantMessageUpdate) => {
     setConversations((prev) => {

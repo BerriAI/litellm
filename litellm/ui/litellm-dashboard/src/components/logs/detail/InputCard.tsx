@@ -7,7 +7,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { ParsedMessage } from "./prettyMessagesTypes";
-import { messageRoleLabel } from "./prettyMessagesUtils";
 import { SectionHeader } from "./SectionHeader";
 import { CollapsibleMessage } from "./CollapsibleMessage";
 import { HistoryTree } from "./HistoryTree";
@@ -70,7 +69,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
           {/* System Message - Collapsible with arrow */}
           {systemMessage && (
             <CollapsibleMessage
-              label={t("logs.detail.messageRoles.system")}
+              label={systemMessage.role.toUpperCase()}
               content={systemMessage.content}
               defaultExpanded={!!(systemMessage.content && systemMessage.content.length < 200)}
             />
@@ -82,7 +81,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
           {/* Last User Message - Always visible */}
           {lastMessage && (
             <SimpleMessageBlock
-              label={messageRoleLabel(lastMessage.role, t)}
+              label={lastMessage.role.toUpperCase()}
               content={lastMessage.content}
               toolCalls={lastMessage.toolCalls}
             />
