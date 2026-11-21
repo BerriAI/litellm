@@ -769,13 +769,28 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
 
-  it.each(["/ui/lens", "/ui/lens/"])("keeps gateway navigation available in the Lens workspace at %s", (pathname) => {
+  it.each(["/ui/lens", "/ui/lens/"])("shows Lens navigation instead of gateway pages at %s", (pathname) => {
     navState.pathname = pathname;
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("button", { name: "Switch workspace, current: Lens" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("href", "/ui/api-keys");
-    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("href", "/ui/logs");
-    expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("data-active");
+    const navigation = within(screen.getByRole("navigation", { name: "Lens" }));
+    expect(navigation.getAllByRole("button")).toHaveLength(9);
+    for (const name of [
+      "Home",
+      "Agents",
+      "Traces",
+      "Profiles",
+      "Findings",
+      "Datasets",
+      "Evals",
+      "Model optimizations",
+      "Settings",
+    ]) {
+      expect(navigation.getByRole("button", { name })).toBeVisible();
+    }
+    expect(navigation.getByRole("button", { name: "Traces" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("link", { name: "Virtual Keys" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {

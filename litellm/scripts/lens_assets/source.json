@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/BerriAI/lens",
-  "revision": "2e66387489387e48ad164526b02c958fcdc16698",
+  "revision": "cde15ba7b03bdcfaa4e0580eb1679d73d66b459c",
   "schema_groups": {
     "types": {
       "schemas/types/QueryScope.json": "1b73f68704a5a94a6d82ee830f3c7d7d1f9c693e34d7a0eef9e90936cdeb0ac2",

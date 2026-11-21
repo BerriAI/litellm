@@ -70,7 +70,9 @@ it("opens the packaged demo trace and preserves its shareable selection in the g
     searchParams: "?demo=true",
     onUrlUpdate,
   });
-  await user.click(await screen.findByText("Where is order #1042?"));
+  const run = await screen.findByText("Where is order #1042?");
+  expect(screen.queryByRole("tablist", { name: "Lens" })).not.toBeInTheDocument();
+  await user.click(run);
   const details = await screen.findByRole("complementary", { name: "Trace details" });
   expect(await within(details).findByRole("tab", { name: "Thread" })).toBeVisible();
   const query = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString));

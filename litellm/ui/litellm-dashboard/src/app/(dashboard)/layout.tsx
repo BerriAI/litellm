@@ -114,7 +114,7 @@ export function AgentControlPlaneView() {
   );
 }
 
-const FULL_BLEED_SEGMENTS = new Set(["logs", "lens"]);
+const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
   useCloseMobileSidebarOn(navigationKey);

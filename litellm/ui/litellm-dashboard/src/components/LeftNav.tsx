@@ -95,6 +95,7 @@ import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
+import { GatewayLensNavigation } from "@/components/lens/GatewayLensNavigation";
 
 const ICON = { strokeWidth: 1.75 } as const;
 
@@ -643,6 +644,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const currentRoute = routeForPathname(usePathname());
+  const inLensWorkspace = currentRoute === "lens";
   const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
@@ -783,25 +785,34 @@ const Sidebar_: React.FC<SidebarProps> = ({
             collapsed={collapsed}
             className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
           />
-          <AriaSidebarLink active={currentRoute === "aria"} />
+          {!inLensWorkspace && <AriaSidebarLink active={currentRoute === "aria"} />}
         </SidebarGroup>
         <SidebarContent>
           <ScrollArea className="min-h-0 flex-1">
-            <nav className="flex flex-col gap-0.5 px-3 pb-3">
-              {visibleGroups.map((group, gi) => (
-                <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
-                  {gi > 0 && (
-                    <SidebarSeparator
-                      aria-hidden
-                      className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
-                    />
-                  )}
-                  <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
-                    {term(groupText(group.groupLabel))}
-                  </SidebarGroupLabel>
-                  <SidebarMenu className={navMenuClassName}>{group.items.map((item) => renderItem(item))}</SidebarMenu>
-                </SidebarGroup>
-              ))}
+            <nav
+              aria-label={inLensWorkspace ? t("shell.nav.items.lens") : undefined}
+              className="flex flex-col gap-0.5 px-3 pb-3"
+            >
+              {inLensWorkspace ? (
+                <GatewayLensNavigation />
+              ) : (
+                visibleGroups.map((group, gi) => (
+                  <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
+                    {gi > 0 && (
+                      <SidebarSeparator
+                        aria-hidden
+                        className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
+                      />
+                    )}
+                    <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
+                      {term(groupText(group.groupLabel))}
+                    </SidebarGroupLabel>
+                    <SidebarMenu className={navMenuClassName}>
+                      {group.items.map((item) => renderItem(item))}
+                    </SidebarMenu>
+                  </SidebarGroup>
+                ))
+              )}
             </nav>
           </ScrollArea>
         </SidebarContent>

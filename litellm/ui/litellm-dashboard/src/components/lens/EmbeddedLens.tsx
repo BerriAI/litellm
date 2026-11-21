@@ -10,6 +10,7 @@ import { GatewayWorkspaceSwitcher } from "./GatewayWorkspaceSwitcher";
 
 const host: LensHost = {
   surface: "embedded",
+  navigation: "host",
   analysis: "deployment",
   WorkspaceSwitcher: GatewayWorkspaceSwitcher,
   spendLogs: { lookup: uiSpendLogsCall, Drawer: LogDetailsDrawer },
