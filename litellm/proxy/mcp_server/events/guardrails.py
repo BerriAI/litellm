@@ -46,7 +46,7 @@ def caller_metadata(caller: UserAPIKeyAuth) -> _RequestData:
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
     return {
-        "user_api_key_metadata": strip_callback_config(caller.metadata),
+        "user_api_key_metadata": strip_callback_config(caller.metadata),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # UserAPIKeyAuth.metadata is a bare dict
         "user_api_key_team_metadata": strip_callback_config(caller.team_metadata),
         "tags": list(LiteLLMProxyRequestSetup.get_inherited_tags(caller)),
     }
