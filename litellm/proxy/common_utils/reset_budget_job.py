@@ -1159,10 +1159,11 @@ class ResetBudgetJob:
             rollover_caps=rollover_caps,
             member_credit_budget_ids=member_credit_budget_ids,
             member_credit_cache_keys=tuple(
-                key
-                for row in team_memberships
-                if row.budget_id in member_credit_budget_id_set
-                for key in _rollover_membership_cache_keys(row)
+                chain.from_iterable(
+                    _rollover_membership_cache_keys(row)
+                    for row in team_memberships
+                    if row.budget_id in member_credit_budget_id_set
+                )
             ),
             windows=windows,
             customer_ids=MappingProxyType({"org": tuple(row.customer_org_id for row in customer_orgs)}),

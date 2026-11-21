@@ -114,13 +114,19 @@ async def _write_budget_update(
         return await BudgetRepository(prisma_client).table.update(where={"budget_id": budget_id}, data=data)
     async with prisma_client.tx() as tx_ctx:
         tx: Final = cast("_BudgetUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
-        current: Final = await lock_budget_limits(tx, "LiteLLM_BudgetTable", budget_id)
         if "rollover_max_budget" in data and data["rollover_max_budget"] is None:
+            # Match the reset cascade's membership-first lock order.
+            await tx.query_raw(
+                'SELECT 1 AS locked FROM "LiteLLM_TeamMembership" WHERE budget_id = $1::text '
+                'ORDER BY team_id COLLATE "C", user_id COLLATE "C" FOR UPDATE',
+                budget_id,
+            )
             await tx.execute_raw(
                 'UPDATE "LiteLLM_TeamMembership" SET rollover_credit = NULL'
                 " WHERE budget_id = $1 AND rollover_credit IS NOT NULL",
                 budget_id,
             )
+        current: Final = await lock_budget_limits(tx, "LiteLLM_BudgetTable", budget_id)
         duration: Final = data.get("budget_duration")
         stored: Final = (
             await tx.litellm_budgettable.find_unique(where={"budget_id": budget_id})
