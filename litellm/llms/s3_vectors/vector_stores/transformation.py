@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
@@ -29,6 +30,8 @@ else:
 
 _DEFAULT_QUERY_EMBEDDING_MODEL: Final = "text-embedding-3-small"
 _DEFAULT_TOP_K: Final = 5
+# The metadata key `/rag/ingest` writes each chunk's text to.
+_DEFAULT_TEXT_FIELD: Final = "source_text"
 S3_VECTORS_STORE_ID_ERROR: Final = (
     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
     "or vector_bucket_name must be provided in litellm_params"
@@ -58,6 +61,13 @@ def s3_vectors_ingest_target(vector_store_config: Mapping[str, object]) -> tuple
         return explicit_bucket_name, explicit_index_name
     derived_bucket_name, derived_index_name = split_s3_vectors_store_id(vector_store_id, explicit_bucket_name)
     return explicit_bucket_name or derived_bucket_name, explicit_index_name or derived_index_name
+
+
+def s3_vectors_text_field(litellm_params: object) -> str:
+    """The metadata key a search hit's text is read from: `s3_vectors_text_field`, else the key `/rag/ingest` writes."""
+    params: Final = as_str_mapping(litellm_params)
+    configured: Final = _non_empty_str(params.get("s3_vectors_text_field")) if params is not None else None
+    return configured or _DEFAULT_TEXT_FIELD
 
 
 def s3_vectors_configured_embedding_model(litellm_params: Mapping[str, object]) -> str | None:
@@ -215,13 +225,13 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
         try:
             response_data: Final = response.json()
             results: Final[list[VectorStoreSearchResult]] = []
+            text_field: Final = s3_vectors_text_field(litellm_logging_obj.model_call_details.get("litellm_params"))
 
             for item in response_data.get("vectors", []) or []:
                 metadata = item.get("metadata", {}) or {}
-                source_text = metadata.get("source_text", "")
-
-                if not source_text:
-                    continue
+                # A hit without the text field is still a hit: it is returned with empty text and its metadata,
+                # as the Milvus and Azure AI Search stores do, rather than dropped from the results.
+                text = metadata.get(text_field)
 
                 chunk_index = metadata.get("chunk_index", "0")
                 file_id = f"s3-vectors-chunk-{chunk_index}"
@@ -235,7 +245,7 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
                 results.append(
                     VectorStoreSearchResult(
                         score=score,
-                        content=[VectorStoreResultContent(text=source_text, type="text")],
+                        content=[VectorStoreResultContent(text=text if isinstance(text, str) else "", type="text")],
                         file_id=file_id,
                         filename=filename,
                         attributes=metadata,
