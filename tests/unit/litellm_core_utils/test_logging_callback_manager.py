@@ -1,9 +1,10 @@
 import asyncio
+import json
 import os
 import threading
 from collections.abc import Iterator, Mapping
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -584,3 +585,48 @@ def test_a_v2_callback_is_added_to_every_event_list_once_per_logger_key(monkeypa
         litellm._async_failure_callback,
     ):
         assert callback_list == [first, second]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_generic_api_compatible_callbacks_json_whiteboxxai(monkeypatch: pytest.MonkeyPatch) -> None:
+    ingest_url: Final = "https://whitebox.example.com/api/v1/llm/gateways/litellm/ingest"
+    api_key: Final = "wbx_lgw_test_key"
+    monkeypatch.setenv("WHITEBOXXAI_INGEST_URL", ingest_url)
+    monkeypatch.setenv("WHITEBOXXAI_API_KEY", api_key)
+
+    result: Final = LoggingCallbackManager.add_custom_callback_generic_api_str("whiteboxxai")
+
+    assert isinstance(result, GenericAPILogger)
+    try:
+        assert result.endpoint == ingest_url
+        assert result.headers["Content-Type"] == "application/json"
+        assert result.headers["Authorization"] == f"Bearer {api_key}"
+        assert result.event_types == ["llm_api_success", "llm_api_failure"]
+    finally:
+        result.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("generic_api_logger_cache")
+async def test_whiteboxxai_callback_posts_queued_event_as_json_array(monkeypatch: pytest.MonkeyPatch) -> None:
+    ingest_url: Final = "https://whitebox.example.com/api/v1/llm/gateways/litellm/ingest"
+    api_key: Final = "wbx_lgw_test_key"
+    monkeypatch.setenv("WHITEBOXXAI_INGEST_URL", ingest_url)
+    monkeypatch.setenv("WHITEBOXXAI_API_KEY", api_key)
+    logger: Final = LoggingCallbackManager.add_custom_callback_generic_api_str("whiteboxxai")
+    assert isinstance(logger, GenericAPILogger)
+    post: Final = AsyncMock(return_value=MagicMock(status_code=200))
+    logger.async_httpx_client = MagicMock(post=post)
+
+    try:
+        logger.log_queue.append({"id": "chatcmpl-test-123", "model": "gpt-4o", "response_cost": 0.00015})
+        await logger.async_send_batch()
+    finally:
+        logger.shutdown()
+
+    post.assert_awaited_once()
+    sent: Final = post.await_args.kwargs
+    assert sent["url"] == ingest_url
+    assert sent["headers"]["Authorization"] == f"Bearer {api_key}"
+    assert json.loads(sent["data"]) == [{"id": "chatcmpl-test-123", "model": "gpt-4o", "response_cost": 0.00015}]

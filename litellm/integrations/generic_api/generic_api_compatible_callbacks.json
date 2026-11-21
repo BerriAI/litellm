@@ -42,5 +42,14 @@
       "Authorization": "Bearer {{environment_variables.RAMP_API_KEY}}"
     },
     "environment_variables": ["RAMP_API_KEY"]
+  },
+  "whiteboxxai": {
+    "event_types": ["llm_api_success", "llm_api_failure"],
+    "endpoint": "{{environment_variables.WHITEBOXXAI_INGEST_URL}}",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{environment_variables.WHITEBOXXAI_API_KEY}}"
+    },
+    "environment_variables": ["WHITEBOXXAI_API_KEY", "WHITEBOXXAI_INGEST_URL"]
   }
 }
