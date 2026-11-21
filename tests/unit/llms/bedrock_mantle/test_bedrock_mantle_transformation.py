@@ -7,7 +7,8 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 
 import json
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -1273,3 +1274,55 @@ def test_mantle_signing_reports_only_missing_aws_dependency(missing):
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+@pytest.fixture
+def mantle_without_usable_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "config").write_text("")
+    for name in (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+        "BEDROCK_MANTLE_API_KEY",
+        "AWS_BEARER_TOKEN_BEDROCK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no-credentials"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+_MANTLE_SIGNED_CALLS: Final = (
+    pytest.param(
+        lambda: litellm.acompletion(
+            model="bedrock_mantle/openai.gpt-6-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            aws_profile_name="profile-that-does-not-exist",
+            aws_region_name="us-east-1",
+        ),
+        id="chat",
+    ),
+    pytest.param(
+        lambda: litellm.aresponses(
+            model="bedrock_mantle/openai.gpt-6-sol",
+            input="hi",
+            aws_profile_name="profile-that-does-not-exist",
+            aws_region_name="us-east-1",
+        ),
+        id="responses",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("mantle_without_usable_credentials")
+@pytest.mark.parametrize("call", _MANTLE_SIGNED_CALLS)
+async def test_a_mantle_call_without_usable_aws_credentials_answers_401(call: Callable[[], Awaitable[object]]) -> None:
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        await call()
+
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+
+    assert excinfo.value.status_code == 401
+    assert type(excinfo.value.__context__) is BedrockMantleAuthError

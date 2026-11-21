@@ -32,6 +32,12 @@ MANTLE_AUTH_FAILED: Final = (
     "(IAM role / access key / profile / web identity) for SigV4."
 )
 
+
+class BedrockMantleAuthError(ValueError):
+    def __init__(self) -> None:
+        super().__init__(MANTLE_AUTH_FAILED)
+
+
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
 
@@ -128,7 +134,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
             ProfileNotFound,
             CredentialRetrievalError,
         ) as e:
-            raise ValueError(MANTLE_AUTH_FAILED) from e
+            raise BedrockMantleAuthError() from e
 
 
 def is_mantle_claude_model(model: str) -> bool:

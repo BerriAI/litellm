@@ -3174,7 +3174,7 @@ def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
         ),
         pytest.param(("invalid_web_identity_token", "", "", "bad"), "AwsAuthError", 401, id="invalid-web-identity"),
         pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", None, id="sts-unreachable"),
-        pytest.param(None, "ValueError", None, id="no-sts-call"),
+        pytest.param(None, "AuthenticationError", 401, id="no-sts-call"),
     ),
 )
 def test_a_bedrock_mantle_sts_failure_raises_the_class_the_mantle_signer_lets_through(
@@ -3616,8 +3616,8 @@ def test_a_refused_reply_raises_an_api_error_500(
 
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize("kind", ("no_credentials", "replay"))
-def test_a_bedrock_mantle_credential_failure_raises_the_mantle_value_error(kind: str) -> None:
-    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
+def test_a_bedrock_mantle_credential_failure_answers_401_with_the_mantle_auth_error(kind: str) -> None:
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
 
     mapped: Final = messages_host.map_failure(
         _credential_failure(kind),
@@ -3625,8 +3625,9 @@ def test_a_bedrock_mantle_credential_failure_raises_the_mantle_value_error(kind:
         "bedrock_mantle",
     )
 
-    assert type(mapped) is ValueError
-    assert str(mapped) == MANTLE_AUTH_FAILED
+    assert type(mapped) is litellm.AuthenticationError
+    assert mapped.status_code == 401
+    assert type(mapped.__context__) is BedrockMantleAuthError
     assert mapped.__traceback__ is not None
 
 
@@ -3658,14 +3659,14 @@ def test_a_bedrock_mantle_route_credential_failure_answers_401() -> None:
 
 
 @pytest.mark.parametrize(
-    ("model", "request_provider", "raised"),
+    ("model", "request_provider", "raised_by_signing"),
     (
-        pytest.param(_MANTLE_ROUTE, "bedrock", "AuthenticationError", id="mantle-route"),
-        pytest.param(_BEDROCK_MANTLE, "bedrock_mantle", "ValueError", id="bedrock-mantle"),
+        pytest.param(_MANTLE_ROUTE, "bedrock", "ProfileNotFound", id="mantle-route"),
+        pytest.param(_BEDROCK_MANTLE, "bedrock_mantle", "BedrockMantleAuthError", id="bedrock-mantle"),
     ),
 )
-def test_a_mantle_missing_profile_raises_what_python_signing_raises(
-    model: str, request_provider: str, raised: str
+def test_a_mantle_missing_profile_answers_401_with_what_python_signing_raises(
+    model: str, request_provider: str, raised_by_signing: str
 ) -> None:
     rust_error: Final = _credential_failure("profile_not_found")
     rust_error.messages_missing_profile = "absent-profile"  # pyright: ignore[reportAttributeAccessIssue]  # set by the Rust host
@@ -3674,9 +3675,8 @@ def test_a_mantle_missing_profile_raises_what_python_signing_raises(
         rust_error, {"model": model, "messages": [], "aws_region_name": "us-east-1"}, request_provider
     )
 
-    assert type(mapped).__name__ == raised
-    if raised == "AuthenticationError":
-        assert getattr(mapped.__context__, "kwargs", None) == {"profile": "absent-profile"}
+    assert type(mapped) is litellm.AuthenticationError
+    assert type(mapped.__context__).__name__ == raised_by_signing
 
 
 def _refused(text: str, **markers: object) -> ValueError:

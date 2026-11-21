@@ -882,7 +882,7 @@ def _bedrock_credential_failure(
     could not acquire, from botocore's `NoCredentialsError` to an STS or `AwsAuthError` failure. Only a
     Bedrock invoke call (`replay`) runs Python's signing again; Rust names the Mantle routes' failure."""
     from litellm.llms.bedrock.base_aws_llm import AwsAuthError
-    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
 
     kind: Final = getattr(error, "messages_credential_failure", None)
     if not isinstance(kind, str):
@@ -892,7 +892,7 @@ def _bedrock_credential_failure(
         sts: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
         if sts is not None:
             return _raised(sts)
-        return _raised(known if isinstance(known, AwsAuthError) else ValueError(MANTLE_AUTH_FAILED))
+        return _raised(known if isinstance(known, AwsAuthError) else BedrockMantleAuthError())
     if known is not None:
         return _raised(known)
     if kind == "unavailable":

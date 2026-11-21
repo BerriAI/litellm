@@ -1060,6 +1060,10 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
 
 
 def _aws_credential_error_status(error: BaseException) -> Literal[401, 403] | None:
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+
+    if isinstance(error, BedrockMantleAuthError):
+        return 401
     if not type(error).__module__.startswith("botocore"):
         return None
     from botocore.exceptions import (

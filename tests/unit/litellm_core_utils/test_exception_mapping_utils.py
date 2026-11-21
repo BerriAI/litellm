@@ -3958,3 +3958,20 @@ def test_bedrock_credential_source_outage_stays_a_retryable_connection_error() -
         )
 
     assert excinfo.value.status_code == 500
+
+
+def test_bedrock_mantle_without_usable_aws_credentials_answers_401() -> None:
+    from botocore.exceptions import ProfileNotFound
+
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+
+    signing_failure: Final = BedrockMantleAuthError()
+    signing_failure.__cause__ = ProfileNotFound(profile="missing-profile")
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="openai.gpt-6-sol", original_exception=signing_failure, custom_llm_provider="bedrock_mantle"
+        )
+
+    assert excinfo.value.status_code == 401
+    assert "github.com/BerriAI/litellm/issues/new" not in excinfo.value.message
