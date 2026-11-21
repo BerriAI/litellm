@@ -122,6 +122,7 @@ pub struct GeneralSettings {
     pub allowed_routes: Option<Box<[String]>>,
     pub custom_auth: Option<String>,
     pub litellm_key_header_name: Option<String>,
+    pub required_customer_headers: Box<[String]>,
     pub litellm_jwtauth: Option<JwtAuthSettings>,
     pub role_permissions: Option<Box<[RolePermissions]>>,
     /// `bool(general_settings.get("enforce_rbac"))`
@@ -185,6 +186,7 @@ impl Default for GeneralSettings {
             allowed_routes: None,
             custom_auth: None,
             litellm_key_header_name: None,
+            required_customer_headers: Box::default(),
             litellm_jwtauth: None,
             role_permissions: None,
             enforce_rbac: false,
@@ -193,32 +195,6 @@ impl Default for GeneralSettings {
             additional_fields: AdditionalFields::default(),
         }
     }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct RouterSettings {
-    pub routing_strategy: Option<String>,
-    pub routing_strategy_args: Option<Object>,
-    pub routing_groups: Option<Box<[Object]>>,
-    pub retry_policy: Option<Object>,
-    pub model_group_retry_policy: Option<Object>,
-    pub model_group_affinity_config: Option<Object>,
-    pub allowed_fails: Option<u64>,
-    pub cooldown_time: Option<f64>,
-    pub num_retries: Option<u64>,
-    pub timeout: Option<f64>,
-    pub max_retries: Option<u64>,
-    pub retry_after: Option<f64>,
-    pub fallbacks: Option<Box<[Object]>>,
-    pub context_window_fallbacks: Option<Box<[Object]>>,
-    pub model_group_alias: Option<Object>,
-    pub enable_tag_filtering: Option<bool>,
-    pub weights: Option<Object>,
-    pub tag_routing_prefix: Option<String>,
-    pub optional_pre_call_checks: Option<Box<[String]>>,
-    #[serde(flatten)]
-    pub additional_fields: AdditionalFields,
 }
 
 /// Callback entries can carry credentials inline, so only whether they are set is printed.

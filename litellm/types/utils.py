@@ -4900,6 +4900,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"

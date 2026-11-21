@@ -360,6 +360,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "phoenix_project_name",
     "opik",
     "model_limit_max_borrow_multiple",
+    "required_customer_headers",
 )
 
 _STORED_METADATA: Final = {"cost_center": "eng", "region": "eu", "priority": "high", "guardrails": ["pii"]}

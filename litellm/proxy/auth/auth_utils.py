@@ -1946,6 +1946,7 @@ _ADMIN_ONLY_METADATA_KEYS: Final = (
     TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
     MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
 )
 _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -1957,6 +1958,9 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         ),
         ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: (
             "It picks the Anthropic user profile a safety action applies to, so the holder cannot change it."
+        ),
+        REQUIRED_CUSTOMER_HEADERS_SETTING: (
+            "It requires customer identity headers, so the holder cannot remove the policy."
         ),
     }
 )

@@ -524,6 +524,7 @@ if TYPE_CHECKING:
         JudgeCheck as JudgeCheck,
         PredicateCheck as PredicateCheck,
         aagent_eval as aagent_eval,
+        aagent_eval_attempt as aagent_eval_attempt,
         agent_eval as agent_eval,
     )
 
@@ -704,6 +705,7 @@ darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
+resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
@@ -1002,6 +1004,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             kyma_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
+        elif value.get("litellm_provider") == "resetdata":
+            resetdata_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
@@ -1187,6 +1191,7 @@ model_list = list(
     | openinfer_models
     | kyma_models
     | streamlake_models
+    | resetdata_models
     | wally_models
     | zerogpu_models
     | v0_models
@@ -1320,6 +1325,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,
+        "resetdata": resetdata_models,
         "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,

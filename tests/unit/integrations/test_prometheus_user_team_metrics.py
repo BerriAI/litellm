@@ -1031,7 +1031,7 @@ async def test_increment_remaining_budget_metrics_emits_customer_gauges_from_cac
     get_end_user_object.assert_not_awaited()
     cache_read = mock_proxy_server.user_api_key_cache.async_get_cache
     cache_read.assert_awaited_once()
-    assert cache_read.await_args.kwargs["key"] == "end_user_id:cust-req"
+    assert cache_read.await_args.kwargs["key"].key == "end_user_id:cust-req"
     assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-req") == pytest.approx(650.0)
     assert _customer_sample("litellm_customer_max_budget_metric", "cust-req") == pytest.approx(1000.0)
 
