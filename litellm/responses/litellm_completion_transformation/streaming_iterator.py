@@ -537,10 +537,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             fn_args_delta = ""
             if isinstance(fn, dict):
                 fn_name = str(fn.get("name") or "")
-                fn_args_delta = serialize_tool_call_arguments(fn.get("arguments"))
+                fn_args_delta = serialize_tool_call_arguments(fn.get("arguments"), default="")
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
-                fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
+                fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""), default="")
             if call_id not in self._tool_output_index_by_call_id:
                 self._queue_held_annotations()
             output_index = self._get_or_assign_tool_output_index(call_id)
@@ -604,10 +604,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             fn_args = ""
             if isinstance(fn, dict):
                 fn_name = str(fn.get("name") or "")
-                fn_args = serialize_tool_call_arguments(fn.get("arguments"))
+                fn_args = serialize_tool_call_arguments(fn.get("arguments"), default="")
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
-                fn_args = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
+                fn_args = serialize_tool_call_arguments(getattr(fn, "arguments", ""), default="")
             web_search_call = self._web_search_calls.get(call_id)
             if web_search_call is not None:
                 if call_id not in self._queued_web_search_call_ids:
