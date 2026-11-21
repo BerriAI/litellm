@@ -692,3 +692,36 @@ def test_malformed_allowed_tools_tool_choice_is_rejected_unless_drop_params_true
         litellm_params={"drop_params": True},
     )
     assert dropped.optional_params == {}
+
+
+def test_remote_image_is_sent_as_bare_base64_with_its_detected_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
+        lambda url: "data:image/webp;base64,ZmFrZQ==",
+    )
+
+    prepared = transform_chat_to_interactions_request(
+        model="gemini-4-neon",
+        messages=[
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat"}}]}
+        ],
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="gemini",
+    )
+
+    assert prepared.input_steps[0]["content"] == [{"type": "image", "mime_type": "image/webp", "data": "ZmFrZQ=="}]
+
+
+@pytest.mark.parametrize("unsupported", ({"background": True}, {"safety_settings": [{"category": "c"}]}))
+def test_params_the_chat_bridge_cannot_honor_are_rejected_even_with_drop_params(
+    unsupported: Mapping[str, object],
+) -> None:
+    with pytest.raises(litellm.BadRequestError):
+        transform_chat_to_interactions_request(
+            model="gemini-4-neon",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=dict(unsupported),
+            litellm_params={"drop_params": True},
+            custom_llm_provider="gemini",
+        )

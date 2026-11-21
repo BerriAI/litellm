@@ -256,3 +256,84 @@ def test_vertex_resume_of_a_stored_turn_sends_no_input_because_the_previous_inte
     assert "input" in bodies[0]
     assert "input" not in bodies[1]
     assert (bodies[1]["continuation_token"], bodies[1]["previous_interaction_id"]) == ("tok-1", "v1_first")
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "expected"),
+    (
+        ("failed", {"code": "resource_exhausted", "message": "quota"}, litellm.RateLimitError),
+        ("failed", {"code": "invalid_argument", "message": "bad input"}, litellm.BadRequestError),
+        ("cancelled", None, litellm.APIConnectionError),
+    ),
+)
+def test_unary_interaction_that_failed_or_was_cancelled_raises_instead_of_answering(
+    status: str, error: Mapping[str, object] | None, expected: type[Exception]
+) -> None:
+    failed: Final = {**_interaction("partial", status), **({"error": error} if error is not None else {})}
+    _, responder = _scripted((httpx.Response(200, json=failed),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client, pytest.raises(expected):
+        litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            api_key="k",
+            api_base=API_BASE,
+            num_retries=0,
+            client=HTTPHandler(client=raw_client),
+        )
+
+
+def test_continuation_hop_that_fails_returns_the_answer_so_far_with_its_token() -> None:
+    _, responder = _scripted(
+        (
+            httpx.Response(200, json=_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(200, json=_interaction("", "failed", interaction_id="v1_second")),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        choice, token = _message_of(
+            litellm.completion(
+                model=MODEL,
+                max_tokens=1000,
+                messages=list(MESSAGES),
+                api_key="k",
+                api_base=API_BASE,
+                client=HTTPHandler(client=raw_client),
+            )
+        )
+
+    assert (choice.message.content, choice.finish_reason, token) == ("Once ", "length", "tok-1")
+
+
+def test_streamed_images_and_audio_reach_the_caller() -> None:
+    events: Final = (
+        {
+            "event_type": "step.start",
+            "index": 0,
+            "step": {"type": "model_output", "content": [{"type": "image", "mime_type": "image/png", "data": "QQ=="}]},
+        },
+        {"event_type": "step.delta", "index": 0, "delta": {"type": "image", "mime_type": "image/png", "data": "Qg=="}},
+        {"event_type": "step.delta", "index": 0, "delta": {"type": "audio", "mime_type": "audio/wav", "data": "Qw=="}},
+        {"event_type": "interaction.completed", "interaction": {"id": "v1_first", "status": "completed"}},
+    )
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    _, responder = _scripted((httpx.Response(200, text=body, headers={"content-type": "text/event-stream"}),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        chunks: Final = list(
+            litellm.completion(
+                model=MODEL,
+                messages=list(MESSAGES),
+                stream=True,
+                api_key="k",
+                api_base=API_BASE,
+                client=HTTPHandler(client=raw_client),
+            )
+        )
+
+    deltas: Final = [chunk.choices[0].delta for chunk in chunks if chunk.choices]
+    images: Final = [image for delta in deltas for image in (getattr(delta, "images", None) or [])]
+    audio: Final = [delta.audio["data"] for delta in deltas if getattr(delta, "audio", None)]
+    assert [(image["index"], image["image_url"]["url"]) for image in images] == [
+        (0, "data:image/png;base64,QQ=="),
+        (1, "data:image/png;base64,Qg=="),
+    ]
+    assert audio == ["Qw=="]

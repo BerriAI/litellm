@@ -1,5 +1,5 @@
-from collections.abc import Mapping
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -24,7 +24,6 @@ from litellm.utils import (
 
 def test_toggle_is_off_by_default_and_excludes_non_gemini_vertex_models(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
-    monkeypatch.delenv("LITELLM_ROUTE_ALL_CHAT_GEMINI_TO_INTERACTIONS", raising=False)
 
     assert should_route_to_interactions_api(model="gemini-3-flash-preview", custom_llm_provider="gemini") is False
     assert should_route_to_interactions_api(model="gemini-3-flash-preview", custom_llm_provider="vertex_ai") is False
@@ -269,7 +268,6 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
             messages=[{"role": "user", "content": "continue"}],
             use_interactions=True,
             previous_interaction_id="v1_prev_99",
-            background=True,
             environment="browser",
             audio={"voice": "alloy", "format": "pcm16"},
             response_json_schema=schema,
@@ -296,7 +294,6 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
         "model": "gemini-3-flash-preview",
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "continue"}]}],
         "previous_interaction_id": "v1_prev_99",
-        "background": True,
         "environment": "browser",
         "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
         "generation_config": {"speech_config": [{"voice": "Kore"}]},
@@ -369,10 +366,9 @@ def test_interactions_native_tool_choice_and_wav_audio_bypass_legacy_gemini_vali
     }
 
 
-def test_runtime_false_toggle_overrides_env_and_interactions_mode_does_not_leak_to_unregistered_cost_row(
+def test_runtime_false_toggle_keeps_older_gemini_off_interactions_and_interactions_mode_does_not_leak_to_unregistered_cost_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LITELLM_ROUTE_ALL_CHAT_GEMINI_TO_INTERACTIONS", "true")
     monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
 
     assert should_route_to_interactions_api(model="gemini-3-flash-preview", custom_llm_provider="gemini") is False
@@ -539,6 +535,7 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
         ("gemini-4-neon", "gemini", {}, True),
         ("gemini-4-neon", "vertex_ai", {}, True),
         ("gemini-4.5-flash", "gemini", {}, True),
+        ("gemini-12.5-flash", "gemini", {}, True),
         ("gemini-10-pro", "gemini", {}, True),
         ("gemini-3.8-flash", "gemini", {}, False),
         ("gemini-3-flash-preview", "vertex_ai", {}, False),
@@ -549,6 +546,10 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
         ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"use_interactions": False}}}, False),
         ("gemini-4-neon", "gemini", {"deployment_model_info": {"mode": "chat"}}, False),
         ("gemini-4-neon", "gemini", {"skip_bridge": True}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"safety_settings": [{"category": "c"}]}}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"safetySettings": []}}}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"generationConfig": {}}}}, False),
+        ("gemini-4-neon", "gemini", {"candidate_count": 2}, False),
     ),
 )
 def test_gemini_4_and_newer_route_to_interactions_by_default_and_older_models_do_not(
@@ -561,3 +562,10 @@ def test_gemini_4_and_newer_route_to_interactions_by_default_and_older_models_do
     monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
 
     assert should_route_to_interactions_api(model=model, custom_llm_provider=provider, **extra) is expected
+
+
+def test_globally_configured_safety_settings_keep_gemini_4_on_generate_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    monkeypatch.setattr(litellm, "vertex_ai_safety_settings", {"HARM_CATEGORY_HARASSMENT": "BLOCK_NONE"})
+
+    assert should_route_to_interactions_api(model="gemini-4-neon", custom_llm_provider="vertex_ai") is False

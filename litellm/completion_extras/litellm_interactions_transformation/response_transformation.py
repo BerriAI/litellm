@@ -126,7 +126,7 @@ def _image_item_from_block(img_idx: int, block: JsonMapping) -> ImageURLListItem
     return None
 
 
-def _parse_output_content_blocks(blocks: Sequence[JsonValue]) -> _ParsedOutputBlocks:
+def parse_output_content_blocks(blocks: Sequence[JsonValue]) -> _ParsedOutputBlocks:
     dict_blocks: Final = tuple(block for block in blocks if isinstance(block, dict))
     text_blocks: Final = tuple(block for block in dict_blocks if block.get("type") == "text")
     pieces: Final = tuple(str(block.get("text") or "") for block in text_blocks)
@@ -231,7 +231,7 @@ def _tool_call_from_step(
 
 def _output_blocks_from_step(step: JsonMapping) -> _ParsedOutputBlocks | None:
     raw_content: Final = step.get("content")
-    return _parse_output_content_blocks(raw_content) if isinstance(raw_content, list) else None
+    return parse_output_content_blocks(raw_content) if isinstance(raw_content, list) else None
 
 
 def _extract_steps(steps: Sequence[JsonValue]) -> _ExtractedSteps:

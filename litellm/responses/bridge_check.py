@@ -380,12 +380,15 @@ def _is_interactions_eligible_target(
 
 
 _ONE_CANDIDATE: Final = (None, 1)
-_GENERATE_CONTENT_BODY_KEYS: Final = frozenset({"generationConfig", "generation_config"})
+_GENERATE_CONTENT_ONLY_KEYS: Final = frozenset(
+    {"generationConfig", "generation_config", "safety_settings", "safetySettings"}
+)
 
 
-def _sends_a_generate_content_body(*param_sources: Mapping[str, object] | None) -> bool:
-    extra_bodies: Final = (str_keyed_mapping((source or {}).get("extra_body")) for source in param_sources)
-    return any(not _GENERATE_CONTENT_BODY_KEYS.isdisjoint(extra_body or {}) for extra_body in extra_bodies)
+def _needs_generate_content(*param_sources: Mapping[str, object] | None) -> bool:
+    sources: Final = tuple(source or {} for source in param_sources)
+    extra_bodies: Final = (str_keyed_mapping(source.get("extra_body")) or {} for source in sources)
+    return any(not _GENERATE_CONTENT_ONLY_KEYS.isdisjoint(params) for params in (*sources, *extra_bodies))
 
 
 def _is_gemini_4_or_newer(model: str) -> bool:
@@ -405,15 +408,12 @@ def _explicit_use_interactions(optional_params: Mapping[str, object] | None) -> 
     return None
 
 
-def _shared_routing_mode(model: str, custom_llm_provider: str) -> object:
+def _catalog_row(model: str, custom_llm_provider: str) -> Mapping[str, object] | None:
     try:
-        shared_info: Final = str_keyed_mapping(
-            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-        )
+        return str_keyed_mapping(get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
     except Exception as exc:  # noqa: BLE001  # capability lookup must not fail request dispatch
         verbose_logger.debug("interactions routing model info lookup failed: %s", exc)
         return None
-    return shared_info.get("mode") if shared_info is not None else None
 
 
 def should_route_to_interactions_api(
@@ -447,15 +447,17 @@ def should_route_to_interactions_api(
     if pinned_mode == "interactions":
         return True
 
-    if _shared_routing_mode(model, custom_llm_provider) == "interactions":
+    catalog_row: Final = _catalog_row(model, custom_llm_provider)
+    if catalog_row is not None and catalog_row.get("mode") == "interactions":
         return True
 
     if bool(litellm.route_all_chat_gemini_to_interactions):
         return True
     return (
         _is_gemini_4_or_newer(model)
+        and litellm.vertex_ai_safety_settings is None
         and candidate_count in _ONE_CANDIDATE
-        and not _sends_a_generate_content_body(str_keyed_mapping(optional_params), llm_map)
+        and not _needs_generate_content(str_keyed_mapping(optional_params), llm_map)
     )
 
 

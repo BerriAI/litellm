@@ -2014,3 +2014,15 @@ def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact()
     assert supported == ["embedding", "aembedding", "completion"]
     assert excluded == ["embedding", "aembedding"]
     assert Cache(type=LiteLLMCacheType.LOCAL).supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+
+def test_cache_key_tells_apart_requests_that_differ_only_in_previous_interaction_id() -> None:
+    cache: Final = Cache()
+    request: Final = {"model": "gemini/gemini-4-neon", "messages": [{"role": "user", "content": "and then?"}]}
+
+    fresh_key: Final = cache.get_cache_key(**request)
+    first_chat_key: Final = cache.get_cache_key(**request, previous_interaction_id="v1_alice")
+
+    assert first_chat_key != fresh_key
+    assert cache.get_cache_key(**request, previous_interaction_id="v1_bob") not in (fresh_key, first_chat_key)
+    assert cache.get_cache_key(**request, extra_body={"previous_interaction_id": "v1_bob"}) != fresh_key

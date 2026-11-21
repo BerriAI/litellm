@@ -238,7 +238,6 @@ def test_interactions_api_base_respects_vertex_location_hosts_and_deployment_mod
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("GEMINI_API_BASE", raising=False)
-    monkeypatch.delenv("LITELLM_ROUTE_ALL_CHAT_GEMINI_TO_INTERACTIONS", raising=False)
     monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", toggle)
 
     assert litellm.get_api_base(model=model, optional_params=dict(optional_params)) == expected

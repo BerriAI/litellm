@@ -5,10 +5,11 @@ import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from types import MappingProxyType
-from typing import Final, NoReturn, TypeAlias
+from typing import Final, NoReturn, TypeAlias, TypedDict
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.exceptions import (
@@ -24,9 +25,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
 from litellm.types.llms.openai import (
+    ChatCompletionAudioDelta,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ImageURLListItem,
 )
 from litellm.types.utils import (
     Delta,
@@ -47,6 +50,7 @@ from .continuation import (
 from .response_transformation import (
     FinishReason,
     map_interactions_status_to_finish_reason,
+    parse_output_content_blocks,
     transform_interactions_usage,
 )
 
@@ -76,6 +80,14 @@ def _parse_event_json(data_str: str) -> JsonMapping | None:
     except ValueError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+class _MediaDelta(TypedDict, total=False):
+    images: ReadOnly[list[ImageURLListItem]]
+    audio: ReadOnly[ChatCompletionAudioDelta]
+
+
+_NO_MEDIA: Final = _MediaDelta()
 
 
 def _text_from_blocks(raw_blocks: JsonValue) -> str:
@@ -118,7 +130,7 @@ def _arguments_delta_piece(delta_map: JsonMapping) -> str:
     return next((piece for piece in candidates if piece is not None), "")
 
 
-def _extract_stream_error_code_and_message(
+def extract_stream_error_code_and_message(
     event: JsonMapping,
     interaction_map: JsonMapping,
     *,
@@ -147,7 +159,7 @@ def _extract_stream_error_code_and_message(
     return default_code, "Interactions stream failed"
 
 
-def _build_stream_exception(
+def build_stream_exception(
     *,
     code_str: str | None,
     message: str,
@@ -225,6 +237,7 @@ class InteractionsChatStreamingIterator:
         self._pending_hop_token: str | None = None
         self._hop_usages: tuple[JsonValue, ...] = ()
         self._hop_open: bool = False
+        self._images_sent: int = 0
         self._step_index_offset: int = 0
         self._highest_step_index: int = -1
         self.http_response: httpx.Response | None = http_response
@@ -364,14 +377,35 @@ class InteractionsChatStreamingIterator:
                 return ()
             case "model_output":
                 initial_text: Final = _text_from_blocks(raw_step.get("content"))
-                if not initial_text:
+                initial_media: Final = self._media_delta(raw_step.get("content"))
+                if not initial_text and initial_media is None:
                     return ()
-                return (self._build_chunk(Delta(role="assistant", content=initial_text)),)
+                return (
+                    self._build_chunk(
+                        Delta(role="assistant", content=initial_text or None, **(initial_media or _NO_MEDIA))
+                    ),
+                )
             case "text":
                 direct_text: Final = str(raw_step.get("text") or "")
                 return (self._build_chunk(Delta(role="assistant", content=direct_text)),) if direct_text else ()
             case _:
                 return ()
+
+    def _media_delta(self, raw_blocks: JsonValue) -> _MediaDelta | None:
+        if not isinstance(raw_blocks, list):
+            return None
+        parsed: Final = parse_output_content_blocks(raw_blocks)
+        images: Final = tuple(
+            ImageURLListItem(image_url=image["image_url"], type=image["type"], index=self._images_sent + offset)
+            for offset, image in enumerate(parsed.images)
+        )
+        self._images_sent += len(images)
+        audio: Final = ChatCompletionAudioDelta(data=parsed.audio_data) if parsed.audio_data is not None else None
+        if images and audio is not None:
+            return _MediaDelta(images=list(images), audio=audio)
+        if images:
+            return _MediaDelta(images=list(images))
+        return _MediaDelta(audio=audio) if audio is not None else None
 
     def _handle_step_delta(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
         step_index: Final = self._step_index_of(event)
@@ -385,6 +419,9 @@ class InteractionsChatStreamingIterator:
                 if not text_piece:
                     return ()
                 return (self._build_chunk(Delta(content=text_piece)),)
+            case "image" | "audio":
+                media: Final = self._media_delta([dict(raw_delta)])
+                return (self._build_chunk(Delta(**media)),) if media is not None else ()
             case "thought_summary" | "thought":
                 thought_piece: Final = _thought_summary_delta_text(raw_delta)
                 if not thought_piece:
@@ -457,7 +494,7 @@ class InteractionsChatStreamingIterator:
         *,
         default_code: str | None = None,
     ) -> NoReturn:
-        code_str, message = _extract_stream_error_code_and_message(
+        code_str, message = extract_stream_error_code_and_message(
             event,
             interaction_map,
             default_code=default_code,
@@ -473,7 +510,7 @@ class InteractionsChatStreamingIterator:
             if isinstance(raw_req, httpx.Request)
             else httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/interactions")
         )
-        raise _build_stream_exception(
+        raise build_stream_exception(
             code_str=code_str,
             message=message,
             model=self._model,

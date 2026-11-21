@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import re
 from collections.abc import Callable, Coroutine, Mapping, Sequence
@@ -51,7 +52,11 @@ from .continuation import (
 )
 from .request_transformation import MediaFetcher, transform_chat_to_interactions_request
 from .response_transformation import transform_interactions_response_to_chat_response
-from .streaming_iterator import InteractionsChatStreamingIterator
+from .streaming_iterator import (
+    InteractionsChatStreamingIterator,
+    build_stream_exception,
+    extract_stream_error_code_and_message,
+)
 
 CompletionResult: TypeAlias = ModelResponse | CustomStreamWrapper
 DispatchResult: TypeAlias = CompletionResult | Coroutine[None, None, CompletionResult]
@@ -471,6 +476,32 @@ def _interaction_of(response: httpx.Response) -> JsonMapping:
     return parsed if isinstance(parsed, dict) else MappingProxyType({})
 
 
+_FAILED_STATUSES: Final = frozenset({"failed", "cancelled"})
+
+
+def _raise_if_interaction_failed(interaction: JsonMapping, *, model: str, custom_llm_provider: str, url: str) -> None:
+    status: Final = interaction.get("status")
+    if status not in _FAILED_STATUSES and interaction.get("error") is None:
+        return
+    code, message = extract_stream_error_code_and_message(
+        MappingProxyType({}), interaction, default_code=status if isinstance(status, str) else None
+    )
+    raise build_stream_exception(
+        code_str=code,
+        message=message,
+        model=model,
+        llm_provider=custom_llm_provider,
+        request=httpx.Request("POST", url),
+    )
+
+
+def _completed_hop(response: httpx.Response) -> JsonMapping:
+    interaction: Final = _interaction_of(response)
+    if interaction.get("status") in _FAILED_STATUSES or interaction.get("error") is not None:
+        raise ValueError(f"continuation hop ended with status {interaction.get('status')!r}")
+    return interaction
+
+
 def _checked_hop_response(response: httpx.Response, custom_llm_provider: str) -> httpx.Response:
     if response.status_code >= 400:
         with contextlib.suppress(httpx.HTTPError):
@@ -739,7 +770,9 @@ class InteractionsToCompletionBridgeHandler:
             original_response=raw_response.text,
             additional_args={"complete_input_dict": wire.body},
         )
-        hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
+        first_hop: Final = _interaction_of(raw_response)
+        _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
+        hops: tuple[JsonMapping, ...] = (first_hop,)  # rebind-ok: grows by one hop per loop pass
         while (
             hop_body := next_hop_body(
                 wire.body,
@@ -758,7 +791,7 @@ class InteractionsToCompletionBridgeHandler:
                     ),
                     custom_llm_provider,
                 )
-                hops = (*hops, _interaction_of(hop_response))
+                hops = (*hops, _completed_hop(hop_response))
             except _HOP_FAILURES as hop_error:
                 log_failed_hop(hop_error)
                 break
@@ -794,7 +827,8 @@ class InteractionsToCompletionBridgeHandler:
         interactions_config: Final = _resolve_provider_config(
             custom_llm_provider, model, provider_config_override or self._provider_config
         )
-        wire: Final = self._prepare_wire_call(
+        wire: Final = await asyncio.to_thread(
+            self._prepare_wire_call,
             model=model,
             messages=messages,
             optional_params=opt_map,
@@ -908,7 +942,9 @@ class InteractionsToCompletionBridgeHandler:
             original_response=raw_response.text,
             additional_args={"complete_input_dict": wire.body},
         )
-        hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
+        first_hop: Final = _interaction_of(raw_response)
+        _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
+        hops: tuple[JsonMapping, ...] = (first_hop,)  # rebind-ok: grows by one hop per loop pass
         while (
             hop_body := next_hop_body(
                 wire.body,
@@ -928,7 +964,7 @@ class InteractionsToCompletionBridgeHandler:
                     ),
                     custom_llm_provider,
                 )
-                hops = (*hops, _interaction_of(hop_response))
+                hops = (*hops, _completed_hop(hop_response))
             except _HOP_FAILURES as hop_error:
                 log_failed_hop(hop_error)
                 break

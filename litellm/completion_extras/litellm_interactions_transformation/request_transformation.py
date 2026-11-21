@@ -21,7 +21,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     get_thought_signature_from_tool,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
 from litellm.llms.vertex_ai.gemini.transformation import GEMINI_FILES_API_URI_PREFIX
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
@@ -75,13 +74,8 @@ class InteractionsPreparedRequest:
 
 
 def _default_media_fetcher(url: str, format_hint: str | None) -> tuple[str, str]:
-    image_obj: Final = _JSON_MAPPING.validate_python(convert_to_anthropic_image_obj(url, format=format_hint))
-    source: Final = image_obj.get("source")
-    if isinstance(source, dict):
-        media_type: Final = str(source.get("media_type") or format_hint or "image/jpeg")
-        data: Final = str(source.get("data") or "")
-        return media_type, data
-    return format_hint or "application/octet-stream", convert_url_to_base64(url)
+    fetched: Final = convert_to_anthropic_image_obj(url, format=format_hint)
+    return fetched["media_type"], fetched["data"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +186,20 @@ def _validate_request_params(
             "Explicit prompt caching ('cached_content') is not supported by the Gemini Interactions API.",
             drop_params,
             custom_llm_provider=custom_llm_provider,
+        )
+    if params.get("background") is True:
+        raise litellm.BadRequestError(
+            message="'background' is not supported for chat completions on the Gemini Interactions API. "
+            "Use the Interactions API directly for background runs.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    if params.get("safety_settings") is not None or params.get("safetySettings") is not None:
+        raise litellm.BadRequestError(
+            message="'safety_settings' cannot be sent to the Gemini Interactions API. "
+            "Send this request with use_interactions=false.",
+            model=model,
+            llm_provider=custom_llm_provider,
         )
     if params.get("video_metadata") is not None:
         _reject_or_drop(
@@ -1051,7 +1059,6 @@ def transform_chat_to_interactions_request(
             for key in (
                 "previous_interaction_id",
                 "continuation_token",
-                "background",
                 "environment",
                 "response_modalities",
             )
