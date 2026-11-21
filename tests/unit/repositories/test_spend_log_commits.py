@@ -9,6 +9,7 @@ import litellm
 from litellm.repositories.spend_log_commits import (
     ACCOUNTING_FIELDS,
     MAX_FIELD_BYTES,
+    MAX_SUMMARY_BYTES,
     NativeCommitReports,
     committed_summary,
     notify_ledger_commit,
@@ -76,17 +77,19 @@ def test_one_failing_observer_does_not_stop_the_others(monkeypatch: pytest.Monke
     assert failing.heard.get_nowait() == ({"request_id": "request-a"},)
     assert healthy.heard.get_nowait() == ({"request_id": "request-a"},)
     assert healthy.heard.empty()
+    notify_ledger_commit(())
+    assert healthy.heard.empty()
 
 
 @pytest.mark.asyncio
 async def test_native_reports_decode_on_the_loop_within_their_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     observer: Final = _Observer()
     monkeypatch.setattr(litellm, "callbacks", [observer])
-    reports: Final = NativeCommitReports(asyncio.get_running_loop(), max_pending=2)
+    reports: Final = NativeCommitReports(asyncio.get_running_loop(), max_pending=3)
 
-    reports.receive([json.dumps({"request_id": "a"}), "not json"])
+    reports.receive([json.dumps({"request_id": "a"}), "not json", "x" * (MAX_SUMMARY_BYTES + 1)])
     reports.receive([json.dumps({"request_id": "over-budget"})])
-    assert (reports.pending, reports.dropped) == (2, 1)
+    assert (reports.pending, reports.dropped) == (3, 1)
     assert observer.heard.empty()
 
     assert await asyncio.wait_for(observer.heard.get(), timeout=5) == ({"request_id": "a"},)
@@ -99,3 +102,38 @@ async def test_native_reports_are_ignored_without_observers(monkeypatch: pytest.
     reports: Final = NativeCommitReports(asyncio.get_running_loop())
     reports.receive([json.dumps({"request_id": "a"})])
     assert (reports.pending, reports.dropped) == (0, 0)
+
+
+class _ClosingLoop:
+    """A loop that reports open but is closed by the time a report is scheduled, then reopens."""
+
+    def __init__(self) -> None:
+        self.closing = True
+        self.scheduled: Final[list[tuple[str, ...]]] = []  # mutable-ok: records scheduled reports
+
+    def is_closed(self) -> bool:
+        return False
+
+    def call_soon_threadsafe(self, callback: object, texts: tuple[str, ...]) -> None:
+        if self.closing:
+            self.closing = False
+            raise RuntimeError("Event loop is closed")
+        self.scheduled.append(texts)
+
+
+def test_native_reports_on_a_closing_loop_are_dropped_and_release_their_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_Observer()])
+    closed: Final = asyncio.new_event_loop()
+    closed.close()
+    on_closed: Final = NativeCommitReports(closed, max_pending=2)
+    on_closed.receive(["a", "b"])
+    assert (on_closed.pending, on_closed.dropped) == (0, 2)
+
+    closing: Final = _ClosingLoop()
+    reports: Final = NativeCommitReports(closing, max_pending=2)  # pyright: ignore[reportArgumentType]  # duck-typed loop
+    reports.receive(["a", "b"])
+    assert (reports.pending, reports.dropped) == (0, 2)
+    reports.receive(["c", "d"])
+    assert (reports.pending, reports.dropped, closing.scheduled) == (2, 2, [("c", "d")])

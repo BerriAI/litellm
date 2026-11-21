@@ -155,3 +155,16 @@ async def test_a_report_that_fails_after_the_commit_keeps_the_exact_count_withou
     )
 
     assert (accepted, writer.committed, len(calls), observer.heard) == (2, True, 1, [])
+
+
+@pytest.mark.asyncio
+async def test_a_commit_that_accepts_nothing_returns_zero_and_reports_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    writer: Final = _Writer(accepted=frozenset())
+    observer: Final = _Observer(writer)
+    monkeypatch.setattr(litellm, "callbacks", [observer])
+
+    accepted: Final = await SpendLogsRepository(_Client(writer)).insert_with_deliveries(
+        (_row("duplicate"),), write_spend_logs=False
+    )
+
+    assert (accepted, writer.committed, observer.heard) == (0, True, [])
