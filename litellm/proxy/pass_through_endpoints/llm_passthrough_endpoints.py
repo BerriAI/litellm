@@ -1736,6 +1736,9 @@ async def handle_bedrock_passthrough_router_model(
         )
 
 
+_ROUTING_CAPACITY_MISSES: Final = (RouterRateLimitError, litellm.RateLimitError)
+
+
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
@@ -1784,7 +1787,7 @@ async def _bedrock_count_tokens(
             model, None, user_api_key_dict, request_routing_metadata(request, request_body, user_api_key_dict)
         )
         deployment: Final = route.usable_deployment()
-        if route.miss is not None and (deployment is None or not isinstance(route.miss, RouterRateLimitError)):
+        if route.miss is not None and (deployment is None or not isinstance(route.miss, _ROUTING_CAPACITY_MISSES)):
             raise rejected_token_count(
                 HTTPException(
                     status_code=int(proxy_exception_status_code(str(route.miss), "400")),
