@@ -24,8 +24,9 @@ do their own logging, so each provider keeps its own wording.
 """
 
 import json
-from collections.abc import Mapping, Sequence
-from typing import Final
+from collections.abc import Iterable, Mapping, Sequence
+from itertools import chain, groupby
+from typing import Final, Literal
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -42,10 +43,18 @@ class _RewrittenOutputTextBlock(TypedDict):
     text: ReadOnly[str]
 
 
+class _RewrittenEncryptedContentBlock(TypedDict):
+    type: ReadOnly[str]
+    encrypted_content: ReadOnly[str]
+
+
+_RewrittenMessageBlock = _RewrittenOutputTextBlock | _RewrittenEncryptedContentBlock
+
+
 class _RewrittenAssistantMessageItem(TypedDict):
     type: ReadOnly[str]
     role: ReadOnly[str]
-    content: ReadOnly[tuple[_RewrittenOutputTextBlock, ...]]
+    content: ReadOnly[tuple[_RewrittenMessageBlock, ...]]
 
 
 class _RewrittenCompactionItem(TypedDict):
@@ -60,12 +69,54 @@ class _RewrittenFunctionCallItem(TypedDict):
     arguments: ReadOnly[str]
 
 
-def _agent_message_text(item: "Mapping[str, object]") -> str:
+_AgentMessagePiece = tuple[Literal["text", "encrypted"], str]
+
+
+def _agent_message_piece(block: "Mapping[str, object]") -> "_AgentMessagePiece | None":
+    text: Final = block.get("text")
+    if isinstance(text, str) and text:
+        return "text", text
+    encrypted_content: Final = block.get("encrypted_content")
+    if isinstance(encrypted_content, str) and encrypted_content:
+        if block.get("type") == "encrypted_content":
+            return "encrypted", encrypted_content
+        return "text", encrypted_content
+    return None
+
+
+def _agent_message_piece_blocks(
+    kind: Literal["text", "encrypted"], group: "Iterable[_AgentMessagePiece]"
+) -> "tuple[_RewrittenMessageBlock, ...]":
+    if kind == "text":
+        text_block: Final[_RewrittenOutputTextBlock] = {
+            "type": "output_text",
+            "text": "".join(text for _, text in group),
+        }
+        return (text_block,)
+    return tuple(_encrypted_content_block(encrypted_content) for _, encrypted_content in group)
+
+
+def _encrypted_content_block(encrypted_content: str) -> _RewrittenEncryptedContentBlock:
+    block: Final[_RewrittenEncryptedContentBlock] = {
+        "type": "encrypted_content",
+        "encrypted_content": encrypted_content,
+    }
+    return block
+
+
+def _agent_message_content(item: "Mapping[str, object]") -> "tuple[_RewrittenMessageBlock, ...]":
     content: Final = item.get("content")
     if not isinstance(content, list):
-        return ""
-    return "".join(
-        str(block.get("text") or block.get("encrypted_content") or "") for block in content if isinstance(block, dict)
+        return ()
+    pieces: Final = tuple(
+        piece
+        for piece in (_agent_message_piece(block) for block in content if isinstance(block, dict))
+        if piece is not None
+    )
+    return tuple(
+        chain.from_iterable(
+            _agent_message_piece_blocks(kind, group) for kind, group in groupby(pieces, key=lambda piece: piece[0])
+        )
     )
 
 
@@ -79,13 +130,13 @@ def _carries_encrypted_content(item: "Mapping[str, object]") -> bool:
 
 
 def _normalize_agent_message_item(item: "Mapping[str, object]") -> "_RewrittenAssistantMessageItem | None":
-    text: Final = _agent_message_text(item)
-    if not text:
+    content: Final = _agent_message_content(item)
+    if not content:
         return None
     rewritten: Final[_RewrittenAssistantMessageItem] = {
         "type": "message",
         "role": "assistant",
-        "content": ({"type": "output_text", "text": text},),
+        "content": content,
     }
     return rewritten
 
@@ -138,9 +189,11 @@ def normalize_codex_input_items(
 
     ``agent_message`` (Codex multi-agent traffic) carrying an ``encrypted_content``
     block is forwarded intact when ``keep_encrypted_agent_messages`` is set, because
-    only the backend can read it. Otherwise it becomes an assistant message: a backend
-    that never encrypts gets the plaintext payload Codex puts in that slot when the
-    model issued no encrypted args. ``context_compaction`` becomes the ``compaction``
+    only the backend can read it. Otherwise it becomes an assistant message, with any
+    typed ``encrypted_content`` blocks kept as typed blocks so their ciphertext is
+    never copied into the message text, and a backend that never encrypts gets the
+    plaintext payload Codex puts in the untyped slot when the model issued no
+    encrypted args. ``context_compaction`` becomes the ``compaction``
     spelling these backends accept, and ``local_shell_call`` becomes the
     ``function_call`` its recorded ``function_call_output`` already pairs with.
 

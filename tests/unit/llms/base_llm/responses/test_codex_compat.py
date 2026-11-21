@@ -56,6 +56,49 @@ class TestAgentMessage:
         assert out[0]["content"] == ({"type": "output_text", "text": "plain"},)
         assert types == ("agent_message",)
 
+    def test_typed_encrypted_content_block_is_kept_as_a_block_not_copied_into_text(self):
+        item = {
+            "type": "agent_message",
+            "content": [
+                {"type": "input_text", "text": "Payload:\n"},
+                {"type": "encrypted_content", "encrypted_content": "pv_SYNTHETIC_CIPHERTEXT"},
+            ],
+        }
+        out, _ = normalize([item, USER], keep_encrypted_agent_messages=False)
+        assert out[0]["content"] == (
+            {"type": "output_text", "text": "Payload:\n"},
+            {"type": "encrypted_content", "encrypted_content": "pv_SYNTHETIC_CIPHERTEXT"},
+        )
+
+    def test_message_with_only_a_typed_encrypted_block_is_kept(self):
+        item = {"type": "agent_message", "content": [{"type": "encrypted_content", "encrypted_content": "ct"}]}
+        out, _ = normalize([item, USER], keep_encrypted_agent_messages=False)
+        assert out[0]["content"] == ({"type": "encrypted_content", "encrypted_content": "ct"},)
+
+    def test_blocks_keep_their_order(self):
+        item = {
+            "type": "agent_message",
+            "content": [
+                {"type": "encrypted_content", "encrypted_content": "first"},
+                {"type": "input_text", "text": "middle"},
+                {"type": "encrypted_content", "encrypted_content": "second"},
+            ],
+        }
+        out, _ = normalize([item, USER], keep_encrypted_agent_messages=False)
+        assert out[0]["content"] == (
+            {"type": "encrypted_content", "encrypted_content": "first"},
+            {"type": "output_text", "text": "middle"},
+            {"type": "encrypted_content", "encrypted_content": "second"},
+        )
+
+    def test_plain_text_blocks_merge_into_one_output_text(self):
+        item = {
+            "type": "agent_message",
+            "content": [{"type": "input_text", "text": "Hello, "}, {"type": "input_text", "text": "world"}],
+        }
+        out, _ = normalize([item, USER], keep_encrypted_agent_messages=False)
+        assert out[0]["content"] == ({"type": "output_text", "text": "Hello, world"},)
+
     def test_non_list_content_yields_no_text_and_drops_the_item(self):
         out, types = normalize([{"type": "agent_message", "content": "not a list"}, USER])
         assert out == [USER]
