@@ -38,7 +38,7 @@ class KeyFacts:
 
 @dataclass(frozen=True, slots=True)
 class FetchUnreachable:
-    """A JWKS or OIDC discovery endpoint answered 5xx or 429. `reason` reaches the client, so it never holds the body."""
+    """JWKS or OIDC discovery answered 5xx or 429. `reason` reaches the client, so it never holds the reply body."""
 
     reason: str
 
