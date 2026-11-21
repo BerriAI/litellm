@@ -660,7 +660,7 @@ async def _lookups(
     auth: Final = _auth(data)
     team_id: Final = None if auth is None else auth.team_id
     model: Final = ctx.call.target.model if ctx.call is not None else ""
-    candidates: Final = rate_limit_candidates(limiter, model)
+    candidates: Final = rate_limit_candidates(limiter, model, team_id)
     named: Final = tuple(candidate for candidate in candidates if candidate)
     groups: Final = {candidate: limiter.model_group_resolver(candidate) for candidate in named}
     resolved: Final = tuple(dict.fromkeys(group or candidate for candidate, group in groups.items()))

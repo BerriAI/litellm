@@ -1873,8 +1873,8 @@ async def test_a_per_model_rpm_limit_on_a_public_name_counts_requests_by_its_lit
     cache: Final = DualCache()
     handler: Final = NativeLimiter(
         internal_usage_cache=InternalUsageCache(cache),
-        namesake_models_resolver=lambda model: public_model_names_of_deployments_routed_by_litellm_model(
-            model, router, None
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
         ),
     )
     auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-namesake"), metadata={"model_rpm_limit": limits})
@@ -1893,13 +1893,123 @@ async def test_a_per_model_rpm_limit_on_a_public_name_counts_requests_by_its_lit
     await call("chat-a" if limits.get("chat-b") == 1 else "chat-b")
 
 
+@pytest.mark.parametrize("team_id, refused", [(None, True), ("team-1", False)])
+@pytest.mark.asyncio
+async def test_a_team_public_name_that_matches_another_deployments_litellm_model_keeps_its_own_limits(
+    team_id: str | None, refused: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "my-gpt", "litellm_params": {"model": "gpt-4o", "api_key": "sk-test"}},
+            {
+                "model_name": "model_name_team-1_own",
+                "litellm_params": {"model": "openai/team-raw", "api_key": "sk-test"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4o"},
+            },
+        ]
+    )
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(
+        internal_usage_cache=InternalUsageCache(cache),
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
+        ),
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-public"), team_id=team_id, metadata={"model_rpm_limit": {"my-gpt": 1}}
+    )
+
+    async def call() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            call_type="acompletion",
+        )
+
+    await call()
+    if refused:
+        with pytest.raises(ProxyRateLimitError, match="model_per_key"):
+            await call()
+    else:
+        await call()
+    await _log_success(
+        handler,
+        {
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": auth.api_key, "user_api_key_team_id": team_id}
+            },
+            "litellm_params": {"metadata": {"model_group": "gpt-4o", "user_api_key_metadata": auth.metadata}},
+            "model": "gpt-4o",
+        },
+        ModelResponse(
+            id="team-public-settle",
+            object="chat.completion",
+            created=int(datetime.now().timestamp()),
+            model="gpt-4o",
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+            choices=[],
+        ),
+    )
+    assert (_tokens(handler, "model_per_key", f"{auth.api_key}:my-gpt") > 0) is refused
+
+
+@pytest.mark.parametrize("served_group", [_NAMESAKE_MODEL, "chat-a"])
+@pytest.mark.asyncio
+async def test_a_request_by_a_litellm_model_settles_each_public_name_counter_once(
+    monkeypatch: pytest.MonkeyPatch, served_group: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": _NAMESAKE_MODEL, "api_key": "sk-test"}}
+            for name in ("chat-a", "chat-b")
+        ]
+    )
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(
+        internal_usage_cache=InternalUsageCache(cache),
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
+        ),
+    )
+    _set_token_rate_limit_type(monkeypatch, "total")
+    key_metadata: Final = {"model_tpm_limit": {"chat-a": 100_000, "chat-b": 100_000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-namesake-settle"), metadata=key_metadata)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": _NAMESAKE_MODEL, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    response: Final = ModelResponse(
+        id="namesake-settle",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model=_NAMESAKE_MODEL,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {"metadata": {"model_group": served_group, "user_api_key_metadata": key_metadata}},
+        "model": _NAMESAKE_MODEL,
+    }
+
+    await _log_success(handler, kwargs, response)
+
+    assert [_tokens(handler, "model_per_key", f"{auth.api_key}:{name}") for name in ("chat-a", "chat-b")] == [
+        150,
+        150,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_success_tpm_accounting_charges_the_public_names_of_a_litellm_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     handler: Final = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()),
-        namesake_models_resolver=lambda model: ("chat-a", "chat-b") if model == _NAMESAKE_MODEL else (),
+        namesake_models_resolver=lambda model, _team: ("chat-a", "chat-b") if model == _NAMESAKE_MODEL else (),
     )
     _set_token_rate_limit_type(monkeypatch, "output")
     key: Final = hash_token("sk-namesake-tpm")

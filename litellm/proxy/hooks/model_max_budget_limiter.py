@@ -602,10 +602,9 @@ def _budget_model_candidates(model: str) -> tuple[str, ...]:
     cross-region ``us.anthropic.claude-opus-4-8``), or on the bare family name
     that Bedrock id shares with its direct-provider twin (``claude-opus-4-8``).
     A ``router_settings.model_group_alias`` name is also governed by every name
-    that budgets the model group it routes to, after the names of its own, and a deployment's
-    ``litellm_params.model`` that routing serves directly by every public name of the deployments behind it.
+    that budgets the model group it routes to, after the names of its own.
     """
-    names: Final = (model, *_aliased_model_group(model), *_namesake_public_names(model))
+    names: Final = (model, *_aliased_model_group(model))
     return tuple(dict.fromkeys(itertools.chain.from_iterable(_own_name_candidates(name) for name in names)))
 
 
@@ -621,11 +620,14 @@ def _aliased_model_group(model: str) -> tuple[str, ...]:
     return () if target is None else (target,)
 
 
-def _namesake_public_names(model: str) -> tuple[str, ...]:
+def _budgeted_models(model: str, team_id: str | None) -> tuple[str, ...]:
     from litellm.proxy.auth.auth_checks import public_model_names_of_deployments_routed_by_litellm_model
 
     router: Final = _proxy_router()
-    return () if router is None else public_model_names_of_deployments_routed_by_litellm_model(model, router, None)
+    return (
+        *expand_model_latest_alias(model),
+        *(() if router is None else public_model_names_of_deployments_routed_by_litellm_model(model, router, team_id)),
+    )
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:
@@ -840,7 +842,7 @@ def _entity_model_budget_entries(
         return ()
     return tuple(
         (entity_type, entity_id, resolved)
-        for candidate in expand_model_latest_alias(model)
+        for candidate in _budgeted_models(model, team_id)
         if (
             resolved := resolve_model_budget(
                 model=candidate,
@@ -1067,7 +1069,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         exceeded_message: str,
     ) -> bool:
-        for candidate in expand_model_latest_alias(model):
+        for candidate in _budgeted_models(model, team_id):
             await self._is_single_entity_within_model_budget(
                 entity_type=entity_type,
                 entity_id=entity_id,

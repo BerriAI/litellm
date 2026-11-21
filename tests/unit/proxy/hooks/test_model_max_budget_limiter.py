@@ -698,6 +698,64 @@ async def test_an_entry_on_a_public_name_or_access_group_gates_and_charges_reque
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budget", "blocked", "served"),
+    [
+        ({"chat-a": ROOMY_CAP, "chat-b": FAMILY_CAP}, (NAMESAKE_MODEL, "chat-b"), ("chat-a",)),
+        ({"chat-a": FAMILY_CAP, "chat-b": ROOMY_CAP}, (NAMESAKE_MODEL, "chat-a"), ("chat-b",)),
+        ({"chat-a": FAMILY_CAP, "chat-b": FAMILY_CAP}, (NAMESAKE_MODEL, "chat-a", "chat-b"), ()),
+    ],
+)
+async def test_every_public_name_entry_of_a_litellm_model_gates_and_charges_its_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    budget: Mapping[str, object],
+    blocked: tuple[str, ...],
+    served: tuple[str, ...],
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_namesakes())
+    limiter: Final = _family_limiter(groups_by_model={})
+
+    await _spend_on(limiter, model=NAMESAKE_MODEL, model_max_budget=budget)
+
+    for requested in blocked:
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+    for requested in served:
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id", "governed"), [(None, True), ("team-1", False)])
+async def test_a_team_public_name_that_matches_another_deployments_litellm_model_keeps_its_own_budgets(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, governed: bool
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "my-gpt", "litellm_params": {"model": "gpt-4o", "api_key": "sk-test"}},
+                {
+                    "model_name": "model_name_team-1_own",
+                    "litellm_params": {"model": "openai/team-raw", "api_key": "sk-test"},
+                    "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4o"},
+                },
+            ]
+        ),
+    )
+    budget: Final = {"my-gpt": FAMILY_CAP}
+    limiter: Final = _family_limiter(groups_by_model={})
+    key: Final = UserAPIKeyAuth(token=KEY_HASH, team_id=team_id, model_max_budget=budget)
+
+    await _spend_on(limiter, model="my-gpt", model_max_budget=budget)
+
+    if governed:
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key_dict=key, model="gpt-4o")
+    else:
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=key, model="gpt-4o")
+
+
+@pytest.mark.asyncio
 async def test_a_model_added_to_the_access_group_later_is_covered_with_no_key_change():
     budget: Final = {OPUS_GROUP: FAMILY_CAP}
     shared_cache: Final = DualCache()
