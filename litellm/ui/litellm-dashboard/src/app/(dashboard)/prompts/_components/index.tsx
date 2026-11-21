@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 
-import { Plus, Upload } from "lucide-react";
+import { FileText, Plus, Upload } from "lucide-react";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "@/components/networking";
 import PromptTable from "./PromptTable";
 import PromptInfoView from "./prompt_info";
@@ -11,6 +11,8 @@ import PromptEditorView from "./prompt_editor_view";
 import { toast } from "@/lib/toast";
 import { isProxyAdminRole } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -144,7 +146,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <Page>
       {showEditorView ? (
         <PromptEditorView
           onClose={handleCloseEditor}
@@ -163,9 +165,14 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           onEdit={handleEditPrompt}
         />
       ) : (
-        <>
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex gap-2">
+        <PageContent>
+          <PageHeader>
+            <PageHeaderTitle>
+              <FileText />
+              {t("shell.nav.items.prompts")}
+            </PageHeaderTitle>
+            <PageHeaderDescription>{t("shell.pageDescriptions.prompts")}</PageHeaderDescription>
+            <PageHeaderControls className="flex-wrap">
               {canModify && (
                 <>
                   <Button onClick={handleAddPrompt} disabled={!accessToken}>
@@ -178,25 +185,25 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
                   </Button>
                 </>
               )}
-            </div>
-            <Select
-              items={ENVIRONMENT_ITEMS.map((item) => ({ label: t(item.labelKey), value: item.value }))}
-              value={selectedEnvironment ?? null}
-              onValueChange={(value) => setSelectedEnvironment((value as string | null) ?? undefined)}
-            >
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder={t(ALL_ENVIRONMENTS_LABEL_KEY)} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={null}>{t(ALL_ENVIRONMENTS_LABEL_KEY)}</SelectItem>
-                {ENVIRONMENT_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {t(option.labelKey)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+              <Select
+                items={ENVIRONMENT_ITEMS.map((item) => ({ label: t(item.labelKey), value: item.value }))}
+                value={selectedEnvironment ?? null}
+                onValueChange={(value) => setSelectedEnvironment((value as string | null) ?? undefined)}
+              >
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder={t(ALL_ENVIRONMENTS_LABEL_KEY)} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={null}>{t(ALL_ENVIRONMENTS_LABEL_KEY)}</SelectItem>
+                  {ENVIRONMENT_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {t(option.labelKey)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </PageHeaderControls>
+          </PageHeader>
 
           <PromptTable
             promptsList={promptsList}
@@ -206,7 +213,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
             accessToken={accessToken}
             isAdmin={canModify}
           />
-        </>
+        </PageContent>
       )}
 
       <AddPromptForm
@@ -242,7 +249,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </div>
+    </Page>
   );
 };
 

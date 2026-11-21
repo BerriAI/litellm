@@ -112,6 +112,7 @@ describe("OrganizationsPanel", () => {
   it("shows the create button for a premium admin", () => {
     renderPanel();
 
+    expect(screen.getByRole("heading", { level: 1, name: "Organizations" })).toBeInTheDocument();
     expect(screen.getByText("+ Create New Organization")).toBeInTheDocument();
   });
 
