@@ -5,6 +5,7 @@ import pytest
 
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     assemble_anthropic_sse_stream,
+    build_usage_only_response_from_chunks,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
     is_sse_error_stream,
@@ -133,7 +134,16 @@ TOOL_USE_STREAM: Final = (
 
 @pytest.mark.parametrize(
     "non_object_frame",
-    [b"data: 5\n\n", b"event: ping\ndata: null\n\n", b'data: "x"\n\n', b"data: [1]\n\n", b"data: some words\n\n"],
+    [
+        b"data: 5\n\n",
+        b"event: ping\ndata: null\n\n",
+        b'data: "x"\n\n',
+        b"data: [1]\n\n",
+        b"data: some words\n\n",
+        b"data: " + b"9" * 5000 + b"\n\n",
+        b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+    ],
+    ids=["number", "null", "string", "array", "not-json", "huge-number", "deep-array"],
 )
 def test_assembling_a_tool_use_stream_skips_a_data_line_that_is_not_a_json_object(non_object_frame: bytes):
     assembled: Final = assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], non_object_frame, *TOOL_USE_STREAM[3:]))
@@ -145,6 +155,34 @@ def test_assembling_a_tool_use_stream_skips_a_data_line_that_is_not_a_json_objec
     assert [(call.function.name, call.function.arguments) for call in choice.message.tool_calls or []] == [
         ("Bash", '{"command": "ls"}')
     ]
+
+
+NON_OBJECT_FRAMES: Final = (b"data: 5\n\n", b"event: ping\ndata: null\n\n", b'data: "x"\n\n', b"data: [1]\n\n")
+
+
+@pytest.mark.parametrize("non_object_frame", NON_OBJECT_FRAMES)
+def test_a_non_object_data_line_before_message_start_reads_like_the_stream_without_it(non_object_frame: bytes):
+    chunks: Final = (non_object_frame, *ANTHROPIC_STREAM)
+
+    assert is_anthropic_sse_stream(chunks) is True
+    assert is_sse_error_stream(chunks) is False
+    assembled: Final = assemble_anthropic_sse_stream(chunks)
+    assert assembled is not None
+    choice: Final = assembled.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.content == "Hello there"
+
+
+@pytest.mark.parametrize("non_object_frame", NON_OBJECT_FRAMES)
+def test_usage_of_a_stream_that_ends_in_an_error_survives_a_non_object_data_line(non_object_frame: bytes):
+    errored: Final = (*ANTHROPIC_STREAM[:3], ANTHROPIC_ERROR)
+    expected: Final = build_usage_only_response_from_chunks(errored, model=MODEL)
+
+    actual: Final = build_usage_only_response_from_chunks((*errored[:3], non_object_frame, ANTHROPIC_ERROR), model=MODEL)
+
+    assert expected is not None
+    assert actual is not None
+    assert actual.usage == expected.usage
 
 
 @pytest.mark.parametrize(

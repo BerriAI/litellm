@@ -255,6 +255,16 @@ def test_decoded_sse_data_line_swallows_invalid_json():
     assert is_provider_error_chunk(malformed_frame) is False
 
 
+def test_a_deeply_nested_data_line_does_not_hide_the_error_event_after_it():
+    deep_array_frame: Final = b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+    error_frame: Final = (
+        b'event: error\ndata: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
+    )
+
+    assert parse_anthropic_error_event(deep_array_frame + error_frame) == ("internal_server_error", "boom", 500)
+    assert is_provider_error_chunk(deep_array_frame) is False
+
+
 class TestIsAnthropicContentDeltaChunk:
     def test_dict_content_block_delta(self):
         assert is_anthropic_content_delta_chunk({"type": "content_block_delta"}) is True

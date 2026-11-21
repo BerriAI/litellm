@@ -3,10 +3,13 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -17,6 +20,8 @@ from litellm.types.utils import (
     ModelResponse,
     TextCompletionResponse,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
@@ -267,19 +272,24 @@ def build_complete_streaming_response_legacy(
     return complete_streaming_response
 
 
-def extract_sse_data(event_str: str) -> dict | None:
-    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+def _sse_data_payload(event_str: str) -> str | None:
     for line in event_str.splitlines():
         stripped = line.strip()
         if stripped.startswith("data:"):
-            payload = stripped[len("data:") :].strip()
-            if not payload or payload == "[DONE]":
-                return None
-            try:
-                return json.loads(payload)
-            except (ValueError, TypeError):
-                return None
+            return stripped[len("data:") :].strip()
     return None
+
+
+def extract_sse_data(event_str: str) -> dict | None:
+    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+    payload: Final = _sse_data_payload(event_str)
+    if payload is None or not payload.startswith("{"):
+        return None
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    except (ValueError, TypeError):
+        return None
+    return decoded if is_str_keyed_dict(decoded) else None
 
 
 def build_usage_only_response_from_chunks(

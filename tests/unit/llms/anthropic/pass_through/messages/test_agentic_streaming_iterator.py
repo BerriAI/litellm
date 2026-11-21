@@ -679,6 +679,38 @@ class TestAgenticStreamingIteratorPhase1:
         assert rebuilt["id"] == "msg_123"
         assert [(block["type"], block["text"]) for block in rebuilt["content"]] == [("text", "Hello, world!")]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "skipped_frame",
+        [b"event: ping\ndata: null\n\n", b"event: ping\ndata: 5\n\n", b"event: ping\ndata: not json\n\n"],
+        ids=["null", "number", "not-json"],
+    )
+    async def test_should_not_carry_a_skipped_line_event_name_to_the_next_data_line(self, skipped_frame: bytes):
+        text_stream = _build_simple_text_stream()
+        delta_without_event_line = text_stream[2].split(b"\n", 1)[1]
+        chunks = [*text_stream[:2], skipped_frame, delta_without_event_line, *text_stream[3:]]
+        hooks = AsyncMock(return_value=None)
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = hooks
+
+        iterator = AgenticAnthropicStreamingIterator(
+            completion_stream=MockAsyncStream(chunks),
+            http_handler=mock_handler,
+            model="claude-sonnet-4-20250514",
+            messages=[],
+            anthropic_messages_provider_config=MagicMock(),
+            anthropic_messages_optional_request_params={},
+            logging_obj=MagicMock(),
+            custom_llm_provider="anthropic",
+            kwargs={},
+        )
+
+        collected = [chunk async for chunk in iterator]
+
+        assert collected == chunks
+        rebuilt = hooks.await_args.kwargs["response"]
+        assert [(block["type"], block["text"]) for block in rebuilt["content"]] == [("text", "Hello, world!")]
+
 
 class TestAgenticStreamingIteratorPhase2:
     @pytest.mark.asyncio
