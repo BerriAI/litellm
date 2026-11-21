@@ -4359,25 +4359,16 @@ class TestTenantConfigAgreement:
         assert resolve_tenant_otel_destinations(auth) == ()
 
     @pytest.mark.usefixtures("premium")
-    @pytest.mark.parametrize(
-        ("header", "resolved"),
-        [
-            ("langfuse_otel", False),
-            (" LANGFUSE_OTEL ,arize", False),
-            ("arize", True),
-        ],
-    )
-    def test_the_disable_header_wins_over_the_key_list(self, header, resolved):
-        """Same precedence as dispatch: a header that names other backends re-enables
-        the one the key stored."""
+    @pytest.mark.parametrize("header", ["langfuse_otel", " LANGFUSE_OTEL ,arize", "arize", "none"])
+    def test_the_disable_header_adds_to_the_key_list_and_cannot_re_enable_it(self, header):
+        """Same precedence as dispatch: the header only adds names, so a header that names
+        other backends leaves the one the key stored disabled."""
         auth = UserAPIKeyAuth(
             metadata={"litellm_disabled_callbacks": ["langfuse_otel"]},
             team_metadata={"logging": [self._entry("http://team.local")]},
         )
 
-        destinations = resolve_tenant_otel_destinations(auth, {"x-litellm-disable-callbacks": header})
-
-        assert bool(destinations) is resolved
+        assert resolve_tenant_otel_destinations(auth, {"x-litellm-disable-callbacks": header}) == ()
 
     def test_a_non_premium_proxy_ignores_the_disabled_list_like_dispatch_does(self, monkeypatch):
         from litellm.proxy import proxy_server

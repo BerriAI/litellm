@@ -5,6 +5,8 @@ from contextvars import ContextVar
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.utils import (
     ARIZE_OTLP_PROTOCOLS,
     BAGGAGE_METADATA_KEYS_VAR,
@@ -17,6 +19,7 @@ from litellm.types.utils import (
 )
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
+_CALLBACK_NAMES: Final = TypeAdapter(tuple[object, ...])
 _inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
     "inherited_message_logging_disabled", default=False
 )
@@ -247,6 +250,14 @@ def initialize_standard_callback_dynamic_params(
                     standard_callback_dynamic_params[param] = (  # pyright: ignore[reportGeneralTypeIssues]  # several supported params predate their StandardCallbackDynamicParams fields
                         _param_value
                     )
+
+        disabled_callbacks: Final = kwargs.get("litellm_disabled_callbacks")
+        if isinstance(disabled_callbacks, list):
+            standard_callback_dynamic_params["litellm_disabled_callbacks"] = [
+                name.strip().lower()
+                for name in _CALLBACK_NAMES.validate_python(disabled_callbacks)
+                if isinstance(name, str)
+            ]
 
         for param, trusted_value in get_trusted_callback_params(kwargs):
             if param in _trusted_overlay_callback_params:

@@ -12153,3 +12153,28 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+def test_key_disabled_callbacks_resolve_to_the_same_names_for_dispatch_and_otel_fan_out() -> None:
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.enterprise.litellm_enterprise.enterprise_callbacks.callback_controls import (
+        EnterpriseCallbackControls,
+    )
+    from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
+    from litellm.proxy.litellm_pre_call_utils import (
+        _dynamically_disabled_backends,  # pyright: ignore[reportPrivateUsage]  # fan-out has no public seam
+    )
+
+    stored: Final = [" LangFuse", "Langsmith "]
+    key: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"litellm_disabled_callbacks": stored})
+    headers: Final = {X_LITELLM_DISABLE_CALLBACKS: "none"}
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        fan_out: Final = _dynamically_disabled_backends(key, headers)
+    request_params: Final[dict[str, object]] = {"proxy_server_request": {"headers": headers}}
+    dispatch: Final = EnterpriseCallbackControls.get_disabled_callbacks(  # pyright: ignore[reportUnknownMemberType]  # untyped
+        request_params, initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": stored})
+    )
+    assert dispatch is not None
+    assert fan_out == frozenset(dispatch) == {"none", "langfuse", "langsmith"}
