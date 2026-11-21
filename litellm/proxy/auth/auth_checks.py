@@ -5052,7 +5052,7 @@ def _every_deployment_with_litellm_model_granted(
     if not isinstance(llm_router, Router):
         return False
     namesakes: Final = _deployments_routed_by_litellm_model(model, llm_router, team_id)
-    return bool(namesakes) and all(
+    return any(llm_router.registry().includes(deployment, team_id=team_id) for deployment in namesakes) and all(
         _deployment_granted(deployment, llm_router, models, team_model_aliases, team_id) for deployment in namesakes
     )
 

@@ -58,8 +58,8 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
 from litellm.router_api import ChangeSet
-from litellm.types.router import RouterGeneralSettings
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+from litellm.types.router import RouterGeneralSettings
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 
@@ -2935,6 +2935,9 @@ _NAMESAKE_DEPLOYMENTS: Final = (
         "openai/team-raw",
         team_info={"team_id": "team-1", "team_public_model_name": "team-public"},
     ),
+    _namesake_deployment(
+        "model_name_team-2_grouped", "openai/team-2-grouped-raw", "group-a", team_info={"team_id": "team-2"}
+    ),
 )
 
 
@@ -2981,6 +2984,9 @@ def _can_call(
         (["group-a"], "openai/split-b", None, False),
         (["group-a"], "openai/routed-elsewhere", None, False),
         (["group-a"], "openai/unknown", None, False),
+        (["group-a"], "openai/team-2-grouped-raw", "team-2", True),
+        (["group-a"], "openai/team-2-grouped-raw", "team-1", False),
+        (["group-a"], "openai/team-2-grouped-raw", None, False),
     ],
 )
 def test_a_restricted_caller_reaches_a_litellm_model_name_only_when_every_deployment_behind_it_is_granted(
