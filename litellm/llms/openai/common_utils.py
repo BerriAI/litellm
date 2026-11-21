@@ -8,6 +8,7 @@ import hashlib
 import inspect
 import json
 import os
+import posixpath
 import ssl
 import time
 import uuid
@@ -151,10 +152,20 @@ def is_openai_backed_api_base(api_base: str) -> bool:
 _OPENAI_AGENTS_API_RESOURCES: Final = frozenset({"agents", "vaults"})
 
 
-def openai_api_resource(path: str) -> str | None:
+def _openai_api_resource_segments(path: str) -> tuple[str, ...]:
     segments: Final = tuple(segment for segment in path.split("/") if segment)
-    resource_segments: Final = segments[1:] if segments[:1] == ("v1",) else segments
-    return next(iter(resource_segments), None)
+    return segments[1:] if segments[:1] == ("v1",) else segments
+
+
+def openai_api_resource(path: str) -> str | None:
+    return next(iter(_openai_api_resource_segments(path)), None)
+
+
+def is_openai_batch_create(method: str, path: str) -> bool:
+    if method.upper() != "POST":
+        return False
+    sent_path: Final = posixpath.normpath(f"/{httpx.URL(path).path}")
+    return _openai_api_resource_segments(sent_path) == ("batches",)
 
 
 def is_openai_agents_api_path(path: str) -> bool:
