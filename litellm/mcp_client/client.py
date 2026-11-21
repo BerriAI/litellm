@@ -984,7 +984,12 @@ class MCPClient:
                         and not listing_session.keep_alive
                     ):
                         await _run_bounded_cleanup(
-                            partial(http_client.delete, self.server_url, headers=listing_session.headers),
+                            partial(
+                                http_client.delete,
+                                self.server_url,
+                                headers=listing_session.headers,
+                                follow_redirects=False,
+                            ),
                             anyio.current_time() + 1,
                         )
                 except (Exception, asyncio.CancelledError) as termination_error:  # noqa: BLE001  # cleanup failures must not replace the listing outcome

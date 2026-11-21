@@ -2909,6 +2909,65 @@ async def test_task_cancellation_during_cleanup_preserves_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", (302, 307))
+async def test_session_bound_cleanup_does_not_follow_redirect(status_code: int) -> None:
+    protocol_version: Final = "2025-11-25"
+    session_id: Final = "redirect-session"
+    requests: list[httpx2.Request] = []
+    redirected: list[httpx2.Request] = []
+    message_adapter: Final = TypeAdapter(JSONRPCMessage)
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if request.url.host == "redirect.example":
+            redirected.append(request)
+            return httpx2.Response(200)
+        if request.method == "DELETE":
+            assert request.headers.get("mcp-session-id") == session_id
+            assert request.headers.get("mcp-protocol-version") == protocol_version
+            return httpx2.Response(
+                status_code,
+                headers={"Location": "https://redirect.example/termination"},
+            )
+
+        message: Final = message_adapter.validate_json(request.content)
+        if isinstance(message, JSONRPCNotification):
+            return httpx2.Response(202)
+        assert isinstance(message, JSONRPCRequest)
+        if message.method == "initialize":
+            return httpx2.Response(
+                200,
+                headers={"mcp-session-id": session_id},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": message.id,
+                    "result": {
+                        "protocolVersion": protocol_version,
+                        "capabilities": {},
+                        "serverInfo": {"name": "redirect-test", "version": "1"},
+                    },
+                },
+            )
+        assert message.method == "tools/list"
+        return httpx2.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": message.id, "result": {"tools": [], "nextCursor": None}},
+        )
+
+    client: Final = MCPClient(
+        server_url="https://example.com/mcp",
+        protocol_version=protocol_version,
+        upstream_transport=httpx2.MockTransport(respond),
+    )
+    await client.list_tools_page(PaginatedRequestParams(), listing_session=ToolListingSession())
+
+    deletes: Final = tuple(request for request in requests if request.method == "DELETE")
+    assert len(deletes) == 1
+    assert str(deletes[0].url) == "https://example.com/mcp"
+    assert not redirected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("original_error", (False, True))
 @pytest.mark.parametrize("cancel_mode", ("task", "scope"))
 async def test_http_close_cancellation_cannot_turn_into_success(original_error: bool, cancel_mode: str) -> None:
