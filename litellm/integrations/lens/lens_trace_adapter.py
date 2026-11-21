@@ -13,6 +13,7 @@ launched it. A gateway trace of the same agent is given that shape, so Lens show
 
 import asyncio
 import hashlib
+import time
 import json
 import re
 from collections import OrderedDict
@@ -589,7 +590,7 @@ class _LensTraceLogger(OpenTelemetryV2):
         call: Final = LLMCallEvent.from_dict(kwargs)
         if call.is_no_upstream_call or call.call_id is None or call.call_id in self._open_llm_calls:
             return
-        started: Final = to_ns(call.upstream_start_seconds) or to_ns(datetime.now())
+        started: Final = to_ns(call.upstream_start_seconds) or time.time_ns()
         self._store_open_call(call.call_id, _LLMCallSpan(span=None, start_time_ns=started))
 
     @override
@@ -717,7 +718,9 @@ class _LensTraceLogger(OpenTelemetryV2):
             step.end(end_time=at_ns)
         remembered: Final = self._open_interactions.get(session_id)
         placed: Final = placement.interaction.key if placement.interaction else None
-        if not steps or placement.actor or remembered is None or remembered.interaction.key != placed:
+        if not steps or placement.actor:
+            return
+        if remembered is None or remembered.interaction.key != placed:
             return
         reported: Final = tuple((step.get_span_context().span_id, exchange.result) for exchange, step in steps)
         self._open_interactions[session_id] = _Open(
