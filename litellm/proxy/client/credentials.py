@@ -142,7 +142,7 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url: Final = f"{self._base_url}/credentials/{credential_name}"
+        url: Final = f"{self._base_url}/credentials/{quote(credential_name, safe='')}"
 
         request: Final = requests.Request("DELETE", url, headers=self._get_headers())
 
@@ -203,7 +203,7 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url: Final = f"{self._base_url}/credentials/by_name/{credential_name}"
+        url: Final = f"{self._base_url}/credentials/by_name/{quote(credential_name, safe='')}"
 
         request: Final = requests.Request("GET", url, headers=self._get_headers())
 
