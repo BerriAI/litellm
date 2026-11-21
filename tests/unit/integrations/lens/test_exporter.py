@@ -1091,3 +1091,44 @@ async def test_a_failed_upload_after_commit_keeps_the_committed_cost() -> None:
     row: Final = lens.drained()[0]
     assert _reference(row) == dict(signed_reference(_KEY, _CANONICAL, Unavailable.UPLOAD_FAILED))
     assert (row["spend"], row["team_id"], store.uploads.qsize()) == (1.25, _CANONICAL.team_id, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_record_the_committed_owner_grows_past_the_event_limit_is_counted_without_blocking_others() -> None:
+    sent: Final = asyncio.Queue[bytes]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        sent.put_nowait(request.content)
+        return httpx.Response(204)
+
+    grown: Final = {
+        "response_cost": 9.0,
+        "litellm_call_id": "grown",
+        "standard_logging_object": {
+            "id": "grown",
+            "status": "success",
+            "response_cost": 9.0,
+            "metadata": {"padding": "x" * (MAX_EVENT_BYTES - 2000)},
+        },
+    }
+    owner: Final = {field: "a" * 512 for field in ("api_key", "user", "team_id", "organization_id", "end_user")}
+    handoff: Final = LedgerHandoff()
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(
+            client, ledger=handoff, ledger_key=lambda kwargs, response: str(kwargs.get("litellm_call_id"))
+        )
+        exporter.start()
+        try:
+            await exporter.async_log_success_event(grown, None, None, None)
+            assert (len(handoff.held), exporter.rows_dropped, sent.empty()) == (1, 0, True)
+            exporter.ledger_committed(({"request_id": "grown", "delivery_id": "d-grown", "spend": 0.5, **owner},))
+            await exporter.async_log_success_event(
+                {**_ledger_event("after"), "litellm_call_id": "after"}, None, None, None
+            )
+            exporter.ledger_committed(({"request_id": "after", "delivery_id": "d-after", "spend": 0.25},))
+            body: Final = await asyncio.wait_for(sent.get(), timeout=5)
+        finally:
+            await exporter.aclose()
+    rows: Final = TypeAdapter(list[dict[str, object]]).validate_json(body)
+    assert [(row["request_id"], row["spend"]) for row in rows] == [("after", 0.25)]
+    assert (exporter.rows_written, exporter.rows_dropped, sent.empty(), len(handoff.held)) == (1, 1, True, 0)
