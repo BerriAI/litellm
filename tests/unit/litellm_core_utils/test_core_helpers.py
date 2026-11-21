@@ -1033,6 +1033,10 @@ def _unpacked_by_double_star(value: object) -> object:
     return {**value}  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # the builtin under test
 
 
+def _called(value: object) -> object:
+    return value()  # pyright: ignore[reportCallIssue]  # the builtin under test
+
+
 def _called_with_unpacked(value: object, target: Callable[..., object]) -> object:
     return target(**value)  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # the builtin under test
 
@@ -1090,7 +1094,7 @@ def _required_keys(value: object) -> object:
         pytest.param(spread, _spread_by_star, ("ab",), id="spread-str"),
         pytest.param(spread, _spread_by_star, (_DATE,), id="spread-date"),
         pytest.param(spread, _spread_by_star, (None,), id="spread-none"),
-        pytest.param(callable_of, operator.call, (_DATE,), id="callable_of-date"),
+        pytest.param(callable_of, _called, (_DATE,), id="callable_of-date"),
         pytest.param(keyword_arguments, _called_with_unpacked, (_DATE, dict), id="keyword_arguments-date"),
         pytest.param(keyword_arguments, _called_with_unpacked, ([("a", 1)], dict), id="keyword_arguments-pairs"),
         pytest.param(unpackable_mapping, _unpacked_by_double_star, (_DATE,), id="unpackable_mapping-date"),
