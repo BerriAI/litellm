@@ -2843,8 +2843,11 @@ async def test_outer_deadline_delivers_session_termination(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("original_error", (False, True))
-async def test_task_cancellation_during_cleanup_preserves_failure(original_error: bool) -> None:
+@pytest.mark.parametrize("original_error", (False, True), ids=("operation_succeeds", "operation_fails"))
+@pytest.mark.parametrize("listing_session_enabled", (False, True), ids=("default_session", "listing_session"))
+async def test_task_cancellation_during_cleanup_preserves_failure(
+    original_error: bool, listing_session_enabled: bool
+) -> None:
     deleting: Final = asyncio.Event()
     drained: Final = asyncio.Event()
     original: Final = RuntimeError("operation failed before teardown")
@@ -2880,10 +2883,20 @@ async def test_task_cancellation_during_cleanup_preserves_failure(original_error
             raise original
         return "completed"
 
-    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
-    task: Final = asyncio.create_task(client.run_with_session(operation))
+    if listing_session_enabled:
+        client: Final = MCPClient(
+            server_url="https://example.com/mcp",
+            timeout=30,
+            upstream_transport=httpx2.MockTransport(respond),
+        )
+        listing_session: Final = ToolListingSession()
+    else:
+        client = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
+        listing_session = None
+    task: Final = asyncio.create_task(client.run_with_session(operation, listing_session=listing_session))
     await asyncio.wait_for(deleting.wait(), 2)
-    for _ in range(3):
+    cancel_count: Final = 1 if listing_session_enabled else 3
+    for _ in range(cancel_count):
         task.cancel()
         await asyncio.sleep(0)
     with pytest.raises(RuntimeError if original_error else asyncio.CancelledError) as caught:

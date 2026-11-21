@@ -928,6 +928,7 @@ class MCPClient:
         not emit a warning per call; every other caller keeps the operator-visible warning."""
         http_client: httpx2.AsyncClient | None = None
         close_cancellation: asyncio.CancelledError | None = None
+        in_flight_error: BaseException | None = None
         try:
             self._last_initialize_instructions = None
             transport_ctx, http_client = (  # rebind-ok: retain the created client for bounded cleanup
@@ -955,6 +956,7 @@ class MCPClient:
             )
             result: Final = await execution
         except Exception as e:
+            in_flight_error = e  # rebind-ok: preserve the operation failure over cleanup cancellation
             if listing_session is not None:
                 listing_session.stop_retaining()
             read_timeout: Final = as_mcp_read_timeout(e)
@@ -968,7 +970,8 @@ class MCPClient:
             _log: Final = verbose_logger.debug if quiet_on_error else verbose_logger.warning
             _log("MCP client run_with_session failed for %s", self.server_url or "stdio")
             raise
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as e:
+            in_flight_error = e  # rebind-ok: preserve the operation cancellation over cleanup cancellation
             if listing_session is not None:
                 listing_session.stop_retaining()
             raise
@@ -984,13 +987,19 @@ class MCPClient:
                             partial(http_client.delete, self.server_url, headers=listing_session.headers),
                             anyio.current_time() + 1,
                         )
-                except (Exception, asyncio.CancelledError):  # noqa: BLE001  # Termination is best effort
+                except (Exception, asyncio.CancelledError) as termination_error:  # noqa: BLE001  # cleanup failures must not replace the listing outcome
                     verbose_logger.debug("MCP tool listing session termination failed")
+                    if (
+                        isinstance(termination_error, asyncio.CancelledError)
+                        and in_flight_error is None
+                        and close_cancellation is None
+                    ):
+                        close_cancellation = termination_error
                 try:
                     await _run_bounded_cleanup(http_client.aclose, anyio.current_time() + 1)
                 except (Exception, asyncio.CancelledError) as e:
                     verbose_logger.debug("Error during http_client cleanup: %s", e)
-                    if isinstance(e, asyncio.CancelledError):
+                    if isinstance(e, asyncio.CancelledError) and in_flight_error is None and close_cancellation is None:
                         close_cancellation = e
 
         if close_cancellation is not None:
