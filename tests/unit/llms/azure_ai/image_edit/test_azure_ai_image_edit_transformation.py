@@ -134,7 +134,7 @@ def test_flux2_image_edit_uses_all_reference_fields(model: str, max_reference_im
     ],
 )
 def test_flux2_image_edit_rejects_too_many_references(model: str, reference_images: int):
-    with pytest.raises(ValueError, match=f"at most {reference_images - 1} reference images"):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
         AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
             model=model,
             prompt="Blend every reference",
@@ -143,6 +143,32 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
             litellm_params={},
             headers={},
         )
+
+    assert exc_info.value.status_code == 400
+    assert f"at most {reference_images - 1} reference images" in exc_info.value.message
+
+
+@pytest.mark.parametrize(
+    ("prompt", "image", "message"),
+    [
+        (None, b"image", "FLUX 2 image edit requires a prompt."),
+        ("Blend every reference", None, "FLUX 2 image edit requires an image."),
+        ("Blend every reference", [], "FLUX 2 image edit requires at least one image."),
+    ],
+)
+def test_flux2_image_edit_rejects_missing_prompt_or_image(prompt, image, message):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+            model="FLUX.2-pro",
+            prompt=prompt,
+            image=image,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert message in exc_info.value.message
 
 
 def _flux2_reference_request(image: object) -> dict[str, object]:
@@ -166,7 +192,9 @@ def test_flux2_image_edit_rejects_a_reference_image_it_cannot_read():
         _flux2_reference_request("cat.png")
 
 
-@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))
+@pytest.mark.parametrize(
+    "dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"})
+)
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
     def respond(request: httpx.Request) -> httpx.Response:
