@@ -4,12 +4,10 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
+use litellm_router_types::{RoutingGroupSpec, RoutingStrategy};
 use serde::Deserialize;
 
-use crate::{
-    error::AttemptError,
-    registry::{DeploymentSpec, RoutingGroupSpec},
-};
+use crate::{error::AttemptError, registry::DeploymentSpec};
 
 /// `DEFAULT_COOLDOWN_TIME_SECONDS` in `litellm/constants.py`.
 pub const DEFAULT_COOLDOWN_TIME: Duration = Duration::from_secs(5);
@@ -41,45 +39,6 @@ impl From<&str> for Op {
 impl std::fmt::Display for Op {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-/// `routing_strategy`. Only simple-shuffle is native; the rest go through `Host::select`.
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    strum::EnumString,
-    strum::Display,
-    serde_with::DeserializeFromStr,
-)]
-pub enum RoutingStrategy {
-    #[default]
-    #[strum(serialize = "simple-shuffle")]
-    SimpleShuffle,
-    #[strum(serialize = "least-busy")]
-    LeastBusy,
-    #[strum(serialize = "usage-based-routing")]
-    UsageBased,
-    #[strum(serialize = "usage-based-routing-v2")]
-    UsageBasedV2,
-    #[strum(serialize = "latency-based-routing")]
-    LatencyBased,
-    #[strum(serialize = "cost-based-routing")]
-    CostBased,
-    /// `routing_strategy=None` passed explicitly (sent as `"None"`): stored as None, so no
-    /// strategy arm matches and every pick finds no deployment.
-    #[strum(serialize = "None")]
-    Unset,
-    #[strum(default, transparent)]
-    Other(String),
-}
-
-impl RoutingStrategy {
-    pub fn is_native(&self) -> bool {
-        matches!(self, Self::SimpleShuffle | Self::Unset)
     }
 }
 
@@ -215,12 +174,13 @@ pub struct RouterConfig {
     /// `enable_weighted_failover`: a failed deployment's group is re-picked without it before
     /// any cross-group fallback (simple-shuffle only).
     pub enable_weighted_failover: bool,
+    pub enable_cross_model_group_collision_check: bool,
     /// `fallback_on_unsupported_params`; `None` is Python's default, `True`.
     pub fallback_on_unsupported_params: Option<bool>,
     /// Deployment ids that are a provider's default and never cool down
     /// (`provider_default_deployment_ids`).
     pub provider_default_deployment_ids: Vec<String>,
-    /// The operations this router must serve: `Host::supports` must accept each one for every
+    /// The operations this router must serve: `HostFacts::supports` must accept each one for every
     /// configured provider, or the router fails to build.
     pub served_ops: Vec<Op>,
 }
@@ -340,16 +300,5 @@ mod tests {
             dynamic.model_alias_map,
             BTreeMap::from([("gpt".to_owned(), "gpt-4".to_owned())])
         );
-    }
-
-    #[rstest]
-    #[case::native("simple-shuffle", RoutingStrategy::SimpleShuffle)]
-    #[case::unknown("my-strategy", RoutingStrategy::Other("my-strategy".to_owned()))]
-    fn routing_strategy_parses_its_wire_name(
-        #[case] wire: &str,
-        #[case] expected: RoutingStrategy,
-    ) {
-        assert_eq!(wire.parse::<RoutingStrategy>().unwrap(), expected);
-        assert_eq!(expected.to_string(), wire);
     }
 }

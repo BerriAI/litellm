@@ -608,6 +608,51 @@ async def test_every_opus_version_draws_from_one_family_entry(family_entry: str)
     assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-sonnet-5")
 
 
+ALIASED_GROUP: Final = "claude-bedrock-opus-4-8"
+GROUP_ALIASES: Final = ("opus", "claude-opus-4-8")
+
+
+def _router_with_global_aliases() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": ALIASED_GROUP,
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={alias: ALIASED_GROUP for alias in GROUP_ALIASES},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spent_under", [ALIASED_GROUP, *GROUP_ALIASES])
+async def test_a_model_group_entry_gates_and_charges_its_global_aliases(
+    monkeypatch: pytest.MonkeyPatch, spent_under: str
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_global_aliases())
+    budget: Final = {ALIASED_GROUP: FAMILY_CAP}
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model=spent_under, model_max_budget=budget)
+
+    for requested in (ALIASED_GROUP, *GROUP_ALIASES):
+        with pytest.raises(litellm.BudgetExceededError, match=rf"model={re.escape(requested)}$"):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
+@pytest.mark.asyncio
+async def test_an_entry_named_after_a_global_alias_still_governs_that_alias(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_global_aliases())
+    budget: Final = {ALIASED_GROUP: FAMILY_CAP, "opus": ROOMY_CAP}
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model=ALIASED_GROUP, model_max_budget=budget)
+
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="opus")
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-4-8")
+
+
 @pytest.mark.asyncio
 async def test_a_model_added_to_the_access_group_later_is_covered_with_no_key_change():
     budget: Final = {OPUS_GROUP: FAMILY_CAP}

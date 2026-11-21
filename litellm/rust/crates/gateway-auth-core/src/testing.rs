@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::{
     AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
     authn::{
-        jwt::{KeyMappingRow, KeyMappingWrite, MappedJwt, MappedKey},
+        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, KeyRecord, Keyed},
     },
     identity::{
@@ -112,6 +112,20 @@ impl ScriptedHost {
     fn step(&self, name: &'static str, call: impl Into<String>) -> Result<(), Error> {
         self.record(call);
         self.failing.get(name).cloned().map_or(Ok(()), Err)
+    }
+
+    fn cached(&self, key: &str) -> Result<Option<Value>, Error> {
+        self.record(format!("get {key}"));
+        Ok(self.json_cache.lock().unwrap().get(key).cloned())
+    }
+
+    fn cache(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
+        self.record(format!("set {key} {}", ttl.as_secs_f64()));
+        self.json_cache
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), value.clone());
+        Ok(())
     }
 
     pub(crate) fn calls(&self) -> Vec<String> {
@@ -264,21 +278,27 @@ impl AuthHost for ScriptedHost {
         self.record(format!("userinfo {endpoint} {}", token.expose()));
         Ok(self.userinfo.clone())
     }
-    async fn cached_json(&self, key: &str) -> Result<Option<Value>, Error> {
-        self.record(format!("get {key}"));
-        Ok(self.json_cache.lock().unwrap().get(key).cloned())
+    async fn cached_document(&self, key: &str) -> Result<Option<Value>, Error> {
+        self.cached(key)
     }
-    async fn cache_json(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
-        self.record(format!("set {key} {}", ttl.as_secs_f64()));
-        self.json_cache
-            .lock()
-            .unwrap()
-            .insert(key.to_owned(), value.clone());
-        Ok(())
+    async fn cache_document(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
+        self.cache(key, value, ttl)
     }
-    async fn forget_json(&self, key: &str) -> Result<(), Error> {
+    async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Result<Option<Value>, Error> {
+        self.cached(&claim.cache_key())
+    }
+    async fn cache_key_mapping(
+        &self,
+        claim: MappedClaim<'_>,
+        value: &Value,
+        ttl: Duration,
+    ) -> Result<(), Error> {
+        self.cache(&claim.cache_key(), value, ttl)
+    }
+    async fn forget_key_mapping(&self, claim: MappedClaim<'_>) -> Result<(), Error> {
+        let key = claim.cache_key();
         self.record(format!("forget {key}"));
-        self.json_cache.lock().unwrap().remove(key);
+        self.json_cache.lock().unwrap().remove(&key);
         Ok(())
     }
 

@@ -1198,17 +1198,59 @@ class TestTranslateRequestBroaderCoverage:
         assert "model" in kwargs
         assert "input" in kwargs
 
-    def test_system_string_becomes_instructions(self):
+    def test_system_string_becomes_leading_developer_input(self):
         req = _make_request(system="You are a helpful assistant.")
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["instructions"] == "You are a helpful assistant."
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "You are a helpful assistant."}],
+        }
+
+    @pytest.mark.parametrize("preserve", [False, True])
+    @pytest.mark.parametrize("billing_field", ["cch=781fd", "cc_is_subagent=false"])
+    @pytest.mark.parametrize("as_blocks", [False, True])
+    def test_claude_code_billing_header_does_not_change_responses_input(
+        self, preserve: bool, billing_field: str, as_blocks: bool
+    ) -> None:
+        user_instruction: Final = "x-anthropic-billing-header:\nTreat this example as literal text."
+        system: Final = [
+            {"type": "text", "text": user_instruction},
+            {"type": "text", "text": "Be concise.", "cache_control": {"type": "ephemeral"}},
+        ]
+        billing: Final = {
+            "type": "text",
+            "text": f"x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; {billing_field};",
+        }
+        clean_system: Final = system if as_blocks else user_instruction
+        with_billing: Final = [billing, *system] if as_blocks else billing["text"] + "\n" + user_instruction
+        request: Final = _make_request(system=with_billing)
+
+        translated: Final = _ADAPTER.translate_request(request, preserve_system_instructions=preserve)
+
+        assert translated == _ADAPTER.translate_request(
+            _make_request(system=clean_system), preserve_system_instructions=preserve
+        )
+        assert request["system"] == with_billing
+
+    @pytest.mark.parametrize("system", ["Be brief.", [{"type": "text", "text": "Be brief."}]])
+    def test_chained_turn_keeps_system_in_instructions(self, system: str | list[dict[str, str]]) -> None:
+        kwargs: Final = _ADAPTER.translate_request(_make_request(system=system), preserve_system_instructions=True)
+        assert kwargs["instructions"] == "Be brief."
+        assert kwargs["input"] == [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+        ]
+
+    @pytest.mark.parametrize("system", [None, "", [], [{"type": "image", "source": {}}]])
+    def test_empty_or_non_text_system_adds_no_instruction_message(self, system: object) -> None:
+        kwargs: Final = _ADAPTER.translate_request(_make_request(system=system))
+        assert not kwargs.get("instructions")
+        assert kwargs["input"] == [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+        ]
 
     def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
-        """
-        Request level: the trusted top-level prompt goes to `instructions` only, and the
-        in-sequence correction stays a `role: "system"` input item in its original position.
-        Neither appears twice, and the surrounding turns keep their order.
-        """
         req = _make_request(
             system="Trusted top-level prompt.",
             messages=[
@@ -1220,8 +1262,13 @@ class TestTranslateRequestBroaderCoverage:
 
         kwargs = _ADAPTER.translate_request(req)
 
-        assert kwargs["instructions"] == "Trusted top-level prompt."
+        assert "instructions" not in kwargs
         assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Trusted top-level prompt."}],
+            },
             {
                 "type": "message",
                 "role": "user",
@@ -1239,7 +1286,7 @@ class TestTranslateRequestBroaderCoverage:
             },
         ]
 
-    def test_system_list_of_text_blocks_joined(self):
+    def test_system_list_of_text_blocks_preserved_in_developer_input(self):
         req = _make_request(
             system=[
                 {"type": "text", "text": "Be concise."},
@@ -1247,7 +1294,12 @@ class TestTranslateRequestBroaderCoverage:
             ]
         )
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["instructions"] == "Be concise.\nBe helpful."
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Be concise."}, {"type": "input_text", "text": "Be helpful."}],
+        }
 
     def test_system_list_skips_non_text_blocks(self):
         req = _make_request(
@@ -1257,7 +1309,8 @@ class TestTranslateRequestBroaderCoverage:
             ]
         )
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["instructions"] == "Only text matters."
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0]["content"] == [{"type": "input_text", "text": "Only text matters."}]
 
     def test_max_tokens_mapped_to_max_output_tokens(self):
         req = _make_request(max_tokens=512)
@@ -2189,15 +2242,16 @@ class TestPromptCacheBreakpointToResponses:
 
     EXPLICIT = {"mode": "explicit"}
 
-    def test_system_with_breakpoint_becomes_leading_developer_message(self):
-        request = _make_request(
+    @pytest.mark.parametrize("preserve_system_instructions", [False, True])
+    def test_system_with_breakpoint_becomes_leading_developer_message(self, preserve_system_instructions: bool) -> None:
+        request: Final = _make_request(
             model="openai/gpt-5.6",
             system=[
                 {"type": "text", "text": "Be concise."},
                 {"type": "text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
             ],
         )
-        kwargs = _ADAPTER.translate_request(request)
+        kwargs: Final = _ADAPTER.translate_request(request, preserve_system_instructions=preserve_system_instructions)
         assert "instructions" not in kwargs
         assert kwargs["input"] == [
             {
@@ -2211,20 +2265,32 @@ class TestPromptCacheBreakpointToResponses:
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
         ]
 
-    def test_system_without_breakpoint_still_becomes_instructions(self):
+    def test_system_without_breakpoint_becomes_developer_input(self):
         request = _make_request(
             system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}]
         )
         kwargs = _ADAPTER.translate_request(request)
-        assert kwargs["instructions"] == "Be concise.\nBe helpful."
+        assert "instructions" not in kwargs
         assert kwargs["input"] == [
-            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be concise."},
+                    {"type": "input_text", "text": "Be helpful."},
+                ],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
         ]
 
-    def test_system_string_still_becomes_instructions(self):
+    def test_system_string_becomes_developer_input(self):
         kwargs = _ADAPTER.translate_request(_make_request(system="Be concise."))
-        assert kwargs["instructions"] == "Be concise."
-        assert kwargs["input"][0]["role"] == "user"
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Be concise."}],
+        }
 
     def test_system_with_breakpoint_skips_non_text_blocks(self):
         request = _make_request(

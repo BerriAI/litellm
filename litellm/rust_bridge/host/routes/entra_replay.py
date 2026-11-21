@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from typing import Final
 
 import requests
-from azure.core.pipeline.transport import HttpRequest, RequestsTransport, RequestsTransportResponse
+from azure.core.pipeline.transport import HttpRequest
+from azure.core.pipeline.transport._requests_basic import RequestsTransport, RequestsTransportResponse
 from azure.identity import ClientSecretCredential
 from requests.structures import CaseInsensitiveDict
 

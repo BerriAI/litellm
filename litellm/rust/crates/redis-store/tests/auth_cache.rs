@@ -173,7 +173,7 @@ async fn writes_mains_json_and_str_bytes(
 
     for (index, (value, json, printed)) in written().into_iter().enumerate() {
         let key = format!("team_id:t{index}");
-        store.set(&key, value.clone(), None).await.unwrap();
+        store.set(None, &key, value.clone(), None).await.unwrap();
         assert_eq!(
             raw.send(commands::get::<String>(&key))
                 .await
@@ -181,7 +181,7 @@ async fn writes_mains_json_and_str_bytes(
                 .as_deref(),
             Some(json)
         );
-        store.set_str(&key, value, None).await.unwrap();
+        store.set_str(None, &key, value, None).await.unwrap();
         assert_eq!(
             raw.send(commands::get::<String>(&key))
                 .await
@@ -238,13 +238,17 @@ async fn ttls_follow_dual_cache_and_the_write_back_rule(
 
     store
         .set(
+            None,
             "team_id:given",
             team("a"),
             Some(Duration::from_secs_f64(30.9)),
         )
         .await
         .unwrap();
-    store.set("team_id:default", team("b"), None).await.unwrap();
+    store
+        .set(None, "team_id:default", team("b"), None)
+        .await
+        .unwrap();
     store
         .write_back(
             RedisSend::Now,
@@ -273,11 +277,14 @@ async fn user_key_objects_survive_churn_in_the_management_object_partition() {
             ..Settings::default()
         },
     );
-    store.set(KEY_OBJECT, team("key"), None).await.unwrap();
+    store
+        .set(None, KEY_OBJECT, team("key"), None)
+        .await
+        .unwrap();
 
     for index in 0..5 {
         store
-            .set(&format!("team_id:t{index}"), team("t"), None)
+            .set(None, &format!("team_id:t{index}"), team("t"), None)
             .await
             .unwrap();
     }
@@ -300,7 +307,7 @@ async fn a_value_json_refuses_stays_in_memory_and_never_reaches_redis(
     let members = Value::Set(vec![Value::from("a")]);
 
     store
-        .set("team_id:set", members.clone(), None)
+        .set(None, "team_id:set", members.clone(), None)
         .await
         .unwrap();
 
@@ -324,6 +331,7 @@ async fn a_value_json_refuses_keeps_its_whole_pipeline_out_of_redis() {
 
     store
         .set_many(
+            None,
             vec![
                 ("team_id:a".to_owned(), team("a")),
                 ("team_id:set".to_owned(), members.clone()),
@@ -502,9 +510,12 @@ async fn an_eviction_broadcast_drops_only_this_pods_copy_and_the_next_read_refil
     let raw = connect(&deployment);
     let this_pod = store(Some(connect(&deployment)));
     let other_pod = store(Some(connect(&deployment)));
-    this_pod.set("team_id:t1", team("old"), None).await.unwrap();
+    this_pod
+        .set(None, "team_id:t1", team("old"), None)
+        .await
+        .unwrap();
     other_pod
-        .set("team_id:t1", team("new"), None)
+        .set(None, "team_id:t1", team("new"), None)
         .await
         .unwrap();
 
@@ -586,6 +597,65 @@ async fn a_key_the_request_read_as_missing_is_not_read_again(
     );
 }
 
+enum RequestWrite {
+    Set,
+    SetStr,
+    SetMany,
+    WriteBack,
+}
+
+#[rstest]
+#[case::set(RequestWrite::Set, team("t"))]
+#[case::set_str(RequestWrite::SetStr, Value::Float(1.5))]
+#[case::set_many(RequestWrite::SetMany, team("t"))]
+#[case::write_back(RequestWrite::WriteBack, team("t"))]
+#[tokio::test]
+async fn a_write_in_the_request_makes_a_key_it_read_as_missing_readable_again(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    #[case] write: RequestWrite,
+    #[case] written: Value,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let store = store(Some(connect(&deployment)));
+    let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
+    let key = "team_id:t";
+    let read = store
+        .get_many(RedisSend::PreCall(&request), &[key.to_owned()])
+        .unwrap();
+    assert_eq!(read.await.unwrap(), vec![None]);
+
+    match write {
+        RequestWrite::Set => store
+            .set(Some(&request), key, written.clone(), None)
+            .await
+            .unwrap(),
+        RequestWrite::SetStr => store
+            .set_str(Some(&request), key, written.clone(), None)
+            .await
+            .unwrap(),
+        RequestWrite::SetMany => store
+            .set_many(
+                Some(&request),
+                vec![(key.to_owned(), written.clone())],
+                None,
+            )
+            .await
+            .unwrap(),
+        RequestWrite::WriteBack => store
+            .write_back(
+                RedisSend::PreCall(&request),
+                vec![(key.to_owned(), written.clone(), None)],
+            )
+            .unwrap()
+            .await
+            .unwrap(),
+    }
+    request.flush_pre().await;
+    store.delete_local(key).unwrap();
+
+    assert_eq!(store.get(Some(&request), key).await.unwrap(), Some(written));
+}
+
 #[rstest]
 #[tokio::test]
 async fn delete_drops_memory_and_redis(
@@ -597,6 +667,7 @@ async fn delete_drops_memory_and_redis(
     let keys = [KEY_OBJECT.to_owned(), "team_id:t1".to_owned()];
     store
         .set_many(
+            None,
             keys.iter().map(|key| (key.clone(), team("t"))).collect(),
             None,
         )
@@ -622,7 +693,10 @@ async fn delete_drops_memory_and_redis(
 async fn delete_drops_memory_before_it_waits_for_redis() {
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
     let store = store(Some(connect(&deployment)));
-    store.set("team_id:t1", team("t"), None).await.unwrap();
+    store
+        .set(None, "team_id:t1", team("t"), None)
+        .await
+        .unwrap();
     deployment.freeze().await.unwrap();
 
     let keys = ["team_id:t1".to_owned()];
@@ -661,7 +735,7 @@ async fn increment_if_present_only_raises_an_entry_redis_holds(
         None
     );
     store
-        .set("litellm-proxy-budget:spend", Value::Float(1.5), None)
+        .set(None, "litellm-proxy-budget:spend", Value::Float(1.5), None)
         .await
         .unwrap();
 
@@ -680,7 +754,10 @@ async fn without_redis_every_operation_is_memory_only() {
     let store = store(None);
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
 
-    store.set("team_id:t1", team("t"), None).await.unwrap();
+    store
+        .set(None, "team_id:t1", team("t"), None)
+        .await
+        .unwrap();
 
     store
         .declare_set(RedisSend::PreCall(&request), "team_id:t2", team("t"), None)
@@ -717,7 +794,11 @@ async fn without_redis_every_operation_is_memory_only() {
     );
     assert_eq!(store.get_local("team_id:t2").unwrap(), None);
     assert_eq!(store.lease("team_id:t1").await, None);
-    assert!(store.set_leased("team_id:t1", None, team("t"), None).await);
+    assert!(
+        store
+            .set_leased(None, "team_id:t1", None, team("t"), None)
+            .await
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -753,7 +834,7 @@ async fn a_load_that_began_before_another_pods_delete_cannot_cache_what_it_read(
     evict(&resetter, how, key).await;
     assert!(
         !loader
-            .set_leased(key, before_reset.as_deref(), team("stale"), None)
+            .set_leased(None, key, before_reset.as_deref(), team("stale"), None)
             .await
     );
     assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
@@ -761,7 +842,7 @@ async fn a_load_that_began_before_another_pods_delete_cannot_cache_what_it_read(
     let after_reset = loader.lease(key).await;
     assert!(
         loader
-            .set_leased(key, after_reset.as_deref(), team("fresh"), None)
+            .set_leased(None, key, after_reset.as_deref(), team("fresh"), None)
             .await
     );
     assert_eq!(resetter.get(None, key).await.unwrap(), Some(team("fresh")));
@@ -770,7 +851,7 @@ async fn a_load_that_began_before_another_pods_delete_cannot_cache_what_it_read(
     evict(&resetter, how, key).await;
     assert!(
         !loader
-            .set_leased(key, after_reset.as_deref(), team("stale"), None)
+            .set_leased(None, key, after_reset.as_deref(), team("stale"), None)
             .await
     );
     assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
@@ -791,7 +872,13 @@ async fn a_load_caches_what_it_read_when_only_another_key_was_deleted(
 
     assert!(
         loader
-            .set_leased("customer_member_id:m", lease.as_deref(), team("t"), None)
+            .set_leased(
+                None,
+                "customer_member_id:m",
+                lease.as_deref(),
+                team("t"),
+                None
+            )
             .await
     );
     assert_eq!(
@@ -816,12 +903,12 @@ async fn a_key_no_lease_can_share_a_slot_with_is_not_written_leased_and_is_still
     let lease = store.lease(key).await;
     assert!(
         !store
-            .set_leased(key, lease.as_deref(), team("t"), None)
+            .set_leased(None, key, lease.as_deref(), team("t"), None)
             .await
     );
     assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
 
-    store.set(key, team("t"), None).await.unwrap();
+    store.set(None, key, team("t"), None).await.unwrap();
     evict(&store, how, key).await;
     assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
 }
@@ -843,6 +930,7 @@ async fn the_auth_cache_sends_the_commands_user_api_key_cache_sends(
 
     store
         .set_many(
+            None,
             vec![
                 (KEY_OBJECT.to_owned(), team("t0")),
                 ("team_id:t1".to_owned(), team("t1")),

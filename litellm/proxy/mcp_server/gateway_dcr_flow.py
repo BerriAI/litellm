@@ -283,9 +283,7 @@ class ConsentTeam(LiteLLMBaseModel):
 class LookupVendorCredential(Protocol):
     """Injected read of a user's vendor credential for one server."""
 
-    def __call__(
-        self, user_id: str, server_id: str, requested_scopes: tuple[str, ...] = (), /
-    ) -> Awaitable[VendorCredentialState]: ...
+    def __call__(self, user_id: str, server_id: str, /) -> Awaitable[VendorCredentialState]: ...
 
 
 class LookupServerReachability(Protocol):
@@ -329,9 +327,7 @@ async def _refuse_assertion(
     )
 
 
-async def _unavailable_vendor_credential(
-    user_id: str, server_id: str, requested_scopes: tuple[str, ...] = ()
-) -> VendorCredentialState:
+async def _unavailable_vendor_credential(user_id: str, server_id: str) -> VendorCredentialState:
     return "unavailable"
 
 
@@ -1126,11 +1122,7 @@ async def _describe_interactive_target(
     scopes: tuple[str, ...],
     lookup_vendor_credential: LookupVendorCredential,
 ) -> ConnectFlowDescription | Response:
-    credential: Final = (
-        await lookup_vendor_credential(flow.user_id, server.server_id, scopes)
-        if scopes
-        else await lookup_vendor_credential(flow.user_id, server.server_id)
-    )
+    credential: Final = await lookup_vendor_credential(flow.user_id, server.server_id)
     if credential == "unavailable":
         return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
     described: Final[ConnectFlowDescription] = {
@@ -1445,7 +1437,7 @@ class _SingleUseGuard:
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         # Resolve the shared authority HERE rather than trusting the injected cache: callers pass
-        # user_api_key_cache, which only carries a redis_cache when enable_redis_auth_cache is set
+        # mcp_state_cache, which only carries a redis_cache when enable_redis_auth_cache is set
         # (off by default), so a guard that read its injected cache silently degraded every claim to
         # a per-worker count on a stock multi-worker deployment. redis_usage_cache is the store the
         # proxy already treats as cross-worker, so no call site can wire the guarantee away.
