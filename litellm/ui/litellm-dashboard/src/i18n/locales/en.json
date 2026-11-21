@@ -9029,6 +9029,7 @@
       "title": "Home",
       "createKey": "Create New Virtual Key",
       "usageAria": "Usage, last {{days}} days",
+      "usagePeriod": "Last {{days}} days",
       "usageFailed": "Failed to load usage",
       "retry": "Retry",
       "whatsNew": "What's new in LiteLLM?",

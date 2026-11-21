@@ -43,6 +43,7 @@ export default function HomePage() {
       </PageHeader>
 
       <section aria-label={t("home.page.usageAria", { days: HOME_USAGE_DAYS })}>
+        <p className="mb-2 text-xs text-muted-foreground">{t("home.page.usagePeriod", { days: HOME_USAGE_DAYS })}</p>
         {usage.failed ? (
           <div className="flex items-center justify-between gap-2 rounded-xl border bg-card px-4 py-3 text-sm">
             <span className="text-destructive">{t("home.page.usageFailed")}</span>
