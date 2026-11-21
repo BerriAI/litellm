@@ -12,6 +12,7 @@ from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm import completion
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
@@ -3555,6 +3556,76 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+def test_openai_compatible_error_relayed_as_json_text_keeps_its_param_and_plain_message(
+    quiet_exception_mapping: None,
+) -> None:
+    upstream_message: Final = "max_tokens must be at least 1, got -5. (parameter=max_tokens, value=-5)"
+    relayed_text: Final = json.dumps(
+        {"error": {"message": upstream_message, "type": "BadRequestError", "param": "max_tokens", "code": 400}}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=relayed_text),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param == "max_tokens"
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {upstream_message}"
+
+
+@pytest.mark.parametrize("message", ("plain text failure", '{"error": "plain text failure"}', "[1, 2]"))
+def test_openai_compatible_error_without_a_relayed_error_object_keeps_its_message(
+    message: str, quiet_exception_mapping: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=message),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param is None
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {message}"
+
+
+@pytest.mark.parametrize("provider", ("openai", "hosted_vllm"))
+@pytest.mark.parametrize(
+    ("status", "error_type", "error_code", "mapped_error"),
+    [
+        (404, "not_found_error", "thread_not_found", litellm.NotFoundError),
+        (400, "invalid_request_error", "thread_unsupported_request", litellm.BadRequestError),
+    ],
+)
+def test_anthropic_thread_refusals_keep_their_details_on_openai_compatible_legs(
+    provider: str,
+    status: int,
+    error_type: str,
+    error_code: str,
+    mapped_error: type[litellm.NotFoundError] | type[litellm.BadRequestError],
+    quiet_exception_mapping: None,
+) -> None:
+    message: Final = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": error_type,
+                "message": "Threads are not supported.",
+                "details": {"error_code": error_code},
+            },
+        }
+    )
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=AnthropicError(status_code=status, message=message),
+            custom_llm_provider=provider,
+        )
+
+    assert AnthropicExceptionMapping.embedded_error_details(raised.value.message) == {"error_code": error_code}
 
 
 _PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", api_base="https://api.githubcopilot.com")

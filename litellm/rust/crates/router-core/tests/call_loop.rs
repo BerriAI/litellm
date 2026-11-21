@@ -9,12 +9,11 @@ use std::{
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HealthState, HostFacts, InMemoryRouterCache, Op, Outcomes, PreRoute,
-    PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost,
-    RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served,
-    SuccessReport, UsageCounts, UsageWindow, call::StreamOrigin, fallback::Fallbacks,
-    health::CooldownValue, health::current_minute, host::UncountedRetries, select,
-    select::PassThrough,
+    FailureReport, Health, HealthState, InMemoryRouterCache, Op, Outcomes, PreRoute, PreRouted,
+    Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
+    RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
+    UsageCounts, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::CooldownValue,
+    health::current_minute, host::UncountedRetries, select, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -382,7 +381,7 @@ fn config() -> RouterConfig {
 
 fn router(config: RouterConfig, dynamic: serde_json::Value, host: Arc<ScriptedHost>) -> Hosted {
     let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
-    let router = Router::builder(config, dynamic, HostFacts::everything())
+    let router = Router::builder(config, dynamic)
         .randomness(Arc::new(SeededRandomness::new(7)))
         .build()
         .unwrap();
@@ -511,7 +510,10 @@ async fn a_failed_call_hands_back_the_host_error_of_the_attempt_it_ends_on(confi
         ),
         (
             Some(FailureKind::BadRequest),
-            Some(Raised(selected[0].clone())),
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
             2,
         )
     );
@@ -542,7 +544,14 @@ async fn a_refused_attempt_ends_the_call_without_retries_or_fallbacks(config: Ro
     );
     assert_eq!(
         (ended.raised, selected.len(), host.retries()),
-        (Some(Raised(selected[0].clone())), 1, 0)
+        (
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
+            1,
+            0
+        )
     );
 }
 
@@ -585,7 +594,11 @@ async fn a_call_whose_retry_fails_too_hands_back_the_host_error_of_the_retry(con
         .unwrap_err();
     let selected = host.selected();
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -611,7 +624,11 @@ async fn a_retry_the_host_refuses_hands_back_the_host_error_of_the_retry(config:
         ended.error
     );
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -642,7 +659,11 @@ async fn stream_retries_that_all_fail_hand_back_the_host_error_of_the_last_one(
         .unwrap_err();
     let selected = host.selected();
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -856,7 +877,7 @@ fn stopped_now() -> f64 {
 
 fn stopped_router(config: RouterConfig, dynamic: Value, host: Arc<ScriptedHost>) -> Hosted {
     let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
-    let router = Router::builder(config, dynamic, HostFacts::everything())
+    let router = Router::builder(config, dynamic)
         .randomness(Arc::new(SeededRandomness::new(7)))
         .clock(Arc::new(StoppedClock(utc_hour(10))))
         .build()
@@ -2834,15 +2855,11 @@ async fn access_windows_follow_the_routers_clock(#[case] now: u64, #[case] expec
     }))
     .unwrap();
     let host = ScriptedHost::default();
-    let router = Router::builder(
-        config,
-        RouterDynamicConfig::default(),
-        HostFacts::everything(),
-    )
-    .randomness(Arc::new(SeededRandomness::new(7)))
-    .clock(Arc::new(StoppedClock(now)))
-    .build()
-    .unwrap();
+    let router = Router::builder(config, RouterDynamicConfig::default())
+        .randomness(Arc::new(SeededRandomness::new(7)))
+        .clock(Arc::new(StoppedClock(now)))
+        .build()
+        .unwrap();
     let mut picked = std::collections::BTreeSet::new();
     for _ in 0..40 {
         let deployment = router

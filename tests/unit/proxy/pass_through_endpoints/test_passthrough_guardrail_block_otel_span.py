@@ -27,7 +27,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 )
 
 import litellm  # noqa: E402
-from litellm.caching.dual_cache import DualCache  # noqa: E402
 from litellm.integrations.custom_guardrail import (  # noqa: E402
     CustomGuardrail,
     log_guardrail_information,
@@ -122,10 +121,8 @@ async def _drive(response_text: str):
     """Run the real pass_through_request with the block-demo guardrail + otel V2
     logger registered, returning (status_code, guardrail_span_names)."""
     otel, exporter = _otel_logger_with_exporter()
-    guardrail = _BlockOnTextGuardrail(
-        guardrail_name="block-demo", event_hook=[GuardrailEventHooks.post_call]
-    )
-    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache(DualCache()))
+    guardrail = _BlockOnTextGuardrail(guardrail_name="block-demo", event_hook=[GuardrailEventHooks.post_call])
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     saved_callbacks = list(litellm.callbacks)
     litellm.callbacks = [guardrail, otel]

@@ -4,7 +4,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
 from operator import attrgetter
@@ -35,9 +35,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
-    get_annual_budget_window_start,
-    is_annual_budget_duration,
+    get_budget_window_start,
     normalize_budget_window_start,
+    rolled_budget_window_start,
 )
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -47,20 +47,13 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    AUTH_OBJECTS_TARGET,
-    end_user_cache_key,
-    model_access_group_cache_key,
-    project_cache_key,
-    tag_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.budget_window_spend_writer import (
     roll_window_spend_row,
     roll_window_spend_rows,
@@ -70,6 +63,7 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARG
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
@@ -268,7 +262,7 @@ def _team_membership_counter_key(row: _TeamMembershipRow) -> str:
 
 
 def _team_membership_cache_keys(row: _TeamMembershipRow) -> tuple[str, ...]:
-    return (f"{row.team_id}_{row.user_id}",)
+    return (AuthObject.team_membership(team_id=row.team_id, user_id=row.user_id).key,)
 
 
 def _key_counter_key(row: _KeyRow) -> str:
@@ -276,7 +270,7 @@ def _key_counter_key(row: _KeyRow) -> str:
 
 
 def _key_cache_keys(row: _KeyRow) -> tuple[str, ...]:
-    return (row.token,)
+    return (AuthObject.virtual_key(row.token).key,)
 
 
 def _org_counter_key(row: _OrgRow) -> str:
@@ -285,8 +279,8 @@ def _org_counter_key(row: _OrgRow) -> str:
 
 def _org_cache_keys(row: _OrgRow) -> tuple[str, ...]:
     return (
-        f"org_id:{row.organization_id}",
-        f"org_id:{row.organization_id}:with_budget",
+        AuthObject.org(row.organization_id).key,
+        AuthObject.org_with_budget(row.organization_id).key,
     )
 
 
@@ -295,7 +289,7 @@ def _tag_counter_key(row: _TagRow) -> str:
 
 
 def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
-    return (tag_cache_key(row.tag_name),)
+    return (AuthObject.tag(row.tag_name).key,)
 
 
 def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
@@ -303,7 +297,7 @@ def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
 
 
 def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]:
-    return (model_access_group_cache_key(row.access_group_name),)
+    return (AuthObject.model_access_group(row.access_group_name).key,)
 
 
 def _project_counter_key(row: _ProjectRow) -> str:
@@ -311,7 +305,7 @@ def _project_counter_key(row: _ProjectRow) -> str:
 
 
 def _project_cache_keys(row: _ProjectRow) -> tuple[str, ...]:
-    return (project_cache_key(row.project_id),)
+    return (AuthObject.project(row.project_id).key,)
 
 
 def _enduser_counter_key(row: _EndUserRow) -> str:
@@ -319,7 +313,7 @@ def _enduser_counter_key(row: _EndUserRow) -> str:
 
 
 def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
-    return (end_user_cache_key(row.user_id),)
+    return (AuthObject.end_user(row.user_id).key,)
 
 
 def _budget_link_where(
@@ -634,13 +628,12 @@ def _window_spend_start(
     budget_duration: str, next_reset_at: datetime, reset_settings: BudgetResetSettings
 ) -> datetime | None:
     try:
-        start: Final = (
-            get_annual_budget_window_start(next_reset_at, reset_settings.timezone)
-            if is_annual_budget_duration(budget_duration)
-            else next_reset_at.astimezone(timezone.utc) - timedelta(seconds=duration_in_seconds(budget_duration))
+        duration_in_seconds(budget_duration)
+        start: Final = get_budget_window_start(
+            budget_duration, next_reset_at, reset_settings.timezone, reset_settings.reset_time_of_day
         )
         return normalize_budget_window_start(start)
-    except Exception as error:  # noqa: BLE001  # duration_in_seconds raises bare exceptions on bad input
+    except (ValueError, OverflowError) as error:
         verbose_proxy_logger.warning("Unparseable budget_duration %s: %s", budget_duration, error)
         return None
 
@@ -649,6 +642,7 @@ def _window_spend_start(
 class _WindowReset:
     next_reset_at: datetime
     budget_duration: str
+    window_start: datetime | None
     counter: tuple[str, float] | None = None
 
 
@@ -826,7 +820,9 @@ class ResetBudgetJob:
 
     async def _invalidate_customer_budget_caches(self, entity: CustomerSpendEntity, identities: Sequence[str]) -> None:
         if entity == "member":
-            await self._evict_on_every_worker(tuple(customer_member_cache_key(identity) for identity in identities))
+            await self._evict_on_every_worker(
+                tuple(AuthObject.customer_member(identity).key for identity in identities)
+            )
             return
         table: Final = CustomerMemberRepository(self.prisma_client, use_writer=True).table
         parents: Final = (
@@ -1139,7 +1135,7 @@ class ResetBudgetJob:
             windows=windows,
             customer_ids=MappingProxyType({"org": tuple(row.customer_org_id for row in customer_orgs)}),
             customer_org_alias_keys=tuple(
-                customer_org_alias_cache_key(row.alias) for row in customer_orgs if row.alias
+                AuthObject.customer_org_alias(row.alias).key for row in customer_orgs if row.alias
             ),
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
@@ -1895,8 +1891,17 @@ class ResetBudgetJob:
         next_reset_at: Final = ResetBudgetJob._next_window_reset(window, now, reset_settings)
         if next_reset_at is None:
             return None
+        duration: Final = str(window["budget_duration"])
+        scheduled_start: Final = _window_spend_start(duration, next_reset_at, reset_settings)
+        window_start: Final = (
+            rolled_budget_window_start(
+                scheduled_start, _as_utc(datetime.fromisoformat(str(window["reset_at"]).replace("Z", "+00:00")))
+            )
+            if scheduled_start is not None
+            else None
+        )
         if counter_key is None:
-            return _WindowReset(next_reset_at, str(window["budget_duration"]))
+            return _WindowReset(next_reset_at, duration, window_start)
         new_value: Final = await ResetBudgetJob._window_carried_spend(
             window,
             counter_key,
@@ -1905,7 +1910,7 @@ class ResetBudgetJob:
         )
         if planned_counters is not None:
             planned_counters[counter_key] = new_value  # rebind-ok: stage each duplicate's carry for the next window
-        return _WindowReset(next_reset_at, str(window["budget_duration"]), (counter_key, new_value))
+        return _WindowReset(next_reset_at, duration, window_start, (counter_key, new_value))
 
     @staticmethod
     def _next_window_reset(
@@ -2079,16 +2084,19 @@ class ResetBudgetJob:
         resets: Sequence[_WindowReset | None],
     ) -> bool:
         updated: Final = tuple(
-            window if reset is None else {**window, "reset_at": reset.next_reset_at.isoformat()}
+            window
+            if reset is None
+            else {
+                **window,
+                "reset_at": reset.next_reset_at.isoformat(),
+                **({"window_start": reset.window_start.isoformat()} if reset.window_start is not None else {}),
+            }
             for window, reset in zip(windows, resets, strict=True)
         )
         spend_windows: Final = tuple(
-            (reset.budget_duration, window_start)
+            (reset.budget_duration, reset.window_start)
             for reset in resets
-            if source.counters is not None
-            and reset is not None
-            and (window_start := _window_spend_start(reset.budget_duration, reset.next_reset_at, self.reset_settings))
-            is not None
+            if source.counters is not None and reset is not None and reset.window_start is not None
         )
         async with self.prisma_client.tx() as tx_ctx:
             transaction: Final = cast("BudgetLimitsTransaction", tx_ctx)  # cast-ok: Prisma raw transaction queries

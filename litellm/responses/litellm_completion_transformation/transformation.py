@@ -52,6 +52,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    attribute_or_none,
     drops_unsupported_params,
     normalize_drop_params,
     require_attributes,
@@ -477,6 +478,21 @@ def _attribute_fields(value: object) -> dict[str, object]:
     if not hasattr(value, "__dict__"):
         return {}
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
+
+
+def _passed_provider_fields(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    return mapping if isinstance(mapping, dict) else _attribute_fields(value)
+
+
+def _tool_call_provider_fields(tool: object, function_definition: object) -> Mapping[str, object] | None:
+    tool_fields: Final = attribute_or_none(tool, "provider_specific_fields")
+    if tool_fields:
+        return _passed_provider_fields(tool_fields)
+    function_fields: Final = attribute_or_none(function_definition, "provider_specific_fields")
+    if function_fields:
+        return _passed_provider_fields(function_fields)
+    return None
 
 
 def _decode_tool_output_part(part: Mapping[str, object], keep_tool_references: bool) -> ToolMessageContentPart | None:
@@ -1115,14 +1131,14 @@ def _replayed_messages_for_cache_points(
 
 class ChatCompletionSession(TypedDict, total=False):
     messages: list[SessionMessage]
-    litellm_session_id: str | None
+    litellm_session_id: object
     instructions: ReadOnly[str | None]
 
 
 ########### End of Initialize Classes used for Responses API  ###########
 
 
-def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+def _chain_session_metadata(chain_session: object, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
     metadata: Final = request_kwargs.get(key)
     if not isinstance(metadata, dict):
@@ -3478,21 +3494,7 @@ class LiteLLMCompletionResponsesConfig:
                     restore_name = LiteLLMCompletionResponsesConfig._restore_namespace_tool_name
                     tool_name, namespace = restore_name(tool_name, namespace_tool_names)
 
-                    provider_specific_fields: dict | None = None
-                    if hasattr(tool, "provider_specific_fields") and getattr(tool, "provider_specific_fields", None):
-                        provider_specific_fields = getattr(tool, "provider_specific_fields")
-                        if not isinstance(provider_specific_fields, dict):
-                            provider_specific_fields = (
-                                dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                            )
-                    elif hasattr(function_definition, "provider_specific_fields") and getattr(
-                        function_definition, "provider_specific_fields", None
-                    ):
-                        provider_specific_fields = getattr(function_definition, "provider_specific_fields")
-                        if not isinstance(provider_specific_fields, dict):
-                            provider_specific_fields = (
-                                dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                            )
+                    provider_specific_fields = _tool_call_provider_fields(tool, function_definition)
 
                     output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
                         name=tool_name,
