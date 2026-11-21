@@ -3798,6 +3798,7 @@
       },
       "margins": {
         "title": "Fee/Price Margin",
+        "configOwnedHint": "Controlled by config.yaml. Edit litellm_settings.cost_margin_config there.",
         "description": "Add fees or margins to LLM costs for internal billing and cost recovery",
         "addButton": "+ Add Provider Margin",
         "emptyTitle": "No provider margins configured",
