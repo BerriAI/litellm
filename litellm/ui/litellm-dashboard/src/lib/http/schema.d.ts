@@ -51229,6 +51229,8 @@ export interface components {
         };
         /** SubscriptionList */
         SubscriptionList: {
+            /** Next Offset */
+            next_offset?: number | null;
             /** Subscriptions */
             subscriptions: components["schemas"]["SubscriptionView"][];
         };
@@ -89400,6 +89402,8 @@ export interface operations {
                 server_id?: string | null;
                 status?: ("pending" | "active" | "suspended" | "terminated") | null;
                 key_alias?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;

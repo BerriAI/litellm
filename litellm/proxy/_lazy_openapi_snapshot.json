@@ -46487,6 +46487,17 @@
         },
         "SubscriptionList": {
           "properties": {
+            "next_offset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Offset"
+            },
             "subscriptions": {
               "items": {
                 "$ref": "#/components/schemas/SubscriptionView"
@@ -47415,6 +47426,29 @@
                   }
                 ],
                 "title": "Key Alias"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 500,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
               }
             }
           ],
