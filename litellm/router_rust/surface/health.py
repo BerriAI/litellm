@@ -93,7 +93,14 @@ def logged_call(op: str, kwargs: Mapping[str, object], started: datetime | None 
     call_type: Final = op.rsplit(".", 1)[-1]
     if details is not None:
         return {"call_type": call_type, **details, "end_time": ended}
-    fields: Final = ("metadata", "litellm_metadata", "client_side_timeout", "timeout")
+    fields: Final = (
+        "metadata",
+        "litellm_metadata",
+        "client_side_timeout",
+        "client_side_stream_ttft_timeout",
+        "stream_ttft_timeout",
+        "timeout",
+    )
     return {
         "call_type": call_type,
         "litellm_params": {name: kwargs.get(name) for name in fields},
@@ -292,7 +299,11 @@ class RustHealthCallbacks:
             or is_video_lookup_not_found(exception, logged)
             or is_response_lookup_not_found(exception, logged)
             or is_message_thread_not_found(exception)
-            or is_caller_timeout_408(logged, status)  # pyright: ignore[reportArgumentType]  # the status as raised
+            or is_caller_timeout_408(
+                logged,
+                status,  # pyright: ignore[reportArgumentType]  # the status as raised
+                exception=exception if isinstance(exception, BaseException) else None,
+            )
             or is_caller_scoped_auth_failure(self._deployment_of(deployment_id), status)  # pyright: ignore[reportArgumentType]  # see above
         )
         return {
@@ -324,7 +335,12 @@ class RustHealthCallbacks:
             (isinstance(exception, Exception) and is_advisor_orchestration_failure(exception))
             or is_stream_stall(exception)
             or (generic and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES)  # pyright: ignore[reportArgumentType]  # the status as raised
-            or is_caller_timeout_408(details, exception_status, ended=datetime.now())  # pyright: ignore[reportArgumentType]  # noqa: DTZ005  # see logged_call
+            or is_caller_timeout_408(
+                details,
+                exception_status,  # pyright: ignore[reportArgumentType]  # the status as raised
+                ended=datetime.now(),  # noqa: DTZ005  # see logged_call
+                exception=exception,
+            )
         )
 
     def trigger_fallback_cooldown(
@@ -386,7 +402,12 @@ class RustHealthCallbacks:
             is_advisor_orchestration_failure(exception)
             or is_stream_stall(exception)
             or (generic and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES)  # pyright: ignore[reportArgumentType]  # the status as raised
-            or is_caller_timeout_408(model_call_details, exception_status, ended=datetime.now())  # pyright: ignore[reportArgumentType]  # noqa: DTZ005  # see logged_call
+            or is_caller_timeout_408(
+                model_call_details,
+                exception_status,  # pyright: ignore[reportArgumentType]  # the status as raised
+                ended=datetime.now(),  # noqa: DTZ005  # see logged_call
+                exception=exception,
+            )
         ):
             return None
         deployment_id: Final[object] = getattr(exception, "failed_deployment_id", None)

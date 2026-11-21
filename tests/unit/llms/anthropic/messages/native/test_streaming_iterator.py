@@ -21,6 +21,7 @@ from litellm.llms.anthropic.messages.native.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
     SafeguardedAnthropicSSEStream,
     _incomplete_stream_error_sse_event,
+    anthropic_content_delta_detector,
     anthropic_messages_response_as_sse_events,
     is_anthropic_content_delta_chunk,
     is_anthropic_ping_chunk,
@@ -258,6 +259,36 @@ def test_decoded_sse_data_line_swallows_invalid_json():
     malformed_frame = b"event: error\ndata: {not valid json\n\n"
     assert parse_anthropic_error_event(malformed_frame) is None
     assert is_provider_error_chunk(malformed_frame) is False
+
+
+@pytest.mark.parametrize("line_ending", (b"\n", b"\r\n"), ids=("lf", "crlf"))
+def test_content_delta_detector_recognizes_every_transport_split(line_ending: bytes) -> None:
+    stream: Final = (
+        b'event: message_start\ndata: {"type":"message_start"}\n\n'
+        b'event: content_block_start\ndata: {"type":"content_block_start"}\n\n'
+        b'event: content_block_delta\ndata: {"type":"content_block_delta"}\n\n'
+    ).replace(b"\n", line_ending)
+    for split in range(1, len(stream)):
+        detector: Final = anthropic_content_delta_detector()
+        detected_before: Final = detector(stream[:split])
+        detected_after: Final = detector(stream[split:])
+        assert detected_before or detected_after, split
+
+
+@pytest.mark.parametrize("padding", (b"", b"x" * 100))
+def test_content_delta_detector_ignores_event_text_inside_data(padding: bytes) -> None:
+    detector: Final = anthropic_content_delta_detector()
+    assert not detector(b'data: {"text":"' + padding)
+    assert not detector(b"event: content_block_delta")
+    assert not detector(b'"}\n\n')
+    assert detector(b"event: content_block_delta\n")
+
+
+def test_content_delta_detector_accepts_dict_and_resets_pending_bytes() -> None:
+    detector: Final = anthropic_content_delta_detector()
+    assert not detector(b"data: unfinished")
+    assert detector({"type": "content_block_delta"})
+    assert detector(bytearray(b"event: content_block_delta\r\n"))
 
 
 class TestIsAnthropicContentDeltaChunk:

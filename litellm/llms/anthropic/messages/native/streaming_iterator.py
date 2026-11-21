@@ -3,7 +3,7 @@ import contextlib
 import json
 import math
 import re
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -124,6 +124,10 @@ def is_anthropic_ping_chunk(chunk: object) -> bool:
     )
 
 
+_CONTENT_DELTA_EVENT_LINE: Final = b"event: content_block_delta"
+_NOT_A_LINE_START: Final = b"\xff"
+
+
 def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     """
     Whether a chunk carries actual assistant-generated output (a
@@ -137,6 +141,27 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     if isinstance(chunk, (bytes, bytearray)):
         return any(line == b"event: content_block_delta" for line in chunk.splitlines())
     return False
+
+
+def anthropic_content_delta_detector() -> Callable[[object], bool]:
+    """Detect content_block_delta event lines across transport chunk boundaries."""
+    pending = b""  # rebind-ok: the unterminated last line carried into the next chunk
+
+    def has_content_delta(chunk: object) -> bool:
+        nonlocal pending
+        if not isinstance(chunk, (bytes, bytearray)):
+            pending = b""  # rebind-ok: a non-byte chunk ends any split line
+            return is_anthropic_content_delta_chunk(chunk)
+        window: Final = pending + bytes(chunk)
+        if is_anthropic_content_delta_chunk(window):
+            return True
+        last_line: Final = window.rpartition(b"\n")[2]
+        pending = (  # rebind-ok: carry this chunk's unterminated line
+            last_line if len(last_line) <= len(_CONTENT_DELTA_EVENT_LINE) + 1 else _NOT_A_LINE_START
+        )
+        return False
+
+    return has_content_delta
 
 
 _DECODED_SSE_DATA: Final = TypeAdapter(object)

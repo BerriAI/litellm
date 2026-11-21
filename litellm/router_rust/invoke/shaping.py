@@ -8,6 +8,7 @@ the same precedence and the same oddities. Nothing here reads a Python router.
 """
 
 import dataclasses
+import math
 from collections.abc import Mapping, MutableMapping, Sequence
 from functools import partial
 from types import MappingProxyType
@@ -359,6 +360,30 @@ def stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping
     )
 
 
+def _stream_ttft_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        seconds: Final = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) else None
+
+
+def is_requested_stream_ttft_timeout(value: object) -> bool:
+    """Null, a boolean or anything that is not a finite number keeps the deployment value. Zero or a negative overrides it."""
+    return _stream_ttft_seconds(value) is not None
+
+
+def stream_ttft_timeout(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> float | None:
+    requested: Final = kwargs.get("stream_ttft_timeout")
+    value: Final = (
+        requested if is_requested_stream_ttft_timeout(requested) else deployment_params.get("stream_ttft_timeout")
+    )
+    seconds: Final = _stream_ttft_seconds(value)
+    return seconds if seconds is not None and seconds > 0 else None
+
+
 def non_stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[str, object]) -> object:
     """``_get_non_stream_timeout``."""
     return (
@@ -572,6 +597,9 @@ def update_kwargs_with_deployment(
         model_info
     )
     _set_timeouts(shaping, deployment_params, kwargs, function_name, splits_stream_timeout)
+    ttft_timeout: Final = stream_ttft_timeout(kwargs, deployment_params)
+    if kwargs.get("stream") and ttft_timeout is not None:
+        kwargs["stream_ttft_timeout"] = ttft_timeout  # rebind-ok: the attempt's kwargs are shaped in place
 
     if router_config_requests_stream_usage(kwargs, (deployment_params, defaults)):
         kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them

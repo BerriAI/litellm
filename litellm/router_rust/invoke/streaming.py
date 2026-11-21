@@ -201,6 +201,8 @@ class StreamAttempt:
                 "model_info": kwargs.get("model_info") or {},
                 "api_base": kwargs.get("api_base"),
                 "client_side_timeout": kwargs.get("client_side_timeout"),
+                "client_side_stream_ttft_timeout": kwargs.get("client_side_stream_ttft_timeout"),
+                "stream_ttft_timeout": kwargs.get("stream_ttft_timeout"),
                 "timeout": kwargs.get("timeout"),
                 **({"cooldown_time": kwargs["cooldown_time"]} if "cooldown_time" in kwargs else {}),
             },
@@ -305,6 +307,37 @@ def _record_now(recording: Callable[[], object]) -> None:
 
 
 _ItemT: Final = TypeVar("_ItemT")
+
+
+async def _anext_before(
+    items: AsyncIterator[_ItemT], deadline: float, expired: Callable[[], MidStreamFallbackError]
+) -> _ItemT:
+    """``items``' next item, or the router's expiry once ``deadline`` passes first. Any other error,
+    a provider's own ``TimeoutError`` included, propagates unchanged."""
+    scope: Final = anyio.CancelScope(deadline=deadline)
+    with scope:
+        return await items.__anext__()
+    raise expired()
+
+
+async def _until_first_output(
+    items: AsyncIterator[_ItemT],
+    deadline: float,
+    has_output: Callable[[_ItemT], bool],
+    expired: Callable[[], MidStreamFallbackError],
+) -> AsyncGenerator[_ItemT, None]:
+    while True:
+        if deadline - anyio.current_time() <= 0:
+            raise expired()
+        try:
+            item: _ItemT = await _anext_before(items, deadline, expired)
+        except StopAsyncIteration:
+            return
+        yield item
+        if has_output(item):
+            async for following in items:
+                yield following
+            return
 
 
 async def _areported(
@@ -433,11 +466,21 @@ def _mid_stream_retry_trigger(error: MidStreamFallbackError) -> Exception:
     return error.original_exception if error.original_exception is not None else error
 
 
-async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk[AsyncIterator[object]]:
+async def _aread_first_chunk(
+    stream: CustomStreamWrapper,
+    deadline: float | None = None,
+    expired: Callable[[], MidStreamFallbackError] | None = None,
+) -> _FirstChunk[AsyncIterator[object]]:
     """Read the first chunk while the attempt still holds the request, so a stream that fails before
     any token fails the attempt. Iterates the way ``async for`` does: one ``__aiter__`` call, then
     ``__anext__`` on what it returned."""
-    rest: Final = stream.__aiter__()
+    rest: Final = (
+        _until_first_output(
+            stream.__aiter__(), deadline, lambda chunk: _stream_chunks_have_generated_content((chunk,)), expired
+        )
+        if deadline is not None and expired is not None
+        else stream.__aiter__()
+    )
     try:
         return _FirstChunk(chunk=await rest.__anext__(), rest=rest)
     except StopAsyncIteration:
@@ -1389,7 +1432,10 @@ def _hop_error_frame(
 
 
 def wrap_anthropic_stream(
-    attempt: StreamAttempt, response: AsyncIterator[bytes]
+    attempt: StreamAttempt,
+    response: AsyncIterator[bytes],
+    deadline: float | None = None,
+    expired: Callable[[], MidStreamFallbackError] | None = None,
 ) -> FallbackAwareAnthropicMessagesStream:
     """``_aanthropic_messages_streaming_iterator``: lifecycle frames are held while a retry or a fallback
     can still take over; an error frame, a raised error or a safeguard refusal before content is
@@ -1398,6 +1444,7 @@ def wrap_anthropic_stream(
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         aclose_if_supported,
         aclose_superseded_attempt,
+        anthropic_content_delta_detector,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
         sse_frames,
@@ -1428,7 +1475,12 @@ def wrap_anthropic_stream(
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
         content_seen = False  # rebind-ok: set at the first chunk past message_start and pings
         try:
-            async for chunk in _areported(attempt, framed_source, usage.total_tokens, usage.observe):
+            items: Final = (
+                _until_first_output(framed_source, deadline, anthropic_content_delta_detector(), expired)
+                if deadline is not None and expired is not None
+                else framed_source
+            )
+            async for chunk in _areported(attempt, items, usage.total_tokens, usage.observe):
                 if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                     yield chunk
                     continue
@@ -1810,10 +1862,15 @@ def _responses_stream_fallback_error(
 
 
 def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it ports
-    attempt: StreamAttempt, response: BaseResponsesAPIStreamingIterator
+    attempt: StreamAttempt,
+    response: BaseResponsesAPIStreamingIterator,
+    deadline: float | None = None,
+    expired: Callable[[], MidStreamFallbackError] | None = None,
 ) -> BaseResponsesAPIStreamingIterator:
     """``_aresponses_streaming_iterator``: pre-output lifecycle events are held while a fallback can take
     over; a mid-stream error falls back through the core, continuing after text."""
+    from litellm.responses.streaming_iterator import PRE_OUTPUT_LIFECYCLE_EVENT_TYPES
+
     source_iterator: Final = response
     attempt.take_outcome()
 
@@ -1834,9 +1891,20 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
         response_id_exposed = False  # rebind-ok: set once, before an early-released event is yielded
         output_started = False  # rebind-ok: set at the first event that is not held
         try:
+            source: Final = cast("AsyncIterator[object]", source_iterator)  # cast-ok: an async stream
+            items: Final = (
+                _until_first_output(
+                    source,
+                    deadline,
+                    lambda item: getattr(item, "type", None) not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES,
+                    expired,
+                )
+                if deadline is not None and expired is not None
+                else source
+            )
             async for item in _areported(
                 attempt,
-                cast("AsyncIterator[object]", source_iterator),  # cast-ok: an async stream
+                items,
                 lambda last: _responses_total_tokens(last, source_iterator),
             ):
                 if not response_id_exposed and background_stream_can_release(item):
@@ -2159,10 +2227,49 @@ def _reported_speech_stream(attempt: StreamAttempt, response: object) -> object:
 async def open_attempt_stream(attempt: StreamAttempt, response: object) -> object:
     """What an attempt returns once its stream is wrapped: a chat stream's first chunk is read here, so
     a stream that fails before any token raises inside the attempt."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+    from litellm.router_rust.invoke.shaping import stream_ttft_timeout
+
+    seconds: Final = stream_ttft_timeout(attempt.kwargs, {})
+    deadline: Final = anyio.current_time() + seconds if seconds is not None else None
+
+    def expired() -> MidStreamFallbackError:
+        model: Final = str(attempt.kwargs.get("model", attempt.group))
+        provider: Final = str(attempt.kwargs.get("custom_llm_provider") or inferred_provider(model) or "")
+        timeout: Final = litellm_exceptions.Timeout(
+            message=f"No model output within stream_ttft_timeout={seconds}s", model=model, llm_provider=provider
+        )
+        timeout.stream_ttft_expired = True  # pyright: ignore[reportAttributeAccessIssue]  # router-owned expiry marker
+        timeout.stream_ttft_client_side = attempt.kwargs.get("client_side_stream_ttft_timeout") is True  # pyright: ignore[reportAttributeAccessIssue]  # who chose the deadline that fired
+        return _stream_pre_content_error(timeout, model, provider)
+
     if attempt.op == "acompletion" and isinstance(response, CustomStreamWrapper):
-        if response.completion_stream is None and response.make_call is not None:  # pyright: ignore[reportUnknownMemberType]  # untyped attributes
+        needs_fetch: Final = response.completion_stream is None and response.make_call is not None  # pyright: ignore[reportUnknownMemberType]  # untyped attributes
+        if deadline is None and needs_fetch:
             await response.fetch_stream()
-        first_chunk: Final = await _aread_first_chunk(response)
+
+        async def read_with_cleanup(
+            stream: CustomStreamWrapper, chat_deadline: float
+        ) -> _FirstChunk[AsyncIterator[object]]:
+            try:
+                if needs_fetch:
+                    fetch_scope: Final = anyio.CancelScope(deadline=chat_deadline)
+                    with fetch_scope:
+                        await stream.fetch_stream()
+                    if fetch_scope.cancelled_caught:
+                        raise _mid_stream_retry_trigger(expired())
+                return await _aread_first_chunk(stream, chat_deadline, expired)
+            except BaseException:
+                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                    await stream.aclose()
+                raise
+
+        first_chunk: Final = (
+            await _aread_first_chunk(response, deadline, expired)
+            if deadline is None
+            else await read_with_cleanup(response, deadline)
+        )
         held_slot: Final = attempt.slot.pop_all() if attempt.slot is not None else contextlib.ExitStack()
         return wrap_chat_stream(attempt, response, first_chunk, held_slot)
     if attempt.op == "aspeech":
@@ -2178,9 +2285,16 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         # deployment's own `stream` setting forced.
         if not attempt.request.get("stream"):
             return response
-        return wrap_responses_stream(attempt, response)
+        return wrap_responses_stream(
+            attempt, response, None if attempt.request.get("background") is True else deadline, expired
+        )
     if attempt.op in ("aanthropic_messages", "anthropic_messages") and hasattr(response, "__aiter__"):
-        return wrap_anthropic_stream(attempt, cast("AsyncIterator[bytes]", response))  # cast-ok: a byte stream
+        return wrap_anthropic_stream(
+            attempt,
+            cast("AsyncIterator[bytes]", response),  # cast-ok: a byte stream
+            deadline,
+            expired,
+        )
     return response
 
 

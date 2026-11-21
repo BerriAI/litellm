@@ -20,6 +20,7 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
@@ -38,8 +39,11 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     cast_exception_status_to_int,
     get_cooldown_deployments,
+    is_deployment_stream_ttft_expiry,
     is_failure_outside_selected_deployment,
     is_response_lookup_not_found,
+    is_stream_stall,
+    is_stream_ttft_expiry,
     mark_advisor_orchestration_failure,
     set_cooldown_deployments,
     should_cooldown_based_on_allowed_fails_policy,
@@ -59,6 +63,95 @@ from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
+@pytest.mark.parametrize("marker", (True, False, None, 1, "true"))
+@pytest.mark.parametrize("wrapped", (False, True))
+def test_stream_ttft_expiry_requires_the_exact_marker(marker: object, wrapped: bool) -> None:
+    timeout: Final = litellm.Timeout(message="timeout", model="test-model", llm_provider="openai")
+    setattr(timeout, "stream_ttft_expired", marker)
+    exception: Final = (
+        MidStreamFallbackError(
+            message="stream failed", model="test-model", llm_provider="openai", original_exception=timeout
+        )
+        if wrapped
+        else timeout
+    )
+    assert is_stream_ttft_expiry(exception) is (marker is True)
+
+
+@pytest.mark.parametrize(
+    "expired, client_side, expected",
+    ((None, None, True), (True, None, False), (True, False, False), (True, True, True)),
+    ids=("read-stall", "deployment-implicit", "deployment-explicit", "caller"),
+)
+def test_stream_stall_preserves_exemption_only_for_read_stalls_and_caller_ttft(
+    expired: bool | None, client_side: bool | None, expected: bool
+) -> None:
+    timeout: Final = litellm.Timeout(message="timeout", model="test-model", llm_provider="openai")
+    if expired is not None:
+        setattr(timeout, "stream_ttft_expired", expired)
+    if client_side is not None:
+        setattr(timeout, "stream_ttft_client_side", client_side)
+    cause: Final = MidStreamFallbackError(
+        message="stream failed", model="test-model", llm_provider="openai", original_exception=timeout
+    )
+    with pytest.raises(litellm.Timeout) as caught:
+        raise timeout from cause
+    assert is_stream_stall(caught.value) is expected
+
+
+@pytest.mark.parametrize(
+    "expired, client_side, expected",
+    ((None, None, False), (True, None, True), (True, False, True), (True, True, False)),
+    ids=("provider-error", "deployment-implicit", "deployment-explicit", "caller"),
+)
+def test_deployment_stream_ttft_expiry_reads_markers_from_wrapped_error(
+    expired: bool | None, client_side: bool | None, expected: bool
+) -> None:
+    timeout: Final = litellm.Timeout(message="timeout", model="test-model", llm_provider="openai")
+    if expired is not None:
+        setattr(timeout, "stream_ttft_expired", expired)
+    if client_side is not None:
+        setattr(timeout, "stream_ttft_client_side", client_side)
+    wrapped: Final = MidStreamFallbackError(
+        message="stream failed", model="test-model", llm_provider="openai", original_exception=timeout
+    )
+    assert is_deployment_stream_ttft_expiry(wrapped) is expected
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("non-stream", "sync-stream"))
+@pytest.mark.asyncio
+async def test_provider_408_past_caller_ttft_deadline_counts_toward_cooldown(stream: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/test-model", "api_key": "fake"},
+                "model_info": {"id": "test-deployment"},
+            }
+        ],
+        allowed_fails_policy=AllowedFailsPolicy(TimeoutErrorAllowedFails=0),
+    )
+    started: Final = datetime.datetime(2024, 1, 1)
+    ended: Final = started + datetime.timedelta(seconds=1)
+    error: Final = litellm.Timeout(message="provider 408", model="test-model", llm_provider="openai")
+    details: Final = {
+        "stream": stream,
+        "exception": error,
+        "api_call_start_time": started,
+        "end_time": ended,
+        "litellm_params": {
+            "model_info": {"id": "test-deployment"},
+            "stream_ttft_timeout": 0.1,
+            "client_side_stream_ttft_timeout": True,
+        },
+    }
+    assert router.deployment_callback_on_failure(details, None, started, ended)
+    assert router.health().failures_this_minute("test-deployment") == 1
+    assert tuple(dep for dep, _ in router.health().cooldowns.get_active_cooldowns(("test-deployment",), None)) == (
+        "test-deployment",
+    )
+
+
 def _ctx_double(
     *,
     deployment_dict: Mapping[str, object] | None = None,
@@ -75,7 +168,9 @@ def _ctx_double(
     ctx.settings.return_value.allowed_fails_policy = None
     ctx.settings.return_value.allowed_fails_for.return_value = None
     ctx.health.return_value.store = store if store is not None else DualCache(in_memory_cache=InMemoryCache())
-    ctx.health.return_value.cooldowns = CooldownCache(RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
+    ctx.health.return_value.cooldowns = CooldownCache(
+        RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time
+    )
     return ctx
 
 
@@ -364,7 +459,9 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 class TestShouldCooldownBasedOnAllowedFailsPolicy:
     def _make_router(self, cooldown_time: float = 60.0, store: RouterCooldowns | None = None) -> MagicMock:
         ctx: Final = _ctx_double(cooldown_time=cooldown_time, allowed_fails=0)
-        ctx.health.return_value.cooldowns = CooldownCache(store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
+        ctx.health.return_value.cooldowns = CooldownCache(
+            store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time
+        )
         return ctx
 
     def test_cooldown_time_override_zero_is_not_falsy(self):

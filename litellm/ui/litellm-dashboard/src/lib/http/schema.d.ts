@@ -39038,6 +39038,8 @@ export interface components {
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
             } | null;
+            /** Stream Ttft Timeout */
+            stream_ttft_timeout?: number | string | null;
             /** Switchyard Router Config */
             switchyard_router_config?: {
                 [key: string]: unknown;
@@ -56406,6 +56408,8 @@ export interface components {
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
             } | null;
+            /** Stream Ttft Timeout */
+            stream_ttft_timeout?: number | string | null;
             /** Switchyard Router Config */
             switchyard_router_config?: {
                 [key: string]: unknown;

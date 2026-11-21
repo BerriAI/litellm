@@ -25,6 +25,7 @@ from litellm.constants import (
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
 from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
@@ -842,17 +843,43 @@ def cast_exception_status_to_int(exception_status: object) -> int:
     return exception_status
 
 
+def is_stream_ttft_expiry(exception: BaseException | None) -> bool:
+    return getattr(exception, "stream_ttft_expired", None) is True or (
+        isinstance(exception, MidStreamFallbackError)
+        and getattr(exception.original_exception, "stream_ttft_expired", None) is True
+    )
+
+
+def is_deployment_stream_ttft_expiry(exception: BaseException | None) -> bool:
+    """The router's TTFT timer fired on a deadline the deployment configured, not one the caller chose."""
+    expiry: Final = (
+        exception.original_exception
+        if isinstance(exception, MidStreamFallbackError) and exception.original_exception is not None
+        else exception
+    )
+    return is_stream_ttft_expiry(expiry) and getattr(expiry, "stream_ttft_client_side", None) is not True
+
+
 def is_caller_timeout_408(
-    model_call_details: Mapping[str, object], exception_status: str | int, ended: datetime | None = None
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    ended: datetime | None = None,
+    *,
+    exception: BaseException | None = None,
 ) -> bool:
-    """A 408 that arrives before the caller-set timeout could have fired came from the provider.
+    """A 408 is caller-controlled when the caller's timeout elapsed or the router's caller-selected TTFT timer fired.
 
     ``ended`` overrides ``model_call_details["end_time"]`` for callers that run before the
-    failure logger has stamped the current API call's end time."""
+    failure logger has stamped the current API call's end time.
+    """
     if cast_exception_status_to_int(exception_status) != 408:
         return False
-    litellm_params: Final = model_call_details.get("litellm_params")
-    if not isinstance(litellm_params, Mapping) or not litellm_params.get("client_side_timeout"):
+    litellm_params: Final = as_str_mapping(model_call_details.get("litellm_params"))
+    if litellm_params is None:
+        return False
+    if litellm_params.get("client_side_stream_ttft_timeout") and is_stream_ttft_expiry(exception):
+        return True
+    if not litellm_params.get("client_side_timeout"):
         return False
     timeout: Final = litellm_params.get("timeout")
     started: Final = model_call_details.get("api_call_start_time") or model_call_details.get("start_time")
@@ -863,7 +890,11 @@ def is_caller_timeout_408(
 
 
 def is_stream_stall(exception: BaseException) -> bool:
-    return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
+    return (
+        isinstance(exception, litellm.Timeout)
+        and isinstance(exception.__cause__, MidStreamFallbackError)
+        and not is_deployment_stream_ttft_expiry(exception)
+    )
 
 
 def is_caller_entra_credential_failure(
