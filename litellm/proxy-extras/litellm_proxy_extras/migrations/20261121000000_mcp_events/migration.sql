@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_MCPEventDelivery" (
     "attempt" INTEGER NOT NULL DEFAULT 0,
     "next_attempt_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "claimed_until" TIMESTAMP(3),
+    "prepared" BOOLEAN NOT NULL DEFAULT false,
+    "delivered_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "LiteLLM_MCPEventDelivery_pkey" PRIMARY KEY ("delivery_id")
@@ -52,3 +54,4 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_MCPEventDelivery" (
 
 CREATE INDEX IF NOT EXISTS "LiteLLM_MCPEventDelivery_next_attempt_at_idx" ON "LiteLLM_MCPEventDelivery"("next_attempt_at");
 CREATE INDEX IF NOT EXISTS "LiteLLM_MCPEventDelivery_subscription_id_idx" ON "LiteLLM_MCPEventDelivery"("subscription_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_MCPEventDelivery_delivered_at_idx" ON "LiteLLM_MCPEventDelivery"("delivered_at");

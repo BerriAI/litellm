@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -36,7 +36,14 @@ from litellm.proxy.mcp_server.events.webhooks.policy import (
     subscription_id,
 )
 from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, new_webhook_id, parse_secret
-from litellm.proxy.mcp_server.events.webhooks.store import EventStore, QueuedDelivery, SubscriptionRow, default_store
+from litellm.proxy.mcp_server.events.webhooks.store import (
+    Activation,
+    EventStore,
+    QueuedDelivery,
+    SubscriptionRow,
+    default_store,
+)
+from litellm.proxy.mcp_server.events.webhooks.termination import end_upstream
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster, verify_callback
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import (
@@ -68,6 +75,7 @@ class _Subscription:
     opened: OpenedCursor
     binding: CursorBinding
     request: _Request
+    reserved: bool = False
 
 
 def _validate(
@@ -174,9 +182,9 @@ async def _subscribe_upstream(
 
 
 async def _discard_pending(subscription: _Subscription) -> None:
-    if subscription.existing is None or subscription.existing.status == "terminated":
+    if subscription.reserved:
         with anyio.CancelScope(shield=True):
-            await subscription.request.store.delete(subscription.base.id)
+            await subscription.request.store.discard_pending(subscription.base.id)
 
 
 async def _reactivation_gap(row: SubscriptionRow, cursor: str | None, store: EventStore) -> None:
@@ -188,6 +196,7 @@ async def _reactivation_gap(row: SubscriptionRow, cursor: str | None, store: Eve
             body=GapEnvelope(cursor=cursor).model_dump_json(),
             webhook_id=gap_id,
             next_attempt_at=datetime.now(timezone.utc),
+            prepared=True,
         )
     )
 
@@ -209,18 +218,15 @@ async def _activate(
     sealed: Final = seal_cursor(subscription.binding, upstream.cursor, runtime.now())
     if isinstance(sealed, Error):
         return Error(sealed.error)
-    await subscription.request.store.save(
-        base.model_copy(
-            update={
-                "status": "active",
-                "upstream_subscription_id": upstream.id,
-                "upstream_refresh_before": upstream_refresh,
-                "refresh_before": refresh_before,
-                "cursor": sealed.ok,
-                "consecutive_failures": 0,
-            }
-        )
+    activation: Final = Activation(
+        client_secret=base.client_secret,
+        upstream_subscription_id=upstream.id,
+        upstream_refresh_before=upstream_refresh,
+        refresh_before=refresh_before,
+        cursor=sealed.ok,
     )
+    if not await subscription.request.store.activate(base.id, activation):
+        return Error(subscription_not_found())
     refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
     if refreshed is not None and refreshed.status == "suspended":
         await _reactivation_gap(base, sealed.ok, subscription.request.store)
@@ -276,6 +282,23 @@ async def _prepare(
     return Ok(_Subscription(base, existing, prepared.ok, params, opened.ok, binding, request))
 
 
+async def _reserve(subscription: _Subscription, settings: EventsSettings) -> Result[_Subscription, EventsFailure]:
+    """Claim the subscription id before any upstream work, so racing subscribes share one row and one secret."""
+    if subscription.existing is not None and subscription.existing.status != "terminated":
+        return Ok(subscription)
+    store: Final = subscription.request.store
+    if not await store.reserve(subscription.base):
+        winner: Final = await store.get(subscription.base.id)
+        if winner is None or winner.status == "terminated":
+            return Error(internal_error("The subscription changed while it was being created; retry"))
+        refreshed: Final = winner.model_copy(update={"client_secret": subscription.params.delivery.secret})
+        return Ok(replace(subscription, base=refreshed, existing=winner))
+    if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
+        await store.discard_pending(subscription.base.id)
+        return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
+    return Ok(replace(subscription, reserved=True))
+
+
 async def subscribe(
     context: OperationContext,
     params: SubscribeEventsParams,
@@ -291,10 +314,10 @@ async def subscribe(
     prepared: Final = await _prepare(context, params, headers, settings, runtime, request.ok, post)
     if isinstance(prepared, Error):
         return Error(prepared.error)
-    subscription: Final = prepared.ok
-    fresh: Final = subscription.existing is None or subscription.existing.status == "terminated"
-    if fresh:
-        await request.ok.store.save(subscription.base)
+    reserved: Final = await _reserve(prepared.ok, settings)
+    if isinstance(reserved, Error):
+        return Error(reserved.error)
+    subscription: Final = reserved.ok
     try:
         upstream: Final = await _subscribe_upstream(subscription, settings, runtime)
     except BaseException:
@@ -330,6 +353,8 @@ async def unsubscribe(
         if mismatch is not None:
             return Error(mismatch)
         await _unsubscribe_upstream(row, prepared.ok, settings, runtime)
+    else:
+        await end_upstream(row, settings, runtime)
     await events_store.delete(sid)
     await runtime.record(
         EventActivity(

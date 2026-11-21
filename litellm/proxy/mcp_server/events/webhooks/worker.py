@@ -14,7 +14,12 @@ from litellm.proxy.mcp_server.events.errors import forbidden
 from litellm.proxy.mcp_server.events.observability import EventActivity, EventMetrics
 from litellm.proxy.mcp_server.events.runtime import DEFAULT_RUNTIME, EventsRuntime
 from litellm.proxy.mcp_server.events.webhooks.delivery import failure_for_status, post_callback
-from litellm.proxy.mcp_server.events.webhooks.outgoing import DeliveryContext, Outgoing, build_outgoing
+from litellm.proxy.mcp_server.events.webhooks.outgoing import (
+    DeliveryContext,
+    Outgoing,
+    build_outgoing,
+    prepared_outgoing,
+)
 from litellm.proxy.mcp_server.events.webhooks.reauth import (
     Authorized,
     CallerLoader,
@@ -22,7 +27,7 @@ from litellm.proxy.mcp_server.events.webhooks.reauth import (
     authorize_row,
     stored_caller,
 )
-from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret, signed_headers
+from litellm.proxy.mcp_server.events.webhooks.signing import new_webhook_id, parse_secret, signed_headers
 from litellm.proxy.mcp_server.events.webhooks.store import (
     LIVE_STATUSES,
     EventStore,
@@ -33,7 +38,7 @@ from litellm.proxy.mcp_server.events.webhooks.store import (
 from litellm.proxy.mcp_server.events.webhooks.termination import registered_server, terminate
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
-from litellm.types.mcp_server.events import CallbackFailure
+from litellm.types.mcp_server.events import CallbackFailure, GapEnvelope
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 RETRY_DELAYS_SECONDS: Final = (30, 120, 480)
@@ -42,6 +47,7 @@ SUSPEND_AFTER_FAILURES: Final = 20
 CLAIM_BATCH: Final = 16
 CONCURRENCY: Final = 8
 LEASE_SECONDS: Final = 60
+DELIVERED_RETENTION: Final = timedelta(minutes=10)
 _IDLE_SECONDS: Final = 1.0
 _HOUSEKEEPING_SECONDS: Final = 30.0
 _TRACER: Final = trace.get_tracer("litellm.mcp.events")
@@ -99,20 +105,22 @@ class DeliveryWorker:
         return len(claimed)
 
     async def expire(self) -> None:
-        for row in await self._store.expired(self._clock()):
-            await self._store.save(row.model_copy(update={"status": "terminated"}))
+        now: Final = self._clock()
+        for row in await self._store.expired(now):
+            await self._store.terminate(row.id)
             await self._store.drop_deliveries(row.id)
+        await self._store.purge_delivered(now - DELIVERED_RETENTION)
         for status in LIVE_STATUSES:
             EventMetrics.set_subscriptions(status, await self._store.count_status(status))
 
     async def process(self, delivery: QueuedDelivery) -> None:
         row: Final = await self._store.get(delivery.subscription_id)
-        if row is None or row.status in ("terminated", "pending"):
-            await self._store.finish(delivery.delivery_id)
+        if row is None or row.status in ("terminated", "pending") or self._expired(row):
+            await self._store.finish(delivery.delivery_id, self._clock())
             return
         authorization: Final = await authorize_row(row, self._runtime, self._load_caller)
         if isinstance(authorization, Revoked):
-            await self._store.finish(delivery.delivery_id)
+            await self._store.finish(delivery.delivery_id, self._clock())
             await terminate(row, forbidden("Access revoked"), self._store, self._settings(), self._runtime, self._post)
             return
         if not isinstance(authorization, Authorized):
@@ -129,17 +137,28 @@ class DeliveryWorker:
             gateway_name=gateway_name(server, row.event_name) if server is not None else row.event_name,
             max_events_per_minute=self._settings().max_events_per_minute,
         )
-        outgoing: Final = await build_outgoing(context, self._runtime)
+        outgoing: Final = await self._outgoing(context)
         if outgoing is None:
-            await self._store.finish(delivery.delivery_id)
+            await self._store.finish(delivery.delivery_id, self._clock())
             return
         await self._send(context, outgoing)
+
+    def _expired(self, row: SubscriptionRow) -> bool:
+        return row.refresh_before is not None and row.refresh_before <= self._clock()
+
+    async def _outgoing(self, context: DeliveryContext) -> Outgoing | None:
+        if context.delivery.prepared:
+            return prepared_outgoing(context.delivery)
+        built: Final = await build_outgoing(context, self._runtime)
+        if built is not None:
+            await self._store.prepare(context.delivery.delivery_id, built.body.decode(), built.webhook_id)
+        return built
 
     async def _send(self, context: DeliveryContext, outgoing: Outgoing) -> None:
         row: Final = context.row
         secret: Final = parse_secret(row.client_secret)
         if secret is None:
-            await self._store.finish(context.delivery.delivery_id)
+            await self._store.finish(context.delivery.delivery_id, self._clock())
             return
         started: Final = time.monotonic()
         attributes: Final = {"mcp.event.name": context.gateway_name, "mcp.subscription.id": row.id}
@@ -155,29 +174,17 @@ class DeliveryWorker:
         if failure is None or status in (410, 413):
             await self._settled(context, outgoing, status, time.monotonic() - started)
             return
-        await self._failed(row, context.delivery, failure)
+        await self._failed(row, context.delivery, outgoing, failure)
 
     async def _settled(self, context: DeliveryContext, outgoing: Outgoing, status: int | None, elapsed: float) -> None:
         row: Final = context.row
-        await self._store.finish(context.delivery.delivery_id)
+        await self._store.finish(context.delivery.delivery_id, self._clock())
         accepted: Final = status is not None and 200 <= status < 300
-        updated: Final = (
-            row.model_copy(
-                update={
-                    "last_delivery_at": self._clock(),
-                    "consecutive_failures": 0,
-                    "failed_since": None,
-                    "last_error": None,
-                }
-            )
-            if accepted
-            else row
-        )
         if outgoing.terminal:
-            await self._store.save(updated.model_copy(update={"status": "terminated"}))
+            await self._store.terminate(row.id)
             await self._store.drop_deliveries(row.id)
         elif accepted:
-            await self._store.save(updated)
+            await self._store.mark_delivered(row.id, self._clock())
             EventMetrics.observe_latency(elapsed)
         await self._runtime.record(
             EventActivity(
@@ -193,22 +200,30 @@ class DeliveryWorker:
             )
         )
 
-    async def _failed(self, row: SubscriptionRow, delivery: QueuedDelivery, failure: CallbackFailure) -> None:
+    async def _failed(
+        self, row: SubscriptionRow, delivery: QueuedDelivery, outgoing: Outgoing, failure: CallbackFailure
+    ) -> None:
         attempt: Final = delivery.attempt + 1
         if attempt <= len(RETRY_DELAYS_SECONDS):
             delay: Final = timedelta(seconds=RETRY_DELAYS_SECONDS[attempt - 1])
             await self._store.reschedule(delivery.delivery_id, attempt, self._clock() + delay)
             return
-        await self._store.finish(delivery.delivery_id)
-        failures: Final = row.consecutive_failures + 1
-        await self._store.save(
-            row.model_copy(
-                update={
-                    "consecutive_failures": failures,
-                    "last_error": failure,
-                    "failed_since": row.failed_since or self._clock(),
-                    "status": "suspended" if failures >= SUSPEND_AFTER_FAILURES else row.status,
-                }
+        await self._store.finish(delivery.delivery_id, self._clock())
+        await self._store.mark_failed(row.id, failure, self._clock(), SUSPEND_AFTER_FAILURES)
+        if outgoing.event_id is not None:
+            await self._report_abandoned(row, outgoing)
+
+    async def _report_abandoned(self, row: SubscriptionRow, outgoing: Outgoing) -> None:
+        """An event given up after its retries becomes a gap, so the client knows to resume from its cursor."""
+        gap_id: Final = new_webhook_id("gap")
+        await self._store.enqueue(
+            QueuedDelivery(
+                delivery_id=gap_id,
+                subscription_id=row.id,
+                body=GapEnvelope(cursor=outgoing.cursor or row.cursor).model_dump_json(),
+                webhook_id=gap_id,
+                next_attempt_at=self._clock(),
+                prepared=True,
             )
         )
 

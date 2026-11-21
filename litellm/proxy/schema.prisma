@@ -637,10 +637,13 @@ model LiteLLM_MCPEventDelivery {
   attempt         Int       @default(0)
   next_attempt_at DateTime  @default(now())
   claimed_until   DateTime?
+  prepared        Boolean   @default(false)
+  delivered_at    DateTime?
   created_at      DateTime  @default(now())
 
   @@index([next_attempt_at])
   @@index([subscription_id])
+  @@index([delivered_at])
 }
 
 // Named collection of {server_id, tool_name} pairs that can be granted to keys/teams

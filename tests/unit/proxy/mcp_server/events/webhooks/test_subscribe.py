@@ -11,7 +11,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
-from litellm.proxy.mcp_server.events.webhooks.subscribe import subscribe, unsubscribe
+from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret
+from litellm.proxy.mcp_server.events.webhooks.subscribe import (
+    _prepare,  # pyright: ignore[reportPrivateUsage]  # the reservation step is the unit under test
+    _Request,  # pyright: ignore[reportPrivateUsage]  # see above
+    _reserve,  # pyright: ignore[reportPrivateUsage]  # see above
+    subscribe,
+    unsubscribe,
+)
 from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import (
@@ -28,9 +35,16 @@ from .memory_store import MemoryStore
 
 SECRET: Final = "whsec_" + base64.b64encode(bytes(range(32))).decode()
 HOOK: Final = "https://client.example/hook"
+ROTATED: Final = "whsec_" + base64.b64encode(bytes(range(1, 33))).decode()
 ARGS: Final = {"repo": "acme/web"}
 SID: Final = subscription_id(principal_of(CALLER) or "", HOOK, "ci-build.failed", ARGS)
 UPSTREAM_OK: Final = {"id": "up_1", "refreshBefore": "2099-01-01T00:00:00Z", "cursor": "c0", "truncated": False}
+
+
+def _request(store: MemoryStore) -> _Request:
+    secret: Final = parse_secret(SECRET)
+    assert secret is not None
+    return _Request(principal=principal_of(CALLER) or "", secret=secret, store=store)
 
 
 @pytest.fixture(autouse=True)
@@ -116,7 +130,8 @@ async def test_refreshing_a_suspended_subscription_reactivates_it_and_queues_a_g
     assert isinstance(refreshed, Ok) and refreshed.ok.delivery_status is not None
     assert refreshed.ok.delivery_status.active is False
     assert store.rows[SID].status == "active"
-    assert [json.loads(item.body)["type"] for item in store.queue.values()] == ["gap"]
+    (gap,) = store.queue.values()
+    assert (gap.prepared, json.loads(gap.body)) == (True, {"type": "gap", "cursor": refreshed.ok.cursor})
 
 
 def test_no_expiry_is_written_as_an_explicit_null() -> None:
@@ -209,3 +224,39 @@ async def test_unsubscribe_deletes_the_row_and_ends_the_upstream_subscription() 
         EventsErrorCode.NOT_FOUND,
         {"kind": "subscription"},
     )
+
+
+@pytest.mark.asyncio
+async def test_a_racing_first_subscribe_joins_the_winner_and_keeps_its_upstream_secret() -> None:
+    store: Final = MemoryStore()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    first: Final = await _subscribe(store, upstream, _Client())
+    winner_secret: Final = store.rows[SID].upstream_secret
+    store.rows[SID] = store.rows[SID].model_copy(update={"status": "pending"})
+    second: Final = await _subscribe(store, upstream, _Client(), params=_params(secret=ROTATED))
+    assert isinstance(first, Ok) and isinstance(second, Ok) and second.ok.id == first.ok.id
+    assert (store.rows[SID].upstream_secret, store.rows[SID].client_secret) == (winner_secret, ROTATED)
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_past_the_cap_backs_itself_out() -> None:
+    capped: Final = EventsSettings(enabled=True, public_base_url="https://gw", max_subscriptions_per_key=1)
+    store: Final = MemoryStore()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    prepared: Final = await _prepare(
+        context(), _params(), None, capped, runtime((server(),), upstream=upstream), _request(store), _Client()
+    )
+    assert isinstance(prepared, Ok)
+    await store.reserve(prepared.ok.base.model_copy(update={"id": "sub_other"}))
+    reserved: Final = await _reserve(prepared.ok, capped)
+    assert isinstance(reserved, Error) and reserved.error.code is EventsErrorCode.RESOURCE_EXHAUSTED
+    assert set(store.rows) == {"sub_other"}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_subscribe_never_deletes_a_row_another_request_activated() -> None:
+    store: Final = MemoryStore()
+    ok_upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    await _subscribe(store, ok_upstream, _Client())
+    await store.discard_pending(SID)
+    assert store.rows[SID].status == "active"

@@ -67,8 +67,14 @@ async def terminate(
     runtime: EventsRuntime,
     post: Poster = post_callback,
     lookup: Callable[[str], MCPServer | None] = registered_server,
+    *,
+    notify: bool = True,
 ) -> None:
     if row.status == "terminated":
+        return
+    await store.terminate(row.id)
+    await store.drop_deliveries(row.id)
+    if not notify:
         return
     secret: Final = parse_secret(row.client_secret)
     if secret is not None and row.status != "pending":
@@ -76,6 +82,4 @@ async def terminate(
         await post(
             row.client_url, body, signed_headers(secret, new_webhook_id("terminated"), int(time.time()), body, row.id)
         )
-    await store.save(row.model_copy(update={"status": "terminated"}))
-    await store.drop_deliveries(row.id)
     await end_upstream(row, settings, runtime, lookup)

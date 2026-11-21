@@ -3,10 +3,13 @@ from datetime import datetime
 
 from litellm.proxy.mcp_server.events.webhooks.store import (
     LIVE_STATUSES,
+    Activation,
     QueuedDelivery,
     SubscriptionQuery,
     SubscriptionRow,
+    pending_row,
 )
+from litellm.types.mcp_server.events import CallbackFailure
 
 
 @dataclass
@@ -14,13 +17,62 @@ class MemoryStore:
     rows: dict[str, SubscriptionRow] = field(default_factory=dict)  # mutable-ok: in-memory table
     queue: dict[str, QueuedDelivery] = field(default_factory=dict)  # mutable-ok: in-memory queue
     finished: list[str] = field(default_factory=list)  # mutable-ok: records completed deliveries
+    delivered: dict[str, datetime] = field(default_factory=dict)  # mutable-ok: delivered tombstones
     fail_enqueue: bool = False
 
     async def get(self, subscription_id: str) -> SubscriptionRow | None:
         return self.rows.get(subscription_id)
 
     async def save(self, row: SubscriptionRow) -> None:
+        """Test setup only: seed a row as it would already sit in the table."""
         self.rows[row.id] = row
+
+    async def reserve(self, row: SubscriptionRow) -> bool:
+        current = self.rows.get(row.id)
+        if current is not None and current.status != "terminated":
+            return False
+        self.rows[row.id] = pending_row(row)
+        return True
+
+    async def discard_pending(self, subscription_id: str) -> None:
+        current = self.rows.get(subscription_id)
+        if current is not None and current.status == "pending":
+            self.rows.pop(subscription_id)
+
+    def _update_live(self, subscription_id: str, **fields: object) -> bool:  # noqa: ANN003  # test double mirrors a guarded UPDATE
+        current = self.rows.get(subscription_id)
+        if current is None or current.status == "terminated":
+            return False
+        self.rows[subscription_id] = current.model_copy(update=fields)
+        return True
+
+    async def activate(self, subscription_id: str, activation: Activation) -> bool:
+        return self._update_live(subscription_id, status="active", consecutive_failures=0, **activation.model_dump())
+
+    async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
+        self._update_live(
+            subscription_id, last_delivery_at=at, consecutive_failures=0, failed_since=None, last_error=None
+        )
+
+    async def mark_failed(
+        self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int
+    ) -> None:
+        current = self.rows.get(subscription_id)
+        if current is None or current.status == "terminated":
+            return
+        failures = current.consecutive_failures + 1
+        self._update_live(
+            subscription_id,
+            consecutive_failures=failures,
+            last_error=failure,
+            failed_since=current.failed_since or at,
+            status="suspended" if current.status == "active" and failures >= suspend_after else current.status,
+        )
+
+    async def terminate(self, subscription_id: str) -> None:
+        current = self.rows.get(subscription_id)
+        if current is not None:
+            self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
 
     async def delete(self, subscription_id: str) -> None:
         self.rows.pop(subscription_id, None)
@@ -61,7 +113,7 @@ class MemoryStore:
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         if self.fail_enqueue:
             raise ConnectionError("database unavailable")
-        if delivery.delivery_id in self.queue:
+        if delivery.delivery_id in self.queue or delivery.delivery_id in self.delivered:
             return False
         self.queue[delivery.delivery_id] = delivery
         return True
@@ -69,9 +121,20 @@ class MemoryStore:
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]:
         return tuple(item for item in self.queue.values() if item.next_attempt_at <= now)[:limit]
 
-    async def finish(self, delivery_id: str) -> None:
+    async def prepare(self, delivery_id: str, body: str, webhook_id: str) -> None:
+        if delivery_id in self.queue:
+            self.queue[delivery_id] = self.queue[delivery_id].model_copy(
+                update={"body": body, "webhook_id": webhook_id, "prepared": True}
+            )
+
+    async def finish(self, delivery_id: str, at: datetime) -> None:
         self.queue.pop(delivery_id, None)
+        self.delivered[delivery_id] = at
         self.finished.append(delivery_id)
+
+    async def purge_delivered(self, before: datetime) -> None:
+        for key in [key for key, at in self.delivered.items() if at < before]:
+            self.delivered.pop(key)
 
     async def reschedule(self, delivery_id: str, attempt: int, next_attempt_at: datetime) -> None:
         self.queue[delivery_id] = self.queue[delivery_id].model_copy(

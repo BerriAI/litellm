@@ -23,6 +23,24 @@ class Outgoing:
     webhook_id: str
     terminal: bool
     event_id: str | None
+    cursor: str | None = None
+
+
+def prepared_outgoing(delivery: QueuedDelivery) -> Outgoing | None:
+    """The delivery as it was first built, so a retry resends the same bytes and webhook-id."""
+    try:
+        envelope: Final = _JSON_OBJECT.validate_json(delivery.body)
+    except ValidationError:
+        return None
+    event_id: Final = envelope.get("eventId")
+    cursor: Final = envelope.get("cursor")
+    return Outgoing(
+        delivery.body.encode(),
+        delivery.webhook_id,
+        envelope.get("type") == "terminated",
+        event_id if isinstance(event_id, str) else None,
+        cursor if isinstance(cursor, str) else None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +87,7 @@ async def _event(context: DeliveryContext, occurrence: EventOccurrence, runtime:
         }
     ).model_dump_json(by_alias=True, exclude_none=True)
     webhook_id: Final = occurrence.event_id if _legacy_webhook_id(context.server) else context.delivery.webhook_id
-    return Outgoing(body.encode(), webhook_id, False, occurrence.event_id)
+    return Outgoing(body.encode(), webhook_id, False, occurrence.event_id, sealed.ok if isinstance(sealed, Ok) else None)
 
 
 async def build_outgoing(context: DeliveryContext, runtime: EventsRuntime) -> Outgoing | None:

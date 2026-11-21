@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 SubscriptionStatus: TypeAlias = Literal["pending", "active", "suspended", "terminated"]
 LIVE_STATUSES: Final[tuple[SubscriptionStatus, ...]] = ("pending", "active", "suspended")
+PENDING_TTL: Final = timedelta(minutes=10)
 
 
 class SubscriptionRow(BaseModel):
@@ -51,6 +52,17 @@ class QueuedDelivery(BaseModel):
     webhook_id: str
     attempt: int = 0
     next_attempt_at: datetime
+    prepared: bool = False
+
+
+class Activation(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    client_secret: str
+    upstream_subscription_id: str | None
+    upstream_refresh_before: datetime | None
+    refresh_before: datetime | None
+    cursor: str | None
 
 
 class SubscriptionQuery(BaseModel):
@@ -66,7 +78,23 @@ class SubscriptionQuery(BaseModel):
 class EventStore(Protocol):
     async def get(self, subscription_id: str) -> SubscriptionRow | None: ...
 
-    async def save(self, row: SubscriptionRow) -> None: ...
+    async def reserve(self, row: SubscriptionRow) -> bool:
+        """Insert ``row`` as pending unless a live row with its id exists; False when one does."""
+        ...
+
+    async def discard_pending(self, subscription_id: str) -> None: ...
+
+    async def activate(self, subscription_id: str, activation: Activation) -> bool:
+        """Mark a non-terminated row active with fresh secrets and deadlines; False when it was terminated."""
+        ...
+
+    async def mark_delivered(self, subscription_id: str, at: datetime) -> None: ...
+
+    async def mark_failed(
+        self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int
+    ) -> None: ...
+
+    async def terminate(self, subscription_id: str) -> None: ...
 
     async def delete(self, subscription_id: str) -> None: ...
 
@@ -86,15 +114,22 @@ class EventStore(Protocol):
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]: ...
 
-    async def finish(self, delivery_id: str) -> None: ...
+    async def prepare(self, delivery_id: str, body: str, webhook_id: str) -> None: ...
+
+    async def finish(self, delivery_id: str, at: datetime) -> None:
+        """Keep the row as a tombstone so a replay of the same upstream message is still a duplicate."""
+        ...
 
     async def reschedule(self, delivery_id: str, attempt: int, next_attempt_at: datetime) -> None: ...
 
     async def drop_deliveries(self, subscription_id: str) -> None: ...
 
+    async def purge_delivered(self, before: datetime) -> None: ...
+
 
 _SECRET_FIELDS: Final = ("client_secret", "upstream_secret")
 _RECORD: Final = TypeAdapter[dict[str, object]](dict[str, object])
+_NOT_TERMINATED: Final = {"not": "terminated"}
 
 
 def _encrypt(value: str) -> str:
@@ -132,6 +167,12 @@ def _record_from_row(row: SubscriptionRow) -> Mapping[str, object]:
     }
 
 
+def pending_row(row: SubscriptionRow) -> SubscriptionRow:
+    return row.model_copy(
+        update={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL}
+    )
+
+
 class _RawQueries(Protocol):
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
 
@@ -148,10 +189,61 @@ class PrismaEventStore:
         record: Final = await self._subscriptions.find_unique(where={"id": subscription_id})
         return _row_from_record(record) if record is not None else None
 
-    async def save(self, row: SubscriptionRow) -> None:
-        data: Final = _record_from_row(row)
-        update: Final = {key: value for key, value in data.items() if key != "id"}
-        await self._subscriptions.upsert(where={"id": row.id}, data={"create": dict(data), "update": update})
+    async def reserve(self, row: SubscriptionRow) -> bool:
+        from prisma.errors import UniqueViolationError
+
+        data: Final = dict(_record_from_row(pending_row(row)))
+        replaced: Final = await self._subscriptions.update_many(
+            where={"id": row.id, "status": "terminated"}, data={key: value for key, value in data.items() if key != "id"}
+        )
+        if replaced:
+            return True
+        try:
+            await self._subscriptions.create(data=data)
+        except UniqueViolationError:
+            return False
+        return True
+
+    async def discard_pending(self, subscription_id: str) -> None:
+        await self._subscriptions.delete_many(where={"id": subscription_id, "status": "pending"})
+
+    async def activate(self, subscription_id: str, activation: Activation) -> bool:
+        updated: Final = await self._subscriptions.update_many(
+            where={"id": subscription_id, "status": _NOT_TERMINATED},
+            data={
+                "status": "active",
+                "client_secret": _encrypt(activation.client_secret),
+                "upstream_subscription_id": activation.upstream_subscription_id,
+                "upstream_refresh_before": activation.upstream_refresh_before,
+                "refresh_before": activation.refresh_before,
+                "cursor": activation.cursor,
+                "consecutive_failures": 0,
+            },
+        )
+        return updated > 0
+
+    async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
+        await self._subscriptions.update_many(
+            where={"id": subscription_id, "status": _NOT_TERMINATED},
+            data={"last_delivery_at": at, "consecutive_failures": 0, "failed_since": None, "last_error": None},
+        )
+
+    async def mark_failed(self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int) -> None:
+        await self._raw.query_raw(
+            'UPDATE "LiteLLM_MCPEventSubscription" SET '
+            '"consecutive_failures" = "consecutive_failures" + 1, "last_error" = $2, '
+            '"failed_since" = COALESCE("failed_since", $3::timestamp), "updated_at" = now(), '
+            '"status" = CASE WHEN "status" = \'active\' AND "consecutive_failures" + 1 >= $4 '
+            "THEN 'suspended' ELSE \"status\" END "
+            'WHERE "id" = $1 AND "status" <> \'terminated\' RETURNING "id"',
+            subscription_id,
+            failure,
+            at.isoformat(),
+            suspend_after,
+        )
+
+    async def terminate(self, subscription_id: str) -> None:
+        await self._subscriptions.update_many(where={"id": subscription_id}, data={"status": "terminated"})
 
     async def delete(self, subscription_id: str) -> None:
         await self._subscriptions.delete_many(where={"id": subscription_id})
@@ -211,17 +303,25 @@ class PrismaEventStore:
             'UPDATE "LiteLLM_MCPEventDelivery" SET "claimed_until" = $1::timestamp '
             'WHERE "delivery_id" IN ('  # bounded-ok: the subquery LIMITs the claimed batch
             'SELECT "delivery_id" FROM "LiteLLM_MCPEventDelivery" '
-            'WHERE "next_attempt_at" <= $2::timestamp AND ("claimed_until" IS NULL OR "claimed_until" < $2::timestamp) '
+            'WHERE "delivered_at" IS NULL AND "next_attempt_at" <= $2::timestamp '
+            'AND ("claimed_until" IS NULL OR "claimed_until" < $2::timestamp) '
             'ORDER BY "next_attempt_at" LIMIT $3 FOR UPDATE SKIP LOCKED) '
-            'RETURNING "delivery_id", "subscription_id", "body", "webhook_id", "attempt", "next_attempt_at"',
+            'RETURNING "delivery_id", "subscription_id", "body", "webhook_id", "attempt", "next_attempt_at", "prepared"',
             lease_until.isoformat(),
             now.isoformat(),
             limit,
         )
         return tuple(QueuedDelivery.model_validate(row) for row in rows)
 
-    async def finish(self, delivery_id: str) -> None:
-        await self._deliveries.delete_many(where={"delivery_id": delivery_id})
+    async def prepare(self, delivery_id: str, body: str, webhook_id: str) -> None:
+        await self._deliveries.update_many(
+            where={"delivery_id": delivery_id}, data={"body": body, "webhook_id": webhook_id, "prepared": True}
+        )
+
+    async def finish(self, delivery_id: str, at: datetime) -> None:
+        await self._deliveries.update_many(
+            where={"delivery_id": delivery_id}, data={"delivered_at": at, "body": "", "claimed_until": None}
+        )
 
     async def reschedule(self, delivery_id: str, attempt: int, next_attempt_at: datetime) -> None:
         await self._deliveries.update_many(
@@ -231,6 +331,9 @@ class PrismaEventStore:
 
     async def drop_deliveries(self, subscription_id: str) -> None:
         await self._deliveries.delete_many(where={"subscription_id": subscription_id})
+
+    async def purge_delivered(self, before: datetime) -> None:
+        await self._deliveries.delete_many(where={"delivered_at": {"lt": before}})
 
 
 def default_store() -> EventStore | None:

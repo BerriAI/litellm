@@ -1,7 +1,7 @@
 import base64
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -14,7 +14,7 @@ from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.outgoing import binding_of
 from litellm.proxy.mcp_server.events.webhooks.reauth import Authorized, Reauthorization, Revoked, Unavailable
 from litellm.proxy.mcp_server.events.webhooks.signing import verify
-from litellm.proxy.mcp_server.events.webhooks.store import QueuedDelivery, SubscriptionRow
+from litellm.proxy.mcp_server.events.webhooks.store import Activation, QueuedDelivery, SubscriptionRow
 from litellm.proxy.mcp_server.events.webhooks.worker import RETRY_DELAYS_SECONDS, SUSPEND_AFTER_FAILURES, DeliveryWorker
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import CallbackFailure
@@ -140,16 +140,15 @@ async def test_failures_retry_on_the_backoff_ladder(attempt: int, delay: int) ->
 
 
 @pytest.mark.asyncio
-async def test_an_event_that_exhausts_its_retries_is_abandoned_and_counted() -> None:
+async def test_an_event_that_exhausts_its_retries_is_counted_and_reported_as_a_gap() -> None:
     store: Final = _store(attempt=len(RETRY_DELAYS_SECONDS))
-    await _worker(store, _Client("timeout")).run_once()
+    client: Final = _Client("timeout")
+    await _worker(store, client).run_once()
     row: Final = store.rows["sub_1"]
-    assert store.queue == {} and (row.consecutive_failures, row.last_error, row.failed_since, row.status) == (
-        1,
-        "timeout",
-        NOW,
-        "active",
-    )
+    assert (row.consecutive_failures, row.last_error, row.failed_since, row.status) == (1, "timeout", NOW, "active")
+    (queued,) = store.queue.values()
+    sent_cursor: Final = client.bodies()[0]["cursor"]
+    assert (queued.prepared, json.loads(queued.body)) == (True, {"type": "gap", "cursor": sent_cursor})
 
 
 @pytest.mark.asyncio
@@ -252,3 +251,94 @@ def test_a_sealed_gap_cursor_falls_back_to_the_last_known_watermark() -> None:
     assert isinstance(stored, Ok)
     outgoing: Final = gap(ROW.model_copy(update={"cursor": stored.ok}), None, int(time.time()))
     assert json.loads(outgoing.body) == {"type": "gap", "cursor": stored.ok}
+
+
+class _SlowClient(_Client):
+    """A callback that lets something else change the subscription while the POST is in flight."""
+
+    def __init__(self, during: Callable[[], Awaitable[None]], *statuses: int | CallbackFailure) -> None:
+        super().__init__(*statuses)
+        self.during = during
+
+    async def __call__(
+        self, url: str, body: bytes, headers: Mapping[str, str]
+    ) -> Result[CallbackResponse, CallbackFailure]:
+        await self.during()
+        return await super().__call__(url, body, headers)
+
+
+ROTATED: Final = "whsec_" + base64.b64encode(bytes(range(1, 33))).decode()
+
+
+@pytest.mark.parametrize("status", (200, 503))
+@pytest.mark.asyncio
+async def test_a_termination_during_an_inflight_delivery_stays_terminated(status: int) -> None:
+    store: Final = _store()
+
+    async def admin_terminates() -> None:
+        await store.terminate("sub_1")
+
+    await _worker(store, _SlowClient(admin_terminates, status)).run_once()
+    assert store.rows["sub_1"].status == "terminated"
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_during_an_inflight_delivery_keeps_the_new_secret_and_cursor() -> None:
+    store: Final = _store()
+    activation: Final = Activation(
+        client_secret=ROTATED,
+        upstream_subscription_id="up_1",
+        upstream_refresh_before=None,
+        refresh_before=None,
+        cursor="mcp_state_v1.fresh",
+    )
+
+    async def client_refreshes() -> None:
+        assert await store.activate("sub_1", activation)
+
+    await _worker(store, _SlowClient(client_refreshes)).run_once()
+    assert (store.rows["sub_1"].client_secret, store.rows["sub_1"].cursor) == (ROTATED, "mcp_state_v1.fresh")
+
+
+@pytest.mark.asyncio
+async def test_a_retry_resends_the_first_build_without_spending_the_event_budget_again() -> None:
+    store: Final = _store()
+    client: Final = _Client(503, 200)
+    tight: Final = EventsSettings(enabled=True, public_base_url="https://gw.example", max_events_per_minute=1)
+    worker: Final = _worker(store, client, settings=tight)
+    await worker.run_once()
+    store.queue["d1"] = store.queue["d1"].model_copy(update={"next_attempt_at": NOW})
+    await worker.run_once()
+    (first_body, first_headers), (second_body, second_headers) = client.posts
+    assert (second_body, second_headers["webhook-id"]) == (first_body, first_headers["webhook-id"])
+    assert json.loads(second_body)["eventId"] == "evt_1"
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_gap_keeps_its_webhook_id_across_retries() -> None:
+    store: Final = _store(body={"type": "gap", "cursor": "41"})
+    client: Final = _Client(503, 200)
+    worker: Final = _worker(store, client)
+    await worker.run_once()
+    store.queue["d1"] = store.queue["d1"].model_copy(update={"next_attempt_at": NOW})
+    await worker.run_once()
+    assert client.posts[0][1]["webhook-id"] == client.posts[1][1]["webhook-id"]
+    assert client.posts[0][1]["webhook-id"].startswith("msg_gap_")
+
+
+@pytest.mark.asyncio
+async def test_a_subscription_past_its_deadline_receives_nothing() -> None:
+    store: Final = _store(row=ROW.model_copy(update={"refresh_before": NOW - timedelta(seconds=1)}))
+    client: Final = _Client(200)
+    await _worker(store, client).run_once()
+    assert client.posts == [] and store.queue == {}
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_message_stays_a_duplicate_until_its_tombstone_is_purged() -> None:
+    store: Final = _store()
+    await _worker(store, _Client(200)).run_once()
+    replay: Final = _delivery(occurrence().model_dump(by_alias=True, mode="json"))
+    assert await store.enqueue(replay) is False
+    await store.purge_delivered(NOW + timedelta(minutes=11))
+    assert await store.enqueue(replay) is True
