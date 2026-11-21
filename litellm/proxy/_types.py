@@ -1888,6 +1888,8 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
 
 
 class TeamMemberBudgetWrite(BudgetNewRequest):
+    model_config = ConfigDict(frozen=True)
+
     rollover_max_budget: BudgetRolloverCap | None = None
 
 

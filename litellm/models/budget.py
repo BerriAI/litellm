@@ -28,7 +28,9 @@ BudgetRolloverCap: TypeAlias = Annotated[
 def active_rollover_credit(
     base: float | None, ceiling: float | None, duration: str | None, credit: float | None
 ) -> float | None:
-    if base is None or ceiling is None or not duration or not 0 < base < ceiling or not isfinite(ceiling):
+    if base is None or ceiling is None or not duration:
+        return None
+    if not 0 < base < ceiling or not isfinite(ceiling):
         return None
     return min(max(0.0, credit or 0.0), ceiling - base)
 

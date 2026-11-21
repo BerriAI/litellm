@@ -5,7 +5,9 @@ Canonical definition for ``litellm_teammembership``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import Field
@@ -39,12 +41,14 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
         credit: Final = self.active_rollover_credit()
         return effective if credit is None or effective is None else effective + credit
 
-    def rollover_usage(self, now: datetime) -> dict[str, float | None]:
+    def rollover_usage(self, now: datetime) -> Mapping[str, float | None]:
         credit: Final = self.active_rollover_credit()
-        return {
-            "rollover_credit": credit,
-            "effective_max_budget": self.effective_budget_with_rollover(now) if credit is not None else None,
-        }
+        return MappingProxyType(
+            {
+                "rollover_credit": credit,
+                "effective_max_budget": self.effective_budget_with_rollover(now) if credit is not None else None,
+            }
+        )
 
     def safe_get_team_member_rpm_limit(self) -> int | None:
         if self.litellm_budget_table is not None:

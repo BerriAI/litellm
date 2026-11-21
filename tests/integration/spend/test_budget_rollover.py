@@ -153,6 +153,10 @@ def test_members_get_a_full_midcycle_allowance_and_roll_over_their_own_spend(
         if cap is not None:
             assert first_after["rollover_credit"] == 150.0
             assert second_after["rollover_credit"] == 100.0
+            assert proxy.rows(
+                'SELECT rollover_credit FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
+                (team, first),
+            ) == [{"rollover_credit": 150.0}]
         else:
             assert not first_after.get("rollover_credit")
             assert not second_after.get("rollover_credit")

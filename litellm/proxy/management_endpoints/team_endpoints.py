@@ -784,27 +784,30 @@ class TeamMemberBudgetHandler:
         else:
             budget_id = f"team-budget-{uuid.uuid4().hex}"
 
-        # Create budget request with all provided limits
-        budget_request: Final = TeamMemberBudgetWrite(
-            budget_id=budget_id,
-            rollover_max_budget=team_member_rollover_max_budget,
-            budget_duration=(
-                team_member_budget_duration
-                if "team_member_budget_duration" in explicitly_set_fields
-                else data.budget_duration or team_member_budget_duration
-            ),
+        member_duration: Final = (
+            team_member_budget_duration
+            if "team_member_budget_duration" in explicitly_set_fields or team_member_budget_duration is not None
+            else data.budget_duration
         )
-
-        if team_member_budget is not None:
-            budget_request.max_budget = team_member_budget
-        if team_member_rpm_limit is not None:
-            budget_request.rpm_limit = team_member_rpm_limit
-        if team_member_tpm_limit is not None:
-            budget_request.tpm_limit = team_member_tpm_limit
-        if team_member_budget_duration is not None:
-            budget_request.budget_duration = team_member_budget_duration
-        if team_member_model_max_budget is not None:
-            budget_request.model_max_budget = team_member_model_max_budget
+        budget_request: Final = TeamMemberBudgetWrite.model_validate(
+            MappingProxyType(
+                {
+                    "budget_id": budget_id,
+                    "budget_duration": member_duration,
+                    "rollover_max_budget": team_member_rollover_max_budget,
+                    **{
+                        key: value
+                        for key, value in (
+                            ("max_budget", team_member_budget),
+                            ("rpm_limit", team_member_rpm_limit),
+                            ("tpm_limit", team_member_tpm_limit),
+                            ("model_max_budget", team_member_model_max_budget),
+                        )
+                        if value is not None
+                    },
+                }
+            )
+        )
 
         team_member_budget_table: Final = await _as_budget_write(new_budget)(
             budget_obj=budget_request,
@@ -824,6 +827,44 @@ class TeamMemberBudgetHandler:
         TeamMemberBudgetHandler.clean_team_member_fields(new_team_data_json)
 
         return new_team_data_json
+
+    @staticmethod
+    def _member_budget_patch(
+        budget_id: str,
+        fields: AbstractSet[str],
+        *,
+        max_budget: float | None = None,
+        rollover_max_budget: float | None = None,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        budget_duration: str | None = None,
+        model_max_budget: GenericBudgetConfigType | None = None,
+    ) -> TeamMemberBudgetWrite:
+        patch: Final = MappingProxyType(
+            {
+                name: value
+                for name, value, include in (
+                    ("budget_id", budget_id, True),
+                    ("max_budget", max_budget, max_budget is not None or "team_member_budget" in fields),
+                    ("rollover_max_budget", rollover_max_budget, "team_member_rollover_max_budget" in fields),
+                    ("rpm_limit", rpm_limit, rpm_limit is not None or "team_member_rpm_limit" in fields),
+                    ("tpm_limit", tpm_limit, tpm_limit is not None or "team_member_tpm_limit" in fields),
+                    (
+                        "budget_duration",
+                        budget_duration,
+                        budget_duration is not None or "team_member_budget_duration" in fields,
+                    ),
+                    ("budget_reset_at", None, budget_duration is None and "team_member_budget_duration" in fields),
+                    (
+                        "model_max_budget",
+                        MappingProxyType({}) if model_max_budget is None else model_max_budget,
+                        model_max_budget is not None or "team_member_model_max_budget" in fields,
+                    ),
+                )
+                if include
+            }
+        )
+        return TeamMemberBudgetWrite.model_validate(patch)
 
     @staticmethod
     async def upsert_team_member_budget_table(
@@ -853,26 +894,16 @@ class TeamMemberBudgetHandler:
 
         team_member_budget_id: Final = team_table.metadata.get("team_member_budget_id")
         if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
-            # Budget exists - create update request with only provided values
-            budget_request: Final = TeamMemberBudgetWrite(budget_id=team_member_budget_id)
-            if "team_member_rollover_max_budget" in explicitly_set_fields:
-                budget_request.rollover_max_budget = team_member_rollover_max_budget
-
-            if team_member_budget is not None or "team_member_budget" in explicitly_set_fields:
-                budget_request.max_budget = team_member_budget
-            if team_member_rpm_limit is not None or "team_member_rpm_limit" in explicitly_set_fields:
-                budget_request.rpm_limit = team_member_rpm_limit
-            if team_member_tpm_limit is not None or "team_member_tpm_limit" in explicitly_set_fields:
-                budget_request.tpm_limit = team_member_tpm_limit
-            if team_member_budget_duration is not None or "team_member_budget_duration" in explicitly_set_fields:
-                budget_request.budget_duration = team_member_budget_duration
-                if team_member_budget_duration is None:
-                    budget_request.budget_reset_at = None
-            if team_member_model_max_budget is not None or "team_member_model_max_budget" in explicitly_set_fields:
-                budget_request.model_max_budget = (
-                    {} if team_member_model_max_budget is None else team_member_model_max_budget
-                )
-
+            budget_request: Final = TeamMemberBudgetHandler._member_budget_patch(
+                team_member_budget_id,
+                explicitly_set_fields,
+                max_budget=team_member_budget,
+                rollover_max_budget=team_member_rollover_max_budget,
+                rpm_limit=team_member_rpm_limit,
+                tpm_limit=team_member_tpm_limit,
+                budget_duration=team_member_budget_duration,
+                model_max_budget=team_member_model_max_budget,
+            )
             budget_row: Final = await _as_budget_write(update_budget)(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
@@ -943,22 +974,8 @@ class TeamMemberBudgetHandler:
 
         team_member_budget_id: Final = team_table.metadata.get("team_member_budget_id")
         if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
-            budget_request: Final = TeamMemberBudgetWrite(budget_id=team_member_budget_id)
-            if "team_member_rollover_max_budget" in explicitly_set_fields:
-                budget_request.rollover_max_budget = None
-            if "team_member_budget" in explicitly_set_fields:
-                budget_request.max_budget = None
-            if "team_member_budget_duration" in explicitly_set_fields:
-                budget_request.budget_duration = None
-                budget_request.budget_reset_at = None
-            if "team_member_rpm_limit" in explicitly_set_fields:
-                budget_request.rpm_limit = None
-            if "team_member_tpm_limit" in explicitly_set_fields:
-                budget_request.tpm_limit = None
-            if "team_member_model_max_budget" in explicitly_set_fields:
-                budget_request.model_max_budget = {}
             await update_budget(
-                budget_obj=budget_request,
+                budget_obj=TeamMemberBudgetHandler._member_budget_patch(team_member_budget_id, explicitly_set_fields),
                 user_api_key_dict=user_api_key_dict,
             )
             await TeamMemberBudgetHandler._evict_default_budget_cache(

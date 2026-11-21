@@ -273,6 +273,13 @@ def _team_membership_cache_keys(row: _TeamMembershipRow) -> tuple[str, ...]:
     return (f"{row.team_id}_{row.user_id}",)
 
 
+def _rollover_membership_cache_keys(row: _TeamMembershipRow) -> tuple[str, ...]:
+    return (
+        *_team_membership_cache_keys(row),
+        team_membership_reservation_cache_key(user_id=row.user_id, team_id=row.team_id),
+    )
+
+
 def _key_counter_key(row: _KeyRow) -> str:
     return key_counter(row.token)
 
@@ -1155,10 +1162,7 @@ class ResetBudgetJob:
                 key
                 for row in team_memberships
                 if row.budget_id in member_credit_budget_id_set
-                for key in (
-                    *_team_membership_cache_keys(row),
-                    team_membership_reservation_cache_key(user_id=row.user_id, team_id=row.team_id),
-                )
+                for key in _rollover_membership_cache_keys(row)
             ),
             windows=windows,
             customer_ids=MappingProxyType({"org": tuple(row.customer_org_id for row in customer_orgs)}),
@@ -2251,11 +2255,16 @@ class ResetBudgetJob:
         still holds the pre-reset value, admitting requests past the cap.
         """
         try:
-            if _rollover_enabled():
-                budget: Final = item.effective_max_budget() if isinstance(item, LiteLLM_UserTable) else item.max_budget
-                item.spend = _carried_spend(item.spend, _rollover_cap(budget))
-            else:
-                item.spend = 0.0
+            item.spend = (
+                _carried_spend(
+                    item.spend,
+                    _rollover_cap(
+                        item.effective_max_budget() if isinstance(item, LiteLLM_UserTable) else item.max_budget
+                    ),
+                )
+                if _rollover_enabled()
+                else 0.0
+            )
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 item.budget_reset_at = compute_budget_reset_at(
                     budget_duration=item.budget_duration,

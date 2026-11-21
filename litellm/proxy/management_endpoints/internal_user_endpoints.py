@@ -16,10 +16,10 @@ import asyncio
 import contextlib
 import json
 import traceback
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Collection, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -30,6 +30,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_get
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.budget import active_rollover_credit
 from litellm.models.team import BudgetLimitEntry
@@ -659,10 +660,7 @@ async def new_user(
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
-        if data.rollover_max_budget is not None:
-            _require_valid_rollover(
-                data_json.get("max_budget"), data.rollover_max_budget, data_json.get("budget_duration")
-            )
+        _require_valid_rollover(data_json.get("max_budget"), data.rollover_max_budget, data_json.get("budget_duration"))
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
@@ -963,16 +961,15 @@ async def _get_user_info_teams(
 _SCIM_DIRECTORY_METADATA_KEYS: Final = SCIM_DIRECTORY_METADATA_KEYS
 
 
-def _redact_scim_enterprise_metadata(
-    metadata: dict[str, object] | None,
-) -> dict[str, object] | None:
+def _redact_scim_enterprise_metadata(metadata: object) -> object:
     """SCIM enterprise attributes, entitlements, and roles are persisted in user
     metadata so reporting can group on them, but they are directory-only fields
     that generic user-info endpoints must not surface; SCIM clients read them
     through the SCIM endpoints."""
-    if not isinstance(metadata, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(metadata):
+    mapping: Final = as_str_mapping(metadata)
+    if not isinstance(mapping, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(mapping):
         return metadata
-    return {k: v for k, v in metadata.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
+    return {k: v for k, v in mapping.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
 
 
 async def _user_budget_limits_usage(
@@ -990,7 +987,7 @@ async def _user_budget_limits_usage(
 
 def _build_user_info_response(
     user_id: str | None,
-    user_info: Any | None,
+    user_info: object,
     keys: Sequence[LiteLLM_VerificationToken] | None,
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
@@ -1006,26 +1003,24 @@ def _build_user_info_response(
     team_list.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     _user_info: Final = user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
-    if isinstance(_user_info, dict):
-        _user_info.pop("password", None)
-        if _user_info.get("rollover_max_budget") is not None:
-            rollover_user: Final = LiteLLM_UserTable.model_validate(_user_info)
-            _user_info["rollover_credit"] = rollover_user.active_rollover_credit()
-            _user_info["effective_max_budget"] = rollover_user.effective_max_budget()
+    info_fields: Final = as_str_mapping(_user_info)
+    if isinstance(info_fields, dict):
+        info_fields.pop("password", None)
+        if info_fields.get("rollover_max_budget") is not None:
+            rollover_user: Final = LiteLLM_UserTable.model_validate(info_fields)
+            info_fields["rollover_credit"] = rollover_user.active_rollover_credit()
+            info_fields["effective_max_budget"] = rollover_user.effective_max_budget()
         else:
-            _user_info.pop("rollover_max_budget", None)
-            _user_info.pop("rollover_credit", None)
-        _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
+            info_fields.pop("rollover_max_budget", None)
+            info_fields.pop("rollover_credit", None)
+        info_fields["metadata"] = _redact_scim_enterprise_metadata(info_fields.get("metadata"))
         if model_max_budget_usage is not None:
-            _user_info["model_max_budget_usage"] = model_max_budget_usage
+            info_fields["model_max_budget_usage"] = model_max_budget_usage
         if budget_limits_usage is not None:
-            _user_info["budget_limits_usage"] = budget_limits_usage
+            info_fields["budget_limits_usage"] = budget_limits_usage
 
-    return UserInfoResponse(
-        user_id=user_id,
-        user_info=_user_info,
-        keys=returned_keys,
-        teams=team_list,
+    return UserInfoResponse.model_validate(
+        {"user_id": user_id, "user_info": _user_info, "keys": returned_keys, "teams": team_list}
     )
 
 
@@ -1297,48 +1292,49 @@ async def user_info_v2(
                 detail=f"User not found: {user_id}",
             )
 
-        user_data: Final = user_row.model_dump()
+        user_dump: Final = user_row.model_dump()
+        user_data: Final = require_get(user_dump)
+        row_user_id: Final = user_data.get("user_id", user_id)
+        row_user_key: Final = None if row_user_id is None else f"{row_user_id}"
         rollover_user: Final = (
-            LiteLLM_UserTable.model_validate(user_data) if user_data.get("rollover_max_budget") is not None else None
+            LiteLLM_UserTable.model_validate(user_dump) if user_data.get("rollover_max_budget") is not None else None
         )
         rollover_credit: Final = rollover_user.active_rollover_credit() if rollover_user is not None else None
 
-        return UserInfoV2Response(
-            user_id=user_data.get("user_id", user_id),
-            user_email=user_data.get("user_email"),
-            user_alias=user_data.get("user_alias"),
-            user_role=user_data.get("user_role"),
-            spend=user_data.get("spend", 0.0),
-            max_budget=user_data.get("max_budget"),
-            rollover_max_budget=rollover_user.rollover_max_budget if rollover_user is not None else None,
-            rollover_credit=rollover_credit,
-            effective_max_budget=(
-                rollover_user.effective_max_budget()
+        return UserInfoV2Response.model_validate(
+            {
+                "user_id": row_user_id,
+                "user_email": user_data.get("user_email"),
+                "user_alias": user_data.get("user_alias"),
+                "user_role": user_data.get("user_role"),
+                "spend": user_data.get("spend", 0.0),
+                "max_budget": user_data.get("max_budget"),
+                "rollover_max_budget": rollover_user.rollover_max_budget if rollover_user is not None else None,
+                "rollover_credit": rollover_credit,
+                "effective_max_budget": rollover_user.effective_max_budget()
                 if rollover_user is not None and rollover_credit is not None
-                else None
-            ),
-            tpm_limit=user_data.get("tpm_limit"),
-            rpm_limit=user_data.get("rpm_limit"),
-            models=user_data.get("models") or [],
-            budget_duration=user_data.get("budget_duration"),
-            budget_limits=user_data.get("budget_limits"),
-            budget_reset_at=user_data.get("budget_reset_at"),
-            metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
-            created_at=user_data.get("created_at"),
-            updated_at=user_data.get("updated_at"),
-            sso_user_id=user_data.get("sso_user_id"),
-            teams=user_data.get("teams") or [],
-            object_permission=user_data.get("object_permission"),
-            model_max_budget=user_data.get("model_max_budget"),
-            model_max_budget_usage=await build_model_max_budget_usage(
-                entity_type=Litellm_EntityType.USER,
-                entity_id=user_data.get("user_id", user_id),
-                model_max_budget=user_data.get("model_max_budget"),
-                cache=model_max_budget_limiter.dual_cache,
-            ),
-            budget_limits_usage=await _user_budget_limits_usage(
-                user_data.get("user_id", user_id), user_data.get("budget_limits")
-            ),
+                else None,
+                "tpm_limit": user_data.get("tpm_limit"),
+                "rpm_limit": user_data.get("rpm_limit"),
+                "models": user_data.get("models") or [],
+                "budget_duration": user_data.get("budget_duration"),
+                "budget_limits": user_data.get("budget_limits"),
+                "budget_reset_at": user_data.get("budget_reset_at"),
+                "metadata": _redact_scim_enterprise_metadata(user_data.get("metadata")),
+                "created_at": user_data.get("created_at"),
+                "updated_at": user_data.get("updated_at"),
+                "sso_user_id": user_data.get("sso_user_id"),
+                "teams": user_data.get("teams") or [],
+                "object_permission": user_data.get("object_permission"),
+                "model_max_budget": user_data.get("model_max_budget"),
+                "model_max_budget_usage": await build_model_max_budget_usage(
+                    entity_type=Litellm_EntityType.USER,
+                    entity_id=row_user_key,
+                    model_max_budget=user_dump.get("model_max_budget"),
+                    cache=model_max_budget_limiter.dual_cache,
+                ),
+                "budget_limits_usage": await _user_budget_limits_usage(row_user_key, user_dump.get("budget_limits")),
+            }
         )
     except Exception as e:
         if isinstance(e, HTTPException) and e.status_code < 500:
@@ -1480,12 +1476,16 @@ def _windows_by_user(
     )
 
 
-def _require_valid_rollover(base: float | None, cap: float, duration: str | None) -> None:
-    if active_rollover_credit(base, cap, duration, None) is None:
+def _require_valid_rollover(base: float | None, cap: float | None, duration: str | None) -> None:
+    if cap is not None and active_rollover_credit(base, cap, duration, None) is None:
         raise HTTPException(
             status_code=400,
             detail="Budget rollover requires a reset period and a positive base budget below the rollover cap.",
         )
+
+
+def _rollover_credit_patch(fields: Collection[str], cap: float | None) -> Mapping[str, None]:
+    return MappingProxyType({"rollover_credit": None} if "rollover_max_budget" in fields and cap is None else {})
 
 
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
@@ -1517,8 +1517,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if "budget_limits" in non_default_values:
         non_default_values["budget_limits"] = budget_windows_json(data.budget_limits, stored=None)
 
-    if "rollover_max_budget" in non_default_values and data.rollover_max_budget is None:
-        non_default_values["rollover_credit"] = None
+    non_default_values.update(_rollover_credit_patch(non_default_values.keys(), data.rollover_max_budget))
 
     is_internal_user = False
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
@@ -1696,7 +1695,7 @@ async def _update_single_user_helper(
     litellm_changed_by: str | None = None,
     password_prevalidated: bool = False,
     hibp_client: AsyncHTTPHandler | None = None,
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """
     Helper function to update a single user.
     Used by both user_update and bulk_user_update endpoints.
@@ -2064,11 +2063,13 @@ async def bulk_update_processed_users(
                 )
                 # Record success
                 results.append(
-                    UserUpdateResult(
-                        user_id=(response.get("user_id") if response else user_request.user_id),
-                        user_email=user_request.user_email,
-                        success=True,
-                        updated_user=response,
+                    UserUpdateResult.model_validate(
+                        {
+                            "user_id": (response.get("user_id") if response else user_request.user_id),
+                            "user_email": user_request.user_email,
+                            "success": True,
+                            "updated_user": response,
+                        }
                     )
                 )
                 successful_updates += 1
