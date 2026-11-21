@@ -1031,8 +1031,10 @@ describe("TeamInfoView - vector stores from access groups", () => {
       />,
     );
 
-    expect(await screen.findByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveTextContent(
-      "Parks knowledge base (store-a) (access group)",
+    await waitFor(() =>
+      expect(screen.getByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveTextContent(
+        "Parks knowledge base (store-a) (access group)",
+      ),
     );
     expect(screen.queryByText("No vector stores configured")).not.toBeInTheDocument();
 
