@@ -17,7 +17,7 @@ const sidebarButtons = {
   [Role.ProxyAdmin]: [
     "Virtual Keys",
     "Playground",
-    "Models + Endpoints",
+    "Model Management",
     "Usage",
     "Teams",
     "Internal Users",
@@ -87,7 +87,7 @@ for (const { role, storage } of roles) {
       test(`sidebar locator tolerates hrefs ${format}`, async ({ page }) => {
         await page.goto("/ui/");
         await dismissFeedbackPopup(page);
-        const link = sidebarLink(page, "Models + Endpoints");
+        const link = sidebarLink(page, "Model Management");
         await expect(link).toBeVisible();
         const destination = new URL("/ui/models-and-endpoints/", page.url());
         const href =
@@ -99,7 +99,7 @@ for (const { role, storage } of roles) {
 
         await link.evaluate((element, value) => element.setAttribute("href", value), href);
         await expect(link).toHaveAttribute("href", href);
-        await clickSidebarLink(page, "Models + Endpoints");
+        await clickSidebarLink(page, "Model Management");
 
         await expectUiRoute(page, "models-and-endpoints");
         await expect(

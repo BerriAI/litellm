@@ -197,7 +197,7 @@ export default function ModelsAndEndpointsPage() {
         <PageHeader>
           <PageHeaderTitle>
             <Network />
-            {t("modelsAndEndpoints.page.title")}
+            {t("shell.nav.items.modelsAndEndpoints")}
           </PageHeaderTitle>
           <PageHeaderDescription>
             {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}

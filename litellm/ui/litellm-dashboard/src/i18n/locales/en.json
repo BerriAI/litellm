@@ -886,7 +886,6 @@
   },
   "vectorStores": {
     "page": {
-      "title": "Vector Store Management",
       "lastRefreshed": "Last Refreshed: {{time}}",
       "refresh": "Refresh",
       "description": "You can use vector stores to store and retrieve LLM embeddings.",
@@ -3780,7 +3779,6 @@
         "removing": "Removing…",
         "remove": "Remove"
       },
-      "title": "Cost Tracking Settings",
       "description": "Configure cost discounts and margins for different LLM providers. Changes are saved automatically.",
       "loading": "Loading configuration...",
       "discounts": {
@@ -4114,7 +4112,7 @@
   "costOptimization": {
     "view": {
       "title": "Cost Optimization",
-      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Models + Endpoints, on the Auto-Routers tab",
+      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Model Management, on the Auto-Routers tab",
       "tabs": {
         "overall": "Overall",
         "compression": "Prompt Compression",
@@ -8552,7 +8550,7 @@
         "home": "Home",
         "virtualKeys": "Virtual Keys",
         "playground": "Playground",
-        "modelsAndEndpoints": "Models + Endpoints",
+        "modelsAndEndpoints": "Model Management",
         "agentic": "Agentic",
         "agents": "Agents",
         "workflowRuns": "Workflow Runs",
@@ -9094,7 +9092,6 @@
         "reset": "Theme settings reset to default!",
         "resetFailed": "Failed to reset theme settings"
       },
-      "title": "UI Theme Customization",
       "description": "Customize your LiteLLM admin dashboard with a custom logo and favicon.",
       "logoUrl": {
         "label": "Custom Logo URL",
@@ -19563,7 +19560,6 @@
       "reloadButton": "Reload Price Data"
     },
     "page": {
-      "title": "Model Management",
       "adminDescription": "Add and manage models for the proxy",
       "userDescription": "View your models and manage routers for teams that allow it.",
       "lastRefreshed": "Last Refreshed: {{time}}",

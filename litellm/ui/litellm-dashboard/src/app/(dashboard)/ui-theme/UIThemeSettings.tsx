@@ -133,7 +133,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
         <PageHeader>
           <PageHeaderTitle>
             <Palette />
-            {t("uiTheme.settings.title")}
+            {t("shell.nav.items.uiTheme")}
           </PageHeaderTitle>
           <PageHeaderDescription>{t("uiTheme.settings.description")}</PageHeaderDescription>
         </PageHeader>

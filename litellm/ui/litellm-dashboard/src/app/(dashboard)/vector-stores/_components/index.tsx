@@ -150,7 +150,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         <PageHeader>
           <PageHeaderTitle>
             <Database />
-            {t("vectorStores.page.title")}
+            {t("shell.nav.items.vectorStores")}
           </PageHeaderTitle>
           <PageHeaderDescription>{t("vectorStores.page.description")}</PageHeaderDescription>
           <PageHeaderControls className="flex-wrap">
