@@ -25,6 +25,10 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
     api_base_env = ("AZURE_AI_API_BASE",)
     api_key_required = False
 
+    def supports_assets(self, headers: Mapping[str, str]) -> bool:
+        # Microsoft-Decision-1.1 takes images through the `assets` field, see #53058.
+        return True
+
     def get_input_limits(
         self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
     ) -> DecisionsInputLimits:
