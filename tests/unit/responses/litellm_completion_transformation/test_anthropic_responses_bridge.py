@@ -14,6 +14,8 @@ import litellm
 from litellm import CustomLLM
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -22,6 +24,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import anth
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.guardrails import BlockedWord, ContentFilterAction
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
@@ -2717,7 +2720,6 @@ def test_responses_over_anthropic_return_an_mcp_connector_call_as_an_mcp_call_it
     }
 
 
-
 _WEB_SEARCH_CALL_ID: Final = "srvtoolu_01WebSearchReactFiber"
 _WEB_SEARCH_TOOL_USE: Final = {
     "type": "server_tool_use",
@@ -2972,6 +2974,27 @@ _STORED_CHAT_COMPLETION_MCP_TURN: Final = _stored_mcp_turn(
         ],
     }
 )
+_STORED_MCP_CALL_INPUT_TURN: Final = {
+    **_stored_mcp_turn(
+        {
+            "id": "chatcmpl-mcp-turn",
+            "object": "chat.completion",
+            "created": 0,
+            "model": _MODEL,
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Done."}}
+            ],
+        }
+    ),
+    "proxy_server_request": {
+        "model": _MODEL,
+        "input": [
+            {"role": "user", "content": "List the wiki pages of facebook/react."},
+            _mcp_call_item(f"mcp_{_MCP_CALL_ID}", status="completed", output="1 React Repository Overview"),
+        ],
+        "tools": [_DEEPWIKI_SERVER],
+    },
+}
 
 
 @pytest.mark.asyncio
@@ -2980,6 +3003,7 @@ _STORED_CHAT_COMPLETION_MCP_TURN: Final = _stored_mcp_turn(
     [
         pytest.param(_STORED_RESPONSES_API_MCP_TURN, id="responses_api_output"),
         pytest.param(_STORED_CHAT_COMPLETION_MCP_TURN, id="chat_completion_message"),
+        pytest.param(_STORED_MCP_CALL_INPUT_TURN, id="stored_request_input"),
     ],
 )
 async def test_previous_response_id_sends_a_stored_mcp_call_and_its_result_back_to_claude(
@@ -3138,6 +3162,9 @@ def test_streamed_responses_over_anthropic_emit_the_deferred_mcp_call_pending_th
     ]
     assert _item_events(turn_two_events, _ANSWERED_MCP_CALL_ITEM["id"]) == [
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0),
+        (ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS, 0),
+        (ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA, 0),
+        (ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE, 0),
         (ResponsesAPIStreamEvents.MCP_CALL_COMPLETED, 0),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 0),
     ]
@@ -3146,7 +3173,7 @@ def test_streamed_responses_over_anthropic_emit_the_deferred_mcp_call_pending_th
         for event in turn_two_events
         if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     ]
-    assert added_items[0] == (0, {**_PENDING_MCP_CALL_ITEM, "id": _ANSWERED_MCP_CALL_ITEM["id"]})
+    assert added_items[0] == (0, {**_PENDING_MCP_CALL_ITEM, "id": _ANSWERED_MCP_CALL_ITEM["id"], "arguments": ""})
     assert [(index, item["type"]) for index, item in added_items[1:]] == [(1, "message")]
     done_mcp_items: Final = [
         _dumped(event.item)
@@ -3154,6 +3181,47 @@ def test_streamed_responses_over_anthropic_emit_the_deferred_mcp_call_pending_th
         if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _dumped(event.item)["type"] == "mcp_call"
     ]
     assert done_mcp_items == [_ANSWERED_MCP_CALL_ITEM]
+
+
+def _streamed_mcp_call_arguments(event: object, item_id: str) -> str | None:
+    item: Final = getattr(event, "item", None)
+    if item is not None:
+        return getattr(item, "arguments", None) if getattr(item, "id", None) == item_id else None
+    if getattr(event, "item_id", None) != item_id:
+        return None
+    return getattr(event, "delta", None) or getattr(event, "arguments", None)
+
+
+@pytest.mark.asyncio
+async def test_a_masking_guardrail_leaves_no_raw_arguments_in_any_streamed_event_of_a_deferred_mcp_result(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            _deferred_mcp_reply(TURN_ONE_MESSAGE, TURN_ONE_STREAM_EVENTS, True),
+            _deferred_mcp_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS, True),
+        ]
+    )
+    turn_one, _ = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM], True)
+    _, turn_two_events = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM, *turn_one, _LOCAL_TIME_OUTPUT_ITEM], True)
+
+    await OpenAIResponsesHandler().process_output_streaming_response(
+        responses_so_far=list(turn_two_events),
+        guardrail_to_apply=ContentFilterGuardrail(
+            guardrail_name="mask-repo-owner",
+            blocked_words=[BlockedWord(keyword="facebook", action=ContentFilterAction.MASK)],
+        ),
+        request_data={"metadata": {}},
+        deliver_ended_stream_rewrites=True,
+    )
+
+    streamed_arguments: Final = [
+        arguments
+        for event in turn_two_events
+        if (arguments := _streamed_mcp_call_arguments(event, _ANSWERED_MCP_CALL_ITEM["id"]))
+    ]
+    assert any("repoName" in arguments for arguments in streamed_arguments)
+    assert [arguments for arguments in streamed_arguments if "facebook" in arguments] == []
 
 
 def _stored_deferred_mcp_turn(

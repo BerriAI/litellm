@@ -11500,8 +11500,11 @@ def _sent_mcp_history_turn(config_class: type[AnthropicConfig], native_content: 
 def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class, native_content):
     sent: Final = _sent_mcp_history_turn(config_class, native_content)
 
-    assert isinstance(sent, list) and len(sent) == 3
-    assert all(block in sent for block in (_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER))
+    assert sent == (
+        [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER]
+        if native_content
+        else [_HISTORY_MCP_ANSWER, _HISTORY_MCP_CALL, _HISTORY_MCP_RESULT]
+    )
 
 
 @pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
