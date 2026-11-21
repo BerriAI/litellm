@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.realtime.transformation import GEMINI_LIVE_DOCUMENTED_VOICES, GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
@@ -1479,7 +1478,7 @@ _APPEND = json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64en
 
 def _realtime_input_keys(config: GeminiRealtimeConfig, client_event: str, setup: str | None) -> list[str]:
     frames = config.transform_realtime_request(client_event, "gemini-live-2.5-flash-native-audio", setup)
-    return [key for frame in frames for key in json.loads(frame)["realtimeInput"]]
+    return [key for frame in frames for key in json.loads(frame).get("realtimeInput", {})]
 
 
 @pytest.mark.parametrize("turn_end", ["input_audio_buffer.commit", "response.create"])
@@ -1537,7 +1536,10 @@ def test_gemini_automatic_vad_sends_no_activity_markers():
     keys = [_realtime_input_keys(config, event, None) for event in (_APPEND, commit)]
 
     assert keys == [["audio"], ["audioStreamEnd"]]
-    assert config.transform_realtime_request(response_create, "gemini-live-2.5-flash", None) == []
+    # a bare response.create is honored as turnComplete: the client asked for a response
+    assert [json.loads(f) for f in config.transform_realtime_request(response_create, "gemini-live-2.5-flash", None)] == [
+        {"clientContent": {"turnComplete": True}}
+    ]
 
 
 def test_gemini_tool_call_id_to_name_evicts_oldest_when_capped():
@@ -2009,7 +2011,8 @@ def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_re
     response_id: Final = opened[0]["response"]["id"]
     item_id: Final = opened[1]["item"]["id"]
 
-    audio_done, part_done, item_done = interrupted
+    speech_started, audio_done, part_done, item_done = interrupted
+    assert (speech_started["type"], speech_started["item_id"]) == ("input_audio_buffer.speech_started", item_id)
     assert [
         (audio_done["type"], audio_done["response_id"], audio_done["item_id"]),
         (part_done["type"], part_done["response_id"], part_done["item_id"]),
@@ -2045,13 +2048,14 @@ def test_gemini_interruption_and_turn_complete_in_one_frame_reports_cancelled() 
     )
 
     assert [event["type"] for event in closing] == [
+        "input_audio_buffer.speech_started",
         "response.output_audio.done",
         "response.content_part.done",
         "response.output_item.done",
         "response.done",
     ], closing
-    assert closing[2]["item"]["status"] == "incomplete"
-    done: Final = closing[3]["response"]
+    assert closing[3]["item"]["status"] == "incomplete"
+    done: Final = closing[4]["response"]
     assert (done["id"], done["status"], done["status_details"], done["usage"]["total_tokens"]) == (
         opened[0]["response"]["id"],
         "cancelled",
@@ -2072,7 +2076,8 @@ def test_gemini_interruption_after_generation_complete_does_not_close_the_item_t
     )
 
     assert generation_complete[-1]["item"]["status"] == "completed", generation_complete
-    assert interrupted == []
+    # the client may still be playing the generated audio: it gets the barge-in signal, the item stays closed
+    assert [event["type"] for event in interrupted] == ["input_audio_buffer.speech_started"], interrupted
     statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
     assert statuses == [("response.done", "cancelled")], turn_complete
 
@@ -2103,6 +2108,7 @@ def test_gemini_repeated_interruption_closes_the_item_once() -> None:
     )
 
     assert [event["type"] for event in first] == [
+        "input_audio_buffer.speech_started",
         "response.output_audio.done",
         "response.content_part.done",
         "response.output_item.done",
@@ -2128,11 +2134,12 @@ def test_gemini_interruption_before_audio_closes_a_transcript_first_item() -> No
 
     closes: Final = [(event["type"], event.get("item_id") or event["item"]["id"]) for event in interrupted]
     assert closes == [
+        ("input_audio_buffer.speech_started", item_id),
         ("response.output_audio.done", item_id),
         ("response.content_part.done", item_id),
         ("response.output_item.done", item_id),
     ], interrupted
-    assert interrupted[2]["item"]["status"] == "incomplete", interrupted[2]
+    assert interrupted[3]["item"]["status"] == "incomplete", interrupted[3]
     statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
     assert statuses == [("response.done", "cancelled")], turn_complete
 
@@ -2799,3 +2806,209 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def test_gemini_maps_the_two_vad_sensitivities():
+    """start_of_speech_sensitivity / end_of_speech_sensitivity reach Gemini's
+    automaticActivityDetection; values outside the enums are not forwarded."""
+    config = GeminiRealtimeConfig()
+
+    mapped = config.map_automatic_turn_detection(
+        {
+            "type": "server_vad",
+            "create_response": True,
+            "silence_duration_ms": 700,
+            "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
+            "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+        }
+    )
+    assert mapped["startOfSpeechSensitivity"] == "START_SENSITIVITY_LOW"
+    assert mapped["endOfSpeechSensitivity"] == "END_SENSITIVITY_LOW"
+    assert mapped["silenceDurationMs"] == 700
+
+    rejected = config.map_automatic_turn_detection({"type": "server_vad", "end_of_speech_sensitivity": "TRES_BASSE"})
+    assert "endOfSpeechSensitivity" not in rejected
+
+
+def test_gemini_interrupted_emits_speech_started_before_response_done():
+    """serverContent.interrupted is the user talking over the model: the client
+    needs input_audio_buffer.speech_started to flush its playback, before the
+    events that close the interrupted item."""
+    config = GeminiRealtimeConfig()
+    result = config.transform_realtime_response(
+        json.dumps({"serverContent": {"interrupted": True}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": "item_1",
+            "current_response_id": "resp_1",
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": "audio",
+        },
+    )
+    types = [e["type"] for e in result["response"]]
+    assert types[0] == "input_audio_buffer.speech_started", types
+    speech_started = next(e for e in result["response"] if e["type"] == "input_audio_buffer.speech_started")
+    assert speech_started["item_id"] == "item_1"
+
+
+def _speech_config_for(session: dict) -> dict | None:
+    messages = GeminiRealtimeConfig().transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}),
+        "gemini-3.8-live",
+        session_configuration_request=None,
+    )
+    return json.loads(messages[0])["setup"].get("generationConfig", {}).get("speechConfig")
+
+
+def test_gemini_output_language_reaches_speech_config_language_code():
+    """session.audio.output.language -> speechConfig.languageCode, next to the voice."""
+    speech_config = _speech_config_for({"audio": {"output": {"voice": "Puck", "language": "fr-FR"}}})
+    assert speech_config is not None
+    assert speech_config["languageCode"] == "fr-FR"
+    assert speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Puck"
+
+
+def test_gemini_output_language_is_kept_without_a_voice():
+    assert _speech_config_for({"audio": {"output": {"language": "fr-FR"}}}) == {"languageCode": "fr-FR"}
+
+
+def test_gemini_output_language_is_kept_when_an_openai_voice_is_dropped():
+    speech_config = _speech_config_for({"audio": {"output": {"voice": "marin", "language": "fr-FR"}}})
+    assert speech_config == {"languageCode": "fr-FR"}
+
+
+def _transform_input(**overrides: object) -> dict:
+    base = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _client_frames(config: GeminiRealtimeConfig, *events: dict) -> list[dict]:
+    out: list[dict] = []
+    for event in events:
+        out += [json.loads(m) for m in config.transform_realtime_request(json.dumps(event), "gemini-3.8-live", None)]
+    return out
+
+
+def _user_item(text: str, **extra: object) -> dict:
+    return {
+        "type": "conversation.item.create",
+        **extra,
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]},
+    }
+
+
+def test_gemini_response_create_alone_hands_the_floor_to_the_model():
+    frames = _client_frames(GeminiRealtimeConfig(), {"type": "response.create"})
+    assert frames == [{"clientContent": {"turnComplete": True}}]
+
+
+def test_gemini_response_create_after_a_completed_item_does_not_generate_twice():
+    """Standard OpenAI clients send the item and then response.create: the item
+    already completed the turn, the trigger must not start a second generation."""
+    frames = _client_frames(GeminiRealtimeConfig(), _user_item("Bonjour."), {"type": "response.create"})
+    assert len(frames) == 1
+    assert frames[0]["clientContent"]["turnComplete"] is True
+
+
+def test_gemini_history_replay_with_turn_complete_false_generates_once():
+    config = GeminiRealtimeConfig()
+    frames = _client_frames(
+        config,
+        _user_item("tour 1", turn_complete=False),
+        _user_item("tour 2", turn_complete=False),
+        _user_item("tour 3", turn_complete=False),
+        {"type": "response.create"},
+    )
+    assert [f["clientContent"].get("turnComplete") for f in frames] == [False, False, False, True]
+    assert all("turns" in f["clientContent"] for f in frames[:3]) and "turns" not in frames[3]["clientContent"]
+
+
+def test_gemini_response_create_after_a_tool_response_does_not_generate_twice():
+    config = GeminiRealtimeConfig()
+    config._tool_call_id_to_name["call_1"] = "set_username"
+    frames = _client_frames(
+        config,
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "function_call_output", "call_id": "call_1", "output": "{}"},
+        },
+        {"type": "response.create"},
+    )
+    assert [next(iter(f)) for f in frames] == ["toolResponse"]
+
+
+def test_gemini_response_create_works_again_once_the_turn_completed():
+    config = GeminiRealtimeConfig()
+    _client_frames(config, _user_item("Bonjour."))
+    config.transform_realtime_response(
+        json.dumps({"serverContent": {"turnComplete": True}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=_transform_input(
+            current_output_item_id="item_1", current_response_id="resp_1", current_delta_type="audio"
+        ),
+    )
+    assert _client_frames(config, {"type": "response.create"}) == [{"clientContent": {"turnComplete": True}}]
+
+
+def _state(**overrides: object) -> dict:
+    base = {
+        "session_configuration_request": json.dumps(
+            {"setup": {"model": "gemini-3.8-live", "generationConfig": {"responseModalities": ["AUDIO"]}}}
+        ),
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_gemini_response_done_lists_the_output_items_of_the_turn():
+    """OpenAI's response.done carries the items it produced; Gemini never lists them,
+    so the bridge must remember the output_item.done events it emitted since the
+    previous response.done, across frames."""
+    config = GeminiRealtimeConfig()
+    state = _state()
+    for frame in (
+        {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "AA=="}}]}}},
+        {"serverContent": {"generationComplete": True}},
+    ):
+        result = config.transform_realtime_response(
+            json.dumps(frame), "gemini-3.8-live", MagicMock(), realtime_response_transform_input=state
+        )
+        state = _state(
+            current_output_item_id=result["current_output_item_id"],
+            current_response_id=result["current_response_id"],
+            current_conversation_id=result["current_conversation_id"],
+            current_delta_type=result["current_delta_type"],
+            current_item_chunks=result["current_item_chunks"] or [],
+        )
+    item_id = state["current_output_item_id"]
+    result = config.transform_realtime_response(
+        json.dumps({"serverContent": {"turnComplete": True}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=state,
+    )
+    done = next(e for e in result["response"] if e["type"] == "response.done")
+    assert [item["id"] for item in done["response"]["output"]] == [item_id]
+    assert done["response"]["output"][0]["type"] == "message"
+    # consumed: the next turn starts empty
+    assert config._pending_output_items == ()
