@@ -40,7 +40,7 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
-_YOUTUBE_VIDEO_URL: Final = re.compile(r"https?://(?:(?:www|m)\.)?(?:youtube\.com|youtu\.be)/")
+_YOUTUBE_VIDEO_URL: Final = re.compile(r"https?://(?:(?:www|m)\.)?(?:youtube\.com|youtu\.be)(?::443)?/", re.IGNORECASE)
 
 
 def gemini_fetches_url_itself(url: str) -> bool:

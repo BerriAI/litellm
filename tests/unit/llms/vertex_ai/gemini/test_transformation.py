@@ -1,11 +1,15 @@
 
+import asyncio
 import json
+import threading
 import uuid
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -16,6 +20,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.types.llms import openai
 from litellm.types import completion
 from litellm.types.llms.vertex_ai import RequestBody
+from tests.unit.conftest import AsyncOnlyImageFetch
 
 
 @pytest.mark.asyncio
@@ -472,7 +477,9 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
 
 
-async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video(async_only_image_fetch):
+async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video(
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
     video_url: Final = f"https://videos.example/{uuid.uuid4()}.mp4"
     captured = {}
 
@@ -552,9 +559,21 @@ async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video
             {"file_data": {"mime_type": "video/mp4", "file_uri": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}},
             id="youtube-link",
         ),
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "HTTPS://WWW.YouTube.com/watch?v=aqz-KE-bpKQ"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "HTTPS://WWW.YouTube.com/watch?v=aqz-KE-bpKQ"}},
+            id="youtube-link-in-capitals",
+        ),
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "https://youtu.be:443/aqz-KE-bpKQ"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "https://youtu.be:443/aqz-KE-bpKQ"}},
+            id="youtube-link-with-port",
+        ),
     ],
 )
-def test_a_video_url_part_reaches_gemini_as_video(video_part: dict, expected_part: dict) -> None:
+def test_a_video_url_part_reaches_gemini_as_video(
+    video_part: Mapping[str, object], expected_part: Mapping[str, object]
+) -> None:
     contents: Final = transformation.gemini_convert_messages_with_history(
         [{"role": "user", "content": [{"type": "text", "text": "Describe the clip"}, video_part]}],
         model="gemini-3.8-flash",
@@ -566,7 +585,7 @@ def test_a_video_url_part_reaches_gemini_as_video(video_part: dict, expected_par
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
 async def test_async_transform_lets_gemini_fetch_youtube_links_itself(
-    async_only_image_fetch, custom_llm_provider: str
+    async_only_image_fetch: AsyncOnlyImageFetch, custom_llm_provider: str
 ) -> None:
     watch_link: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
     short_link: Final = "https://youtu.be/aqz-KE-bpKQ"
@@ -605,7 +624,9 @@ async def test_async_transform_lets_gemini_fetch_youtube_links_itself(
     assert async_only_image_fetch.fetched == []
 
 
-def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself(async_only_image_fetch) -> None:
+def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself(
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
     watch_link: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
     short_link: Final = "https://youtu.be/aqz-KE-bpKQ"
     captured = {}
@@ -673,6 +694,169 @@ def test_drop_params_drops_a_video_url_part_without_a_url() -> None:
     )
 
     assert contents[0]["parts"] == [{"text": "Describe the clip"}]
+
+
+def _find_clip_turns(video_url: Mapping[str, object]) -> list[Mapping[str, object]]:
+    return [
+        {"role": "user", "content": "Find the clip"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "find_clip", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": video_url}],
+        },
+    ]
+
+
+def _turns_with_a_url_less_video(role: str) -> list[Mapping[str, object]]:
+    url_less_video: Final = {"type": "video_url", "video_url": {}}
+    if role == "system":
+        return [
+            {"role": "system", "content": [{"type": "text", "text": "Be brief"}, url_less_video]},
+            {"role": "user", "content": "Find the clip"},
+        ]
+    if role == "assistant":
+        return [
+            {"role": "user", "content": "Find the clip"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Here it is"}, url_less_video]},
+        ]
+    return _find_clip_turns({})
+
+
+@pytest.mark.parametrize("role", ["system", "assistant", "tool"])
+def test_a_url_less_video_url_part_in_any_role_is_a_bad_request_instead_of_a_silent_drop(role: str) -> None:
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model="gemini/gemini-flash-latest", api_key="fake-gemini-key", messages=_turns_with_a_url_less_video(role)
+        )
+
+
+@pytest.mark.parametrize(
+    "role, expected_last_turn, expected_system",
+    [
+        pytest.param(
+            "system",
+            {"role": "user", "parts": [{"text": "Find the clip"}]},
+            {"parts": [{"text": "Be brief"}]},
+            id="system",
+        ),
+        pytest.param("assistant", {"role": "model", "parts": [{"text": "Here it is"}]}, None, id="assistant"),
+        pytest.param(
+            "tool",
+            {
+                "role": "user",
+                "parts": [{"function_response": {"name": "find_clip", "response": {"ok": True}, "id": "call_1"}}],
+            },
+            None,
+            id="tool",
+        ),
+    ],
+)
+def test_drop_params_drops_a_url_less_video_url_part_in_any_role(
+    role: str, expected_last_turn: Mapping[str, object], expected_system: Mapping[str, object] | None
+) -> None:
+    body: Final = transformation.transform_request_body(
+        messages=_turns_with_a_url_less_video(role),
+        model="gemini-3.8-flash",
+        optional_params={},
+        custom_llm_provider="gemini",
+        litellm_params={"drop_params": True},
+        cached_content=None,
+    )
+
+    assert body["contents"][-1] == expected_last_turn
+    assert body.get("system_instruction") == expected_system
+
+
+def test_an_assistant_video_url_part_reaches_gemini_as_video() -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [
+            {"role": "user", "content": "Show me the clip"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Here it is"},
+                    {"type": "video_url", "video_url": {"url": "gs://qa-bucket/clip.mp4"}},
+                ],
+            },
+        ],
+        model="gemini-3.8-flash",
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert contents[-1]["parts"] == [
+        {"text": "Here it is"},
+        {"file_data": {"mime_type": "video/mp4", "file_uri": "gs://qa-bucket/clip.mp4"}},
+    ]
+
+
+def _user_video_turns(video_url: Mapping[str, object]) -> list[Mapping[str, object]]:
+    return [{"role": "user", "content": [{"type": "video_url", "video_url": video_url}]}]
+
+
+def _user_video_parts(body: RequestBody) -> object:
+    return [part for part in body["contents"][-1]["parts"] if "inline_data" in part]
+
+
+def _tool_result_video_parts(body: RequestBody) -> object:
+    return body["contents"][-1]["parts"][0]["function_response"]["parts"]
+
+
+@pytest.mark.parametrize(
+    "video_url, turns, downloaded_parts",
+    [
+        (f"https://8.8.8.8/{uuid.uuid4()}.mp4", _find_clip_turns, _tool_result_video_parts),
+        (f"http://8.8.8.8/{uuid.uuid4()}.mp4", _user_video_turns, _user_video_parts),
+        (f"https://8.8.8.8/{uuid.uuid4()}", _user_video_turns, _user_video_parts),
+    ],
+    ids=["tool-result", "user-http", "user-no-extension"],
+)
+async def test_async_transform_downloads_a_video_off_the_event_loop(
+    video_url: str,
+    turns: Callable[[Mapping[str, object]], list[Mapping[str, object]]],
+    downloaded_parts: Callable[[RequestBody], object],
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    download_started: Final = asyncio.Event()
+    released_by_the_loop: Final = threading.Event()
+    released_while_downloading: Final[list[bool]] = []
+
+    def blocking_download(request: httpx.Request) -> httpx.Response:
+        loop.call_soon_threadsafe(download_started.set)
+        released_while_downloading.append(released_by_the_loop.wait(timeout=5))
+        return httpx.Response(200, content=b"\x00\x00\x00\x18ftypmp42", headers={"content-type": "video/mp4"})
+
+    async def release_the_download() -> None:
+        await download_started.wait()
+        released_by_the_loop.set()
+
+    releaser: Final = asyncio.create_task(release_the_download())
+    with respx.mock:
+        respx.get(video_url).mock(side_effect=blocking_download)
+        body: Final = await transformation.async_transform_request_body(
+            gemini_api_key=None,
+            messages=turns({"url": video_url}),
+            api_base=None,
+            model="gemini-3.8-flash",
+            client=None,
+            timeout=None,
+            extra_headers=None,
+            optional_params={},
+            logging_obj=Mock(),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            vertex_project="qa-project",
+            vertex_location="us-central1",
+            vertex_auth_header=None,
+        )
+    await asyncio.wait_for(releaser, timeout=5)
+
+    assert released_while_downloading == [True]
+    assert downloaded_parts(body) == [{"inline_data": {"data": "AAAAGGZ0eXBtcDQy", "mime_type": "video/mp4"}}]
 
 
 @pytest.mark.parametrize("custom_llm_provider, expected_provider", [("gemini", "gemini"), (None, "vertex_ai")])

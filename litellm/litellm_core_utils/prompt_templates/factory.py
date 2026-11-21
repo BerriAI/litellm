@@ -1500,26 +1500,37 @@ def _contains_part_reference(payload: JsonValue) -> bool:
     return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
-def _gemini_tool_result_video_url(content: object) -> str | None:
+def _gemini_tool_result_video_blob(content: object, *, drop_params: bool) -> BlobType | None:
+    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
+
     fields: Final = as_str_mapping(content)
     if fields is None or fields.get("type") != "video_url":
         return None
     video_url: Final = fields.get("video_url")
-    url: Final = video_url if isinstance(video_url, str) else (as_str_mapping(video_url) or {}).get("url")
-    return url if isinstance(url, str) and url else None
-
-
-def _gemini_tool_result_video_blob(video_url: str) -> BlobType | None:
-    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
-
-    if gemini_fetches_url_itself(video_url):
+    video_fields: Final = as_str_mapping(video_url) or {}
+    url: Final = video_url if isinstance(video_url, str) else video_fields.get("url")
+    if not isinstance(url, str) or not url:
+        if drop_params:
+            return None
+        raise BadRequestError(
+            message="Invalid message content: element type is 'video_url' but it has no 'url'",
+            model="",
+            llm_provider="gemini",
+        )
+    if video_fields.get("video_metadata") and not drop_params:
+        raise BadRequestError(
+            message="Gemini tool results cannot carry video_metadata. Remove it or set drop_params=True.",
+            model="",
+            llm_provider="gemini",
+        )
+    if gemini_fetches_url_itself(url):
         raise BadRequestError(
             message="Gemini tool results require inline media data. Use a data URL for this video.",
             model="",
             llm_provider="gemini",
         )
     try:
-        video: Final = convert_to_anthropic_image_obj(video_url, format=None)
+        video: Final = convert_to_anthropic_image_obj(url, format=None)
     except litellm.ImageFetchError as exc:
         verbose_logger.warning("Failed to process video in tool response: %s", exc)
         return None
@@ -1530,6 +1541,8 @@ def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
     forward_function_call_id: bool = False,
+    *,
+    drop_params: bool = False,
 ) -> VertexPartType | list[VertexPartType]:
     """
     OpenAI message with a tool result looks like:
@@ -1637,9 +1650,7 @@ def convert_to_gemini_tool_call_result(
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
-                elif (video_url := _gemini_tool_result_video_url(content)) is not None and (
-                    video_blob := _gemini_tool_result_video_blob(video_url)
-                ) is not None:
+                elif (video_blob := _gemini_tool_result_video_blob(content, drop_params=drop_params)) is not None:
                     inline_data_list.append(video_blob)
     name: str | None = message.get("name", "")
 

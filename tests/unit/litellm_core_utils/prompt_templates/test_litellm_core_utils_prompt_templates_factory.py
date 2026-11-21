@@ -1829,17 +1829,21 @@ _FIND_CLIP_CALL: Final = {
 }
 
 
-def _find_clip_result(video_url: str) -> dict:
+def _find_clip_result(video_url: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "role": "tool",
         "tool_call_id": "call_1",
-        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": {"url": video_url}}],
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": video_url}],
     }
+
+
+_TOOL_OUTPUT_ONLY: Final = {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+_CLIP_WITH_METADATA: Final = {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "video_metadata": {"fps": 2}}
 
 
 def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
-        _find_clip_result("data:video/mp4;base64,AAAAGGZ0eXA="), _FIND_CLIP_CALL
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA="}), _FIND_CLIP_CALL
     )
 
     assert delivered == [
@@ -1856,16 +1860,48 @@ def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
 def test_gemini_tool_result_youtube_video_is_a_bad_request_instead_of_a_page_download() -> None:
     with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
         convert_to_gemini_tool_call_result(
-            _find_clip_result("https://www.youtube.com/watch?v=aqz-KE-bpKQ"), _FIND_CLIP_CALL
+            _find_clip_result({"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}), _FIND_CLIP_CALL
         )
 
 
 def test_gemini_tool_result_keeps_the_tool_output_when_its_video_cannot_be_fetched() -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
-        _find_clip_result("https://clips.invalid/missing.mp4"), _FIND_CLIP_CALL
+        _find_clip_result({"url": "https://clips.invalid/missing.mp4"}), _FIND_CLIP_CALL
     )
 
-    assert delivered == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+def test_gemini_tool_result_video_without_a_url_is_a_bad_request_instead_of_a_silent_drop() -> None:
+    with pytest.raises(litellm.BadRequestError, match="'video_url' but it has no 'url'"):
+        convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL)
+
+
+def test_drop_params_drops_a_tool_result_video_without_a_url() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL, drop_params=True)
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+def test_gemini_tool_result_video_metadata_is_a_bad_request_instead_of_a_silent_drop() -> None:
+    with pytest.raises(litellm.BadRequestError, match="cannot carry video_metadata"):
+        convert_to_gemini_tool_call_result(_find_clip_result(_CLIP_WITH_METADATA), _FIND_CLIP_CALL)
+
+
+def test_drop_params_sends_a_tool_result_video_without_its_metadata() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result(_CLIP_WITH_METADATA), _FIND_CLIP_CALL, drop_params=True
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
 
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():

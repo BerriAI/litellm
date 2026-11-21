@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 import os
 import re
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -282,16 +283,22 @@ def _message_fields(message: object) -> Mapping[str, object] | None:
     return as_str_mapping(message)
 
 
+def _video_may_need_download(video_url: object) -> bool:
+    url: Final = video_url if isinstance(video_url, str) else (as_str_mapping(video_url) or {}).get("url")
+    return isinstance(url, str) and url.startswith(("http://", "https://")) and not gemini_fetches_url_itself(url)
+
+
 def _openai_messages_may_need_sync_gcs_metadata_fetch(
     messages: list[AllMessageValues],
 ) -> bool:
     """
     Heuristic: True if any message part can trigger a blocking GCS JSON
     metadata read inside _transform_request_body (extension-less gs:// without
-    explicit MIME hints). Covers user/system ``content`` parts and assistant
-    ``images`` (same paths as ``_gemini_convert_messages_with_history``). Used
-    to decide whether ``async_transform_request_body`` should offload the sync
-    transform via ``asyncify``.
+    explicit MIME hints) or a blocking download of a remote ``video_url``.
+    Covers user/system/tool ``content`` parts and assistant ``images`` (same
+    paths as ``_gemini_convert_messages_with_history``). Used to decide whether
+    ``async_transform_request_body`` should offload the sync transform via
+    ``asyncify``.
     """
     for raw in messages:
         message_fields = _message_fields(raw)
@@ -312,6 +319,8 @@ def _openai_messages_may_need_sync_gcs_metadata_fetch(
             if fields is None:
                 continue
             itype = fields.get("type")
+            if itype == "video_url" and _video_may_need_download(fields.get("video_url")):
+                return True
             if itype in ("image_url", "video_url"):
                 if _image_url_payload_may_need_sync_gcs_metadata_fetch(fields.get(itype)):
                     return True
@@ -624,6 +633,13 @@ def _process_gemini_video_url(
     )
 
 
+def _assistant_video_url_part(element: object, video_url_part: Callable[[object], PartType | None]) -> PartType | None:
+    fields: Final = as_str_mapping(element)
+    if fields is None or fields.get("type") != "video_url":
+        return None
+    return video_url_part(fields.get("video_url"))
+
+
 def snake_to_camel(snake_str: str) -> str:
     """Convert snake_case to camelCase"""
     components: Final = snake_str.split("_")
@@ -760,6 +776,13 @@ def gemini_convert_messages_with_history(
     if litellm_params:
         vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
+    video_url_part: Final = partial(
+        _process_gemini_video_url,
+        model=model,
+        vertex_project=vertex_project,
+        vertex_credentials=vertex_credentials,
+        drop_params=drop_params,
+    )
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
@@ -821,15 +844,7 @@ def gemini_convert_messages_with_history(
                             )
                             _parts.append(_part)
                         elif element["type"] == "video_url":
-                            if (
-                                video_part := _process_gemini_video_url(
-                                    element.get("video_url"),
-                                    model,
-                                    vertex_project,
-                                    vertex_credentials,
-                                    drop_params=drop_params,
-                                )
-                            ) is not None:
+                            if (video_part := video_url_part(element.get("video_url"))) is not None:
                                 _parts.append(video_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
@@ -948,6 +963,8 @@ def gemini_convert_messages_with_history(
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
+                            elif (video_part := _assistant_video_url_part(element, video_url_part)) is not None:
+                                _parts.append(video_part)
 
                     assistant_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
@@ -1080,6 +1097,7 @@ def gemini_convert_messages_with_history(
                     messages[msg_i],
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
+                    drop_params=drop_params,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1198,10 +1216,13 @@ def transform_request_body(
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
+    request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
     # Separate system prompt from rest of message
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     system_instructions, messages = transform_system_message(
-        supports_system_message=supports_system_message, messages=messages
+        supports_system_message=supports_system_message,
+        messages=messages,
+        drop_params=drops_unsupported_params(request_params.get("drop_params")),
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
@@ -1241,7 +1262,6 @@ def transform_request_body(
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
-        request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
         labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
@@ -1465,8 +1485,13 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
+def _has_video_url_part(message: object) -> bool:
+    parts: Final = as_object_list((as_str_mapping(message) or {}).get("content")) or ()
+    return any((as_str_mapping(part) or {}).get("type") == "video_url" for part in parts)
+
+
 def transform_system_message(
-    supports_system_message: bool, messages: list[AllMessageValues]
+    supports_system_message: bool, messages: list[AllMessageValues], drop_params: bool = False
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
     Extracts the system message from the openai message list.
@@ -1487,6 +1512,15 @@ def transform_system_message(
                 if isinstance(message["content"], str):
                     _system_content_block = PartType(text=message["content"])
                 elif isinstance(message["content"], list):
+                    if not drop_params and _has_video_url_part(message):
+                        raise litellm.BadRequestError(
+                            message=(
+                                "Gemini system instructions take text only. "
+                                "Move the video to a user message or set drop_params=True."
+                            ),
+                            model="",
+                            llm_provider="gemini",
+                        )
                     system_text = ""
                     for content in message["content"]:
                         system_text += content.get("text") or ""
