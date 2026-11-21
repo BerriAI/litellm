@@ -36,14 +36,15 @@ def test_session_token_hides_the_upstream_id_and_opens_for_its_owner() -> None:
 @pytest.mark.parametrize(
     ("caller", "expected"),
     [
-        (UserAPIKeyAuth(token="other-key-hash", team_id="team-a"), _SESSION),
+        (UserAPIKeyAuth(token="owner-key-hash", team_id="team-a"), _SESSION),
+        (UserAPIKeyAuth(token="other-key-hash", team_id="team-a"), None),
         (UserAPIKeyAuth(token="other-key-hash", team_id="team-b"), None),
         (UserAPIKeyAuth(token="other-key-hash"), None),
         (UserAPIKeyAuth(), None),
     ],
-    ids=["same-team", "other-team", "other-key-no-team", "no-identity"],
+    ids=["same-key", "teammate-key", "other-team", "other-key-no-team", "no-identity"],
 )
-def test_session_token_opens_only_for_the_owning_key_or_team(
+def test_session_token_opens_only_for_the_key_that_created_the_session(
     caller: UserAPIKeyAuth, expected: _LiveSession | None
 ) -> None:
     assert _attachable_session(_session_token(_SESSION, _OWNER), caller) == expected
@@ -93,7 +94,12 @@ _CREATE_BODY: Final = {"session": {"model": "live-group"}, "transport": {"type":
 @pytest.fixture
 def started_sidebands(monkeypatch: pytest.MonkeyPatch) -> list[_LiveSession]:
     started: Final[list[_LiveSession]] = []  # mutable-ok: collects each billing sideband the route starts
-    monkeypatch.setattr(live_endpoints, "_start_live_billing_sideband", lambda session, _auth: started.append(session))
+
+    async def _joins(session: _LiveSession, _auth: UserAPIKeyAuth) -> bool:
+        started.append(session)
+        return True
+
+    monkeypatch.setattr(live_endpoints, "_start_live_billing_sideband", _joins)
     return started
 
 
@@ -189,3 +195,24 @@ def test_create_requires_the_session_model(
     assert response.status_code == 400, response.text
     assert "session.model is required" in response.text
     assert started_sidebands == []
+
+
+def test_create_refuses_a_session_the_proxy_could_not_join_to_meter(
+    live_client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/live/sessions").mock(
+        return_value=httpx.Response(
+            201, json={"session": {"id": "live_upstream"}, "transport": {"type": "webrtc", "sdp": "v=0 answer"}}
+        )
+    )
+
+    async def _does_not_join(_session: _LiveSession, _auth: UserAPIKeyAuth) -> bool:
+        return False
+
+    monkeypatch.setattr(live_endpoints, "_start_live_billing_sideband", _does_not_join)
+
+    response: Final = live_client.post("/v1/live/sessions", json=_CREATE_BODY)
+
+    assert response.status_code == 503, response.text
+    assert "v=0 answer" not in response.text, "without the SDP answer the browser cannot start an unmetered session"
+    assert "could not join this session to meter it" in response.text

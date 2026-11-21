@@ -204,6 +204,7 @@ def _user_message(content: object) -> list[dict[str, object]]:  # mutable-ok: a 
 
 
 PINNED_DEPLOYMENT_KEY: Final = "_pinned_deployment_id"
+_PINNABLE_REALTIME_ENDPOINTS: Final = frozenset({"_arealtime", "acreate_realtime_client_secret", "arealtime_calls"})
 
 # Request keys the router reads to route the call; the deployment call never receives them.
 ROUTING_KEYS: Final = frozenset(
@@ -1445,9 +1446,9 @@ def pinned_video_deployment(plan: Plan, request: Mapping[str, object]) -> Mappin
 
 def pinned_request_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
     """The deployment a call names because the upstream object it reaches lives on that deployment's account:
-    a vector store file, or a realtime session that already runs upstream."""
+    a vector store file, or a realtime call from its client secret to the sideband that meters it."""
     deployment_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
-    pins: Final = plan.endpoint.startswith("avector_store_file_") or plan.endpoint == "_arealtime"
+    pins: Final = plan.endpoint.startswith("avector_store_file_") or plan.endpoint in _PINNABLE_REALTIME_ENDPOINTS
     if not pins or not isinstance(deployment_id, str) or not deployment_id:
         return {}
     return {"pinned_deployment_id": deployment_id}

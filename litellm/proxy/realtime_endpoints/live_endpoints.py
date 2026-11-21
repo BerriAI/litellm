@@ -1,6 +1,5 @@
 """GPT-Live sessions over WebRTC: the HTTP route that creates one and the sideband that joins it."""
 
-import asyncio
 import json
 import time
 from collections.abc import Mapping
@@ -21,7 +20,7 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_live_websocket
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.realtime_endpoints.sideband import SidebandClientWebSocket, keep_sideband_task
+from litellm.proxy.realtime_endpoints.sideband import SidebandClientWebSocket, join_sideband
 from litellm.realtime_api.main import live_guardrails_configured, live_session_upstream
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -51,7 +50,6 @@ def _session_token(session: _LiveSession, user_api_key_dict: UserAPIKeyAuth) -> 
                 "model": session.model,
                 "deployment_id": session.deployment_id,
                 "key": user_api_key_dict.token or "",
-                "team_id": user_api_key_dict.team_id or "",
                 "expires_at": int(time.time()) + _LIVE_SESSION_TOKEN_TTL_SECONDS,
             },
             separators=(",", ":"),
@@ -80,34 +78,33 @@ def _attachable_session(session_token: str, user_api_key_dict: UserAPIKeyAuth) -
         return None
     if expires_at < time.time():
         return None
-    same_key: Final = bool(payload.get("key")) and payload.get("key") == user_api_key_dict.token
-    same_team: Final = bool(payload.get("team_id")) and payload.get("team_id") == user_api_key_dict.team_id
-    if not same_key and not same_team:
+    if not payload.get("key") or payload.get("key") != user_api_key_dict.token:
         return None
     return _LiveSession(session_id=session_id, model=model, deployment_id=deployment_id)
 
 
-def _start_live_billing_sideband(session: _LiveSession, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Meter a WebRTC session from the proxy's own sideband, since its audio and usage bypass the proxy."""
+async def _start_live_billing_sideband(session: _LiveSession, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """Meter a WebRTC session from the proxy's own sideband, since its audio and usage bypass the proxy.
+    False when the sideband could not join the session."""
     from litellm.proxy.proxy_server import (
         _route_realtime_websocket_session,  # pyright: ignore[reportPrivateUsage]  # the WebSocket session route owns live metering
     )
 
-    keep_sideband_task(
-        asyncio.create_task(
-            _route_realtime_websocket_session(
-                SidebandClientWebSocket(_LIVE_SESSIONS_PATH),  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
-                user_api_key_dict.model_copy(),
-                route_model=session.model,
-                model=None,
-                intent=None,
-                guardrails=None,
-                request_path=_LIVE_SESSIONS_PATH,
-                live_session_start={"type": "session.start", "session": {"model": session.model}},
-                live_attach=LiveAttach(session_id=session.session_id, metered=True),
-                pinned_deployment_id=session.deployment_id,
-            )
-        )
+    client: Final = SidebandClientWebSocket(_LIVE_SESSIONS_PATH)
+    return await join_sideband(
+        client,
+        _route_realtime_websocket_session(
+            client,  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
+            user_api_key_dict.model_copy(),
+            route_model=session.model,
+            model=None,
+            intent=None,
+            guardrails=None,
+            request_path=_LIVE_SESSIONS_PATH,
+            live_session_start={"type": "session.start", "session": {"model": session.model}},
+            live_attach=LiveAttach(session_id=session.session_id, metered=True),
+            pinned_deployment_id=session.deployment_id,
+        ),
     )
 
 
@@ -201,7 +198,7 @@ async def create_live_session(
             status_code=http_status.HTTP_400_BAD_REQUEST, detail="Guardrails are not supported on OpenAI Live sessions"
         )
 
-    deployment: Final = as_str_mapping(await llm_router.select(model, {}))
+    deployment: Final = as_str_mapping(await llm_router.select(model, dict(request_data)))
     litellm_params: Final = None if deployment is None else as_str_mapping(deployment.get("litellm_params"))
     resolved: Final = None if litellm_params is None else await live_session_upstream(litellm_params)
     if resolved is None:
@@ -226,7 +223,11 @@ async def create_live_session(
         model=model,
         deployment_id=deployment_id if isinstance(deployment_id, str) else "",
     )
-    _start_live_billing_sideband(live_session, user_api_key_dict)
+    if not await _start_live_billing_sideband(live_session, user_api_key_dict):
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The proxy could not join this session to meter it, so the session was not started",
+        )
     return JSONResponse(
         status_code=upstream_response.status_code,
         content={
