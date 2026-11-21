@@ -266,11 +266,17 @@ def _leaves_workspace(path: str) -> bool:
 
 
 async def lens_ui_asset(
-    path: str, remote: LensConnection | None, client: httpx.AsyncClient | None, mount: str
+    path: str,
+    remote: LensConnection | None,
+    client: httpx.AsyncClient | None,
+    mount: str,
+    *,
+    budget: BufferBudget = FORWARD_BUFFER_BUDGET,
 ) -> Response:
     """The Lens workspace is served by the connected Lens, so it follows that Lens's version and not the gateway's."""
     if remote is None or client is None or _leaves_workspace(path):
         raise HTTPException(404, _UI_UNAVAILABLE)
+    reservation: Final = BodyReservation(budget)
     try:
         async with client.stream(
             "GET", remote.endpoint("/embedded/" + quote(path, safe="/")), headers={_UI_MOUNT_HEADER: mount}
@@ -279,15 +285,21 @@ async def lens_ui_asset(
                 raise HTTPException(404, _UI_UNAVAILABLE)
             if response.status_code != 200:
                 raise HTTPException(503, "Lens service is unavailable")
-            return Response(
-                await bounded_response(response, MAX_RESPONSE_BYTES),
+            return BufferedResponse(
+                await bounded_response(response, MAX_RESPONSE_BYTES, reserve=reservation.reserve),
+                status_code=200,
                 headers={
                     **{name: value for name, value in response.headers.items() if name in _UI_RESPONSE_HEADERS},
                     **_UI_SAME_ORIGIN_FRAME,
                 },
+                reservation=reservation,
             )
     except (httpx.HTTPError, RuntimeError) as error:
+        reservation.release()
         raise HTTPException(503, "Lens service is unavailable") from error
+    except BaseException:
+        reservation.release()
+        raise
 
 
 def _remote() -> LensConnection | None:

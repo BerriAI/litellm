@@ -22,6 +22,7 @@ from litellm.integrations.lens.proxy.adapter import (
     service_status,
     ui_mount,
 )
+from litellm.integrations.lens.proxy.buffering import BufferBudget
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
@@ -590,3 +591,27 @@ async def test_workspace_reports_an_unreachable_lens_apart_from_an_older_one() -
         with pytest.raises(HTTPException) as error:
             await lens_ui_asset("", LENS, client, "/lens/ui")
     assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_workspace_asset_is_charged_to_the_buffer_budget_until_it_is_sent() -> None:
+    asset: Final = b"x" * 600
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=asset)
+
+    async def receive() -> dict[str, str]:
+        return {"type": "http.disconnect"}
+
+    async def send(message: Mapping[str, object]) -> None:
+        return None
+
+    budget: Final = BufferBudget(1000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        held: Final = await lens_ui_asset("", LENS, client, "/lens/ui", budget=budget)
+        with pytest.raises(HTTPException) as busy:
+            await lens_ui_asset("", LENS, client, "/lens/ui", budget=budget)
+        assert (busy.value.status_code, busy.value.headers) == (503, {"Retry-After": "1"})
+        await held({"type": "http", "method": "GET"}, receive, send)
+        after_send: Final = await lens_ui_asset("", LENS, client, "/lens/ui", budget=budget)
+    assert after_send.body == asset
