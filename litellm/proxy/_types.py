@@ -468,6 +468,7 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/skills/{name}/archive",
         "/skill-hub/skills/{name}/content",
         "/skill-hub/skills/{plugin_name}/downloads",
+        "/skill-hub/skills/{name}/downloads/export",
         "/skill-hub/skills/{name}/versions",
         "/skill-hub/skills/{name}/versions/{version_id}",
         "/skill-hub/skills/{name}/versions/{version_id}/archive",

@@ -5,8 +5,7 @@ import { useTranslation } from "react-i18next";
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse } from "./types";
-import { buildSkillDownloadsCsv } from "./skillDownloadsCsv";
+import type { Plugin, PluginDownloadsResponse } from "./types";
 
 export const skillDownloadsQueryKey = (skill: Pick<Plugin, "id" | "name">, accessToken?: string | null) =>
   ["skill-downloads", skill.id, skill.name, accessToken] as const;
@@ -18,21 +17,12 @@ interface SkillDownloadsProps {
 
 export function SkillDownloads({ skill, accessToken }: SkillDownloadsProps) {
   const { t, i18n } = useTranslation();
-  const fetchDownloadHistory = async (
-    cursor: string | null = null,
-  ): Promise<readonly (readonly PluginDownloadEvent[])[]> => {
-    const page = await apiClient.get<PluginDownloadsResponse>(
-      `/skill-hub/skills/${encodeURIComponent(skill.name)}/downloads`,
-      { accessToken, query: { limit: 100, cursor } },
-    );
-    if (page.next_cursor === null) return [page.downloads];
-    return [page.downloads, ...(await fetchDownloadHistory(page.next_cursor))];
-  };
   const exportCsv = useMutation({
     mutationFn: async () => {
-      const pages = await fetchDownloadHistory();
-      const events = pages.flatMap((page) => page);
-      downloadBlob(new Blob([buildSkillDownloadsCsv(events)], { type: "text/csv;charset=utf-8" }), `${skill.name}.csv`);
+      const blob = await apiClient.getBlob(`/skill-hub/skills/${encodeURIComponent(skill.name)}/downloads/export`, {
+        accessToken,
+      });
+      downloadBlob(blob, `${skill.name}.csv`);
     },
   });
   const queryOptions = {

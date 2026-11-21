@@ -84,31 +84,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("exports fresh history across all pages without loading them into the table", async () => {
+it("downloads the backend CSV in one authenticated request without changing the table", async () => {
+  setGlobalLitellmHeaderName("X-LiteLLM-Key");
   renderHub();
-  skillRequestMock.mockResolvedValueOnce(Response.json(page([event])));
+  skillRequestMock.mockResolvedValueOnce(Response.json(page([event], 2, event.id)));
   fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
   await screen.findByRole("cell", { name: event.user_email });
   const pending = Promise.withResolvers<Response>();
   skillRequestMock.mockReturnValueOnce(pending.promise);
   fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
   expect(await screen.findByRole("button", { name: "Exporting..." })).toBeDisabled();
-  skillRequestMock.mockResolvedValueOnce(
-    Response.json(page([{ ...event, id: "2", user_email: "second@example.test" }])),
-  );
-  pending.resolve(Response.json(page([event], 2, event.id)));
+  const csv = "download_id,user_email\r\n1,reader@example.test\r\n2,second@example.test\r\n";
+  pending.resolve(new Response(csv, { headers: { "Content-Type": "text/csv;charset=utf-8" } }));
   await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
-  expect(skillRequestMock).toHaveBeenNthCalledWith(
-    2,
-    downloadsUrl.replace("limit=25", "limit=100"),
+  expect(skillRequestMock).toHaveBeenCalledTimes(2);
+  expect(skillRequestMock).toHaveBeenLastCalledWith(
+    `${getProxyBaseUrl()}/skill-hub/skills/my-skill/downloads/export`,
     expect.objectContaining({
-      headers: expect.objectContaining({ Authorization: "Bearer dashboard-token" }),
+      method: "GET",
+      headers: expect.objectContaining({ "X-LiteLLM-Key": "Bearer dashboard-token" }),
     }),
-  );
-  expect(skillRequestMock).toHaveBeenNthCalledWith(
-    3,
-    `${downloadsUrl.replace("limit=25", "limit=100")}&cursor=${event.id}`,
-    expect.anything(),
   );
   expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "my-skill.csv");
   const blob = vi.mocked(downloadBlob).mock.calls[0][0];
@@ -117,25 +112,35 @@ it("exports fresh history across all pages without loading them into the table",
     reader.onload = () => resolve(String(reader.result));
     reader.readAsText(blob);
   });
-  expect(content.split("\r\n")).toEqual([
-    "download_id,downloaded_at,user_email,user_id,team,key,version",
-    `${event.id},2026-10-01T10:00:00.000Z,reader@example.test,reader-id,Engineering,development,1.2.0`,
-    "2,2026-10-01T10:00:00.000Z,second@example.test,reader-id,Engineering,development,1.2.0",
-  ]);
+  expect(content).toBe(csv);
   expect(screen.queryByRole("cell", { name: "second@example.test" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
 });
 
-it("does not produce a partial CSV when a later page fails and allows retry", async () => {
+it.each(["server", "stream"])("does not save a CSV after a %s failure and allows retry", async (failure) => {
   renderHub();
   skillRequestMock.mockResolvedValueOnce(Response.json(page()));
   fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
   await screen.findByText("No authenticated download history yet.");
-  skillRequestMock.mockResolvedValueOnce(Response.json(page([event], 2, event.id)));
-  skillRequestMock.mockResolvedValueOnce(Response.json({ detail: "Unavailable" }, { status: 500 }));
+  const brokenStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("download_id\r\n"));
+      controller.error(new TypeError("Download interrupted"));
+    },
+  });
+  skillRequestMock.mockResolvedValueOnce(
+    failure === "server"
+      ? Response.json({ detail: "Unavailable" }, { status: 500 })
+      : new Response(brokenStream, { headers: { "Content-Type": "text/csv" } }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not export download history. Try again.");
   expect(downloadBlob).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Download CSV" })).toBeEnabled();
+  skillRequestMock.mockResolvedValueOnce(new Response("download_id\r\n", { headers: { "Content-Type": "text/csv" } }));
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 it.each(["legacy", "portable"])(

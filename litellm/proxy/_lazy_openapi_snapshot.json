@@ -62660,6 +62660,54 @@
           ]
         }
       },
+      "/skill-hub/skills/{name}/downloads/export": {
+        "get": {
+          "description": "Export all recorded authenticated downloads. Anonymous downloads remain totals-only.",
+          "operationId": "export_skill_downloads_skill_hub_skills__name__downloads_export_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Authenticated download history as CSV"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Export Skill Downloads",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
       "/skill-hub/skills/{name}/publish": {
         "post": {
           "description": "Make a skill public using the existing Hub publication policy.",

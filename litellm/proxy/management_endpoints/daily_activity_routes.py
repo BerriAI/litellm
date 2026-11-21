@@ -1,5 +1,3 @@
-import csv
-import io
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import asdict, fields, replace
@@ -15,6 +13,7 @@ from litellm import constants
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.csv_export import csv_row
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
     ScopeDenied,
@@ -225,18 +224,6 @@ def _search_rows(keys: Sequence[str], response: SpendAnalyticsPaginatedResponse)
     return [row for key in keys if (row := _fold_key_metrics(api_key_bucket(key), response)) is not None]
 
 
-def _csv_cell(value: object) -> object:
-    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
-        return f"'{value}"
-    return value
-
-
-def _csv_row(values: Sequence[object]) -> bytes:
-    output: Final[io.StringIO] = io.StringIO(newline="")
-    csv.writer(output, lineterminator="\r\n").writerow(tuple(_csv_cell(value) for value in values))
-    return output.getvalue().encode()
-
-
 def _stream_export_rows(
     first_row: ExportRow | None,
     rows: AsyncIterator[ExportRow],
@@ -244,11 +231,11 @@ def _stream_export_rows(
 ) -> AsyncIterator[bytes]:
     async def stream() -> AsyncIterator[bytes]:
         if file_format == "csv":
-            yield _csv_row(tuple(field.name for field in fields(ExportRow)))
+            yield csv_row(tuple(field.name for field in fields(ExportRow)))
             if first_row is not None:
-                yield _csv_row(tuple(asdict(first_row).values()))
+                yield csv_row(tuple(asdict(first_row).values()))
             async for row in rows:
-                yield _csv_row(tuple(asdict(row).values()))
+                yield csv_row(tuple(asdict(row).values()))
             return
 
         if first_row is None:
