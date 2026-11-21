@@ -12605,38 +12605,56 @@ async def test_azure_chat_content_filter_400_relays_the_param_and_the_provider_c
     assert (fields["code"], fields["innererror"]) == ("content_filter", inner_error)
 
 
+@pytest.mark.usefixtures("httpx_transport")
+async def test_azure_chat_429_relays_the_provider_code() -> None:
+    body: Final = {"error": {"code": "RateLimitReached", "message": "Your requests have exceeded the rate limit."}}
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://azure-backend.example.com/openai/").mock(
+            return_value=httpx.Response(429, json=body)
+        )
+        with pytest.raises(litellm.RateLimitError) as caught:
+            _ = litellm.completion(
+                model="azure/gpt-deployment",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://azure-backend.example.com",
+                api_key="azure-key",
+                api_version="2025-04-01-preview",
+                max_retries=0,
+            )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "azure-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert relayed.value.to_dict()["provider_specific_fields"] == {"code": "RateLimitReached"}
+
+
 _OPENROUTER_BACKEND: Final = MappingProxyType(
     {"api_base": "https://openrouter-backend.example.com/api/v1", "api_key": "sk-or-key"}
 )
 
 
-@pytest.mark.usefixtures("httpx_transport")
-@pytest.mark.parametrize(
-    ("route", "call"),
-    [
-        (
-            "chat/completions",
-            lambda: litellm.completion(
-                model="openrouter/openai/gpt-6.2-sol",
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=-5,
-                **_OPENROUTER_BACKEND,
-            ),
+_OPENROUTER_ROUTES: Final = (
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="openrouter/openai/gpt-6.2-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=-5,
+            **_OPENROUTER_BACKEND,
         ),
-        (
-            "responses",
-            lambda: litellm.responses(
-                model="openrouter/openai/gpt-6.2-sol", input="hi", max_output_tokens=-5, **_OPENROUTER_BACKEND
-            ),
+    ),
+    (
+        "responses",
+        lambda: litellm.responses(
+            model="openrouter/openai/gpt-6.2-sol", input="hi", max_output_tokens=-5, **_OPENROUTER_BACKEND
         ),
-    ],
+    ),
 )
-async def test_openrouter_400_relays_the_unwrapped_message_and_the_error_metadata(
-    route: str, call: Callable[[], object]
-) -> None:
-    body: Final = {
-        "error": {"message": "Expected max_tokens to be at least 1", "code": 400, "metadata": {"provider_name": None}}
-    }
+
+
+async def _relayed_openrouter_400(route: str, call: Callable[[], object], body: Mapping[str, object]) -> ProxyException:
     with respx.mock(assert_all_called=True) as mock:
         _ = mock.post(f"https://openrouter-backend.example.com/api/v1/{route}").mock(
             return_value=httpx.Response(400, json=body)
@@ -12649,9 +12667,47 @@ async def test_openrouter_400_relays_the_unwrapped_message_and_the_error_metadat
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
             proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
         )
-    payload: Final = relayed.value.to_dict()
-    assert str(payload["message"]).endswith(" - Expected max_tokens to be at least 1")
-    assert payload["provider_specific_fields"] == {"metadata": {"provider_name": None}}
+    return relayed.value
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _OPENROUTER_ROUTES)
+async def test_openrouter_400_relays_the_unwrapped_message_and_the_error_metadata(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {"message": "Expected max_tokens to be at least 1", "code": 400, "metadata": {"provider_name": None}}
+    }
+    relayed: Final = await _relayed_openrouter_400(route, call, body)
+    assert relayed.message.endswith(" - Expected max_tokens to be at least 1")
+    assert relayed.to_dict()["provider_specific_fields"] == {"metadata": {"provider_name": None}}
+
+
+_OPENROUTER_UPSTREAM_REASON: Final = "Invalid schema for response_format 'answer': Missing 'city'."
+_OPENROUTER_UPSTREAM_BODY: Final = json.dumps(
+    {"error": {"message": _OPENROUTER_UPSTREAM_REASON, "type": "invalid_request_error"}}, indent=2
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _OPENROUTER_ROUTES)
+@pytest.mark.parametrize(
+    ("openrouter_message", "raw"),
+    [
+        pytest.param("Provider returned error", _OPENROUTER_UPSTREAM_BODY, id="generic-message-json-raw"),
+        pytest.param(_OPENROUTER_UPSTREAM_REASON, _OPENROUTER_UPSTREAM_BODY, id="upstream-message-json-raw"),
+        pytest.param("Provider returned error", _OPENROUTER_UPSTREAM_REASON, id="generic-message-text-raw"),
+    ],
+)
+async def test_openrouter_upstream_provider_400_states_the_upstream_reason_once(
+    route: str, call: Callable[[], object], openrouter_message: str, raw: str
+) -> None:
+    body: Final = {
+        "error": {"message": openrouter_message, "code": 400, "metadata": {"raw": raw, "provider_name": "OpenAI"}}
+    }
+    relayed: Final = await _relayed_openrouter_400(route, call, body)
+    assert relayed.message.endswith(f" - {_OPENROUTER_UPSTREAM_REASON}")
+    assert relayed.message.count(_OPENROUTER_UPSTREAM_REASON) == 1
 
 
 @pytest.mark.usefixtures("httpx_transport")

@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.types.utils import LlmProviders
 
@@ -140,7 +140,7 @@ class ExceptionCheckers:
         return False
 
 
-def get_error_message(error_obj) -> str | None:
+def get_error_message(error_obj: object) -> str | None:
     """
     OpenAI Returns Error message that is nested, this extract the message
 
@@ -168,17 +168,17 @@ def get_error_message(error_obj) -> str | None:
             return None
 
         if hasattr(error_obj, "body"):
-            _error_obj_body: Final = getattr(error_obj, "body")
-            if isinstance(_error_obj_body, dict):
+            _error_obj_body: Final = as_str_mapping(attribute_or_none(error_obj, "body"))
+            if _error_obj_body is not None:
                 # OpenAI-style: {"message": "...", "type": "...", ...}
                 top_level_message: Final[object] = _error_obj_body.get("message")
                 if isinstance(top_level_message, str) and top_level_message:
                     return top_level_message
 
                 # Azure-style: {"error": {"message": "...", ...}}
-                nested_error: Final = _error_obj_body.get("error")
-                if isinstance(nested_error, dict):
-                    nested_message: Final[object] = nested_error.get("message")
+                nested_error: Final = as_str_mapping(_error_obj_body.get("error"))
+                if nested_error is not None:
+                    nested_message: Final = nested_error.get("message")
                     return nested_message if isinstance(nested_message, str) else None
 
         # If all else fails, return None
@@ -305,16 +305,20 @@ def _litellm_proxy_response(
     )
 
 
-def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | None:
-    message: Final = getattr(original_exception, "message", None)
-    if isinstance(getattr(original_exception, "body", None), dict) or not isinstance(message, str):
-        return None
+def _decoded_openai_error(text: str) -> Mapping[str, object] | None:
     try:
-        decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(message)))
+        decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(text)))
     except ValueError:
         return None
     relayed: Final = None if decoded is None else as_str_mapping(decoded.get("error"))
     return relayed if relayed is not None and isinstance(relayed.get("message"), str) else None
+
+
+def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | None:
+    message: Final = attribute_or_none(original_exception, "message")
+    if isinstance(attribute_or_none(original_exception, "body"), dict) or not isinstance(message, str):
+        return None
+    return _decoded_openai_error(message)
 
 
 def _map_openai_exception(
@@ -2225,6 +2229,25 @@ def _openai_style_error_message_and_body(
     return get_error_message(error_obj=original_exception) or error_str, dict(carried_body)
 
 
+def _openrouter_upstream_reason(raw: object) -> str | None:
+    match raw:
+        case None | "":
+            return None
+        case str():
+            upstream_error: Final = _decoded_openai_error(raw)
+            return raw if upstream_error is None else str(upstream_error.get("message"))
+        case _:
+            return json.dumps(raw, default=str)
+
+
+def _openrouter_error_message(provider_message: str, body: Mapping[str, object] | None) -> str:
+    metadata: Final = as_str_mapping(body.get("metadata")) if body is not None else None
+    upstream_reason: Final = _openrouter_upstream_reason(metadata.get("raw") if metadata is not None else None)
+    if upstream_reason is None or upstream_reason == provider_message:
+        return provider_message
+    return f"{provider_message} - {upstream_reason}"
+
+
 def _map_openrouter_exception(
     *,
     model: str,
@@ -2238,7 +2261,8 @@ def _map_openrouter_exception(
     received_status: Final = hasattr(original_exception, "status_code") and not getattr(
         original_exception, "status_code_is_synthesized", False
     )
-    message, body = _openai_style_error_message_and_body(original_exception, error_str)
+    provider_message, body = _openai_style_error_message_and_body(original_exception, error_str)
+    message: Final = _openrouter_error_message(provider_message, body)
     if received_status:
         if original_exception.status_code == 400:
             raise BadRequestError(

@@ -31,6 +31,8 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 
 _ERROR_BODY: Final = TypeAdapter(dict[str, object])
 
+_NO_PROVIDER_SPECIFIC_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
 _OPENAI_ERROR_TYPE_SHAPE: Final = re.compile(r"[a-z][a-z0-9_]*")
 
 _OPENAI_ERROR_OBJECT_FIELDS: Final = frozenset(
@@ -88,29 +90,24 @@ def relayed_provider_specific_fields(
 ) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
     carried: Final = attribute_of(exc, "provider_specific_fields")
     relayed: Final = {
-        **(_error_body_provider_specific_fields(exc) or {}),
+        **_error_body_provider_specific_fields(exc),
         **(_ERROR_BODY.validate_python(carried) if isinstance(carried, dict) else {}),
     }
-    return relayed or None
+    if not relayed:
+        return None
+    redacted: Final = _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(relayed))
+    return redacted if _is_json_compliant(redacted) else None
 
 
-def _error_body_provider_specific_fields(
-    exc: object,
-) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
+def _error_body_provider_specific_fields(exc: object) -> Mapping[str, object]:
     body: Final = attribute_of(exc, "body")
     if not isinstance(body, dict):
-        return None
+        return _NO_PROVIDER_SPECIFIC_FIELDS
     error_object: Final = _ERROR_BODY.validate_python(body)
     declared: Final = error_object.get("provider_specific_fields")
-    fields: Final = (
-        _ERROR_BODY.validate_python(declared)
-        if isinstance(declared, dict)
-        else _openai_error_object_extras(error_object)
-    )
-    if not fields:
-        return None
-    redacted: Final = _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(fields))
-    return redacted if _is_json_compliant(redacted) else None
+    if isinstance(declared, dict):
+        return _ERROR_BODY.validate_python(declared)
+    return _openai_error_object_extras(error_object)
 
 
 def _is_json_compliant(fields: Mapping[str, object]) -> bool:
