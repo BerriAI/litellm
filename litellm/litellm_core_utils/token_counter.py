@@ -1859,6 +1859,7 @@ _ANTHROPIC_SERVER_TOOL_FIELDS: Final = MappingProxyType(
         "text_editor_code_execution_tool_result_error": ("error_code", "error_message"),
     }
 )
+_ANTHROPIC_CLIENT_TOOL_TYPES: Final = ("tool_use", "tool_result", "search_result")
 _ANTHROPIC_DOCUMENT: Final = TypeAdapter(AnthropicMessagesDocumentParam)
 
 
@@ -1921,14 +1922,26 @@ def _count_anthropic_content(
                     and field_name == "content"
                     and (field_mapping := as_str_mapping(content[field_name])) is not None
                 ):
-                    tokens += _count_anthropic_content(
-                        field_mapping,
-                        count_function,
-                        use_default_image_token_count,
-                        default_token_count,
-                        pdf_pricing,
-                        _content_depth=_content_depth + 1,
-                    )
+                    inner_type: Final = field_mapping.get("type")
+                    if isinstance(inner_type, str) and (
+                        inner_type in _ANTHROPIC_SERVER_TOOL_FIELDS or inner_type in _ANTHROPIC_CLIENT_TOOL_TYPES
+                    ):
+                        tokens += _count_anthropic_content(
+                            field_mapping,
+                            count_function,
+                            use_default_image_token_count,
+                            default_token_count,
+                            pdf_pricing,
+                            _content_depth=_content_depth + 1,
+                        )
+                    else:
+                        tokens += _count_content_list(
+                            count_function,
+                            [field_mapping],
+                            use_default_image_token_count,
+                            default_token_count,
+                            pdf_pricing,
+                        )
                 else:
                     tokens += count_function(str(field_value))
         except Exception as e:
@@ -2021,9 +2034,7 @@ def _count_content_list(
                     use_default_image_token_count,
                     pdf_pricing,
                 )
-            elif (
-                c["type"] in ("tool_use", "tool_result", "search_result") or c["type"] in _ANTHROPIC_SERVER_TOOL_FIELDS
-            ):
+            elif c["type"] in _ANTHROPIC_CLIENT_TOOL_TYPES or c["type"] in _ANTHROPIC_SERVER_TOOL_FIELDS:
                 num_tokens += _count_anthropic_content(
                     c,
                     count_function,
