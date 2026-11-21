@@ -4,13 +4,14 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import patch
 
 import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.messages.caller_model_checks import (
@@ -43,6 +44,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.router import Router
 from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import RouterErrors
 from litellm.types.utils import Choices, Message, ModelResponse
 from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
@@ -124,6 +126,45 @@ async def test_evaluate_maps_classifier_verdicts_onto_each_tool_use_id():
         "call_ls": {"type": "evaluated", "outcome": "not_flagged"},
         "call_curl": {"type": "evaluated", "outcome": "flagged", "explanation": "runs fetched code"},
     }
+
+
+class _CacheControlHookClassifier(_RecordingClassifier):
+    """Run the real cache control hook on the messages the evaluator passes it.
+
+    ``cache_control_injection_points`` with ``location: message`` writes each
+    breakpoint into the message sequence in place whenever the hook keeps the
+    caller's sequence (every route that does not rebuild it, e.g. an
+    OpenAI-dialect classifier deployment). A read-only ``Sequence`` (a tuple)
+    then raises ``TypeError``, which the evaluator turns into unavailable
+    verdicts.
+    """
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.injected: list[Mapping[str, object]] | None = None
+
+    async def __call__(self, *, messages: Sequence[Mapping[str, object]], **kwargs: object) -> ModelResponse:
+        _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the hook's bare dict annotations
+            model="openai/gpt-4o",
+            messages=cast(list[AllMessageValues], messages),
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        self.injected = cast("list[Mapping[str, object]]", processed)
+        return _classifier_response(
+            json.dumps({"verdicts": {"call_ls": {"flagged": False, "explanation": "lists files"}}})
+        )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_gives_the_classifier_a_message_list_a_cache_control_point_can_write_to():
+    classifier: Final = _CacheControlHookClassifier()
+    verdicts: Final = _verdicts(await _evaluator(classifier).evaluate((LS,)))
+    assert verdicts == {"call_ls": {"type": "evaluated", "outcome": "not_flagged"}}
+    assert classifier.injected is not None
+    assert classifier.injected[0].get("cache_control") == {"type": "ephemeral"}
 
 
 class _TextPartsClassifier:
