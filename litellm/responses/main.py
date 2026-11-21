@@ -136,6 +136,13 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
+from .input_items_query import (
+    DEFAULT_INPUT_ITEMS_QUERY,
+    InputItemsQuery,
+    InvalidInputItemsQuery,
+    parse_input_items_extra_query,
+    parse_input_items_query,
+)
 from .retrieve_stream_query import (
     RETRIEVE_INCLUDE_QUERY_KEYS,
     InvalidRetrieveStreamQuery,
@@ -1952,6 +1959,7 @@ def responses(
             litellm_params={
                 **responses_api_request_params,
                 **litellm_params.custom_pricing_overrides(),
+                "custom_llm_provider": custom_llm_provider,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
@@ -2147,6 +2155,7 @@ def delete_responses(
             },
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -2392,6 +2401,7 @@ def get_responses(
             },
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -2436,19 +2446,44 @@ def get_responses(
         )
 
 
+def _raise_invalid_input_items_query(invalid: InvalidInputItemsQuery, custom_llm_provider: str) -> NoReturn:
+    raise litellm.BadRequestError(
+        message=invalid.message,
+        model=None,
+        llm_provider=custom_llm_provider,
+        body={"message": invalid.message, "type": "invalid_request_error", "param": invalid.param},
+    )
+
+
+def _requested_input_items_query(
+    arguments: Mapping[str, object],
+    extra_query: object,
+    custom_llm_provider: str,
+    drop_malformed: bool,
+) -> InputItemsQuery:
+    called_with: Final = parse_input_items_query(arguments, DEFAULT_INPUT_ITEMS_QUERY, drop_malformed=drop_malformed)
+    if isinstance(called_with, InvalidInputItemsQuery):
+        _raise_invalid_input_items_query(called_with, custom_llm_provider)
+    requested: Final = parse_input_items_extra_query(extra_query, called_with, drop_malformed=drop_malformed)
+    if isinstance(requested, InvalidInputItemsQuery):
+        _raise_invalid_input_items_query(requested, custom_llm_provider)
+    return requested
+
+
 @client
 async def alist_input_items(
     response_id: str,
     after: str | None = None,
     before: str | None = None,
     include: list[str] | None = None,
-    limit: int = 20,
-    order: Literal["asc", "desc"] = "desc",
+    limit: int | None = 20,
+    order: Literal["asc", "desc"] | None = "desc",
     extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
+    extra_query: Mapping[str, object] | None = None,
     **kwargs,
-) -> dict:
+) -> dict[str, object]:
     """Async: List input items for a response"""
     local_vars: Final = locals()
     try:
@@ -2468,6 +2503,7 @@ async def alist_input_items(
             limit=limit,
             order=order,
             extra_headers=extra_headers,
+            extra_query=extra_query,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
@@ -2498,13 +2534,14 @@ def list_input_items(
     after: str | None = None,
     before: str | None = None,
     include: list[str] | None = None,
-    limit: int = 20,
-    order: Literal["asc", "desc"] = "desc",
+    limit: int | None = 20,
+    order: Literal["asc", "desc"] | None = "desc",
     extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
+    extra_query: Mapping[str, object] | None = None,
     **kwargs,
-) -> dict | Coroutine[object, object, dict]:
+) -> dict[str, object] | Coroutine[object, object, dict[str, object]]:
     """List input items for a response"""
     local_vars: Final = locals()
     try:
@@ -2538,8 +2575,15 @@ def list_input_items(
             kwargs=local_vars,
             model=None,
             optional_params={"response_id": response_id},
-            litellm_params={"litellm_call_id": litellm_call_id},
+            litellm_params={"litellm_call_id": litellm_call_id, "custom_llm_provider": custom_llm_provider},
             custom_llm_provider=custom_llm_provider,
+        )
+
+        query: Final = _requested_input_items_query(
+            arguments={"after": after, "before": before, "include": include, "limit": limit, "order": order},
+            extra_query=extra_query,
+            custom_llm_provider=custom_llm_provider,
+            drop_malformed=drops_unsupported_params(litellm_params.drop_params),
         )
 
         response: Final = base_llm_http_handler.list_responses_input_items(
@@ -2548,11 +2592,11 @@ def list_input_items(
             responses_api_provider_config=responses_api_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
-            after=after,
-            before=before,
-            include=include,
-            limit=limit,
-            order=order,
+            after=query.after,
+            before=query.before,
+            include=list(query.include),
+            limit=query.limit,
+            order=query.order,
             extra_headers=extra_headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
@@ -2701,6 +2745,7 @@ def cancel_responses(
             },
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -2898,6 +2943,7 @@ def compact_responses(
             optional_params=dict(responses_api_request_params),
             litellm_params={
                 **responses_api_request_params,
+                "custom_llm_provider": custom_llm_provider,
                 "litellm_call_id": litellm_call_id,
                 "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
             },
@@ -3064,7 +3110,7 @@ async def _aresponses_websocket(
         model=resolved_model,
         user=user,
         optional_params={},
-        litellm_params=litellm_params_dict,
+        litellm_params={**litellm_params_dict, "custom_llm_provider": _custom_llm_provider},
         custom_llm_provider=_custom_llm_provider,
     )
 

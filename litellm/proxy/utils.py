@@ -91,6 +91,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.password_policy import MIN_ALLOWED_LENGTH
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.fips import fips_mode_active
+from litellm.proxy.common_utils.hook_cache import HookCache
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -198,11 +199,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
-from litellm.litellm_core_utils.duration_parser import (
-    get_annual_budget_window_start,
-    get_budget_window_start,
-    is_annual_budget_duration,
-)
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
@@ -226,6 +223,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    Litellm_EntityType,
     SpecialModelNames,
     UserAPIKeyAuth,
 )
@@ -335,9 +333,9 @@ from litellm.proxy.v2_proxy_fields import (
 )
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
 from litellm.repositories.table_repositories import (
-    EndUserRepository,
     HealthCheckRepository,
     SpendLogsRepository,
     UserNotificationsRepository,
@@ -1532,8 +1530,18 @@ def _billed_earlier_attempts(
     ``base_model`` or model, which a fallback hop can make a different model than the final one).
     Only the exception class survives on the record, so an earlier connect timeout is billed too;
     any other failure class is not."""
-    final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
-    final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
+    retry_metadata: Final = _retry_metadata_bucket(litellm_params)
+    final_attempt: Final = retry_metadata.get("attempted_retries")
+    routed_model_info: Final = retry_metadata.get("model_info")
+    routed_id: Final = (
+        cast("Mapping[str, object]", routed_model_info).get("id")  # cast-ok: untyped router dict, read with .get
+        if isinstance(routed_model_info, dict)
+        else None
+    )
+    final_identity: Final = (
+        routed_id if isinstance(routed_id, str) else deployment_id,
+        final_attempt if isinstance(final_attempt, int) else None,
+    )
     return tuple(
         _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
@@ -2023,6 +2031,13 @@ def routes_through_apply_guardrail(callback: CustomGuardrail) -> bool:
     )
 
 
+def scans_mcp_tool_results(callback: CustomGuardrail) -> bool:
+    return routes_through_apply_guardrail(callback) or (
+        subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail)
+        and GuardrailEventHooks.post_mcp_call in (type(callback).get_supported_event_hooks() or ())
+    )
+
+
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
 
@@ -2265,10 +2280,14 @@ class ProxyLogging:
         self,
         user_api_key_cache: UserApiKeyCache,
         premium_user: bool = False,
+        hook_cache: DualCache | None = None,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
+        self.hook_cache: Final = (
+            hook_cache if hook_cache is not None else HookCache(auth_cache=lambda: user_api_key_cache)
+        )
         self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
             dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
         )
@@ -2964,7 +2983,7 @@ class ProxyLogging:
         if hook_type == "pre_call":
             return await target.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
-                cache=self.call_details["user_api_key_cache"],
+                cache=self.hook_cache,
                 data=data,
                 call_type=call_type,
             )
@@ -3719,7 +3738,7 @@ class ProxyLogging:
                     return None
                 response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
                     user_api_key_dict=run.user_api_key_dict,
-                    cache=self.call_details["user_api_key_cache"],
+                    cache=self.hook_cache,
                     data=data,
                     call_type=run.call_type,
                 )
@@ -4213,8 +4232,13 @@ class ProxyLogging:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if self.alerting is not None and (
-            "slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting
+        is_team_percentage_email: Final = (
+            type == "max_budget_alert" and user_info.event_group == Litellm_EntityType.TEAM
+        )
+        if (
+            not is_team_percentage_email
+            and self.alerting is not None
+            and ("slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting)
         ):
             if self.slack_alerting_instance is not None:
                 await self.slack_alerting_instance.budget_alerts(
@@ -4942,7 +4966,7 @@ class ProxyLogging:
     ) -> None:
         if not isinstance(callback, CustomGuardrail):
             return
-        if not routes_through_apply_guardrail(callback):
+        if not scans_mcp_tool_results(callback):
             return
         if callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call) is not True:
             return
@@ -6020,6 +6044,7 @@ class PrismaClient:
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
         self.autorouter_turn_transactions: list[AutoRouterTurnTransaction] = []
         self.baseline_accounting_lock: Final = asyncio.Lock()
+        self.baseline_accounting_recovery_due_at = 0.0
         self.proxy_logging_obj = proxy_logging_obj
         self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")
@@ -7762,6 +7787,7 @@ class PrismaClient:
                             )
                             if isinstance(self.db, RoutingPrismaWrapper):
                                 self.db.mark_writer_recovered()
+                                await self.db.degrade_reader_unless_healthy()
                             await self._start_engine_watcher()
                             return
                     except Exception as probe_err:
@@ -8137,6 +8163,20 @@ class PrismaClient:
         )
         return rows[0]["present"]
 
+    async def _recover_unavailable_reader(self) -> None:
+        if not isinstance(self.db, RoutingPrismaWrapper) or not self.db.reader_unavailable:
+            return
+        try:
+            await asyncio.wait_for(
+                self.db.recover_reader(),
+                timeout=self._db_watchdog_reconnect_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning(
+                "Reader Prisma client did not recover within %ss; reads stay on the writer.",
+                self._db_watchdog_reconnect_timeout_seconds,
+            )
+
     async def _db_health_watchdog_loop(self) -> None:
         while True:
             try:
@@ -8152,6 +8192,7 @@ class PrismaClient:
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                     continue
+                await self._recover_unavailable_reader()
                 if await asyncio.wait_for(
                     self._writer_is_read_only(self.writer_db),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
@@ -9677,11 +9718,10 @@ def _as_aware(moment: datetime) -> datetime:
 
 def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
     window_end: Final = _as_aware(budget_reset_at)
-    window_start: Final = (
-        get_annual_budget_window_start(window_end, get_budget_reset_settings().timezone)
-        if is_annual_budget_duration(budget_duration)
-        else get_budget_window_start(budget_duration, window_end)
-    )
+    settings: Final = get_budget_reset_settings()
+    window_start: Final = get_budget_window_start(
+        budget_duration, window_end, settings.timezone, settings.reset_time_of_day
+    ).astimezone(timezone.utc)
     return (window_start, window_end) if window_start < window_end else None
 
 

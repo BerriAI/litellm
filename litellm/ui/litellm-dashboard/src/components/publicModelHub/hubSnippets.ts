@@ -4,9 +4,8 @@ import { formatInstallCommand } from "@/components/claude_code_plugins/helpers";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
-import type { AgentCard, MCPServerData, ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
+import type { MCPServerData, ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { isDecisionMode } from "@/lib/decisionModels";
-import i18n from "@/i18n/i18n";
 
 import { gatewayUrl, wildcardExample } from "./hubFormat";
 
@@ -68,32 +67,6 @@ export const curlSnippet = (model: ModelGroupInfo): string | null => {
     "messages": [{"role": "user", "content": "Hello"}]
   }'`;
 };
-
-export const agentSnippets = (agent: AgentCard): { title: string; code: string }[] => [
-  {
-    title: i18n.t("publicModelHub.snippets.retrieveAgentCard"),
-    code: `from a2a.client import A2ACardResolver
-
-resolver = A2ACardResolver(httpx_client=httpx_client, base_url="${agent.url}")
-card = await resolver.get_agent_card()`,
-  },
-  {
-    title: i18n.t("publicModelHub.snippets.callAgent"),
-    code: `from a2a.client import A2AClient
-from a2a.types import MessageSendParams, SendMessageRequest
-
-client = A2AClient(httpx_client=httpx_client, agent_card=card)
-request = SendMessageRequest(
-    id=str(uuid4()),
-    params=MessageSendParams(message={
-        "role": "user",
-        "parts": [{"kind": "text", "text": "how much is 10 USD in INR?"}],
-        "messageId": uuid4().hex,
-    }),
-)
-response = await client.send_message(request)`,
-  },
-];
 
 export const mcpEndpoint = (server: MCPServerData): string => `${gatewayUrl()}/${server.name}/mcp`;
 

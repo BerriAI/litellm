@@ -6048,11 +6048,37 @@ _LAPTOP_LOOPBACK_REDIRECT: Final = "http://127.0.0.1:33418/"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("opt_in", [None, "false"])
+@pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
+async def test_register_bridge_keeps_client_callback_without_gateway_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    opt_in: str | None,
+    auth_type_value: Literal["oauth_delegate", "true_passthrough"],
+) -> None:
+    from litellm.types.mcp import MCPAuth
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    if opt_in is None:
+        monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", opt_in)
+    response, upstream, persisted = await _bridge_register_response(
+        _bridge_server(auth_type=MCPAuth(auth_type_value)),
+        {"client_name": "backend", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
+    )
+
+    assert upstream.post.call_args.kwargs["json"]["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT]
+    assert upstream.post.call_args.kwargs["json"]["client_name"] == "backend"
+    assert json.loads(response.body.decode("utf-8"))["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT]
+    persisted.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
 async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_laptop_loopback(
     monkeypatch: pytest.MonkeyPatch, auth_type_value: Literal["oauth_delegate", "true_passthrough"]
 ) -> None:
-    """A laptop MCP client (VS Code) registers with its own loopback redirect. With PROXY_BASE_URL set
+    """A laptop MCP client (VS Code) registers with its own loopback redirect. With explicit opt-in
     the gateway must not relay that registration upstream: it registers its one shared client bound
     to the gateway /callback, keeps it, and hands the caller a client bound to the caller's loopback.
     Relaying the loopback is the customer failure on upstreams that restrict redirect domains."""
@@ -6061,6 +6087,7 @@ async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_
     from litellm.types.mcp import MCPAuth
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     response, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(auth_type=MCPAuth(auth_type_value)),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6082,6 +6109,7 @@ async def test_register_bridge_without_database_still_relays_client_registration
     """A database-free gateway cannot keep the shared client past this process, so even with
     PROXY_BASE_URL set it relays the caller's own registration instead of stranding the next authorize."""
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     _, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6099,6 +6127,7 @@ async def test_register_bridge_without_proxy_base_url_still_relays_client_regist
     """Without PROXY_BASE_URL the gateway cannot keep a shared client, so the relay arm remains the
     fallback and the caller's own redirect goes upstream as before."""
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     _, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6146,6 +6175,7 @@ async def test_authorize_clientless_bridge_loads_shared_client_before_choosing_t
     from litellm.proxy.mcp_server.discoverable_endpoints import authorize_with_server
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server: Final = _bridge_server(url="https://mcp.example.com/mcp")
@@ -6207,6 +6237,7 @@ async def test_token_clientless_bridge_loads_shared_client_before_choosing_the_a
     client and the gateway /callback, and with none yet it relays the caller's own client and redirect."""
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server: Final = _bridge_server(url="https://mcp.example.com/mcp")
@@ -7728,6 +7759,7 @@ def _jwt_auth_patches(mapped_key):
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
 
+    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7735,7 +7767,8 @@ def _jwt_auth_patches(mapped_key):
     jwks_url = "https://idp.example.test/mapped/jwks"
     signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     cache = UserApiKeyCache()
-    cache.set_cache(
+    jwks_cache = DualCache()
+    jwks_cache.set_cache(
         f"litellm_jwt_auth_keys_{jwks_url}",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
@@ -7752,6 +7785,7 @@ def _jwt_auth_patches(mapped_key):
     stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", object()))
     stack.enter_context(patch("litellm.proxy.proxy_server.litellm_jwtauth", jwt_auth))
     stack.enter_context(patch("litellm.proxy.proxy_server.user_api_key_cache", cache))
+    stack.enter_context(patch("litellm.proxy.proxy_server.jwks_cache", jwks_cache))
     stack.enter_context(
         patch(
             "litellm.proxy.mcp_server.bridge_token_flow._key_owner_scim_deactivated",
@@ -8704,7 +8738,9 @@ async def test_reload_active_user_by_id_permanent_engine_fault_is_faulted(proxy_
 
 
 @pytest.mark.asyncio
-async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_cache(proxy_globals):
+async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_cache(
+    proxy_globals, rust_auth_stores: RustAuthStores
+):
     """JWT auth caches the user it creates before it adds that user to the JWT's team, and adding a
     member never evicts the cached row, so a credential minted off the cached row refused the very first
     token exchange as not a member. The database source has to read the row from the database and leave
@@ -8718,9 +8754,9 @@ async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_ca
         key="fresh-jwt-user", value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
-    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=["team-a"])
-    )
+    rust_auth_stores.user.writer = {
+        "fresh-jwt-user": LiteLLM_UserTable(user_id="fresh-jwt-user", teams=["team-a"]).model_dump()
+    }
     proxy_globals.user_api_key_cache = cache
     proxy_globals.prisma_client = prisma
 
@@ -8734,7 +8770,9 @@ async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_ca
 
 
 @pytest.mark.asyncio
-async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_read(proxy_globals):
+async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_read(
+    proxy_globals, rust_auth_stores: RustAuthStores
+):
     """Introspection and refresh revalidation run per call, so the loader's default source is the cache: a
     cached row answers without a database read, and only a caller that asks for the database row pays for
     one."""
@@ -8752,9 +8790,9 @@ async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_rea
         model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
-    prisma.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="cached-jwt-user", teams=[])
-    )
+    rust_auth_stores.user.rows = {
+        "cached-jwt-user": LiteLLM_UserTable(user_id="cached-jwt-user", teams=[]).model_dump()
+    }
     proxy_globals.user_api_key_cache = cache
     proxy_globals.prisma_client = prisma
 
@@ -8763,7 +8801,7 @@ async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_rea
     assert not isinstance(loaded, str)
     assert loaded.teams == ["team-a"]
     assert await reload_active_user_by_id("cached-jwt-user") is None
-    prisma.db.litellm_usertable.find_unique.assert_not_awaited()
+    assert rust_auth_stores.user.sign_ins == []
 
 
 @pytest.mark.asyncio
@@ -9941,6 +9979,7 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     """On restart a config server's in-memory object has no client_id; hydration overlays the
     persisted DCR client from the server-scoped store, decrypting the encrypted-at-rest blob, so the
     refresh_token grant can authenticate as the registered client instead of re-authenticating."""
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     from litellm.proxy._types import MCPTransport
@@ -10000,6 +10039,7 @@ async def test_reuse_config_server_reads_store_with_real_crypto(monkeypatch):
     """A config-declared server (rowless) keeps its DCR client in the store, so the reuse read
     resolves it from the store and decrypts the encrypted-at-rest client, mirroring the write path so
     a re-authorize reuses the client instead of re-minting one."""
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     from litellm.proxy._types import MCPTransport
@@ -12826,7 +12866,7 @@ async def test_enforced_login_warms_verified_token_readable_without_database_loo
     proof = await current_binding_proof(server.oauth_identity_binding, "alice", "srv")
     cache = DualCache()
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-cache-warm-encryption-salt")
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "mcp_state_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(
         mcp_server_manager, "global_mcp_server_manager", SimpleNamespace(invalidate_user_oauth_token_cache=AsyncMock())
@@ -13007,6 +13047,7 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple[_JwtOAuthConfig
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
 
+    from litellm.caching.dual_cache import DualCache
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_JWTAuth
@@ -13014,7 +13055,8 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple[_JwtOAuthConfig
 
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     cache: Final = UserApiKeyCache()
-    cache.set_cache(
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(
         "litellm_jwt_auth_keys_https://idp.example.test/jwks",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
@@ -13027,6 +13069,7 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple[_JwtOAuthConfig
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "jwks_cache", jwks_cache)
     prisma: Final = MagicMock()
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
@@ -13076,6 +13119,7 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     admin: bool,
     owner_state: str,
     monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
 ) -> None:
     import httpx
 
@@ -13119,13 +13163,11 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
 
     database: Final = MagicMock()
     users: Final = database.db.litellm_usertable
-    users.find_unique = AsyncMock(return_value=None)
-    users.find_first = AsyncMock(return_value=None)
     users.create = AsyncMock()
     if owner_state in ("missing", "database_error"):
         handler.user_api_key_cache.delete_cache("jwt-owner")
     if owner_state == "database_error":
-        users.find_unique.side_effect = RuntimeError("database unavailable")
+        rust_auth_stores.user.error = RuntimeError("database unavailable")
     if owner_state == "inactive":
         handler.user_api_key_cache.set_cache(
             "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": False})
@@ -13364,13 +13406,12 @@ async def test_oauth_jwt_identity_preserves_separate_mcp_route_authorization(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("identity", ["sso", "email"])
 @pytest.mark.parametrize("inactive", [False, True])
 @pytest.mark.parametrize("admin", [False, True])
 async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
+    rust_auth_stores: RustAuthStores,
     jwt_oauth_identity: tuple[_JwtOAuthConfig, "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
-    identity: str,
     inactive: bool,
     admin: bool,
 ) -> None:
@@ -13381,7 +13422,7 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
     from litellm.proxy.mcp_server.bridge_token_flow import extract_user_id_from_request
 
     handler, signing_key = jwt_oauth_identity
-    external_id: Final = f"external-{identity}-{inactive}-{admin}"
+    external_id: Final = f"external-{inactive}-{admin}"
     handler.litellm_jwtauth.user_email_jwt_field = "email"
     handler.litellm_jwtauth.admin_allowed_routes = ["mcp_routes"]
     owner: Final = LiteLLM_UserTable(
@@ -13391,19 +13432,14 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
         organization_memberships=[],
     )
     database: Final = MagicMock()
-    table: Final = database.db.litellm_usertable
-    table.find_unique = AsyncMock(side_effect=[None, owner if identity == "sso" else None])
-    table.find_first = AsyncMock(return_value=owner)
-    table.update = AsyncMock(return_value=owner)
-    database.writer_db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    users: Final = rust_auth_stores.user
+    users.rows = {external_id: owner.model_dump()}
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     bearer: Final = _oauth_identity_jwt(signing_key, owner=external_id, scope="litellm_proxy_admin" if admin else "")
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"})
     stored_owner: Final = await extract_user_id_from_request(request)
     assert stored_owner == (None if inactive else external_id if admin else "canonical-oauth-owner")
-    assert table.find_unique.await_count == 2
-    if identity == "email":
-        table.find_first.assert_awaited_once()
+    assert users.sign_ins[0][0]["user_id"] == external_id
     if not inactive:
         admission: Final = await proxy_jwt.authorize(
             core.proxy_settings(), bearer, "/mcp/example", "POST", provisioning=True
@@ -13439,6 +13475,7 @@ async def test_oauth_jwt_identity_does_not_provision_or_synchronize_teams(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["active", "inactive", "missing_database"])
 async def test_oauth_refresh_revalidates_the_same_active_user_rule(
+    rust_auth_stores: RustAuthStores,
     jwt_oauth_identity: tuple[_JwtOAuthConfig, "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
     state: str,
@@ -13450,7 +13487,7 @@ async def test_oauth_refresh_revalidates_the_same_active_user_rule(
     handler, _ = jwt_oauth_identity
     user_id: Final = f"jwt-owner-{state}"
     row: Final = LiteLLM_UserTable(user_id=user_id, metadata={"scim_active": state != "inactive"})
-    proxy_server.prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
+    rust_auth_stores.user.rows = {user_id: row.model_dump()}
     if state == "missing_database":
         monkeypatch.setattr(proxy_server, "prisma_client", None)
     expected: Final = None if state == "active" else "no_active_key" if state == "inactive" else "unresolvable"
@@ -13536,6 +13573,7 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("server_id", ["team-a-server", "team-b-server"])
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_oauth_writer_preserves_claimed_team_instead_of_expanding_user_roster(
     jwt_oauth_identity: tuple[_JwtOAuthConfig, "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
@@ -14281,6 +14319,7 @@ def test_persisted_client_remains_usable_for_its_issuer(issuer, url, monkeypatch
         _PersistedDcrCredentials,
     )
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server = _issuer_anchored_oauth_server(issuer).model_copy(update={"url": url, "client_id": None})
     credentials = _PersistedDcrCredentials(

@@ -79,12 +79,23 @@ class CustomerScopeAuth(BaseModel):
     budget_reset_at: datetime | None = None
     max_budget: float | None = None
     budget_limits: tuple[BudgetLimit | AppDurationLimit, ...] = ()
+    soft_budget_duration: str | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_models: tuple[str, ...] | None = None
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
     cap_policy: CapPolicy | None = None
+
+    def accounting_limits(self) -> tuple[BudgetLimit | AppDurationLimit, ...]:
+        if self.soft_budget_duration is None or any(
+            limit.budget_duration == self.soft_budget_duration for limit in self.budget_limits
+        ):
+            return self.budget_limits
+        return (*self.budget_limits, AppDurationLimit(budget_duration=self.soft_budget_duration, max_budget=0))
+
+
+_APP_FIELDS: Final = ("app_id", "app_alias", "app_customer_margin")
 
 
 class CustomerHierarchyAuth(BaseModel):
@@ -100,6 +111,9 @@ class CustomerHierarchyAuth(BaseModel):
     customer_member_alias: str | None = None
     app_id: str | None = None
     app_alias: str | None = None
+    app_customer_margin: float | None = Field(
+        default=None, description="The app's own customer surcharge; None uses the gateway-wide one"
+    )
     scopes: tuple[CustomerScopeAuth, ...]
     team_scopes: tuple[CustomerScopeAuth, ...] = Field(
         default=(),
@@ -109,7 +123,7 @@ class CustomerHierarchyAuth(BaseModel):
     @model_serializer(mode="wrap")
     def serialize_identity(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
         values: Final = TypeAdapter(Mapping[str, object]).validate_python(handler(self))
-        return {key: value for key, value in values.items() if key not in ("app_id", "app_alias") or value is not None}
+        return {key: value for key, value in values.items() if key not in _APP_FIELDS or value is not None}
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +172,7 @@ def customer_budget_scopes_metadata(hierarchy: CustomerHierarchyAuth | None) -> 
         return None
     return _BUDGET_SCOPES.dump_json(
         hierarchy.scopes,
-        include={"__all__": {"key": True, "entity_id": True, "budget_limits": True}},
+        include={"__all__": {"key": True, "entity_id": True, "budget_limits": True, "soft_budget_duration": True}},
     ).decode()
 
 

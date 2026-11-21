@@ -7,6 +7,14 @@ const monthly = (spend: number, max_budget = 100) => [
 ];
 
 describe("concise app budget usage", () => {
+  it("shows rate-only limits without describing the app as unlimited", () => {
+    render(<AppBudgetLimits budget={{ tpm_limit: 50000, rpm_limit: 0 }} />);
+    expect(screen.getByText("50,000 TPM")).toBeInTheDocument();
+    expect(screen.getByText("0 RPM")).toBeInTheDocument();
+    expect(screen.getByText("No max budget")).toBeInTheDocument();
+    expect(screen.queryByText("Unlimited")).not.toBeInTheDocument();
+  });
+
   it("should show a zero spend against its allowance once", () => {
     render(<AppBudgetLimits usage={monthly(0)} cumulativeSpend={500} />);
     expect(screen.getByText("$0.00 of $100.00 used")).toBeInTheDocument();

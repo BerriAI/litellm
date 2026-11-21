@@ -73,6 +73,12 @@ _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
+BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES: Final = (
+    "/openai/v1/chat/completions",
+    "/v1/chat/completions",
+    "/chat/completions",
+)
+BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES: Final = ("/openai/v1/responses", "/v1/responses", "/responses")
 BedrockRoute = Literal[
     "converse",
     "invoke",
@@ -85,6 +91,11 @@ BedrockRoute = Literal[
     "mantle",
     "chat_completions",
 ]
+
+
+def strip_bedrock_runtime_route_suffix(url: str, suffixes: Sequence[str]) -> str:
+    trimmed: Final = url.rstrip("/")
+    return next((trimmed[: -len(suffix)] for suffix in suffixes if trimmed.endswith(suffix)), trimmed)
 
 
 def served_service_tier(response_headers: Mapping[str, str] | None) -> str | None:
@@ -1884,13 +1895,18 @@ def _bedrock_model_id_without_region(model: str) -> str:
     return regional_id if separator and region in get_all_bedrock_regions() else routed_id
 
 
-def bedrock_model_is_unknown(model: str) -> bool:
+def bedrock_model_is_in_catalog(model: str) -> bool:
     model_id: Final = _bedrock_model_id_without_region(model)
-    if "/" in model_id:
-        return False
     base: Final = get_bedrock_base_model(model_id)
     regional_ids: Final = (f"{region}.{base}" for region in get_bedrock_cross_region_inference_regions())
-    if any(_cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)):
+    return any(
+        _cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)
+    )
+
+
+def bedrock_model_is_unknown(model: str) -> bool:
+    model_id: Final = _bedrock_model_id_without_region(model)
+    if "/" in model_id or bedrock_model_is_in_catalog(model_id):
         return False
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
@@ -2780,7 +2796,9 @@ class CommonBatchFilesUtils:
 
         aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
-            AwsAuthParams.model_validate(optional_params), aws_region_name
+            AwsAuthParams.model_validate(optional_params),
+            aws_region_name,
+            _JSON_OBJECT.validate_python(optional_params),
         )
 
         # Prepare the request data

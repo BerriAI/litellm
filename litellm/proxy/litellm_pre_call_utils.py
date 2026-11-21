@@ -570,6 +570,8 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
+    "used_client_oauth_token",
+    "claude_subscription_usage",
     "disable_global_guardrails",
     "disable_global_guardrail",
     "opted_out_global_guardrails",
@@ -1695,14 +1697,14 @@ def litellm_auth_header_name(headers: Headers) -> str:
 
 
 def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
-    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header
 
     forwarded: Final = clean_headers(headers, authenticated_with_header=litellm_auth_header_name(headers))
     return next(
         (
-            value.removeprefix("Bearer ")
+            token
             for header, value in forwarded.items()
-            if header.lower() == "authorization" and is_anthropic_oauth_key(value)
+            if header.lower() == "authorization" and (token := anthropic_oauth_token_from_header(value)) is not None
         ),
         None,
     )
@@ -2108,7 +2110,7 @@ class LiteLLMProxyRequestSetup:
         # caller can supply any of those via the request body as well as the headers above.
         # A deliberately tiny value can force a 408 on every deployment in a fallback chain,
         # so this marker (never trusted verbatim from the client; stripped above) must cover
-        # every source cooldown_handlers._trigger_cooldown_for_failed_deployment needs to
+        # every source router_rust.surface.health.RustHealthCallbacks.blocked_failure_exempt needs to
         # distinguish from a real deployment health signal.
         if (
             header_timeout is not None
@@ -3098,9 +3100,7 @@ async def add_litellm_data_to_request(
         data["api_version"] = dynamic_api_version
 
     ## Forward any LLM API Provider specific headers in extra_headers
-    data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers
-    )
+    used_client_oauth_token: Final = add_provider_specific_headers_to_request(data=data, headers=_headers)
     caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
@@ -3138,6 +3138,8 @@ async def add_litellm_data_to_request(
             )
             for _k in [k for k in _user_meta if isinstance(k, str) and _is_proxy_owned_metadata_key(k)]:
                 _user_meta.pop(_k, None)
+
+    data[_metadata_variable_name]["used_client_oauth_token"] = used_client_oauth_token
 
     # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
     # above, for the same reason as the user_api_key_* strip — JSON-string
@@ -4846,7 +4848,7 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
 ) -> bool:
-    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header, is_anthropic_oauth_key
     from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
@@ -4891,7 +4893,9 @@ def add_provider_specific_headers_to_request(
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
+    return any(
+        anthropic_oauth_token_from_header(value) is not None for value in anthropic_oauth_credential_headers.values()
+    )
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

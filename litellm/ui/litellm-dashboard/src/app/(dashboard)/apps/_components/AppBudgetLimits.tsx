@@ -1,10 +1,12 @@
 import { useTranslation } from "react-i18next";
 import { Info } from "lucide-react";
+import { BudgetUsageProgress } from "@/components/shared/BudgetUsageProgress";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { customerBudgetPeriod, type CustomerBudgetUsage } from "../../customers/_components/customerBudgetUsage";
 import { appBudgetReached, appBudgetWindows, appSpend } from "./appBudgetPresentation";
 import type { Budget } from "./appForms";
+import { CustomerRateLimitSummary } from "../../customers/_components/CustomerRateLimits";
 
 function BudgetDetails({
   windows,
@@ -72,7 +74,8 @@ export default function AppBudgetLimits({
   if (!primary)
     return (
       <div className="space-y-1 text-sm">
-        <span>{t("apps.unlimited")}</span>
+        <span>{t("customerPortal.rateLimits.noSpendLimit")}</span>
+        <CustomerRateLimitSummary limits={budget} />
         {cumulativeSpend !== undefined && (
           <p className="text-xs text-muted-foreground">
             <span>{appSpend(cumulativeSpend)}</span> {t("apps.lifetimeSpend")}
@@ -111,23 +114,9 @@ export default function AppBudgetLimits({
         )}
         <BudgetDetails windows={windows} cumulativeSpend={cumulativeSpend} />
       </div>
-      {spent !== null && (
-        <div
-          role="progressbar"
-          aria-label={t("apps.budgetUsed")}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percentage}
-          aria-valuetext={label}
-          className="h-1 overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className={atLimit ? "h-full bg-destructive" : "h-full bg-foreground/70"}
-            style={{ width: `${percentage}%` }}
-          />
-        </div>
-      )}
+      {spent !== null && <BudgetUsageProgress percentage={percentage} label={t("apps.budgetUsed")} valueText={label} />}
       <p className={atLimit ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{caption}</p>
+      <CustomerRateLimitSummary limits={budget} />
     </div>
   );
 }
