@@ -63,9 +63,10 @@ sequenceDiagram
 | Multipart form handling | Reconstruct multipart/form-data requests for file uploads |
 | Guardrails (opt-in) | Run content filtering when explicitly configured |
 | Cost injection | Inject cost into streaming chunks when `include_cost_in_streaming_usage` enabled |
+| LiteLLM request fields | Read top-level body fields named like LiteLLM params (`metadata`, `tags`, `guardrails`, ...) for logging and guardrails, then remove them before forwarding. Configured `pass_through_endpoints` routes keep `id` in a JSON-RPC request (a body with `jsonrpc` or `method`) so the reply can carry it back |
 
 ## What Does NOT Change
 
-- Request body
+- Request body, apart from the LiteLLM request fields above and provider rewrites such as Anthropic `metadata.user_id` and LiteLLM-managed IDs swapped for provider IDs
 - Response body
 - Provider-specific parameters

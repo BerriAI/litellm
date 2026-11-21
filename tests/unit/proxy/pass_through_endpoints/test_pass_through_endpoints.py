@@ -93,6 +93,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -6828,6 +6829,7 @@ async def _relay_through_pass_through(
     target: str,
     guardrails_config: dict[str, object] | None,
     custom_body: dict[str, object] | None = None,
+    custom_endpoint: bool = False,
 ) -> Mapping[str, object]:
     async def receive() -> Mapping[str, object]:
         return {"type": "http.request", "body": json.dumps(dict(client_body)).encode()}
@@ -6839,6 +6841,7 @@ async def _relay_through_pass_through(
             "path": "/my-claude-route",
             "query_string": b"",
             "headers": [(b"content-type", b"application/json")],
+            "endpoint": SimpleNamespace(**{LITELLM_PASS_THROUGH_ENDPOINT_MARKER: True}) if custom_endpoint else None,
         },
         receive,
     )
@@ -6868,6 +6871,94 @@ async def _relay_through_pass_through(
     return MappingProxyType(json.loads(relayed))
 
 
+@pytest.mark.parametrize("request_id", [1, "request-1", None])
+async def test_custom_pass_through_preserves_json_rpc_request_id(request_id: int | str | None) -> None:
+    body: Final = {"jsonrpc": "2.0", "id": request_id, "method": "skills/list", "params": {}, "canary": "kept"}
+
+    upstream_body: Final = await _relay_through_pass_through(
+        body, "http://upstream.test/mcp", guardrails_config=None, custom_endpoint=True
+    )
+
+    assert upstream_body == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guardrails_config", [None, {"pii-guard": {}}], ids=["no-guardrail", "guardrail-on-the-route"])
+async def test_custom_pass_through_forwards_only_the_id_among_litellm_fields(
+    guardrails_config: dict[str, object] | None,
+) -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="pii-guard", event_hook=GuardrailEventHooks.pre_call)
+    body: Final = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {},
+        "metadata": {"note": "never scanned by the guardrail"},
+        "litellm_metadata": {"tags": ["team-a"]},
+        "tags": ["team-a"],
+        "guardrails": ["pii-guard"],
+        "num_retries": 2,
+        "litellm_session_id": "session-1",
+    }
+
+    with patch.object(litellm, "callbacks", [guardrail]):
+        upstream_body: Final = await _relay_through_pass_through(
+            body, "http://upstream.test/mcp", guardrails_config=guardrails_config, custom_endpoint=True
+        )
+
+    assert upstream_body == {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}}
+
+
+async def test_custom_pass_through_preserves_a_json_rpc_1_request_id() -> None:
+    body: Final = {"method": "getblockcount", "params": [], "id": "curltest"}
+
+    upstream_body: Final = await _relay_through_pass_through(
+        body, "http://upstream.test/rpc", guardrails_config=None, custom_endpoint=True
+    )
+
+    assert upstream_body == body
+
+
+async def test_built_in_pass_through_drops_id_from_a_json_rpc_body() -> None:
+    body: Final = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+
+    upstream_body: Final = await _relay_through_pass_through(body, "http://upstream.test/mcp", guardrails_config=None)
+
+    assert upstream_body == {"jsonrpc": "2.0", "method": "tools/list", "params": {}}
+
+
+async def test_custom_pass_through_drops_id_from_a_body_that_is_not_json_rpc() -> None:
+    body: Final = {"model": "claude-haiku-5-5", "id": "req-1", "max_tokens": 20, "messages": []}
+
+    upstream_body: Final = await _relay_through_pass_through(
+        body, "http://upstream.test/v1/messages", guardrails_config=None, custom_endpoint=True
+    )
+
+    assert upstream_body == {"model": "claude-haiku-5-5", "max_tokens": 20, "messages": []}
+
+
+class _ResponseBlockingGuardrail(CustomGuardrail):
+    async def async_post_call_success_hook(
+        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
+        raise HTTPException(status_code=400, detail="response blocked")
+
+
+@pytest.mark.asyncio
+async def test_custom_pass_through_client_guardrails_field_cannot_skip_the_route_post_call_guardrail() -> None:
+    guardrail: Final = _ResponseBlockingGuardrail(
+        guardrail_name="response-guard", event_hook=GuardrailEventHooks.post_call
+    )
+    body: Final = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}, "guardrails": []}
+
+    with patch.object(litellm, "callbacks", [guardrail]), pytest.raises(ProxyException) as blocked:
+        await _relay_through_pass_through(
+            body, "http://upstream.test/mcp", guardrails_config={"response-guard": {}}, custom_endpoint=True
+        )
+
+    assert (blocked.value.message, blocked.value.code) == ("response blocked", "400")
+
+
 _MESSAGES_BODY: Final = MappingProxyType(
     {"model": "claude-sonnet-4-5", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}
 )
@@ -6882,6 +6973,7 @@ def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize("custom_endpoint", [False, True], ids=["provider-route", "configured-route"])
 @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
 @pytest.mark.parametrize(
     "client_metadata, target, forwarded_metadata",
@@ -6929,14 +7021,20 @@ def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
     ],
 )
 async def test_pass_through_forwards_only_an_acceptable_user_id_to_anthropic_messages(
-    stream: bool, client_metadata: object, target: str, forwarded_metadata: Mapping[str, object] | None
+    custom_endpoint: bool,
+    stream: bool,
+    client_metadata: object,
+    target: str,
+    forwarded_metadata: Mapping[str, object] | None,
 ) -> None:
     client_body: Final = MappingProxyType(
         {**_MESSAGES_BODY, "metadata": client_metadata, **({"stream": True} if stream else {})}
     )
     body_without_metadata: Final = {k: v for k, v in client_body.items() if k != "metadata"}
 
-    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
+    relayed: Final = await _relay_through_pass_through(
+        client_body, target, guardrails_config=None, custom_endpoint=custom_endpoint
+    )
 
     assert relayed == (
         body_without_metadata if forwarded_metadata is None else {**body_without_metadata, "metadata": forwarded_metadata}
@@ -6990,6 +7088,7 @@ async def test_pass_through_caps_the_user_id_for_a_configured_anthropic_compatib
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize("custom_endpoint", [False, True], ids=["provider-route", "configured-route"])
 @pytest.mark.parametrize(
     "default_on, event_hook, guardrails_config, client_fields, stream_scope, forwarded",
     [
@@ -7020,6 +7119,7 @@ async def test_pass_through_caps_the_user_id_for_a_configured_anthropic_compatib
     ],
 )
 async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
+    custom_endpoint: bool,
     default_on: bool,
     event_hook: GuardrailEventHooks,
     guardrails_config: dict[str, object] | None,
@@ -7035,7 +7135,7 @@ async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
 
     with patch.object(litellm, "callbacks", [guardrail]):
         relayed: Final = await _relay_through_pass_through(
-            client_body, _ANTHROPIC_MESSAGES, guardrails_config=guardrails_config
+            client_body, _ANTHROPIC_MESSAGES, guardrails_config=guardrails_config, custom_endpoint=custom_endpoint
         )
 
     assert relayed == (
