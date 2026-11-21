@@ -114,16 +114,18 @@ impl RustSpendLogWriter {
         };
         let flusher = SpendLogFlusher::new(store, settings);
         let flusher = match on_committed {
-            Some(on_committed) => flusher.with_commit_observer(Arc::new(move |rows: Vec<String>| {
-                Python::attach(|py| {
-                    if let Err(error) = on_committed.call1(py, (rows,)) {
-                        tracing::warn!(
-                            "Spend tracking - could not report committed spend logs: {}",
-                            error
-                        );
-                    }
-                });
-            })),
+            Some(on_committed) => {
+                flusher.with_commit_observer(Arc::new(move |rows: Vec<String>| {
+                    Python::attach(|py| {
+                        if let Err(error) = on_committed.call1(py, (rows,)) {
+                            tracing::warn!(
+                                "Spend tracking - could not report committed spend logs: {}",
+                                error
+                            );
+                        }
+                    });
+                }))
+            }
             None => flusher,
         };
         Ok(Self {

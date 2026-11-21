@@ -72,7 +72,10 @@ fn supplement(log: &SpendLogRecord) -> [(&'static str, Option<Value>); 6] {
         ("api_base", log.api_base.clone().map(Value::from)),
         ("session_id", log.session_id.clone().map(Value::from)),
         ("cache_hit", log.cache_hit.clone().map(Value::from)),
-        ("litellm_call_id", log.litellm_call_id.clone().map(Value::from)),
+        (
+            "litellm_call_id",
+            log.litellm_call_id.clone().map(Value::from),
+        ),
     ]
 }
 
@@ -106,12 +109,21 @@ fn summary(write: &SpendLogWrite) -> Option<String> {
         }
     }
     for name in ACCOUNTING_FIELDS {
-        fields.insert(name.into(), payload.get(name).cloned().unwrap_or(Value::Null));
+        fields.insert(
+            name.into(),
+            payload.get(name).cloned().unwrap_or(Value::Null),
+        );
     }
     if fields["request_id"].is_null() {
-        fields.insert("request_id".into(), Value::from(delivery.request_id.clone()));
+        fields.insert(
+            "request_id".into(),
+            Value::from(delivery.request_id.clone()),
+        );
     }
-    fields.insert("delivery_id".into(), Value::from(delivery.delivery_id.clone()));
+    fields.insert(
+        "delivery_id".into(),
+        Value::from(delivery.delivery_id.clone()),
+    );
     serde_json::to_string(&fields).ok()
 }
 
@@ -162,7 +174,10 @@ mod tests {
                 }),
             ),
             charge("a", json!({"request_id": "request-a", "spend": 9.0})),
-            charge("rejected", json!({"request_id": "request-rejected", "spend": 1.0})),
+            charge(
+                "rejected",
+                json!({"request_id": "request-rejected", "spend": 1.0}),
+            ),
         ];
         let rows: Vec<Value> = committed_rows(&writes, &["a".into()])
             .iter()
@@ -171,7 +186,11 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let row = rows[0].as_object().unwrap();
         assert_eq!(
-            (row["spend"].clone(), row["api_key"].clone(), row["delivery_id"].clone()),
+            (
+                row["spend"].clone(),
+                row["api_key"].clone(),
+                row["delivery_id"].clone()
+            ),
             (json!(0.5), json!("hash"), json!("a"))
         );
         assert_eq!(row["end_user"], Value::Null);

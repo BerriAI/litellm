@@ -517,10 +517,7 @@ mod tests {
             .with_commit_observer(Arc::new(move |_| *sink.lock().expect("lock") += 1));
         flusher.set_reporting(true);
 
-        flusher
-            .write(&[charged("a")], None)
-            .await
-            .expect("writes");
+        flusher.write(&[charged("a")], None).await.expect("writes");
 
         assert_eq!(*reported.lock().expect("lock"), 0);
     }
