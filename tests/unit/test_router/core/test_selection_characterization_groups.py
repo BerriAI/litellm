@@ -336,10 +336,10 @@ async def test_allowed_model_region_keeps_only_deployments_in_that_region(make_c
 
 
 @pytest.mark.asyncio
-async def test_allowed_model_region_is_ignored_without_request_input(make_core: MakeCore) -> None:
+async def test_allowed_model_region_is_enforced_without_request_input(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=list(REGIONAL), enable_pre_call_checks=True)
-    picked: Final = await picked_ids(core, "g", times=SPREAD_PICKS, request_kwargs={"allowed_model_region": "eu"})
-    assert picked == {"eu", "us", "unknown"}
+    picked: Final = await picked_ids(core, "g", request_kwargs={"allowed_model_region": "eu"})
+    assert picked == {"eu"}
 
 
 @pytest.mark.asyncio
