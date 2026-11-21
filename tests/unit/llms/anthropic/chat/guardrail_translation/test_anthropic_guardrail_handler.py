@@ -8,7 +8,8 @@ with guardrail transformations, specifically testing edge cases with empty choic
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
+    _pair_tool_indices,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import truncate_tool_name
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
@@ -1999,11 +2001,649 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[0]["type"] == "tool_search_tool_regex_20251119"
         assert tools[0]["name"] == "tool_search_tool_regex"
 
-        # Second tool should be converted to Anthropic custom tool format
-        assert tools[1]["type"] == "custom"
+        assert "type" not in tools[1]
+        assert tools[1]["defer_loading"] is True
         assert tools[1]["name"] == "get_weather"
         assert tools[1]["description"] == "Get the weather at a specific location"
         assert "input_schema" in tools[1]
+
+
+class AnthropicToolEditingGuardrail(CustomGuardrail):
+    def __init__(self, mode: str):
+        super().__init__(guardrail_name="tool-fields")
+        self.mode: Final = mode
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools: Final = inputs.get("tools", [])
+        assert all(tool.get("type") == "function" for tool in tools)
+        assert all(not tool["function"]["name"].startswith("litellm_unnamed_tool_") for tool in tools)
+        if self.mode == "echo":
+            return inputs
+        if self.mode == "copy":
+            return deepcopy(inputs)
+        if self.mode == "texts-only":
+            return {"texts": inputs.get("texts", [])}
+        if self.mode in ("description", "duplicate-reverse-edit"):
+            tools[0]["function"]["description"] = "Read [MASKED] data"
+        if self.mode == "duplicate-edit-last":
+            tools[1]["function"]["description"] = "Read [MASKED] data"
+        if self.mode == "duplicate-reverse-edit":
+            return {**inputs, "tools": list(reversed(tools))}
+        if self.mode == "duplicate-remove-last":
+            return {**inputs, "tools": [tools[0], *tools[2:]]}
+        if self.mode == "schema":
+            tools[0]["function"]["parameters"] = {"type": "object", "properties": {"safe": {"type": "string"}}}
+        if self.mode == "schema-inplace":
+            tools[0]["function"]["parameters"]["properties"]["safe"] = {"type": "string"}
+        if self.mode == "remove":
+            return {**inputs, "tools": tools[1:]}
+        if self.mode == "empty":
+            return {**inputs, "tools": []}
+        if self.mode in ("add", "duplicate-add", "native-add"):
+            return {
+                **inputs,
+                "tools": [
+                    *tools,
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": {"add": "Added", "duplicate-add": "Read", "native-add": "web_search"}[self.mode],
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    },
+                ],
+            }
+        return inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", ("echo", "copy", "texts-only", "description", "schema", "schema-inplace", "remove", "empty", "add")
+)
+@pytest.mark.parametrize("long_name", (False, True), ids=("short-name", "long-name"))
+async def test_guardrail_preserves_original_tool_dicts_except_explicit_edits(mode: str, long_name: bool) -> None:
+    custom: Final = {
+        "name": "Read" + ("_long" * 20 if long_name else ""),
+        "description": "Read private data",
+        "input_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "ReadInput",
+            "type": "object",
+            "properties": {},
+        },
+        "defer_loading": True,
+        "cache_control": {"type": "ephemeral"},
+        "strict": True,
+        "input_examples": [{}],
+        "allowed_callers": ["direct"],
+    }
+    native: Final = [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 1},
+        {"type": "mcp_toolset", "mcp_server_name": "github"},
+        {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        {"type": "code_execution_20250825", "name": "code_execution"},
+        {"type": "memory_20250818", "name": "memory"},
+        {"googleSearch": {}},
+    ]
+    untouched: Final = {**custom, "name": "Untouched", "type": "custom"}
+    tools: Final = [custom, *native, untouched]
+    original: Final = deepcopy(tools)
+    data: Final = {
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "Read a file"}],
+        "tools": tools,
+    }
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
+    )
+    rewritten: Final = {
+        **{key: value for key, value in custom.items() if key != "input_examples" or mode != "schema"},
+        **({"description": "Read [MASKED] data"} if mode == "description" else {}),
+        **(
+            {"input_schema": {"type": "object", "properties": {"safe": {"type": "string"}}}} if mode == "schema" else {}
+        ),
+        **(
+            {"input_schema": {**custom["input_schema"], "properties": {"safe": {"type": "string"}}}}
+            if mode == "schema-inplace"
+            else {}
+        ),
+    }
+    expected: Final = [
+        *([rewritten] if mode not in ("remove", "empty") else []),
+        *(native if mode != "empty" else [{"googleSearch": {}}]),
+        *([untouched] if mode != "empty" else []),
+        *(
+            [{"name": "Added", "input_schema": {"type": "object", "properties": {}}, "type": "custom"}]
+            if mode == "add"
+            else []
+        ),
+    ]
+    assert result["tools"] == expected
+    assert tools == original
+    if mode in ("echo", "copy", "texts-only"):
+        assert result["tools"] is tools
+    if mode != "empty":
+        assert result["tools"][-1 if mode != "add" else -2] is untouched
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "copy",
+        "description",
+        "duplicate-edit-last",
+        "duplicate-reverse-edit",
+        "remove",
+        "duplicate-remove-last",
+        "empty",
+        "duplicate-add",
+    ),
+)
+@pytest.mark.parametrize("openai_format", (False, True))
+async def test_repeated_tool_names_keep_each_schema_and_apply_each_guardrail_edit(
+    mode: str, openai_format: bool
+) -> None:
+    custom: Final = [
+        {
+            "name": "Read",
+            "description": "Read private data",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "defer_loading": True,
+        },
+        {
+            "name": "Read",
+            "description": "Read public data",
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    def formatted(tool: dict[str, object]) -> dict[str, object]:
+        return (
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"],
+                },
+            }
+            if openai_format
+            else tool
+        )
+
+    native: Final = {"googleSearch": {}}
+    tools: Final = [formatted(custom[0]), native, formatted(custom[1])]
+    expected_custom: Final = [
+        {
+            **tool,
+            **(
+                {"description": "Read [MASKED] data"}
+                if (index == 0 and mode in ("description", "duplicate-reverse-edit"))
+                or (index == 1 and mode == "duplicate-edit-last")
+                else {}
+            ),
+        }
+        for index, tool in enumerate(custom)
+    ]
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data={"messages": [{"role": "user", "content": "Read a file"}], "tools": tools},
+        guardrail_to_apply=AnthropicToolEditingGuardrail(mode),
+    )
+    assert result["tools"] == [
+        *([formatted(expected_custom[0])] if mode not in ("remove", "empty") else []),
+        native,
+        *([formatted(expected_custom[1])] if mode not in ("duplicate-remove-last", "empty") else []),
+        *(
+            [{"name": "Read", "input_schema": {"type": "object", "properties": {}}, "type": "custom"}]
+            if mode == "duplicate-add"
+            else []
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_guardrail_addition_with_native_name_preserves_both_tool_definitions() -> None:
+    native: Final = {"type": "web_search_20250305", "name": "web_search"}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data={"messages": [{"role": "user", "content": "Read a file"}], "tools": [native]},
+        guardrail_to_apply=AnthropicToolEditingGuardrail("native-add"),
+    )
+    assert result["tools"] == [
+        native,
+        {"name": "web_search", "input_schema": {"type": "object", "properties": {}}, "type": "custom"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("echo", "empty", "add"))
+async def test_scan_only_tool_results_preserves_unscanned_tools_and_accepts_injection(mode: str) -> None:
+    tools: Final = [{"name": "Read", "input_schema": {"type": "object"}, "defer_loading": True}]
+    data: Final = {
+        "tools": tools,
+        "messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]}],
+    }
+    guardrail: Final = AnthropicToolEditingGuardrail(mode)
+    guardrail.scan_only_tool_results = True
+    result: Final = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+    assert result["tools"] == [
+        *tools,
+        *(
+            [{"name": "Added", "input_schema": {"type": "object", "properties": {}}, "type": "custom"}]
+            if mode == "add"
+            else []
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("empty", "remove", "description"))
+async def test_guardrail_removals_fail_closed_when_a_long_name_collides_with_its_alias(mode: str) -> None:
+    long_name: Final = "Read" + "_long" * 20
+    tools: Final = [
+        {"name": long_name, "description": "Read private data", "input_schema": {"type": "object"}},
+        {"name": truncate_tool_name(long_name), "description": "Read public data", "input_schema": {"type": "object"}},
+    ]
+    native: Final = {"googleSearch": {}}
+    data: Final = {"tools": [native, *tools], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
+    )
+    expected_custom: Final = (
+        []
+        if mode == "empty"
+        else tools[1:]
+        if mode == "remove"
+        else [{**tools[0], "description": "Read [MASKED] data"}, tools[1]]
+    )
+    assert result["tools"] == [native, *expected_custom]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_type", ("anything", "web_search_fake", "computer_fake", "custom"))
+@pytest.mark.parametrize("mode", ("empty", "description", "copy"))
+async def test_unknown_typed_tools_are_scanned_instead_of_bypassing_the_guardrail(tool_type: str, mode: str) -> None:
+    custom: Final = {"type": tool_type, "name": "blocked-read", "description": "Read sensitive data"}
+    native: Final = {"type": "mcp_toolset", "mcp_server_name": "github"}
+    data: Final = {"tools": [custom, native], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=AnthropicToolEditingGuardrail(mode)
+    )
+    expected_custom: Final = (
+        []
+        if mode == "empty"
+        else [{**custom, "description": "Read [MASKED] data"} if mode == "description" else custom]
+    )
+    assert result["tools"] == [*expected_custom, *([] if mode == "empty" else [native])]
+
+
+class NamedToolScanGuardrail(CustomGuardrail):
+    def __init__(self, name: str, remove: bool):
+        super().__init__(guardrail_name="named-tool-scan")
+        self.name: Final = name
+        self.remove: Final = remove
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        assert [tool["function"]["name"] for tool in inputs.get("tools", [])] == [self.name]
+        return {**inputs, "tools": []} if self.remove else inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remove", (False, True))
+@pytest.mark.parametrize(
+    ("tool", "name"),
+    (
+        ({"type": "memory_20250818", "name": "memory"}, "memory"),
+        ({"type": "code_execution_20250825", "name": "code_execution"}, "code_execution"),
+        ({"type": "web_search_20250305", "name": "web_search"}, "web_search"),
+        ({"type": "mcp_toolset", "mcp_server_name": "github"}, "github"),
+    ),
+)
+async def test_typed_tools_are_scanned_without_widening_the_provider_native_exemption(
+    tool: dict[str, object], name: str, remove: bool
+) -> None:
+    wrapper: Final = {"googleSearch": {}}
+    data: Final = {"tools": [tool, wrapper], "messages": [{"role": "user", "content": "Use a safe tool"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=NamedToolScanGuardrail(name, remove)
+    )
+    assert result["tools"] == [*(() if remove else (tool,)), wrapper]
+    assert result["tools"][-1] is wrapper
+
+
+class SafeToolOnlyGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        assert [tool["function"]["name"] for tool in inputs.get("tools", [])] == ["decoy", "blocked", "safe"]
+        return {
+            **inputs,
+            "tools": [tool for tool in inputs.get("tools", []) if tool["function"]["name"] == "safe"],
+        }
+
+
+@pytest.mark.asyncio
+async def test_web_search_named_openai_envelope_cannot_shift_filtered_tool_identity() -> None:
+    decoy: Final = {"type": "function", "name": "web_search", "function": {"name": "decoy"}}
+    blocked: Final = {"name": "blocked", "input_schema": {"type": "object", "properties": {}}}
+    safe: Final = {"name": "safe", "input_schema": {"type": "object", "properties": {}}}
+    data: Final = {"tools": [decoy, blocked, safe], "messages": [{"role": "user", "content": "Use a safe tool"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=SafeToolOnlyGuardrail(guardrail_name="safe-only")
+    )
+    assert result["tools"] == [safe]
+    assert result["tools"][0] is safe
+
+
+class RelocatedToolFieldGuardrail(CustomGuardrail):
+    def __init__(self, field: str, remove: bool):
+        super().__init__(guardrail_name="relocated-field")
+        self.field: Final = field
+        self.remove: Final = remove
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools: Final = inputs.get("tools", [])
+        return {
+            **inputs,
+            "tools": [
+                {
+                    **tool,
+                    "function": {
+                        **tool["function"],
+                        "parameters": {
+                            **{
+                                key: value for key, value in tool["function"]["parameters"].items() if key != self.field
+                            },
+                            **({} if self.remove else {self.field: [{"path": "[MASKED]"}]}),
+                        },
+                    },
+                }
+                for tool in tools
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("input_examples", "vendor_examples"))
+@pytest.mark.parametrize("remove", (False, True))
+@pytest.mark.parametrize("overlap", (False, True))
+async def test_relocated_tool_field_edits_return_to_the_original_location(
+    field: str, remove: bool, overlap: bool
+) -> None:
+    schema: Final = {"type": "object", "properties": {"path": {"type": "string"}}}
+    tool: Final = {
+        "name": "Read",
+        "input_schema": {**schema, **({field: [{"path": "schema-private"}]} if overlap else {})},
+        "strict": True,
+        field: [{"path": "private"}],
+    }
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=RelocatedToolFieldGuardrail(field, remove)
+    )
+    assert result["tools"] == [
+        {
+            "name": "Read",
+            "input_schema": {**schema, **({field: [{"path": "[MASKED]"}]} if overlap and not remove else {})},
+            "strict": True,
+            **({} if remove or overlap else {field: [{"path": "[MASKED]"}]}),
+            **({"type": "custom"} if overlap else {}),
+        }
+    ]
+
+
+class SchemaRedactionGuardrail(CustomGuardrail):
+    def __init__(self, schema: Mapping[str, object] | None):
+        super().__init__(guardrail_name="schema-redaction")
+        self.schema: Final = schema
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {
+            **inputs,
+            "tools": [
+                {
+                    **tool,
+                    "function": {
+                        **{key: value for key, value in tool["function"].items() if key != "parameters"},
+                        **({"parameters": self.schema} if self.schema is not None else {}),
+                    },
+                }
+                for tool in inputs.get("tools", [])
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("unchanged", "redacted", "empty", "omitted"))
+async def test_reserved_tool_parameters_cannot_hide_guardrail_schema_redactions(mode: str) -> None:
+    schema: Final = {"type": "object", "properties": {"path": {"type": "string", "description": "private"}}}
+    metadata: Final = {"strict": True, "cache_control": {"type": "ephemeral"}}
+    tool: Final = {"name": "Read", "input_schema": schema, "parameters": {}, **metadata}
+    returned: Final = (
+        None
+        if mode == "omitted"
+        else {}
+        if mode == "empty"
+        else {
+            **schema,
+            "parameters": {},
+            **(
+                {"properties": {"path": {"type": "string", "description": "[MASKED]"}}}
+                if mode == "redacted"
+                else {}
+            ),
+        }
+    )
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=SchemaRedactionGuardrail(returned)
+    )
+    assert result["tools"] == [
+        tool
+        if mode == "unchanged"
+        else {
+            "name": "Read",
+            **({"input_schema": returned} if returned is not None else {}),
+            "type": "custom",
+            **metadata,
+        }
+    ]
+
+
+class OuterToolMetadataGuardrail(CustomGuardrail):
+    def __init__(self, field: str, at_function: bool):
+        super().__init__(guardrail_name="outer-tool-metadata")
+        self.field: Final = field
+        self.at_function: Final = at_function
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        edits: Final = {"defer_loading": False} if self.field == "defer_loading" else {"allowed_callers": []}
+        return {
+            **inputs,
+            "tools": [
+                {
+                    **tool,
+                    **({} if self.at_function else edits),
+                    "function": {**tool["function"], **(edits if self.at_function else {})},
+                }
+                for tool in inputs.get("tools", [])
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("defer_loading", "allowed_callers"))
+@pytest.mark.parametrize("at_function", (False, True), ids=("outer-tool", "outer-function"))
+@pytest.mark.parametrize("reserved_parameters", (False, True), ids=("normal-schema", "reserved-schema"))
+async def test_explicit_outer_tool_metadata_edits_override_unchanged_relocated_values(
+    field: str, at_function: bool, reserved_parameters: bool
+) -> None:
+    schema: Final = {"type": "object", "properties": {}}
+    metadata: Final = {"defer_loading": True} if field == "defer_loading" else {"allowed_callers": ["direct"]}
+    edits: Final = {"defer_loading": False} if field == "defer_loading" else {"allowed_callers": []}
+    tool: Final = {
+        "name": "Read",
+        "type": "custom",
+        "strict": True,
+        "input_schema": schema,
+        **metadata,
+        **({"parameters": {}} if reserved_parameters else {}),
+    }
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=OuterToolMetadataGuardrail(field, at_function)
+    )
+    assert result["tools"] == [
+        {
+            "name": "Read",
+            "type": "custom",
+            "strict": True,
+            "input_schema": {**schema, **metadata, "parameters": {}} if reserved_parameters else schema,
+            **edits,
+        }
+    ]
+
+
+class ToolFieldSplitGuardrail(CustomGuardrail):
+    def __init__(self, explicit: bool, omit_schema: bool):
+        super().__init__(guardrail_name="field-split")
+        self.explicit: Final = explicit
+        self.omit_schema: Final = omit_schema
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {
+            **inputs,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["function"]["name"],
+                        **(
+                            {}
+                            if self.omit_schema
+                            else {
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {},
+                                    **({"defer_loading": False, "allowed_callers": []} if self.explicit else {}),
+                                }
+                            }
+                        ),
+                        **(
+                            {"defer_loading": False, "allowed_callers": []}
+                            if self.explicit and self.omit_schema
+                            else {}
+                        ),
+                        **({"strict": False, "cache_control": None, "type": "custom"} if self.explicit else {}),
+                    },
+                }
+                for tool in inputs.get("tools", [])
+            ],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", (False, True))
+@pytest.mark.parametrize("omit_schema", (False, True))
+@pytest.mark.parametrize("original_type", ("custom", "anything"))
+async def test_guardrail_content_omissions_remove_content_but_metadata_requires_an_explicit_edit(
+    explicit: bool,
+    omit_schema: bool,
+    original_type: str,
+) -> None:
+    metadata: Final = {
+        "defer_loading": True,
+        "allowed_callers": ["direct"],
+        "cache_control": {"type": "ephemeral"},
+        "strict": True,
+        "type": original_type,
+    }
+    tool: Final = {
+        "name": "Read",
+        "description": "Private content",
+        "input_examples": [{"path": "private"}],
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        **metadata,
+    }
+    data: Final = {"tools": [tool], "messages": [{"role": "user", "content": "Read data"}]}
+    result: Final = await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=ToolFieldSplitGuardrail(explicit, omit_schema)
+    )
+    assert result["tools"] == [
+        {
+            "name": "Read",
+            **({} if omit_schema else {"input_schema": {"type": "object", "properties": {}}}),
+            **(
+                {
+                    "defer_loading": False,
+                    "allowed_callers": [],
+                    "cache_control": None,
+                    "strict": False,
+                    "type": "custom",
+                }
+                if explicit
+                else metadata
+            ),
+        }
+    ]
+
+
+class EqualityCountedTool(dict[str, object]):
+    comparisons = 0
+
+    def __eq__(self, other: object) -> bool:
+        type(self).comparisons += 1
+        return super().__eq__(other)
+
+
+def test_duplicate_tool_matching_does_not_compare_every_pair() -> None:
+    count: Final = 256
+    before: Final = tuple(EqualityCountedTool(type="function", function={"name": "Read"}) for _ in range(count))
+    after: Final = tuple(EqualityCountedTool(type="function", function={"name": "Read"}) for _ in range(count - 1))
+    EqualityCountedTool.comparisons = 0
+    assert _pair_tool_indices(before, after) == tuple((index, index) for index in range(count - 1))
+    assert EqualityCountedTool.comparisons <= count * 4
 
 
 class ToolAppendingGuardrail(CustomGuardrail):

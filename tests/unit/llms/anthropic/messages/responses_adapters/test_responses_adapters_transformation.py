@@ -889,6 +889,39 @@ class TestTranslateMessagesToResponsesInput:
 class TestTranslateToolsToResponsesAPI:
     """Anthropic tool definitions -> Responses API function tools."""
 
+    @pytest.mark.parametrize("strict", (None, False, True))
+    def test_openai_function_tool_keeps_its_name_schema_and_description(self, strict: bool | None) -> None:
+        function: Final = {
+            "name": "Read",
+            "description": "Read [MASKED] file",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            "strict": strict,
+        }
+        tools: Final[list[AllAnthropicToolsValues]] = [{"type": "function", "function": function}]
+        original: Final = copy.deepcopy(tools)
+
+        result: Final = _ADAPTER.translate_tools_to_responses_api(tools)
+
+        assert result == [{"type": "function", **function, "strict": bool(strict)}]
+        assert tools == original
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"name": "web_search", "input_schema": {"type": "object", "properties": {}}},
+            {"type": "custom", "name": "web_search", "input_schema": {"type": "object", "properties": {}}},
+        ],
+    )
+    def test_custom_tool_named_web_search_is_not_promoted_to_server_tool(self, tool: AllAnthropicToolsValues) -> None:
+        assert _ADAPTER.translate_tools_to_responses_api([tool]) == [
+            {
+                "type": "function",
+                "name": "web_search",
+                "strict": False,
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
+
     def test_regular_tool_with_description_and_schema(self):
         """Standard tool with description and input_schema is converted to function."""
         tools = [

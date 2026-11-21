@@ -477,10 +477,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _translate_tool_to_responses_api(tool_dict: Mapping[str, object]) -> dict[str, object]:
+        function: Final = as_str_mapping(tool_dict.get("function"))
+        if tool_dict.get("type") == "function" and function is not None:
+            return {**json_copy_or_original(function), "type": "function", "strict": bool(function.get("strict"))}
         tool_type: Final = tool_dict.get("type", "")
         tool_name: Final = tool_dict.get("name", "")
         # web_search tool
-        if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
+        native_web_search: Final = isinstance(tool_type, str) and tool_type.startswith("web_search")
+        if native_web_search or (tool_name == "web_search" and "input_schema" not in tool_dict):
             return {"type": "web_search_preview"}
         # Responses turns strict mode on when `strict` is omitted, silently rewriting
         # `required` to every property. Anthropic tools are non-strict unless asked.
