@@ -1,4 +1,4 @@
-use litellm_python_compat::lenient::{IsTrue, StrBool, Truthy};
+use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -71,6 +71,7 @@ pub struct GeneralSettings {
     pub max_queued_requests_per_worker: Option<u64>,
     pub admission_queue_timeout_seconds: f64,
     pub master_key: Option<SecretValue>,
+    pub litellm_license: Option<SecretValue>,
     pub database_url: Option<SecretValue>,
     pub tracing: Option<TracingSettings>,
     pub database_connection_pool_limit: Option<u64>,
@@ -78,9 +79,15 @@ pub struct GeneralSettings {
     pub database_connect_timeout: Option<f64>,
     pub database_socket_timeout: Option<f64>,
     pub database_max_idle_connection_lifetime: Option<f64>,
+    pub database_connection_pool_timeout: Option<Spelled<f64>>,
+    pub database_statement_timeout: Option<Spelled<f64>>,
+    pub database_lock_timeout: Option<Spelled<f64>>,
+    pub database_idle_in_transaction_session_timeout: Option<Spelled<f64>>,
+    #[serde_as(as = "StrBool")]
+    pub database_disable_prepared_statements: bool,
     pub max_parallel_requests: Option<u64>,
     pub global_max_parallel_requests: Option<u64>,
-    pub max_request_size_mb: Option<u64>,
+    pub max_request_size_mb: Option<f64>,
     pub max_response_size_mb: Option<u64>,
     pub proxy_config_reload_interval_seconds: u64,
     pub background_health_checks: Option<bool>,
@@ -108,6 +115,8 @@ pub struct GeneralSettings {
     pub allow_user_auth: bool,
     #[serde_as(as = "StrBool")]
     pub allow_requests_on_db_unavailable: bool,
+    #[serde_as(as = "IsTrue")]
+    pub allow_client_side_credentials: bool,
     pub public_routes: Option<RouteList>,
     pub allowed_ips: Option<Box<[String]>>,
     pub allowed_routes: Option<Box<[String]>>,
@@ -133,6 +142,7 @@ impl Default for GeneralSettings {
             max_queued_requests_per_worker: None,
             admission_queue_timeout_seconds: 1.0,
             master_key: None,
+            litellm_license: None,
             database_url: None,
             tracing: None,
             database_connection_pool_limit: Some(10),
@@ -140,6 +150,11 @@ impl Default for GeneralSettings {
             database_connect_timeout: None,
             database_socket_timeout: None,
             database_max_idle_connection_lifetime: Some(60.0),
+            database_connection_pool_timeout: None,
+            database_statement_timeout: None,
+            database_lock_timeout: None,
+            database_idle_in_transaction_session_timeout: None,
+            database_disable_prepared_statements: false,
             max_parallel_requests: None,
             global_max_parallel_requests: None,
             max_request_size_mb: None,
@@ -164,6 +179,7 @@ impl Default for GeneralSettings {
             enable_oauth2_proxy_auth: false,
             allow_user_auth: false,
             allow_requests_on_db_unavailable: false,
+            allow_client_side_credentials: false,
             public_routes: None,
             allowed_ips: None,
             allowed_routes: None,
@@ -206,6 +222,7 @@ pub struct RouterSettings {
 }
 
 /// Callback entries can carry credentials inline, so only whether they are set is printed.
+#[serde_as]
 #[derive(Clone, Default, Deserialize, Redact)]
 #[serde(default)]
 pub struct LiteLlmSettings {
@@ -218,7 +235,25 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
-    pub drop_params: Option<Spelled<bool>>,
+    #[serde_as(as = "LaxBool")]
+    pub drop_params: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub modify_params: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub enable_anthropic_prompt_caching: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub reasoning_auto_summary: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub use_chat_completions_url_for_anthropic_messages: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub route_all_chat_openai_to_responses: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub gemini_live_defer_setup: Option<bool>,
+    pub anthropic_prompt_caching_ttl: Option<String>,
+    pub model_cost_map_url: Option<SecretValue>,
+    pub blog_posts_url: Option<SecretValue>,
+    pub anthropic_beta_headers_url: Option<SecretValue>,
+    pub autorouter_presets_url: Option<SecretValue>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
@@ -240,7 +275,9 @@ pub struct LiteLlmSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::GeneralSettings;
+    use rstest::rstest;
+
+    use super::{GeneralSettings, LiteLlmSettings};
     use crate::JwtAuthSettings;
 
     #[test]
@@ -255,9 +292,34 @@ mod tests {
         assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 
+    #[rstest]
+    #[case::a_word_for_on(serde_json::json!("on"), Some(true))]
+    #[case::a_word_that_is_no_flag(serde_json::json!("banana"), None)]
+    fn a_flag_key_written_as_text_is_read_by_the_one_flag_rule(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<bool>,
+    ) {
+        let settings: LiteLlmSettings =
+            serde_json::from_value(serde_json::json!({"modify_params": written})).unwrap();
+
+        assert_eq!(settings.modify_params, expected);
+    }
+
     #[test]
     fn unset_text_flags_are_false() {
         let general: GeneralSettings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!general.allow_requests_on_db_unavailable && !general.enforce_rbac);
+    }
+
+    #[rstest]
+    #[case::int(serde_json::json!(1), 1.0)]
+    #[case::fraction(serde_json::json!(0.5), 0.5)]
+    fn a_request_size_limit_is_an_int_or_a_float(
+        #[case] limit: serde_json::Value,
+        #[case] expected: f64,
+    ) {
+        let settings: GeneralSettings =
+            serde_json::from_value(serde_json::json!({"max_request_size_mb": limit})).unwrap();
+        assert_eq!(settings.max_request_size_mb, Some(expected));
     }
 }

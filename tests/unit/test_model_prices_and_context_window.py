@@ -15,11 +15,14 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.types.utils import SearchFreeRequests
+from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
+from litellm.utils import ProviderConfigManager
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
+
+CostMap = Mapping[str, Mapping[str, JsonValue]]
 
 
 @pytest.fixture(scope="module")
@@ -101,6 +104,142 @@ def test_github_copilot_rows_derive_mode_from_their_endpoints(path: Path) -> Non
     assert {key: row.mode for key, row in rows.items()} == {
         key: "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses" for key, row in rows.items()
     }
+
+
+def _mantle_route_rows_priced_apart_from_their_provider_row(
+    prices: Mapping[str, Mapping[str, object]],
+) -> tuple[str, ...]:
+    route: Final = "bedrock/mantle/"
+    provider_rows: Final = {
+        key: prices.get(f"bedrock_mantle/{key.removeprefix(route)}") for key in prices if key.startswith(route)
+    }
+    return tuple(
+        key
+        for key, provider_row in provider_rows.items()
+        if provider_row is not None and _price_fields(prices[key]) != _price_fields(provider_row)
+    )
+
+
+def _price_fields(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {field: value for field, value in row.items() if "cost" in field}
+
+
+def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows(prices: dict) -> None:
+    assert _mantle_route_rows_priced_apart_from_their_provider_row(prices) == ()
+
+
+@pytest.mark.parametrize("model", ("anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5"))
+def test_claude_5_5_costs_the_same_on_both_govcloud_bedrock_prefixes(
+    model: str, local_model_cost_map: None, prices: dict
+) -> None:
+    litellm.register_model({f"bedrock/us-gov-west-1/{model}": prices[f"bedrock/us-gov-west-1/{model}"]})
+    litellm.register_model({f"bedrock_mantle/us-gov-west-1/{model}": prices[f"bedrock_mantle/us-gov-west-1/{model}"]})
+    tokens: Final = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
+    assert litellm.cost_per_token(model=f"bedrock/us-gov-west-1/{model}", **tokens) == litellm.cost_per_token(
+        model=f"bedrock_mantle/us-gov-west-1/{model}", **tokens
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+        ("bedrock", "ap-southeast-1", "apac.amazon.nova-lite-v1:0"),
+        ("azure", None, "us-gov/o3-mini-2025-01-31"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_region(
+    provider: str, region: str | None, model: str, local_model_cost_map: None, prices: dict
+) -> None:
+    key: Final = f"{provider}/{region}/{model}" if region is not None else f"{provider}/{model}"
+    row: Final = prices[key]
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider=provider, region_name=region, prompt_tokens=1, completion_tokens=1
+    ) == pytest.approx((row["input_cost_per_token"], row["output_cost_per_token"]))
+
+
+@pytest.mark.parametrize("service_tier", ("priority", "flex"))
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_service_tier(
+    provider: str, region: str, model: str, service_tier: str, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"{provider}/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider=provider,
+        region_name=region,
+        service_tier=service_tier,
+        prompt_tokens=1,
+        completion_tokens=1,
+    ) == pytest.approx(
+        (row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"])
+    )
+
+
+@pytest.mark.parametrize("tokens", (0, 1))
+@pytest.mark.parametrize("region", ("ap-northeast-1", "eu-north-1", "us-west-2"))
+@pytest.mark.parametrize("model", ("amazon.nova-2-5-sonic", "amazon.nova-2-sonic-v1:0"))
+def test_regional_sonic_catalog_rows_price_audio_tokens(
+    model: str, region: str, tokens: int, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"bedrock/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="bedrock",
+        region_name=region,
+        prompt_tokens=tokens,
+        completion_tokens=tokens,
+        usage_object=Usage(
+            prompt_tokens=tokens,
+            completion_tokens=tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+            completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+        ),
+    ) == pytest.approx((tokens * row["input_cost_per_audio_token"], tokens * row["output_cost_per_audio_token"]))
+
+
+@pytest.mark.parametrize("above_threshold", (False, True))
+@pytest.mark.parametrize(
+    ("model", "threshold"),
+    (
+        ("ca.anthropic.claude-haiku-5-5", 100_000),
+        ("in.openai.gpt-5.6-luna", 272_000),
+        ("in.openai.gpt-5.6-terra", 272_000),
+    ),
+)
+def test_geo_catalog_rows_price_the_declared_long_context_boundary(
+    model: str, threshold: int, above_threshold: bool, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[model]
+    prompt_tokens: Final = threshold + int(above_threshold)
+    suffix: Final = f"_above_{threshold // 1000}k_tokens" if above_threshold else ""
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider="bedrock", prompt_tokens=prompt_tokens, completion_tokens=1
+    ) == pytest.approx((prompt_tokens * row[f"input_cost_per_token{suffix}"], row[f"output_cost_per_token{suffix}"]))
+
+
+@pytest.mark.parametrize("model", ("openai.gpt-6.2-sol", "openai.gpt-6.2-astra"))
+def test_bedrock_mantle_gpt_6_2_deployments_are_served_by_the_mantle_responses_config(
+    model: str, local_model_cost_map: None
+) -> None:
+    # A proxy deployment registers its model_info under its own bedrock_mantle/ name. Without a
+    # bedrock_mantle row, that registration merges into the bedrock_converse row for the same
+    # Bedrock id, Mantle loses its Responses capability, and requests leave unsigned.
+    litellm.register_model({f"bedrock_mantle/{model}": {"litellm_provider": "bedrock_mantle", "mode": "responses"}})
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders.BEDROCK_MANTLE, model=model
+    )
+    assert isinstance(config, litellm.BedrockMantleResponsesAPIConfig)
+    assert config.get_complete_url(api_base=None, litellm_params={"aws_region_name": "us-east-1"}) == (
+        "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+    )
 
 
 def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
@@ -929,6 +1068,45 @@ def test_model_prices_backup_is_synchronized(prices: dict):
     backup: Final = json.loads(BACKUP_PRICES_PATH.read_text())
 
     assert backup == prices
+
+
+@pytest.mark.parametrize(
+    "alias,snapshot",
+    (
+        ("gpt-realtime-translate", "gpt-realtime-translate-2026-05-06"),
+        ("gpt-realtime-whisper", "gpt-realtime-whisper-2026-05-06"),
+        ("gpt-realtime-2.1", "gpt-realtime-2.1-2026-07-07"),
+        ("gpt-realtime-2.1-mini", "gpt-realtime-2.1-mini-2026-07-07"),
+        ("gpt-6.1-terra", "us/gpt-6.1-terra"),
+        ("gpt-6.1-terra", "eu/gpt-6.1-terra"),
+        ("gpt-6.1-terra", "apac/gpt-6.1-terra"),
+    ),
+)
+def test_azure_aliases_and_model_variants_retire_together(prices: CostMap, alias: str, snapshot: str) -> None:
+    assert prices[f"azure/{alias}"]["deprecation_date"] == prices[f"azure/{snapshot}"]["deprecation_date"]
+
+
+def test_gmi_gemini_hydrogen_bills_at_its_hosted_rates(prices: CostMap, local_model_cost_map: None) -> None:
+    model: Final = "gmi/google/gemini-4-hydrogen"
+    row: Final = prices[model]
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model,
+        usage_object=Usage(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40, cache_write_tokens=10),
+        ),
+    )
+
+    expected_input: Final = (
+        50 * TypeAdapter(float).validate_python(row["input_cost_per_token"])
+        + 10 * TypeAdapter(float).validate_python(row["cache_creation_input_token_cost"])
+        + 40 * TypeAdapter(float).validate_python(row["cache_read_input_token_cost"])
+    )
+    expected_output: Final = 20 * TypeAdapter(float).validate_python(row["output_cost_per_token"])
+    assert (prompt_cost, completion_cost) == pytest.approx((expected_input, expected_output))
 
 
 def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:

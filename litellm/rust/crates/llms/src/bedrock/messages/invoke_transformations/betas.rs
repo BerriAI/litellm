@@ -10,7 +10,7 @@ use crate::{
     base_llm::{auth::Headers, messages::context::MessagesModelCapabilities},
 };
 
-use super::request::Body;
+use super::request::{Body, InvokeRequestSettings};
 
 const PER_TURN_CONTROL: &str = "per-turn-control-2026-07-01";
 const DANGEROUS_TOOL_USE: &str = "dangerous-tool-use-2026-09-03";
@@ -27,7 +27,7 @@ const TOOL_SEARCH_TYPES: [&str; 2] = [
     "tool_search_tool_regex_20251119",
     "tool_search_tool_bm25_20251119",
 ];
-const CONTEXT_MANAGEMENT_EDIT_BETAS: [(&str, &str); 2] = [
+pub(crate) const BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDITS: [(&str, &str); 2] = [
     ("compact_20260112", "compact-2026-01-12"),
     ("clear_tool_uses_20250919", "context-management-2025-06-27"),
 ];
@@ -38,12 +38,12 @@ const COMPUTER_TOOL_BETAS: [(&str, &str); 3] = [
 ];
 const OPUS_4_5_EFFORT_PATTERNS: [&str; 2] = ["opus-4-5", "opus_4_5"];
 
-fn on_bedrock(beta: &str) -> Option<String> {
+fn on_provider(beta: &str, provider: BetaProvider) -> Option<String> {
     on_loaded_config(
         &beta
             .parse::<AnthropicBeta>()
             .unwrap_or_else(|never| match never {}),
-        BetaProvider::Bedrock,
+        provider,
     )
     .map(|beta| beta.as_str().to_string())
 }
@@ -163,7 +163,7 @@ fn eager_input_streaming_used(tools: &[Value]) -> Result<bool, Error> {
 }
 
 fn effort_used(params: &Body, model: &str, capabilities: &MessagesModelCapabilities) -> bool {
-    if params.is_empty() || capabilities.supports_adaptive_thinking {
+    if params.is_empty() || capabilities.bedrock.supports_adaptive_thinking {
         return false;
     }
     let lowered = model.to_lowercase();
@@ -220,7 +220,11 @@ fn carries_signed_compaction_block(messages: &[Value]) -> bool {
 }
 
 /// Port of Python's `_filter_context_management_for_bedrock_invoke`.
-fn filter_context_management_for_bedrock_invoke(body: &mut Body, betas: &mut BTreeSet<String>) {
+fn filter_context_management_for_bedrock_invoke(
+    body: &mut Body,
+    betas: &mut BTreeSet<String>,
+    supported: &[(&str, &'static str)],
+) {
     let Some(Value::Object(context_management)) = body.get("context_management") else {
         return;
     };
@@ -232,7 +236,7 @@ fn filter_context_management_for_bedrock_invoke(body: &mut Body, betas: &mut BTr
         .iter()
         .filter_map(|edit| {
             let edit_type = edit.as_object()?.get("type")?.as_str()?;
-            CONTEXT_MANAGEMENT_EDIT_BETAS
+            supported
                 .iter()
                 .find(|(supported, _)| *supported == edit_type)
                 .map(|(_, beta)| (edit.clone(), *beta))
@@ -341,9 +345,14 @@ pub(super) fn get_bedrock_invoke_anthropic_beta_headers(
     model: &str,
     capabilities: &MessagesModelCapabilities,
     injected_thinking: bool,
+    settings: &InvokeRequestSettings,
 ) -> Result<(Vec<String>, Headers), Error> {
     let keep = model_specific_anthropic_betas(capabilities);
-    let headers = update_headers_with_filtered_beta(headers, &keep);
+    let headers = if settings.filters_caller_betas {
+        update_headers_with_filtered_beta(headers, &keep)
+    } else {
+        headers
+    };
     let user = user_betas(&headers);
     let mut betas = user.clone();
     let outgoing_tools = tools(body.get("tools")).to_vec();
@@ -367,10 +376,14 @@ pub(super) fn get_bedrock_invoke_anthropic_beta_headers(
         .is_some_and(|safeguards| !safeguards.is_null())
     {
         betas.insert(DANGEROUS_TOOL_USE.into());
-    } else {
+    } else if settings.drops_dangerous_tool_use_beta_without_safeguards {
         betas.remove(DANGEROUS_TOOL_USE);
     }
-    filter_context_management_for_bedrock_invoke(body, &mut betas);
+    filter_context_management_for_bedrock_invoke(
+        body,
+        &mut betas,
+        settings.context_management_edits,
+    );
     add_compaction_beta_for_bedrock_invoke(body, &messages, &mut betas);
     let tool_search_used = outgoing_tools
         .iter()
@@ -388,12 +401,15 @@ pub(super) fn get_bedrock_invoke_anthropic_beta_headers(
     let model_supported = user.iter().filter(|beta| keep.contains(beta.as_str()));
     let filtered: BTreeSet<String> = betas
         .iter()
-        .filter_map(|beta| on_bedrock(beta))
+        .filter_map(|beta| on_provider(beta, settings.beta_headers_provider))
         .chain(model_supported.cloned())
         .collect();
     let dropped: Vec<&String> = user
         .iter()
-        .filter(|beta| !keep.contains(beta.as_str()) && on_bedrock(beta).is_none())
+        .filter(|beta| {
+            !keep.contains(beta.as_str())
+                && on_provider(beta, settings.beta_headers_provider).is_none()
+        })
         .collect();
     if !dropped.is_empty() {
         litellm_tracing::warn!(

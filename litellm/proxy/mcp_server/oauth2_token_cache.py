@@ -233,7 +233,7 @@ _compute_per_user_token_ttl: Final = compute_per_user_token_ttl
 class MCPPerUserTokenCache:
     """Redis-backed cache for per-user OAuth2 access tokens.
 
-    Uses LiteLLM's existing ``user_api_key_cache`` (DualCache with optional
+    Uses the proxy's ``mcp_state_cache`` (DualCache with optional
     Redis backend).  Tokens are NaCl-encrypted with ``encrypt_value_helper``
     before storage so they are safe at rest in Redis.
 
@@ -257,10 +257,10 @@ class MCPPerUserTokenCache:
     @with_service_target(MCP_OAUTH_TOKENS_TARGET)
     async def get_token(self, user_id: str, server_id: str) -> OAuthToken | None:
         try:
-            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+            from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
 
             key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = _CACHED_TOKEN.validate_python(await user_api_key_cache.async_get_cache(key))
+            encrypted: Final = _CACHED_TOKEN.validate_python(await mcp_state_cache.async_get_cache(key))
             if not isinstance(encrypted, str):
                 return None
             return self._codec().decode(encrypted)
@@ -284,13 +284,13 @@ class MCPPerUserTokenCache:
     ) -> None:
         """Store NaCl-encrypted access_token in Redis with the given TTL."""
         try:
-            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+            from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
 
             key: Final = self._cache_key(user_id, server_id)
             encrypted: Final = self._codec().encode(
                 OAuthToken(access_token=access_token, identity_binding_proof=identity_binding_proof)
             )
-            await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
+            await mcp_state_cache.async_set_cache(key, encrypted, ttl=ttl)
             verbose_logger.debug(
                 "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",
                 user_id,
@@ -309,12 +309,12 @@ class MCPPerUserTokenCache:
         """Invalidate the cached token in Redis, here, and in every peer worker's in-memory layer."""
         try:
             from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (  # noqa: PLC0415  # proxy import cycle
-                evict_and_broadcast,
+                evict_state_and_broadcast,
             )
-            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+            from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
 
             key: Final = self._cache_key(user_id, server_id)
-            await evict_and_broadcast((key,), user_api_key_cache)
+            await evict_state_and_broadcast((key,), mcp_state_cache)
         except Exception as exc:
             verbose_logger.debug(
                 "MCPPerUserTokenCache.delete failed for user=%s server=%s: %s",
