@@ -53,6 +53,11 @@ class PostHogLogKwargs(TypedDict, total=False):
 
 
 class PostHogLogger(CustomBatchLogger):
+    # Don't silently drop events when async_send_batch fails/raises: keep
+    # them in log_queue so CustomBatchLogger.flush_queue retries them on
+    # the next flush (bounded by CustomBatchLogger.max_queue_size).
+    preserve_events_added_during_flush = True
+
     def __init__(self, **kwargs):
         """
         Initializes the PostHog logger, checks if the correct env variables are set
@@ -329,41 +334,80 @@ class PostHogLogger(CustomBatchLogger):
             "standard_callback_dynamic_params", None
         )
 
+        # Defaults. These are always plain strings (validated in __init__),
+        # so the (api_key, api_url) tuple is always hashable -- required
+        # since it's used as a dict key when grouping log_queue entries for
+        # batch sending in async_send_batch.
+        api_key: str | None = self.POSTHOG_API_KEY
+        api_url: str | None = self.posthog_host
+
         if standard_callback_dynamic_params is not None:
-            api_key = standard_callback_dynamic_params.get("posthog_api_key") or self.POSTHOG_API_KEY
-            api_url = standard_callback_dynamic_params.get("posthog_api_url") or self.posthog_host
-        else:
-            api_key = self.POSTHOG_API_KEY
-            api_url = self.posthog_host
+            override_api_key = standard_callback_dynamic_params.get("posthog_api_key")
+            override_api_url = standard_callback_dynamic_params.get("posthog_api_url")
+
+            if isinstance(override_api_key, str) and override_api_key:
+                api_key = override_api_key
+            elif override_api_key is not None:
+                verbose_logger.warning(
+                    "PostHog: ignoring non-string posthog_api_key override (type %s); "
+                    "falling back to default credentials",
+                    type(override_api_key).__name__,
+                )
+
+            if isinstance(override_api_url, str) and override_api_url:
+                api_url = override_api_url
+            elif override_api_url is not None:
+                verbose_logger.warning(
+                    "PostHog: ignoring non-string posthog_api_url override (type %s); "
+                    "falling back to default credentials",
+                    type(override_api_url).__name__,
+                )
 
         return api_key, api_url
 
     async def async_send_batch(self):
         """
-        Sends the in memory logs queue to PostHog API
+        Sends the in memory logs queue to PostHog API, grouped by
+        credentials (one tenant's PostHog project may differ from
+        another's via per-request dynamic params).
+
+        Each credential group is sent independently: a group that sends
+        successfully has its events removed from ``log_queue`` right away,
+        regardless of whether other groups fail. This isolates failures so
+        one tenant's bad/unreachable PostHog project can't block delivery
+        of other tenants' events.
+
+        If any group failed, this re-raises after every group has been
+        attempted, so ``CustomBatchLogger.flush_queue`` preserves the
+        still-queued (failed) events and retries them on the next flush,
+        instead of silently dropping them.
 
         Raises:
-            Raises a NON Blocking verbose_logger.exception if an error occurs
+            Exception: if at least one credential group failed to send.
         """
-        try:
-            if not self.log_queue:
-                return
+        if not self.log_queue:
+            return
 
-            verbose_logger.debug("PostHog: Sending batch of %s events", len(self.log_queue))
+        verbose_logger.debug("PostHog: Sending batch of %s events", len(self.log_queue))
 
-            if self.is_mock_mode:
-                verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
+        if self.is_mock_mode:
+            verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
 
-            # Group events by credentials for batch sending
-            batches_by_credentials: Final[dict[tuple[str, str], list[PostHogEventPayload]]] = {}
-            for item in self.log_queue:
-                key = (item["api_key"], item["api_url"])
-                if key not in batches_by_credentials:
-                    batches_by_credentials[key] = []
-                batches_by_credentials[key].append(item["event"])
+        # Group events by credentials for batch sending. Credentials here
+        # are always validated strings (see _get_credentials_for_request),
+        # so this tuple key is always hashable.
+        batches_by_credentials: Final[dict[tuple[str, str], list[dict]]] = {}
+        for item in self.log_queue:
+            key = (item["api_key"], item["api_url"])
+            batches_by_credentials.setdefault(key, []).append(item)
 
-            # Send each batch to its respective PostHog instance
-            for (api_key, api_url), events in batches_by_credentials.items():
+        succeeded_items: list[dict] = []
+        errors: list[Exception] = []
+
+        # Send each batch to its respective PostHog instance.
+        for (api_key, api_url), items in batches_by_credentials.items():
+            events = [item["event"] for item in items]
+            try:
                 headers = {
                     "Content-Type": "application/json",
                 }
@@ -383,12 +427,29 @@ class PostHogLogger(CustomBatchLogger):
                         f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
                     )
 
-            if self.is_mock_mode:
-                verbose_logger.debug("[POSTHOG MOCK] Batch of %s events successfully mocked", len(self.log_queue))
-            else:
-                verbose_logger.debug("PostHog: Batch of %s events successfully sent", len(self.log_queue))
-        except Exception as e:
-            verbose_logger.exception("PostHog Error sending batch API - %s", e)
+                if self.is_mock_mode:
+                    verbose_logger.debug("[POSTHOG MOCK] Batch of %s events successfully mocked", len(events))
+                else:
+                    verbose_logger.debug("PostHog: Batch of %s events successfully sent", len(events))
+
+                succeeded_items.extend(items)
+            except Exception as e:
+                verbose_logger.exception("PostHog Error sending batch API for one credential group - %s", e)
+                errors.append(e)
+
+        if succeeded_items:
+            # Remove exactly the items that were just sent, by identity --
+            # never by value -- so we don't disturb events that were
+            # concurrently appended to log_queue while this flush was in
+            # flight, or events belonging to a credential group that failed.
+            succeeded_ids = {id(item) for item in succeeded_items}
+            self.log_queue[:] = [item for item in self.log_queue if id(item) not in succeeded_ids]
+
+        if errors:
+            raise Exception(
+                f"PostHog: {len(errors)} of {len(batches_by_credentials)} credential group(s) "
+                f"failed to send (first error: {errors[0]})"
+            )
 
     def _ensure_async_setup(self):
         if not self._async_initialized:
