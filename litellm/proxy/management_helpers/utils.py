@@ -719,7 +719,7 @@ def _delete_customer_id_from_cache(kwargs):
 
 
 async def send_management_endpoint_alert(
-    request_kwargs: dict,
+    request_kwargs: dict[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     function_name: str,
 ):

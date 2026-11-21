@@ -3195,6 +3195,7 @@ async def get_user_object(
         if _response is None and user_id_upsert:
             from litellm.proxy.management_endpoints.internal_user_endpoints import (
                 add_new_user_to_default_team,
+                announce_user_created_at_sign_in,
                 check_if_default_team_set,
             )
             from litellm.proxy.management_helpers.utils import initial_budget_windows_json
@@ -3236,6 +3237,8 @@ async def get_user_object(
                     teams=default_teams,
                     prisma_client=prisma_client,
                 )
+            if inserted.created:
+                asyncio.create_task(announce_user_created_at_sign_in(inserted.user))
             _response = inserted.user
         elif _response is None:
             if should_check_db:
