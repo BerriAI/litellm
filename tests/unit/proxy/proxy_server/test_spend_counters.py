@@ -1296,7 +1296,7 @@ def _cache_end_user_spend(
     spend: float,
     in_flight: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
-    cache, _ = shared_cache(_SharedAuthRoundTrip({end_user_cache_key(end_user_id): {"spend": spend}}, in_flight))
+    cache, _ = shared_cache(_SharedAuthRoundTrip({f"end_user_id:{end_user_id}": {"spend": spend}}, in_flight))
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
 
 
@@ -1315,7 +1315,7 @@ async def test_ensure_spend_counter_initialized_overlapping_cold_seeds_hold_the_
     await asyncio.gather(
         *(
             ps._ensure_spend_counter_initialized(
-                counter_key=f"spend:end_user:{end_user_id}", source_cache_key=end_user_cache_key(end_user_id)
+                counter_key=f"spend:end_user:{end_user_id}", source_cache_key=AuthObject.end_user(end_user_id)
             )
             for _ in range(5)
         )
@@ -1337,7 +1337,7 @@ async def test_ensure_spend_counter_initialized_cold_seed_keeps_the_cached_spend
     monkeypatch.setattr(ps, "prisma_client", None)
 
     await ps._ensure_spend_counter_initialized(
-        counter_key="spend:end_user:charged-first", source_cache_key=end_user_cache_key("charged-first")
+        counter_key="spend:end_user:charged-first", source_cache_key=AuthObject.end_user("charged-first")
     )
 
     assert spend.redis == {"spend:end_user:charged-first": 6.0}
@@ -1353,7 +1353,7 @@ async def test_ensure_spend_counter_initialized_cold_seed_raises_when_redis_fail
 
     with pytest.raises(NativeRedisStoreError, match="transport"):
         await ps._ensure_spend_counter_initialized(
-            counter_key="spend:end_user:redis-down", source_cache_key=end_user_cache_key("redis-down")
+            counter_key="spend:end_user:redis-down", source_cache_key=AuthObject.end_user("redis-down")
         )
 
     assert spend.redis == {}
@@ -1369,7 +1369,7 @@ async def test_ensure_spend_counter_initialized_cold_seed_increments_when_redis_
     monkeypatch.setattr(ps, "prisma_client", None)
 
     await ps._ensure_spend_counter_initialized(
-        counter_key="spend:end_user:no-lua", source_cache_key=end_user_cache_key("no-lua")
+        counter_key="spend:end_user:no-lua", source_cache_key=AuthObject.end_user("no-lua")
     )
 
     assert spend.redis == {"spend:end_user:no-lua": 6.0}
@@ -1385,7 +1385,7 @@ async def test_ensure_spend_counter_initialized_cold_seed_does_not_increment_whe
 
     with pytest.raises(NativeRedisStoreError, match="timeout"):
         await ps._ensure_spend_counter_initialized(
-            counter_key="spend:end_user:slow-redis", source_cache_key=end_user_cache_key("slow-redis")
+            counter_key="spend:end_user:slow-redis", source_cache_key=AuthObject.end_user("slow-redis")
         )
 
     assert spend.redis == {}

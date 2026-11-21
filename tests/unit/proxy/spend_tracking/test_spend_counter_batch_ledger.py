@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import litellm.proxy.proxy_server as ps
+from litellm.redis.stores.auth_cache import AuthObject
 from tests.unit.proxy.spend_counters_ledger_twin import (
     RedisCalls,
     force_ledger_windows,
@@ -92,7 +93,7 @@ class _CachedSpend:
     def __init__(self, spend: float) -> None:
         self.spend: Final = spend
 
-    async def async_get_cache(self, key: str, **_: object) -> object:
+    async def async_get_cache(self, key: object, **_: object) -> object:
         return {"spend": self.spend}
 
 
@@ -104,7 +105,7 @@ async def test_cold_seed_whose_reply_is_lost_leaves_no_counter_in_redis(monkeypa
 
     with rust_redis_store(monkeypatch, redis, socket_timeout=0.5):
         with pytest.raises(Exception, match="timeout"):
-            await ps._ensure_spend_counter_initialized(counter_key="spend:end_user:eu", source_cache_key="eu")
+            await ps._ensure_spend_counter_initialized(counter_key="spend:end_user:eu", source_cache_key=AuthObject.end_user("eu"))
 
     assert redis.count("EVAL") == 1
     assert "spend:end_user:eu" not in redis.values
