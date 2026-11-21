@@ -1,8 +1,9 @@
 import asyncio, importlib, os, uuid
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from itertools import chain
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -27,7 +28,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, ModelInfo, Usage
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
@@ -1885,6 +1886,361 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
         None,
     ]
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+GEMINI_THOUGHT_IMAGE_MODEL_URL: Final = (
+    r"https://generativelanguage\.googleapis\.com/v1\w+/models/gemini-3\.1-flash-image"
+)
+GEMINI_THOUGHT_IMAGE_PARTS: Final = [
+    {"text": "Sketching the layout first", "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "ZmluYWw="}, "thoughtSignature": "c2ln"},
+]
+GEMINI_THOUGHT_TEXT_BLOCK: Final = {"type": "thinking", "thinking": "Sketching the layout first"}
+GEMINI_FINAL_IMAGE: Final = {
+    "image_url": {"url": "data:image/png;base64,ZmluYWw=", "detail": "auto"},
+    "index": 0,
+    "type": "image_url",
+    "provider_specific_fields": {"thought_signature": "c2ln"},
+}
+GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS: Final = [
+    {"text": "Sketching the layout first", "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "Zmlyc3Q="}, "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True},
+]
+GEMINI_LAST_THOUGHT_IMAGE: Final = {
+    "image_url": {"url": "data:image/png;base64,ZHJhZnQ=", "detail": "auto"},
+    "index": 0,
+    "type": "image_url",
+}
+GEMINI_TRUNCATED_USAGE: Final = {"promptTokenCount": 13, "candidatesTokenCount": 64, "totalTokenCount": 77}
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamFailsAfter(httpx.SyncByteStream, httpx.AsyncByteStream):
+    body: bytes
+    error: Exception
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.body
+        raise self.error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.body
+        raise self.error
+
+
+def _chunks_until_error(stream: litellm.CustomStreamWrapper) -> Iterator[ModelResponseStream | Exception]:
+    try:
+        yield from stream
+    except Exception as e:
+        yield e
+
+
+async def _async_chunks_until_error(
+    stream: litellm.CustomStreamWrapper,
+) -> AsyncIterator[ModelResponseStream | Exception]:
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as e:
+        yield e
+
+
+async def _read_gemini_image_stream(sync: bool) -> tuple[tuple[ModelResponseStream, ...], Exception | None]:
+    messages: Final = [{"role": "user", "content": "Draw a window"}]
+    response: Final = (
+        litellm.completion(
+            model="gemini/gemini-3.1-flash-image", messages=messages, max_tokens=64, stream=True, api_key="test-api-key"
+        )
+        if sync
+        else await litellm.acompletion(
+            model="gemini/gemini-3.1-flash-image", messages=messages, max_tokens=64, stream=True, api_key="test-api-key"
+        )
+    )
+    assert isinstance(response, litellm.CustomStreamWrapper)
+    items: Final = (
+        tuple(_chunks_until_error(response))
+        if sync
+        else tuple([item async for item in _async_chunks_until_error(response)])
+    )
+    return (
+        tuple(item for item in items if isinstance(item, ModelResponseStream)),
+        next((item for item in items if isinstance(item, Exception)), None),
+    )
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_leaves_thought_images_out_of_images_and_thinking_blocks(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"role": "model", "parts": GEMINI_THOUGHT_IMAGE_PARTS}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1290, "totalTokenCount": 1303},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].message.images == [GEMINI_FINAL_IMAGE]
+    assert response.choices[0].message.reasoning_content == "Sketching the layout first"
+    assert response.choices[0].message.thinking_blocks == [GEMINI_THOUGHT_TEXT_BLOCK]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_leaves_thought_images_out_of_images(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(
+            *(
+                {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                for part in GEMINI_THOUGHT_IMAGE_PARTS
+            ),
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}
+                ],
+                "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1290, "totalTokenCount": 1303},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
+
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_FINAL_IMAGE]
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_cut_off_before_final_image_returns_last_thought_image(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS},
+                        "finishReason": "MAX_TOKENS",
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        max_tokens=64,
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.images == [GEMINI_LAST_THOUGHT_IMAGE]
+
+
+@pytest.mark.parametrize(
+    ("events", "finish_reason"),
+    [
+        pytest.param(
+            (
+                *(
+                    {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+                ),
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": "", "thoughtSignature": "c2ln"}]},
+                            "finishReason": "MAX_TOKENS",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": GEMINI_TRUNCATED_USAGE,
+                },
+            ),
+            "length",
+            id="finish-in-its-own-chunk",
+        ),
+        pytest.param(
+            (
+                *(
+                    {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS[:-1]
+                ),
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS[-1:]},
+                            "finishReason": "MAX_TOKENS",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": GEMINI_TRUNCATED_USAGE,
+                },
+            ),
+            "length",
+            id="finish-with-the-last-thought-image",
+        ),
+        pytest.param(
+            tuple(
+                {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+            ),
+            "stop",
+            id="stream-ends-without-a-finish-reason",
+        ),
+    ],
+)
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_last_thought_image(
+    respx_mock: respx.MockRouter,
+    events: tuple[dict[str, object], ...],
+    finish_reason: str,
+    sync: bool,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(*({**event, "responseId": "gemini-response"} for event in events))
+    )
+
+    chunks, error = await _read_gemini_image_stream(sync)
+
+    assert error is None
+    assert {chunk.id for chunk in chunks} == {"gemini-response"}
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [finish_reason]
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_LAST_THOUGHT_IMAGE]
+    ]
+
+
+@pytest.mark.parametrize(
+    "stream_error",
+    [httpx.ReadError("connection dropped"), ValueError("connection dropped")],
+    ids=["connection-dropped", "unreadable-chunk"],
+)
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_dropped_after_thought_image_sends_it_before_failing(
+    respx_mock: respx.MockRouter,
+    sync: bool,
+    stream_error: Exception,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_StreamFailsAfter(
+                "".join(
+                    f"data: {json.dumps({'candidates': [{'content': {'role': 'model', 'parts': [part]}, 'index': 0}]})}\r\n\r\n"
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+                ).encode(),
+                stream_error,
+            ),
+        )
+    )
+
+    chunks, error = await _read_gemini_image_stream(sync)
+
+    assert error is not None and "connection dropped" in str(error)
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_LAST_THOUGHT_IMAGE]
+    ]
+
+
+@pytest.mark.parametrize("native_finish_reason", ["IMAGE_SAFETY", "IMAGE_RECITATION", "NO_IMAGE"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_blocked_before_final_image_sends_no_thought_image(
+    respx_mock: respx.MockRouter,
+    native_finish_reason: str,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(
+            *(
+                {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+            ),
+            {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": ""}]},
+                        "finishReason": native_finish_reason,
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["content_filter"]
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == []
+
+
+@pytest.mark.parametrize("native_finish_reason", ["IMAGE_RECITATION", "NO_IMAGE"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_blocked_before_final_image_returns_no_thought_image(
+    respx_mock: respx.MockRouter,
+    native_finish_reason: str,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS},
+                        "finishReason": native_finish_reason,
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].finish_reason == "content_filter"
+    assert not getattr(response.choices[0].message, "images", None)
 
 
 @pytest.mark.respx(assert_all_called=True)
