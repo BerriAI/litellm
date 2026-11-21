@@ -1271,6 +1271,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
+        self._stream_success_refused: bool = False
         self._holding_stream_failure: bool = False
         self._held_stream_failure: Exception | None = None
         self._stash_owed_on_success: bool = False
@@ -3474,6 +3475,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         self._stream_failure_claimed = True
         return True
+
+    def refuse_stream_success(self) -> None:
+        """A post-call hook refused this stream, so its failure log is its only spend row and a success log the
+        stream bills later, at teardown, is dropped."""
+        self._stream_success_refused = True
+
+    @property
+    def stream_success_refused(self) -> bool:
+        return self._stream_success_refused
 
     def served_round(self, response: object) -> ServedRound | None:
         usage: Final = get_usage_object(completion_response=response)

@@ -816,6 +816,25 @@ async def _without_token_id_only_chunks(response: AsyncIterable[object]) -> Asyn
         yield chunk
 
 
+def _is_native_messages_stream(response: object) -> bool:
+    from litellm.litellm_core_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
+    from litellm.llms.anthropic.messages.native.streaming_iterator import AnthropicMessagesStreamingResponse
+
+    unwrapped: Final = response.inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
+    return isinstance(unwrapped, AnthropicMessagesStreamingResponse)
+
+
+class _ReadBytesTap:
+    def __init__(self) -> None:
+        self.read: Final[list[bytes]] = []  # mutable-ok: appended while the stream is read
+
+    async def tap(self, stream: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+        async for chunk in stream:
+            if isinstance(chunk, bytes):
+                self.read.append(chunk)
+            yield chunk
+
+
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
     return all(_pipeline_step_streams_live(step) for step in _pipeline_steps(pipelines))
 
@@ -5298,7 +5317,9 @@ class ProxyLogging:
         )
         if drops_token_ids:
             _drop_built_stream_token_ids(request_data)
-        current_response = _without_token_id_only_chunks(response) if drops_token_ids else response
+        read_tap: Final = _ReadBytesTap() if _is_native_messages_stream(response) else None  # pyright: ignore[reportUnknownArgumentType]  # the hook's response parameter is untyped
+        source: Final = response if read_tap is None else read_tap.tap(response)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # the hook's response parameter is untyped
+        current_response = _without_token_id_only_chunks(source) if drops_token_ids else source
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in running_overrides:
             effective_kind = (
@@ -5367,7 +5388,10 @@ class ProxyLogging:
             raise
         except Exception as e:
             await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-            if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+            refused_native: Final = read_tap is not None and await ProxyLogging._refuse_native_messages_stream(
+                request_data, e, tuple(read_tap.read)
+            )
+            if not refused_native and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
             raise
 
@@ -5719,6 +5743,40 @@ class ProxyLogging:
                 return False
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
+        return True
+
+    @staticmethod
+    async def _refuse_native_messages_stream(
+        request_data: Mapping[str, object], error: Exception, read: tuple[bytes, ...]
+    ) -> bool:
+        """Drop the success log of a native /v1/messages stream that ends in an error ``post_call_failure_hook`` logs
+        as a failure, parked or still to come at teardown, and bill the bytes it read on the failure row instead.
+        Returns False when another parked dispatch shape still has to be discarded or flushed by the caller."""
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if not isinstance(logging_obj, Logging) or not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
+            return False
+        parked_args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        match parked_args:
+            case (parked,) if asyncio.iscoroutine(parked):
+                parked.close()
+            case None:
+                pass
+            case _:
+                return False
+        logging_obj.refuse_stream_success()
+        logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        pricing_request: Final[Mapping[str, object]] = (
+            {"speed": request_data["speed"]} if "speed" in request_data else {}
+        )
+        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+            litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=read
+        )
         return True
 
     async def arelease_max_parallel_requests(

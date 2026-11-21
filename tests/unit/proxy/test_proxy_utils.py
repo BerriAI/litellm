@@ -3886,3 +3886,134 @@ async def test_streams_wait_for_their_served_output_once_background_rebuilds_hit
             await asyncio.sleep(0.01)
 
     await asyncio.wait_for(every_stream_recorded(), timeout=10)
+
+
+def _native_messages_sse(input_tokens: int, output_tokens: int) -> tuple[bytes, ...]:
+    def event(name: str, payload: dict) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    message: Final = {"id": "msg_refused", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5"}
+    return (
+        event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {**message, "content": [], "usage": {"input_tokens": input_tokens, "output_tokens": 1}},
+            },
+        ),
+        event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+        event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Call 212-555-0187"}},
+        ),
+        event("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        event(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": output_tokens}},
+        ),
+        event("message_stop", {"type": "message_stop"}),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frames_read", [None, 3], ids=["refused_at_end", "refused_mid_stream"])
+async def test_refused_native_messages_stream_logs_one_failure_billed_with_the_upstream_usage(monkeypatch, frames_read):
+    from litellm.caching.caching import DualCache
+    from litellm.exceptions import GuardrailRaisedException
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
+        GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+        AnthropicMessagesStreamingResponse,
+    )
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    class RefusingGuard(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            read = 0
+            async for _ in response:
+                read += 1
+                if read == frames_read:
+                    break
+            raise GuardrailRaisedException(guardrail_name="pii-output", message="Blocked entity detected")
+            yield
+
+    class SpendRows(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows: list[tuple[str, int, int, float]] = []
+
+        def _row(self, status: str, kwargs: dict) -> tuple[str, int, int, float]:
+            payload: Final = kwargs["standard_logging_object"]
+            return status, payload["prompt_tokens"], payload["completion_tokens"], payload["response_cost"]
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.rows.append(self._row("success", kwargs))
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.rows.append(self._row("failure", kwargs))
+
+    monkeypatch.setattr(litellm, "callbacks", [RefusingGuard()])
+    spend_rows: Final = SpendRows()
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "Repeat my phone number"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="refused-native-stream",
+        function_id="refused-native-stream",
+        dynamic_async_success_callbacks=[spend_rows],
+        dynamic_async_failure_callbacks=[spend_rows],
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5",
+        user="",
+        optional_params={},
+        litellm_params={"api_base": "", "custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    frames: Final = _native_messages_sse(input_tokens=30, output_tokens=20)
+    started: Final = datetime.now()
+
+    def success_logging(read: tuple[bytes, ...]):
+        return PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+            url_route="/v1/messages",
+            request_body={"model": "claude-sonnet-4-5"},
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=started,
+            raw_bytes=list(read),
+            end_time=datetime.now(),
+        )
+
+    async def run_parked(parked) -> None:
+        await parked
+
+    async def upstream():
+        for frame in frames:
+            yield frame
+        logging_obj._deferred_stream_complete_args = (success_logging(frames),)
+
+    logging_obj._on_deferred_stream_complete = run_parked
+    guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=AnthropicMessagesStreamingResponse(completion_stream=upstream(), hidden_params={}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+        request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
+    )
+
+    with pytest.raises(GuardrailRaisedException) as refusal:
+        _ = [chunk async for chunk in guarded]
+    if frames_read is not None:
+        await success_logging(frames[:frames_read])
+    for _ in range(10):
+        await asyncio.sleep(0)
+    await logging_obj.async_failure_handler(refusal.value, "", started, datetime.now())
+
+    assert [row[:2] for row in spend_rows.rows] == [("failure", 30)]
+    _, _, completion_tokens, response_cost = spend_rows.rows[0]
+    assert completion_tokens == 20 if frames_read is None else completion_tokens >= 1
+    assert response_cost > 0
