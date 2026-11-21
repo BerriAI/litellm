@@ -5,7 +5,7 @@ use litellm_secret_value::SecretValue;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::authn::jwt::is_jwt;
+use crate::{Error, authn::jwt::is_jwt};
 
 const VIRTUAL_KEY_PREFIX: &str = "sk-";
 
@@ -40,18 +40,24 @@ impl Token {
     }
 
     #[cfg(not(feature = "fips"))]
-    pub fn hash(&self) -> KeyHash {
-        KeyHash(format!("{:x}", Sha256::digest(self.expose().as_bytes())))
+    pub fn hash(&self) -> Result<KeyHash, Error> {
+        Ok(KeyHash(format!(
+            "{:x}",
+            Sha256::digest(self.expose().as_bytes())
+        )))
     }
 
+    /// The SHA-256 from OpenSSL, which fails when no loaded provider serves it.
     #[cfg(feature = "fips")]
-    pub fn hash(&self) -> KeyHash {
+    pub fn hash(&self) -> Result<KeyHash, Error> {
         let digest = openssl::hash::hash(
             openssl::hash::MessageDigest::sha256(),
             self.expose().as_bytes(),
         )
-        .expect("OpenSSL serves SHA-256");
-        KeyHash(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+        .map_err(|error| Error::Hash(litellm_error::Source::new(error)))?;
+        Ok(KeyHash(
+            digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+        ))
     }
 
     pub(crate) fn masked(&self) -> String {
@@ -145,7 +151,10 @@ mod tests {
         "39733fedd08389c527695749573f585ae204d740c0adbbff5787fd694692e863"
     )]
     fn hashes_with_sha256(#[case] token: &str, #[case] expected: &str) {
-        assert_eq!(Token::new(token).hash().as_str(), expected);
+        assert_eq!(
+            Token::new(token).hash().map(|hash| hash.0),
+            Ok(expected.to_owned())
+        );
     }
 
     #[rstest]

@@ -4128,6 +4128,7 @@ dependencies = [
  "jiff",
  "jsonwebtoken",
  "litellm-config",
+ "litellm-error",
  "litellm-fnmatch",
  "litellm-python-compat",
  "litellm-secret-value",

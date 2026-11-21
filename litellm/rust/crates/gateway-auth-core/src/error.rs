@@ -1,6 +1,8 @@
 mod jwt;
 mod key;
 
+use litellm_error::Source;
+
 pub use jwt::{
     AgentIdentityFailure, AssertionRejection, ClaimDenial, JwtDenial, KeyError, KeyFailure,
     ModelAccessDenied, RbacDenial, Searched, TeamDenial, TokenError, VerifyDenial,
@@ -25,6 +27,9 @@ pub enum Error {
     /// A host step raised. The host keeps that failure and surfaces it, so the core never renders this.
     #[error("the auth host failed a step")]
     HostFailed,
+    /// OpenSSL could not compute the credential's SHA-256, which the proxy reports as a failed authentication.
+    #[error("OpenSSL could not hash the credential")]
+    Hash(#[source] Source),
 }
 
 impl Error {
@@ -32,9 +37,11 @@ impl Error {
     pub fn is_host_failure(&self) -> bool {
         match self {
             Self::HostFailed => true,
-            Self::PremiumRequired(_) | Self::Key(_) | Self::Jwt(_) | Self::BudgetExceeded(_) => {
-                false
-            }
+            Self::PremiumRequired(_)
+            | Self::Key(_)
+            | Self::Jwt(_)
+            | Self::BudgetExceeded(_)
+            | Self::Hash(_) => false,
         }
     }
 }

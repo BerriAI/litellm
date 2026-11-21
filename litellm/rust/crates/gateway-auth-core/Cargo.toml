@@ -14,6 +14,7 @@ http.workspace = true
 jiff.workspace = true
 jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 litellm-config.workspace = true
+litellm-error.workspace = true
 litellm-fnmatch.workspace = true
 litellm-python-compat.workspace = true
 litellm-secret-value.workspace = true

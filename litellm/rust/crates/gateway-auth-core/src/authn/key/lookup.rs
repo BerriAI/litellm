@@ -20,7 +20,7 @@ pub(super) async fn presented<H: AuthHost>(
     settings: &KeySettings,
 ) -> Result<Lookup<H>, Refused<H::Rows>> {
     let end_user = request_end_user(host, Some(token), requested_end_user, settings).await?;
-    let hash = token.hash();
+    let hash = token.hash()?;
     let key = found_key(host, token, settings, &hash).await?;
     Ok(Lookup {
         hash,
