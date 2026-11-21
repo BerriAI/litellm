@@ -29,6 +29,7 @@ from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from litellm.integrations.gitlab import GitLabPromptManager
+from litellm.integrations.hex import HexLogger
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.langfuse.langfuse_prompt_management import (
@@ -105,6 +106,7 @@ class CustomLoggerRegistry:
         "agentops": AgentOps,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
+        "hex": HexLogger,
         "pointfive": PointFiveLogger,
         "zerobus": ZerobusLogger,
         "aws_sqs": SQSLogger,
