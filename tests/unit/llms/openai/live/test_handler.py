@@ -1382,3 +1382,35 @@ async def test_attached_live_session_joins_without_starting_or_closing_it_and_bi
     assert (REALTIME_SESSION_SUCCESS_LOGGED_KEY in logger.model_call_details) is metered, (
         "a caller's attach logs nothing, so the proxy must still release the budget hold and slot it took"
     )
+
+
+@pytest.mark.parametrize(
+    ("metered_seconds", "billed_seconds"),
+    [(0.0, 7), (3.0, 4.0), (9.0, 0.0)],
+    ids=["first-sideband", "rejoined-sideband", "earlier-sidebands-billed-more-than-the-total"],
+)
+@pytest.mark.asyncio
+async def test_a_rejoined_sideband_bills_the_session_total_less_what_earlier_sidebands_billed(
+    metered_seconds: float, billed_seconds: float
+) -> None:
+    logger: Final = _FakeLogging()
+    worker: Final = _FakeLoggingWorker()
+
+    await OpenAILiveSessions(
+        logging_worker=worker, websocket_connector=_FakeConnector(_attached_upstream())
+    ).async_live_session(
+        model="gpt-live-1",
+        websocket=_FakeClientWebSocket(messages=(), disconnect_after_send_type="session.started"),
+        logging_obj=cast(Logging, logger),
+        session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        attach=LiveAttach(session_id="live_abc", metered=True, metered_seconds=metered_seconds),
+    )
+    assert worker.coroutine is not None
+    await worker.coroutine
+
+    logged: Final = cast(LiteLLMRealtimeStreamLoggingObject, logger.dispatched_result)
+    assert [event["usage"] for event in logged.results if event["type"] == "session.closed"] == [
+        {"seconds": billed_seconds}
+    ]

@@ -90,6 +90,8 @@ class LiveAttach:
 
     session_id: str
     metered: bool
+    metered_seconds: float = 0.0
+    """Seconds of this session that earlier sidebands already billed, which the provider's running total repeats."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +173,15 @@ def _usage_event(event: Mapping[str, object], event_type: str) -> _LiveUsageEven
         return usage_with_seconds
     usage_without_seconds: Final[_LiveUsageEvent] = {"type": event_type}
     return usage_without_seconds
+
+
+def _less_metered_seconds(event: Mapping[str, object], metered_seconds: float) -> Mapping[str, object]:
+    """A usage event with the seconds an earlier sideband already billed taken off the provider's running total."""
+    usage: Final = as_str_mapping(event.get("usage"))
+    seconds: Final = usage.get("seconds") if usage is not None else None
+    if usage is None or isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return event
+    return {**event, "usage": {**usage, "seconds": max(0.0, seconds - metered_seconds)}}
 
 
 def _terminal_response_event(event: Mapping[str, object]) -> _LiveResponseEvent | None:
@@ -487,7 +498,10 @@ class OpenAILiveSessions(OpenAIRealtime):
                     raise
                 finally:
                     session_end_time: Final = self._clock()
-                    retained_events: Final = event_retention.results()
+                    retained_events: Final = tuple(
+                        _less_metered_seconds(event, 0.0 if attach is None else attach.metered_seconds)
+                        for event in event_retention.results()
+                    )
                     logging_result: Final = LiteLLMRealtimeStreamLoggingObject.model_validate(
                         {"usage": Usage(), "results": list(retained_events)}
                     )

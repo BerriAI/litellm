@@ -38,7 +38,6 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
 )
 from litellm.proxy.realtime_endpoints.sideband import (
-    SidebandClientWebSocket,
     join_sideband,
     realtime_call_id,
 )
@@ -378,12 +377,11 @@ async def _start_realtime_billing_sideband(
         _route_realtime_websocket_session,  # pyright: ignore[reportPrivateUsage]  # the WebSocket session route owns realtime metering
     )
 
-    client: Final = SidebandClientWebSocket("/v1/realtime")
     return await join_sideband(
-        client,
-        _route_realtime_websocket_session(
+        "/v1/realtime",
+        lambda client, _metered_seconds: _route_realtime_websocket_session(
             client,  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
-            caller_auth,
+            caller_auth.model_copy(),
             route_model=model,
             model=None,
             intent=None,

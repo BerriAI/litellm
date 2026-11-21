@@ -38,6 +38,9 @@ async def test_sideband_client_never_speaks_and_disconnects_once_the_session_clo
         await pending_receive
 
 
+_NEVER: Final = 3600.0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("first_frame", "reads_its_client", "joined"),
@@ -52,43 +55,36 @@ async def test_sideband_client_never_speaks_and_disconnects_once_the_session_clo
 async def test_a_sideband_has_joined_once_the_relay_to_the_provider_runs(
     first_frame: str | None, reads_its_client: bool, joined: bool
 ) -> None:
-    client: Final = SidebandClientWebSocket("/v1/realtime")
-
-    async def _session() -> None:
+    async def _session(client: SidebandClientWebSocket, _metered_seconds: float) -> None:
         if first_frame is not None:
             await client.send_text(first_frame)
         if reads_its_client:
             with pytest.raises(WebSocketDisconnect):
                 await client.receive_text()
 
-    assert await join_sideband(client, _session()) is joined
-    await client.close()
+    assert await join_sideband("/v1/realtime", _session, rejoin_delay=_NEVER) is joined
 
 
 @pytest.mark.asyncio
 async def test_a_sideband_that_never_reaches_the_provider_is_given_up_on_and_stopped() -> None:
-    client: Final = SidebandClientWebSocket("/v1/realtime")
     outcome: Final[asyncio.Future[str]] = asyncio.get_running_loop().create_future()
 
-    async def _session() -> None:
+    async def _session(_client: SidebandClientWebSocket, _metered_seconds: float) -> None:
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             outcome.set_result("stopped")
             raise
 
-    assert await join_sideband(client, _session(), timeout=0, wind_down=0) is False
-    with pytest.raises(WebSocketDisconnect):
-        await client.receive_text()
+    assert await join_sideband("/v1/realtime", _session, timeout=0, wind_down=0) is False
     assert await asyncio.wait_for(outcome, 1) == "stopped"
 
 
 @pytest.mark.asyncio
 async def test_a_refused_sideband_finishes_releasing_its_holds_before_it_is_stopped() -> None:
-    client: Final = SidebandClientWebSocket("/v1/realtime")
     outcome: Final[asyncio.Future[str]] = asyncio.get_running_loop().create_future()
 
-    async def _session() -> None:
+    async def _session(client: SidebandClientWebSocket, _metered_seconds: float) -> None:
         try:
             await client.send_text(json.dumps({"type": "error", "error": {"message": "rate limited"}}))
             await asyncio.sleep(0.05)
@@ -97,5 +93,63 @@ async def test_a_refused_sideband_finishes_releasing_its_holds_before_it_is_stop
             outcome.set_result("stopped")
             raise
 
-    assert await join_sideband(client, _session()) is False
+    assert await join_sideband("/v1/realtime", _session) is False
     assert await asyncio.wait_for(outcome, 1) == "released"
+
+
+_DROPPED: Final = ('{"type":"session.created"}',)
+_REFUSED: Final = ('{"type":"error","error":{"message":"Upstream realtime handshake rejected with HTTP 404"}}',)
+_CLOSED_BY_PROVIDER: Final = ('{"type":"session.started"}', '{"type":"session.closed"}')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sessions", "sessions_opened"),
+    [
+        ((_DROPPED, _DROPPED, _CLOSED_BY_PROVIDER, _DROPPED), 3),
+        ((_DROPPED, _REFUSED, _DROPPED), 2),
+        ((_CLOSED_BY_PROVIDER, _DROPPED), 1),
+    ],
+    ids=["rejoined-after-each-drop-until-the-session-closes", "call-gone-at-the-provider", "session-closed"],
+)
+async def test_a_joined_sideband_is_reopened_when_it_drops_while_the_call_still_runs(
+    sessions: tuple[tuple[str, ...], ...], sessions_opened: int
+) -> None:
+    remaining: Final = iter(sessions)
+    opened: Final[list[str]] = []
+    idle: Final = asyncio.Event()
+
+    async def _session(client: SidebandClientWebSocket, _metered_seconds: float) -> None:
+        frames: Final = next(remaining)
+        opened.append(client.url.path)
+        for frame in frames:
+            await client.send_text(frame)
+        if len(opened) == sessions_opened:
+            idle.set()
+
+    assert await join_sideband("/v1/realtime", _session, rejoin_delay=0) is True
+    await asyncio.wait_for(idle.wait(), 1)
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert opened == ["/v1/realtime"] * sessions_opened
+
+
+@pytest.mark.asyncio
+async def test_a_rejoined_session_is_told_the_seconds_earlier_sessions_metered() -> None:
+    clock: Final = iter((100.0, 106.5, 200.0, 201.0, 300.0))
+    remaining: Final = iter((_DROPPED, _DROPPED, _CLOSED_BY_PROVIDER))
+    metered: Final[list[float]] = []
+    idle: Final = asyncio.Event()
+
+    async def _session(client: SidebandClientWebSocket, metered_seconds: float) -> None:
+        metered.append(metered_seconds)
+        for frame in next(remaining):
+            await client.send_text(frame)
+        if client.session_ended:
+            idle.set()
+
+    assert await join_sideband("/v1/live/sessions", _session, rejoin_delay=0, clock=lambda: next(clock)) is True
+    await asyncio.wait_for(idle.wait(), 1)
+
+    assert metered == [0.0, 6.5, 7.5], "the seconds between a rejoin and the next session are metered by neither"

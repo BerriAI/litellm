@@ -20,7 +20,7 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_live_websocket
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.realtime_endpoints.sideband import SidebandClientWebSocket, join_sideband
+from litellm.proxy.realtime_endpoints.sideband import join_sideband
 from litellm.realtime_api.main import live_guardrails_configured, live_session_upstream
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -90,10 +90,9 @@ async def _start_live_billing_sideband(session: _LiveSession, user_api_key_dict:
         _route_realtime_websocket_session,  # pyright: ignore[reportPrivateUsage]  # the WebSocket session route owns live metering
     )
 
-    client: Final = SidebandClientWebSocket(_LIVE_SESSIONS_PATH)
     return await join_sideband(
-        client,
-        _route_realtime_websocket_session(
+        _LIVE_SESSIONS_PATH,
+        lambda client, metered_seconds: _route_realtime_websocket_session(
             client,  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
             user_api_key_dict.model_copy(),
             route_model=session.model,
@@ -102,7 +101,7 @@ async def _start_live_billing_sideband(session: _LiveSession, user_api_key_dict:
             guardrails=None,
             request_path=_LIVE_SESSIONS_PATH,
             live_session_start={"type": "session.start", "session": {"model": session.model}},
-            live_attach=LiveAttach(session_id=session.session_id, metered=True),
+            live_attach=LiveAttach(session_id=session.session_id, metered=True, metered_seconds=metered_seconds),
             pinned_deployment_id=session.deployment_id,
         ),
     )
