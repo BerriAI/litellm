@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 pytestmark = pytest.mark.e2e
 
 FAST_TIER: Final = "priority"
+MIN_TURN_REQUESTS: Final = 2
 
 
 class _ClientRequest(BaseModel):
@@ -46,7 +47,12 @@ class TestCodexFastMode:
         assert run.exit_code == 0, run
         assert any(marker in command.output for command in run.commands), run
         assert marker in run.answer, run
-        tiers: Final = _requested_tiers(proxy.poll_logs_for_key(real_name_setup.api_key, min_rows=2))
+        rows: Final = proxy.poll_logs_for_key(real_name_setup.api_key, min_rows=MIN_TURN_REQUESTS)
+        assert len(rows) >= MIN_TURN_REQUESTS, (
+            "the gateway logged fewer requests than one command round trip makes",
+            rows,
+        )
+        tiers: Final = _requested_tiers(rows)
         if offers_fast:
             assert all(tier == FAST_TIER for tier in tiers), tiers
         else:
