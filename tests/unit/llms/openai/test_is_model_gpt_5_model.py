@@ -87,6 +87,10 @@ NON_GPT5_MODELS = [
     "o1",
     "o3",
     "o3-mini",
+    "gpt-5-gateway/claude-3-5-sonnet",
+    "gpt-5-team/llama-3.3-70b",
+    "gpt-6-proxy/mistral-large",
+    "my-gpt-5-org/gemini-2.0-flash",
 ]
 
 
