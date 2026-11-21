@@ -1068,12 +1068,111 @@ def _mcp_scope_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
         return ("",)
 
 
+def _server_matches_normalized_name(candidate: "MCPServer", normalized_target: str) -> bool:
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        normalize_server_name,
+    )
+
+    identifiers: Final = tuple(ident for ident in (candidate.alias, candidate.server_name, candidate.name) if ident)
+    return any(normalize_server_name(ident) == normalized_target for ident in identifiers)
+
+
+def _servers_matching_name(server_name: str, all_servers: tuple["MCPServer", ...]) -> tuple["MCPServer", ...]:
+    if not server_name:
+        return ()
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        normalize_server_name,
+    )
+
+    normalized_target: Final = normalize_server_name(server_name)
+    return tuple(
+        candidate for candidate in all_servers if _server_matches_normalized_name(candidate, normalized_target)
+    )
+
+
+def _reprefixed_dispatch_pairs(native_name: str, server_name: str) -> tuple[tuple[str, "MCPServer"], ...]:
+    if not server_name:
+        return ()
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        add_server_prefix_to_name,
+    )
+
+    prefixed_name: Final = add_server_prefix_to_name(native_name, server_name)
+    routed: Final = global_mcp_server_manager.get_mcp_server_from_tool_name(prefixed_name)
+    return () if routed is None else ((prefixed_name, routed), (native_name, routed))
+
+
+def _stage2_pairs_for_name(
+    native_name: str,
+    stage1_server: "MCPServer",
+    same_name_servers: tuple["MCPServer", ...],
+) -> tuple[tuple[str, "MCPServer"], ...]:
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        global_mcp_server_manager,
+    )
+
+    reprefixed: Final = _reprefixed_dispatch_pairs(native_name, stage1_server.name)
+    same_name_pairs: Final = tuple((native_name, candidate) for candidate in same_name_servers)
+    fallback: Final = global_mcp_server_manager.get_mcp_server_from_tool_name(native_name)
+    fallback_pairs: Final = (
+        ((native_name, fallback),)
+        if fallback is not None and (not stage1_server.name or fallback in same_name_servers)
+        else ()
+    )
+    return (*reprefixed, *same_name_pairs, *fallback_pairs)
+
+
+def _managed_dispatch_pairs(
+    tool_name: str,
+    stage1_server: "MCPServer",
+    all_servers: tuple["MCPServer", ...],
+) -> tuple[tuple[str, "MCPServer"], ...]:
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        strip_known_server_prefix,
+    )
+
+    same_name_servers: Final = _servers_matching_name(stage1_server.name, all_servers)
+    stripped_name: Final = strip_known_server_prefix(tool_name, stage1_server)
+    raw_pairs: Final = _stage2_pairs_for_name(tool_name, stage1_server, same_name_servers)
+    stripped_pairs: Final = (
+        () if stripped_name == tool_name else _stage2_pairs_for_name(stripped_name, stage1_server, same_name_servers)
+    )
+    return ((tool_name, stage1_server), *raw_pairs, *stripped_pairs)
+
+
+def _requested_prefixed_servers(tool_name: str, requested_server: "MCPServer | None") -> tuple["MCPServer", ...]:
+    if requested_server is None:
+        return ()
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        add_server_prefix_to_name,
+        iter_known_server_prefixes,
+    )
+
+    candidates: Final = tuple(
+        global_mcp_server_manager.get_mcp_server_from_tool_name(add_server_prefix_to_name(tool_name, prefix))
+        for prefix in iter_known_server_prefixes(requested_server)
+    )
+    return tuple(server for server in candidates if server is not None)
+
+
+def _all_pairs_free(pairs: tuple[tuple[str, "MCPServer"], ...]) -> bool:
+    return all(_server_free_price_for(priced_name, server) for priced_name, server in pairs)
+
+
 def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
     """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
 
-    Only a name with a known server prefix, or a REST ``server_id``, says which server runs it. Display names can
-    send a name to another tool, so a call stays budget checked when a server that could run it has any, or when
-    any server shows a tool under the name."""
+    Only a name with a known server prefix, or a REST server_id, says which server runs it; bare names stay
+    budget checked. When a prefix or server_id is present, both initial tool-route resolution and managed
+    execution's add_server_prefix_to_name re-lookup can redirect a colliding tool name to another server, so
+    every reachable dispatch target is priced. Display names can send a name to another tool, so a call stays
+    budget checked when a server that could run it has any, or when any server shows a tool under the name."""
     if not _is_mcp_tool_call(route=route, request_body=request_body):
         return False
     from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
@@ -1092,30 +1191,37 @@ def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -
     if tool_name is None:
         return False
     requested_server_id: Final = request_body.get("server_id") if route in MCP_TOOL_CALL_ROUTES else None
-    named_servers: Final = tuple(
-        server
-        for server in (
-            global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
-            (
-                global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
-                or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
-            )
-            if isinstance(requested_server_id, str)
-            else None,
+    prefix_server: Final = global_mcp_server_manager.server_owning_tool_name_prefix(tool_name)
+    requested_server: Final = (
+        (
+            global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
+            or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
         )
-        if server is not None
+        if isinstance(requested_server_id, str)
+        else None
     )
+    if prefix_server is None and requested_server is None:
+        return False
+    routed_server: Final = global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
+    stage1_candidates: Final = (
+        prefix_server,
+        requested_server,
+        routed_server,
+        *_requested_prefixed_servers(tool_name, requested_server),
+    )
+    named_servers: Final = tuple(server for server in stage1_candidates if server is not None)
     servers_in_scope: Final = tuple(
         global_mcp_server_manager.get_mcp_server_by_identifier(name) for name in _mcp_scope_names(request_body)
-    )
-    servers_that_could_run_it: Final = tuple(
-        server for server in (*named_servers, *servers_in_scope) if server is not None
     )
     if _is_reserved_mcp_tool_name(tool_name) or not named_servers or None in servers_in_scope:
         return False
     if any(_is_shown_as_a_display_name(tool_name, server) for server in servers):
         return False
-    return all(_server_free_price_for(tool_name, server) for server in servers_that_could_run_it)
+    scope_pairs: Final = tuple((tool_name, server) for server in servers_in_scope if server is not None)
+    stage1_free: Final = all(
+        _all_pairs_free(_managed_dispatch_pairs(tool_name, server, servers)) for server in named_servers
+    )
+    return stage1_free and _all_pairs_free(scope_pairs)
 
 
 def is_video_retrieval_request(route: str, http_method: str | None) -> bool:
