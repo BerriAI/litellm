@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_events,
+    anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     is_raw_sse_stream,
     is_sse_error_stream,
@@ -1681,8 +1682,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
+        forwardable: Final = not anthropic_sse_error_events(all_chunks) and anthropic_sse_reads_alike(all_chunks)
         anthropic_response: Final = assemble_anthropic_sse_stream(
-            all_chunks, restore_identity=bool(anthropic_sse_error_events(all_chunks)), through_upstream_error=True
+            all_chunks, restore_identity=not forwardable, through_upstream_error=True
         )
         if anthropic_response is None:
             if is_raw_sse_stream(all_chunks) and not is_sse_error_stream(all_chunks):
@@ -1698,7 +1700,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return
 
         for sse_chunk in self._anthropic_stream_to_deliver(
-            anthropic_response, all_chunks, self._returned_call_names(request_data)
+            anthropic_response, all_chunks, self._returned_call_names(request_data), forwardable=forwardable
         ):
             yield sse_chunk
 
@@ -1707,16 +1709,20 @@ class ToolPermissionGuardrail(CustomGuardrail):
         anthropic_response: ModelResponse,
         source_chunks: Sequence[object],
         judged_names: _JudgedCalls,
+        *,
+        forwardable: bool,
     ) -> Sequence[object]:
-        """The frames the client gets: on a failed upstream only what the check read, never the upstream's own.
+        """The frames the client gets: the upstream's own only when ``forwardable``, else only what the check read.
 
-        Assembly reads past an upstream error, and a client can read a frame of a broken stream that assembly
-        does not, so forwarding those frames would pass a tool call nobody checked.
+        A stream is forwardable when no upstream error cut it and every client reads it as assembly does.
+        Assembly reads past an upstream error, and a client can read a frame of a broken stream, or of a
+        stream whose names, types or block order disagree, as another call than assembly does, so
+        forwarding those frames would pass a tool call nobody checked.
         """
         denials: Final = self._check_assembled_stream(anthropic_response, judged_names)
         if denials:
             self._modify_response_with_permission_errors(anthropic_response, denials)
-        elif not anthropic_sse_error_events(source_chunks):
+        elif forwardable:
             return source_chunks
         return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
