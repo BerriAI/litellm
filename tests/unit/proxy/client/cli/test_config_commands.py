@@ -1,6 +1,7 @@
 import json
 import stat
 from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -45,7 +46,7 @@ def _raise_home_unresolvable() -> str:
 class TestConfigSet:
     @pytest.mark.parametrize(
         "value",
-        ["https://your-proxy.example.com", "http://your-proxy.example.com:8080"],
+        ["https://your-proxy.example.com", "http://your-proxy.example.com:8080", "http://[::1]:8080"],
     )
     def test_set_stores_value_with_owner_only_permissions(self, cli_runner, isolated_home, value):
         result = cli_runner.invoke(cli, ["config", "set", "base_url", value])
@@ -86,6 +87,22 @@ class TestConfigSet:
 
         assert result.exit_code != 0
         assert not _config_path(isolated_home).exists()
+
+    @pytest.mark.parametrize(
+        "value",
+        ("http://:4000", "http://localhost:wrong", "http://localhost:65536", "http://[::1"),
+    )
+    def test_set_malformed_base_url_keeps_previous_config(
+        self, cli_runner: CliRunner, isolated_home: Path, value: str
+    ) -> None:
+        previous: Final = {"base_url": "http://localhost:4000"}
+        save_config(previous)
+
+        result: Final = cli_runner.invoke(cli, ("config", "set", "base_url", value))
+
+        assert result.exit_code == 2, result.output
+        assert "Error: base_url" in result.stderr
+        assert json.loads(_config_path(isolated_home).read_text()) == previous
 
     @pytest.mark.parametrize(
         "value",

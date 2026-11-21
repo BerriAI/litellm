@@ -68,8 +68,12 @@ def hidden_command_names() -> frozenset[str]:
 def normalize_base_url(value: str) -> str:
     if any(ord(char) <= 32 or ord(char) == 127 for char in value):
         raise click.UsageError("base_url must not contain whitespace or control characters")
-    parsed: Final = urlparse(value)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    try:
+        parsed: Final = urlparse(value)
+        _port: Final = parsed.port
+    except ValueError:
+        raise click.UsageError("base_url must have a valid host and port") from None
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise click.UsageError("base_url must be a full http:// or https:// URL including a host")
     if "?" in value or "#" in value:
         raise click.UsageError("base_url must not include a query string or fragment")
