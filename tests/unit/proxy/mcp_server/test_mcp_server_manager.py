@@ -23226,3 +23226,22 @@ async def test_pre_call_guardrail_bearer_never_carries_the_admission_key(
 
     hook_kwargs: Final = proxy_logging_obj.create_mcp_request_object_from_kwargs.call_args.args[0]
     assert hook_kwargs["incoming_bearer_token"] == expected_bearer
+
+
+@pytest.mark.parametrize(
+    ("stored", "enabled"),
+    (
+        ('{"enabled": true}', True),
+        ({"enabled": True, "allowed_events": ["build.*"]}, True),
+        ({"enabled": False}, False),
+        ('{"enabled": "maybe-not"}', None),
+        ("", None),
+        (None, None),
+        (object(), None),
+    ),
+)
+def test_stored_events_config_accepts_json_or_mappings_and_ignores_anything_else(stored, enabled):
+    from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
+
+    config = _stored_events_config(stored)
+    assert (config.enabled if config is not None else None) is enabled

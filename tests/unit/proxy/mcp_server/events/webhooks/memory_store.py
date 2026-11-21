@@ -29,6 +29,9 @@ class MemoryStore:
     async def count_live(self, principal: str) -> int:
         return sum(1 for row in self.rows.values() if row.principal == principal and row.status in LIVE_STATUSES)
 
+    async def count_status(self, status: str) -> int:
+        return sum(1 for row in self.rows.values() if row.status == status)
+
     async def verified(self, principal: str, client_url: str) -> bool:
         return any(
             row.principal == principal and row.client_url == client_url and row.verified_at is not None

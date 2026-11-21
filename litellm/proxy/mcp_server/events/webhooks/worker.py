@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import anyio
+from opentelemetry import trace
 
 from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.events.catalog import gateway_name
@@ -22,7 +23,13 @@ from litellm.proxy.mcp_server.events.webhooks.reauth import (
     stored_caller,
 )
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret, signed_headers
-from litellm.proxy.mcp_server.events.webhooks.store import EventStore, QueuedDelivery, SubscriptionRow, default_store
+from litellm.proxy.mcp_server.events.webhooks.store import (
+    LIVE_STATUSES,
+    EventStore,
+    QueuedDelivery,
+    SubscriptionRow,
+    default_store,
+)
 from litellm.proxy.mcp_server.events.webhooks.termination import registered_server, terminate
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
@@ -37,6 +44,7 @@ CONCURRENCY: Final = 8
 LEASE_SECONDS: Final = 60
 _IDLE_SECONDS: Final = 1.0
 _HOUSEKEEPING_SECONDS: Final = 30.0
+_TRACER: Final = trace.get_tracer("litellm.mcp.events")
 
 
 def _utc_now() -> datetime:
@@ -94,6 +102,8 @@ class DeliveryWorker:
         for row in await self._store.expired(self._clock()):
             await self._store.save(row.model_copy(update={"status": "terminated"}))
             await self._store.drop_deliveries(row.id)
+        for status in LIVE_STATUSES:
+            EventMetrics.set_subscriptions(status, await self._store.count_status(status))
 
     async def process(self, delivery: QueuedDelivery) -> None:
         row: Final = await self._store.get(delivery.subscription_id)
@@ -132,12 +142,15 @@ class DeliveryWorker:
             await self._store.finish(context.delivery.delivery_id)
             return
         started: Final = time.monotonic()
-        response: Final = await self._post(
-            row.client_url,
-            outgoing.body,
-            signed_headers(secret, outgoing.webhook_id, int(time.time()), outgoing.body, row.id),
-        )
-        status: Final = response.ok.status if isinstance(response, Ok) else None
+        attributes: Final = {"mcp.event.name": context.gateway_name, "mcp.subscription.id": row.id}
+        with _TRACER.start_as_current_span("mcp.event.deliver", attributes=attributes) as span:
+            response: Final = await self._post(
+                row.client_url,
+                outgoing.body,
+                signed_headers(secret, outgoing.webhook_id, int(time.time()), outgoing.body, row.id),
+            )
+            status: Final = response.ok.status if isinstance(response, Ok) else None
+            span.set_attribute("http.response.status_code", status or 0)
         failure: Final = response.error if isinstance(response, Error) else failure_for_status(status or 0)
         if failure is None or status in (410, 413):
             await self._settled(context, outgoing, status, time.monotonic() - started)

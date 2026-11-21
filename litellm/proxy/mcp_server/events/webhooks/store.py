@@ -72,6 +72,8 @@ class EventStore(Protocol):
 
     async def count_live(self, principal: str) -> int: ...
 
+    async def count_status(self, status: SubscriptionStatus) -> int: ...
+
     async def verified(self, principal: str, client_url: str) -> bool: ...
 
     async def find(self, query: SubscriptionQuery) -> tuple[SubscriptionRow, ...]: ...
@@ -157,6 +159,9 @@ class PrismaEventStore:
 
     async def count_live(self, principal: str) -> int:
         return await self._subscriptions.count(where={"principal": principal, "status": {"in": list(LIVE_STATUSES)}})
+
+    async def count_status(self, status: SubscriptionStatus) -> int:
+        return await self._subscriptions.count(where={"status": status})
 
     async def verified(self, principal: str, client_url: str) -> bool:
         record: Final = await self._subscriptions.find_first(

@@ -51,6 +51,16 @@ litellm/proxy/mcp_server/
   cost_calculator.py         # MCP tool cost calculation
   ui_session_utils.py        # dashboard session auth context helpers
   utils.py                   # shared primitives used by several modules
+  events/                    # MCP Events extension (io.modelcontextprotocol/events), gated by mcp_events_enabled
+    handlers.py              # events/* request handlers, the off-switch middleware, discover advertisement
+    runtime.py               # injected seams (upstream calls, grants, clock, guardrails, logging) for every flow
+    catalog.py               # merged events/list, prefixed names, descriptor lookup
+    admission.py             # shared admission: routing headers, mode, rate limit, re-authorization
+    poll.py / push.py        # poll relay and events/stream relay
+    upstream.py              # EventsClientSession: extension ad, Mcp-Param headers, stream demux
+    access.py / cursors.py   # principal + mcp_event_permissions grants, sealed cursors
+    webhooks/                # webhook relay: store, receiver route, delivery worker, signing, SSRF-pinned POST
+    admin.py                 # /v1/mcp/events admin routes and key-lifecycle termination
 ```
 
 Do not add broad catch-all modules. Prefer the existing owner above, and add a
