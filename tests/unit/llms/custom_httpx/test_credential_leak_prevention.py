@@ -7,6 +7,7 @@ Covers:
 - _raise_masked_sync_error and _raise_masked_async_error
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -38,6 +39,24 @@ def _make_httpx_status_error(
         request=request,
         response=response,
     )
+
+
+def _unread_status_error(body: bytes, content_type: str) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request("POST", "https://upstream.example/v1/chat")
+    return httpx.HTTPStatusError(
+        "Client error '400 Bad Request'",
+        request=request,
+        response=httpx.Response(
+            400, request=request, headers={"content-type": content_type}, stream=httpx.ByteStream(body)
+        ),
+    )
+
+
+async def _raise_for_stream(is_async: bool, error: httpx.HTTPStatusError) -> None:
+    if is_async:
+        await _raise_masked_async_error(error, stream=True)
+    else:
+        _raise_masked_sync_error(error, stream=True)
 
 
 class TestMaskedHTTPStatusError:
@@ -220,6 +239,7 @@ class TestRaiseMaskedError:
         err = exc_info.value
         assert "LEAKED_KEY" not in str(err.request.url)
         assert err.message is not None
+        assert (err.message, err.text) == ("stream body", "stream body")
 
     def test_sync_breaks_exception_chain(self):
         orig = _make_httpx_status_error()
@@ -252,6 +272,7 @@ class TestRaiseMaskedError:
         err = exc_info.value
         assert "LEAKED_KEY" not in str(err.request.url)
         assert err.message is not None
+        assert (err.message, err.text) == ("async stream", "async stream")
 
     @pytest.mark.asyncio
     async def test_async_breaks_chain(self):
@@ -260,6 +281,60 @@ class TestRaiseMaskedError:
             await _raise_masked_async_error(orig, stream=False)
 
         assert exc_info.value.__cause__ is None
+
+    @pytest.mark.parametrize("is_async", [pytest.param(True, id="async"), pytest.param(False, id="sync")])
+    @pytest.mark.parametrize(
+        ("body", "content_type", "expected"),
+        [
+            pytest.param(
+                "This model's maximum context length is 4096 tokens. Réduisez l'entrée.".encode(),
+                "application/json; charset=utf-8",
+                "This model's maximum context length is 4096 tokens. Réduisez l'entrée.",
+                id="utf-8",
+            ),
+            pytest.param("Réduisez l'entrée.".encode(), "application/json", "Réduisez l'entrée.", id="no-charset"),
+            pytest.param(
+                "Requête refusée".encode("iso-8859-1"), "text/plain; charset=iso-8859-1", "Requête refusée", id="latin-1"
+            ),
+            pytest.param(
+                "Ressource épuisée".encode(),
+                "text/plain; charset=utf-32",
+                "Ressource épuisée",
+                id="label-whose-codec-rejects-the-bytes",
+            ),
+            pytest.param(
+                "Ressource épuisée".encode(),
+                "text/plain; charset=undefined",
+                "Ressource épuisée",
+                id="label-whose-codec-always-fails",
+            ),
+            pytest.param(
+                "Ressource épuisée".encode(),
+                "text/plain; charset=base64",
+                "Ressource épuisée",
+                id="label-that-is-not-a-text-codec",
+            ),
+            pytest.param(
+                "Ressource épuisée".encode("iso-8859-1"),
+                "text/plain; charset=undefined",
+                "Ressource �puis�e",
+                id="label-and-bytes-both-wrong",
+            ),
+            pytest.param(
+                b"POST https://upstream.example/v1?key=LEAKED_KEY&alt=sse failed",
+                "text/plain",
+                "POST https://upstream.example/v1?key=[REDACTED_API_KEY]&alt=sse failed",
+                id="api-key-in-body",
+            ),
+        ],
+    )
+    async def test_a_streamed_body_reaches_the_error_as_masked_text(
+        self, is_async: bool, body: bytes, content_type: str, expected: str
+    ) -> None:
+        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            await _raise_for_stream(is_async, _unread_status_error(body, content_type))
+
+        assert (exc_info.value.message, exc_info.value.text) == (expected, expected)
 
 
 class TestHTTPHandlerErrorPaths:
