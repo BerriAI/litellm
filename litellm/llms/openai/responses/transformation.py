@@ -513,7 +513,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         drops_o_series_temperature: Final = (
             self.custom_llm_provider == LlmProviders.OPENAI
             and (drop_params or litellm.drop_params)
-            and response_api_optional_params.get("temperature") not in (None, 1)
+            and "temperature" in response_api_optional_params
+            and response_api_optional_params["temperature"] not in (None, 1)
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         )
         params: Final = {
