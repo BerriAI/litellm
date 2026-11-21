@@ -12398,8 +12398,10 @@ _EMPTY_MALFORMED: Final = {"content": {"role": "model", "parts": []}, "finishRea
 _WEATHER_FUNCTION: Final = {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}
 
 
-async def _ask_gemini_4_carbon(candidates: Sequence[Mapping[str, object]], **extra: object) -> ModelResponse:
-    body: Final = {"candidates": list(candidates), "usageMetadata": _MALFORMED_USAGE}
+async def _ask_gemini_4_carbon(
+    candidates: Sequence[Mapping[str, object]], usage: Mapping[str, int] = _MALFORMED_USAGE, **extra: object
+) -> ModelResponse:
+    body: Final = {"candidates": list(candidates), "usageMetadata": dict(usage)}
     return cast(
         ModelResponse,
         await litellm.acompletion(
@@ -12440,7 +12442,16 @@ async def test_gemini_malformed_finish_with_no_output_raises_a_retriable_500(
 
     assert raised.value.status_code == 500
     assert f"{candidates[0]['finishReason']} and returned no output" in str(raised.value)
-    assert "completion_tokens=381" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_gemini_malformed_finish_stays_a_retriable_500_whatever_token_count_google_bills() -> None:
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await _ask_gemini_4_carbon(
+            (_EMPTY_MALFORMED,), usage={"promptTokenCount": 429, "candidatesTokenCount": 403, "totalTokenCount": 832}
+        )
+
+    assert raised.value.status_code == 500
 
 
 @pytest.mark.asyncio
