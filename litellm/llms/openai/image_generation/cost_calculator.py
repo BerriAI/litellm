@@ -23,6 +23,32 @@ def cost_calculator(
     model_info: ModelInfo | None = None,
 ) -> float:
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
+    rendering_cost: Final = _rendering_cost(model, image_response, custom_llm_provider, model_info)
+    svg_usage: Final = image_response.svg_usage
+    if svg_usage is None:
+        return rendering_cost
+    try:
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=svg_usage.model,
+            usage=Usage(
+                prompt_tokens=svg_usage.input_tokens,
+                completion_tokens=svg_usage.output_tokens,
+                total_tokens=svg_usage.total_tokens,
+            ),
+            custom_llm_provider=custom_llm_provider or "openai",
+        )
+    except Exception as exc:  # noqa: BLE001  # get_model_info can raise a bare Exception for missing pricing
+        verbose_logger.debug("Unable to price SVG authoring usage for model=%s: %s", svg_usage.model, exc)
+        return rendering_cost
+    return rendering_cost + prompt_cost + completion_cost
+
+
+def _rendering_cost(
+    model: str,
+    image_response: ImageResponse,
+    custom_llm_provider: str | None,
+    model_info: ModelInfo | None,
+) -> float:
     provider: Final = custom_llm_provider or "openai"
     price_table: Final = (
         None

@@ -19,6 +19,7 @@ class HookArgs:
     outcome: Outcome | None = None
     logging_obj: object = None
     call_type: str | None = None
+    traceback_str: str | None = None
 
 
 Derive: TypeAlias = Callable[[HookArgs], object]
