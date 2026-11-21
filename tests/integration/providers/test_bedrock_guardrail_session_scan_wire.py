@@ -8,6 +8,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain, groupby
 from pathlib import Path
 from typing import Final
 
@@ -62,11 +63,9 @@ def _conversation(label: str, rounds: int) -> _Conversation:
     )
 
 
-def _chat_body(conversation: _Conversation) -> dict[str, JsonValue]:
-    rounds: Final = tuple(
-        message
-        for index, result in enumerate(conversation.results)
-        for message in (
+def _chat_body(conversation: _Conversation) -> Mapping[str, JsonValue]:
+    rounds: Final = chain.from_iterable(
+        (
             {
                 "role": "assistant",
                 "content": None,
@@ -80,6 +79,7 @@ def _chat_body(conversation: _Conversation) -> dict[str, JsonValue]:
             },
             {"role": "tool", "tool_call_id": f"call_{index}", "content": result},
         )
+        for index, result in enumerate(conversation.results)
     )
     return {
         "model": _OPENAI,
@@ -102,11 +102,9 @@ def _chat_body(conversation: _Conversation) -> dict[str, JsonValue]:
     }
 
 
-def _responses_body(conversation: _Conversation) -> dict[str, JsonValue]:
-    rounds: Final = tuple(
-        item
-        for index, result in enumerate(conversation.results)
-        for item in (
+def _responses_body(conversation: _Conversation) -> Mapping[str, JsonValue]:
+    rounds: Final = chain.from_iterable(
+        (
             {
                 "type": "function_call",
                 "call_id": f"call_{index}",
@@ -115,6 +113,7 @@ def _responses_body(conversation: _Conversation) -> dict[str, JsonValue]:
             },
             {"type": "function_call_output", "call_id": f"call_{index}", "output": result},
         )
+        for index, result in enumerate(conversation.results)
     )
     return {
         "model": _OPENAI,
@@ -132,11 +131,9 @@ def _responses_body(conversation: _Conversation) -> dict[str, JsonValue]:
     }
 
 
-def _messages_body(conversation: _Conversation) -> dict[str, JsonValue]:
-    rounds: Final = tuple(
-        message
-        for index, result in enumerate(conversation.results)
-        for message in (
+def _messages_body(conversation: _Conversation) -> Mapping[str, JsonValue]:
+    rounds: Final = chain.from_iterable(
+        (
             {
                 "role": "assistant",
                 "content": [
@@ -150,6 +147,7 @@ def _messages_body(conversation: _Conversation) -> dict[str, JsonValue]:
             },
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"toolu_{index}", "content": result}]},
         )
+        for index, result in enumerate(conversation.results)
     )
     return {
         "model": _CLAUDE,
@@ -166,7 +164,7 @@ def _messages_body(conversation: _Conversation) -> dict[str, JsonValue]:
     }
 
 
-_BODIES: Final[Mapping[str, tuple[str, Callable[[_Conversation], dict[str, JsonValue]]]]] = {
+_BODIES: Final[Mapping[str, tuple[str, Callable[[_Conversation], Mapping[str, JsonValue]]]]] = {
     "chat": ("/v1/chat/completions", _chat_body),
     "responses": ("/v1/responses", _responses_body),
     "messages": ("/v1/messages", _messages_body),
@@ -225,15 +223,18 @@ def _texts(body: Mapping[str, JsonValue]) -> tuple[str, ...]:
     return tuple(str(object_value(object_value(item)["text"])["text"]) for item in content)
 
 
+def _invocation_metrics(characters: int) -> JsonValue:
+    return {
+        "guardrailCoverage": {"textCharacters": {"guarded": characters, "total": characters}},
+        "usage": {"contentPolicyUnits": 1},
+    }
+
+
 def _bedrock(request: Request) -> Reply:
     """Bedrock ApplyGuardrail as the guardrail sees it: block any scan carrying the attack marker, allow the rest, and
     report the characters it was sent in ``guardrailCoverage`` as Bedrock does."""
     texts: Final = _texts(_JSON_OBJECT.validate_json(request.body))
-    characters: Final = sum(len(text) for text in texts)
-    metrics: Final = {
-        "guardrailCoverage": {"textCharacters": {"guarded": characters, "total": characters}},
-        "usage": {"contentPolicyUnits": 1},
-    }
+    metrics: Final = _invocation_metrics(sum(len(text) for text in texts))
     if any(_ATTACK in text for text in texts):
         blocked: Final = {
             "action": "GUARDRAIL_INTERVENED",
@@ -258,7 +259,7 @@ def _bedrock(request: Request) -> Reply:
     return Reply(body=json.dumps(allowed).encode())
 
 
-def _guardrail(name: str, mode: str, bedrock_url: str, **fields: JsonValue) -> dict[str, JsonValue]:
+def _guardrail(name: str, mode: str, bedrock_url: str, only_scan_new_messages: bool = False) -> JsonValue:
     return {
         "guardrail_name": name,
         "litellm_params": {
@@ -271,14 +272,14 @@ def _guardrail(name: str, mode: str, bedrock_url: str, **fields: JsonValue) -> d
             "aws_access_key_id": "AKIASYNTHETICGUARDRAIL",
             "aws_secret_access_key": "synthetic-guardrail-secret",
             "aws_bedrock_runtime_endpoint": bedrock_url,
-            **fields,
+            "only_scan_new_messages": only_scan_new_messages,
         },
     }
 
 
 def _config(directory: Path, provider_url: str, bedrock_url: str) -> Path:
     stock: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
-    config: Final[dict[str, JsonValue]] = {
+    config: Final[Mapping[str, JsonValue]] = {
         **stock,
         "model_list": [
             {
@@ -299,6 +300,7 @@ def _config(directory: Path, provider_url: str, bedrock_url: str) -> Path:
             },
         ],
         "router_settings": {**object_value(stock["router_settings"]), "num_retries": 0},
+        "general_settings": {**object_value(stock["general_settings"]), "store_prompts_in_spend_logs": True},
         "guardrails": [
             _guardrail(_FULL_PRE, "pre_call", bedrock_url),
             _guardrail(_FULL_DURING, "during_call", bedrock_url),
@@ -332,12 +334,15 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
             )
 
 
-def _scanned_by_guardrail(requests: Sequence[Request]) -> dict[str, tuple[str, ...]]:
-    by_guardrail: Final[dict[str, list[str]]] = {}
-    for request in requests:
-        guardrail: Final = request.target.split("/guardrail/", 1)[1].split("/", 1)[0]
-        by_guardrail.setdefault(guardrail, []).extend(_texts(_JSON_OBJECT.validate_json(request.body)))
-    return {guardrail: tuple(texts) for guardrail, texts in by_guardrail.items()}
+def _guardrail_of(request: Request) -> str:
+    return request.target.split("/guardrail/", 1)[1].split("/", 1)[0]
+
+
+def _scanned_by_guardrail(requests: Sequence[Request]) -> Mapping[str, tuple[str, ...]]:
+    return {
+        guardrail: tuple(chain.from_iterable(_texts(_JSON_OBJECT.validate_json(request.body)) for request in scans))
+        for guardrail, scans in groupby(sorted(requests, key=_guardrail_of), key=_guardrail_of)
+    }
 
 
 def _send(rig: _Rig, endpoint: str, key: str, conversation: _Conversation, session: str | None = None) -> _Turn:
@@ -361,7 +366,7 @@ def _through(conversation: _Conversation, results: int) -> _Conversation:
     return _Conversation(conversation.system, conversation.ask, conversation.results[:results])
 
 
-def _during_call_entry(rig: _Rig, call_id: str) -> dict[str, JsonValue]:
+def _during_call_entry(rig: _Rig, call_id: str) -> Mapping[str, JsonValue]:
     rows: Final = eventually(
         lambda: rig.gateway.rows(
             'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id=%s OR litellm_call_id=%s', (call_id, call_id)
@@ -411,6 +416,9 @@ def test_each_session_turn_scans_only_what_it_added_in_pre_call_and_during_call(
         assert turn.scanned.get(_SESSION_DURING, ()) == (added,), turn.scanned
     last_entry: Final = _during_call_entry(rig, turns[-1].call_id)
     assert last_entry["guardrail_mode"] == "during_call", last_entry
+    assert object_value(last_entry["guardrail_response"])["assessments"] == [
+        {"invocationMetrics": _invocation_metrics(len(conversation.results[-1]))}
+    ], last_entry
 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
