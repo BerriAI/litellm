@@ -10,7 +10,7 @@ import { stackedUsageColor } from "@/components/shared/charts";
 import type { TFunction } from "i18next";
 import type { DailyData } from "@/components/UsagePage/types";
 import i18n from "@/i18n/i18n";
-import type { CustomerHierarchyUsage } from "./customerUsageApi";
+import type { CustomerUsageAnalysisData } from "./customerUsageApi";
 import type { CustomerUsageDimension } from "./CustomerUsageRankings";
 import { customerModelBreakdown } from "./customerUsageTotals";
 
@@ -76,7 +76,7 @@ const entityDays = (
 export const customerUsageSeriesWith =
   (t: TFunction, language = i18n.language) =>
   (
-    data: CustomerHierarchyUsage,
+    data: CustomerUsageAnalysisData,
     dimension: CustomerUsageDimension,
     metric: UsageMetric,
     colorByModel: ReadonlyMap<string, string>,
