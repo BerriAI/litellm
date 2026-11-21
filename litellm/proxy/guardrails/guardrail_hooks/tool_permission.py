@@ -1434,7 +1434,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         Create a tool_result block for a permission error
 
         Args:
-            tool_use: The tool use that was denied
+            tool_call: The tool call that was denied
             error: The permission error details
 
         Returns:
