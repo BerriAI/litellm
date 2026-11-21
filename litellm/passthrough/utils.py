@@ -7,11 +7,9 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
 from litellm.litellm_core_utils.aws_partition import contains_aws_arn
-from litellm.litellm_core_utils.get_provider_specific_headers import (
-    ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
-    names_a_claude_model,
-)
+from litellm.litellm_core_utils.get_provider_specific_headers import ANTHROPIC_USER_PROFILE_ID_PROVIDERS
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
+from litellm.utils import supports_anthropic_user_profile_id
 
 # Headers that must not be overwritten via the x-pass- forwarding mechanism.
 # Includes standard credential/auth headers and protocol-level headers that
@@ -51,7 +49,7 @@ def with_pinned_pass_through_profile_id(
     if (
         pinned_profile_id is None
         or custom_llm_provider not in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
-        or not names_a_claude_model(model)
+        or not supports_anthropic_user_profile_id(model, custom_llm_provider)
     ):
         return request_headers
     return {

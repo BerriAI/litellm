@@ -20131,7 +20131,7 @@ def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooli
 @pytest.mark.usefixtures("isolate_litellm_state")
 @pytest.mark.parametrize(
     "model_filter, serves_from_the_shared_deployment",
-    [("non_claude_models_only", True), ("claude_models_only", False)],
+    [("non_user_profile_id_models_only", True), ("user_profile_id_models_only", False)],
 )
 async def test_a_caller_authorization_isolates_a_claude_deployment_only_when_it_reaches_claude(
     model_filter: str, serves_from_the_shared_deployment: bool

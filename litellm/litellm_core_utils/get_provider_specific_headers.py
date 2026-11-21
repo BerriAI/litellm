@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
+from litellm.utils import supports_anthropic_user_profile_id
 
 _PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]] = TypeAdapter(
     ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None
@@ -35,21 +36,27 @@ ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = frozenset(
 )
 
 
-def names_a_claude_model(model: str | None) -> bool:
-    return model is not None and "claude" in model.lower()
+def _gates_on_user_profile_id_support(scoped_header: ProviderSpecificHeader) -> bool:
+    return bool(
+        scoped_header.get("user_profile_id_models_only") or scoped_header.get("non_user_profile_id_models_only")
+    )
+
+
+def _takes_user_profile_id(model: str | None, custom_llm_provider: str) -> bool:
+    return model is not None and supports_anthropic_user_profile_id(model, custom_llm_provider)
 
 
 def _applies_to_call(
     scoped_header: ProviderSpecificHeader,
     custom_llm_provider: str,
     native_anthropic_messages: bool,
-    model: str | None,
+    takes_user_profile_id: bool,
 ) -> bool:
     if scoped_header.get("native_anthropic_messages_only") and not native_anthropic_messages:
         return False
-    if scoped_header.get("claude_models_only") and not names_a_claude_model(model):
+    if scoped_header.get("user_profile_id_models_only") and not takes_user_profile_id:
         return False
-    if scoped_header.get("non_claude_models_only") and names_a_claude_model(model):
+    if scoped_header.get("non_user_profile_id_models_only") and takes_user_profile_id:
         return False
     scoped_providers: Final = scoped_header.get("custom_llm_provider", "").split(",")
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
@@ -120,8 +127,8 @@ class ProviderSpecificHeaderUtils:
         without sharing a scope. Entries whose provider list does not contain
         `custom_llm_provider` contribute nothing, and entries marked
         `native_anthropic_messages_only` contribute only to a provider's native Messages route.
-        Entries marked `claude_models_only` contribute only when `model` names a Claude model, entries marked
-        `non_claude_models_only` only when it does not, and
+        Entries marked `user_profile_id_models_only` contribute only when the model cost map says `model` takes the
+        Anthropic user profile id, entries marked `non_user_profile_id_models_only` only when it does not, and
         entries marked `yields_to_configured` never replace a header already in `configured_headers`, and
         entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them,
         whose value starts with `configured_credential_prefix` when the entry sets one, under a name no other
@@ -139,10 +146,13 @@ class ProviderSpecificHeaderUtils:
 
         configured: Final[Mapping[str, object]] = configured_headers or {}
         configured_names: Final = frozenset(name.lower() for name in configured)
+        takes_user_profile_id: Final = any(map(_gates_on_user_profile_id_support, scoped_headers)) and (
+            _takes_user_profile_id(model, custom_llm_provider)
+        )
         applicable: Final = tuple(
             scoped_header
             for scoped_header in scoped_headers
-            if _applies_to_call(scoped_header, custom_llm_provider, native_anthropic_messages, model)
+            if _applies_to_call(scoped_header, custom_llm_provider, native_anthropic_messages, takes_user_profile_id)
         )
         replaced_names: Final = frozenset(
             chain.from_iterable(

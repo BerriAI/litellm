@@ -3879,7 +3879,7 @@ async def test_azure_ai_decision_model_gets_no_proxy_user_profile_id_since_it_is
 
     monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
     monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
-    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    proxy_request_data: Final[dict[str, object]] = {}  # mutable-ok: the function under test writes into it
     add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
     respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
         json={**_RESPONSE, "model": "microsoft-decision-1"}

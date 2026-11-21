@@ -109,7 +109,6 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -236,6 +235,7 @@ from litellm.utils import (
     acredential_updates,
     cost_map_omits_token_price,
     native_structured_output_support,
+    supports_anthropic_user_profile_id,
     with_named_credential,
 )
 
@@ -15279,8 +15279,12 @@ from litellm.responses.litellm_completion_transformation.count_request import (
 _PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO: Final = frozenset({LlmProviders.OPENROUTER})
 
 
-def _counts_claude(deployment_litellm_params: Mapping[str, object]) -> bool:
-    return names_a_claude_model(str(deployment_litellm_params.get("model") or ""))
+def _counts_with_user_profile_id(deployment_litellm_params: Mapping[str, object]) -> bool:
+    model: Final = deployment_litellm_params.get("model")
+    provider: Final = deployment_litellm_params.get("custom_llm_provider")
+    return isinstance(model, str) and supports_anthropic_user_profile_id(
+        model, provider if isinstance(provider, str) else None
+    )
 
 
 def _count_user_profile_id(
@@ -15288,7 +15292,7 @@ def _count_user_profile_id(
     client_user_profile_id: str | None,
     deployment_litellm_params: Mapping[str, object],
 ) -> str | None:
-    if not _counts_claude(deployment_litellm_params):
+    if not _counts_with_user_profile_id(deployment_litellm_params):
         return None
     return (
         pinned_user_profile_id
@@ -15304,7 +15308,9 @@ def _with_client_identity(
     client_user_profile_id: str | None,
     deployment_litellm_params: Mapping[str, object],
 ) -> BaseTokenCounter | None:
-    claude_client_user_profile_id: Final = client_user_profile_id if _counts_claude(deployment_litellm_params) else None
+    counted_client_user_profile_id: Final = (
+        client_user_profile_id if _counts_with_user_profile_id(deployment_litellm_params) else None
+    )
     user_profile_id: Final = _count_user_profile_id(
         pinned_user_profile_id, client_user_profile_id, deployment_litellm_params
     )
@@ -15313,7 +15319,7 @@ def _with_client_identity(
             return AnthropicTokenCounter(
                 client_oauth_token=client_oauth_token,
                 user_profile_id=user_profile_id,
-                client_user_profile_id=claude_client_user_profile_id,
+                client_user_profile_id=counted_client_user_profile_id,
             )
         case AnthropicTokenCounter() if user_profile_id:
             return AnthropicTokenCounter(user_profile_id=user_profile_id)

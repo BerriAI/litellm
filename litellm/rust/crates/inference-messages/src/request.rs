@@ -170,7 +170,7 @@ pub(super) async fn provider_call(
 
     let forwarded = forwarded_headers(
         provider,
-        &model,
+        shaping.capabilities.supports_anthropic_user_profile_id,
         extra_headers,
         provider_specific_header.as_ref(),
     )?;
@@ -487,7 +487,7 @@ fn logged_params(
 
 fn forwarded_headers(
     provider: MessagesProvider,
-    model: &str,
+    takes_user_profile_id: bool,
     extra_headers: Option<Map<String, Value>>,
     provider_specific_header: Option<&ProviderSpecificHeaders>,
 ) -> Result<Headers, Error> {
@@ -495,7 +495,7 @@ fn forwarded_headers(
     let scoped = get_provider_specific_headers(
         provider_specific_header,
         provider.as_str(),
-        model,
+        takes_user_profile_id,
         &configured_headers,
     );
     string_headers(Some(merge_messages_header_sources([

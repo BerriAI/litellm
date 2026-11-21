@@ -236,11 +236,19 @@ async def test_allm_passthrough_route_hosted_vllm_on_the_vllm_api_base_sends_its
         ("azure_ai/claude-sonnet-5-5", None, "uprof_caller"),
         ("azure_ai/gpt-5", None, "uprof_caller"),
         ("hosted_vllm/claude-sonnet-5-5", "uprof_pin", "uprof_caller"),
+        ("azure_ai/claude-unlisted-deployment", "uprof_pin", "uprof_caller"),
     ],
-    ids=["claude_pin", "other_model_pin", "claude_no_pin", "other_model_no_pin", "other_provider_pin"],
+    ids=[
+        "claude_pin",
+        "other_model_pin",
+        "claude_no_pin",
+        "other_model_no_pin",
+        "other_provider_pin",
+        "unmapped_claude_name_pin",
+    ],
 )
 @pytest.mark.asyncio
-async def test_allm_passthrough_route_puts_a_pin_over_the_x_pass_user_profile_id_for_claude_models_only(
+async def test_allm_passthrough_route_puts_a_pin_over_the_x_pass_user_profile_id_for_flagged_models_only(
     respx_mock: respx.MockRouter, model: str, pinned_profile_id: str | None, forwarded_profile_id: str
 ) -> None:
     upstream: Final = respx_mock.route(host="example.services.ai.azure.com").respond(json={"ok": True})

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 pub fn get_provider_specific_headers(
     provider_specific_header: Option<&ProviderSpecificHeaders>,
     custom_llm_provider: &str,
-    model: &str,
+    takes_user_profile_id: bool,
     configured_headers: &Map<String, Value>,
 ) -> Map<String, Value> {
     let entries: &[ProviderSpecificHeader] = match provider_specific_header {
@@ -20,7 +20,7 @@ pub fn get_provider_specific_headers(
         .collect();
     let applicable: Vec<&ProviderSpecificHeader> = entries
         .iter()
-        .filter(|entry| applies_to_call(entry, custom_llm_provider, model))
+        .filter(|entry| applies_to_call(entry, custom_llm_provider, takes_user_profile_id))
         .collect();
     let replaced_names: HashSet<String> = applicable
         .iter()
@@ -43,10 +43,13 @@ pub fn get_provider_specific_headers(
         .collect()
 }
 
-fn applies_to_call(entry: &ProviderSpecificHeader, custom_llm_provider: &str, model: &str) -> bool {
-    let names_a_claude_model = model.to_lowercase().contains("claude");
-    (!entry.claude_models_only || names_a_claude_model)
-        && (!entry.non_claude_models_only || !names_a_claude_model)
+fn applies_to_call(
+    entry: &ProviderSpecificHeader,
+    custom_llm_provider: &str,
+    takes_user_profile_id: bool,
+) -> bool {
+    (!entry.user_profile_id_models_only || takes_user_profile_id)
+        && (!entry.non_user_profile_id_models_only || !takes_user_profile_id)
         && entry
             .custom_llm_provider
             .split(',')
@@ -167,7 +170,7 @@ mod tests {
             Value::Object(get_provider_specific_headers(
                 Some(&configured),
                 "anthropic",
-                "claude-haiku-5-5",
+                true,
                 &Map::new()
             )),
             expected
@@ -177,27 +180,29 @@ mod tests {
     #[rstest]
     fn no_configured_headers_match_nothing() {
         assert_eq!(
-            get_provider_specific_headers(None, "anthropic", "claude-haiku-5-5", &Map::new()),
+            get_provider_specific_headers(None, "anthropic", true, &Map::new()),
             Map::new()
         );
     }
 
     #[rstest]
-    #[case::claude_model("claude-sonnet-5-5", json!({"anthropic-user-profile-id": "uprof_pin"}))]
-    #[case::claude_model_in_any_case("Claude-Sonnet-5-5", json!({"anthropic-user-profile-id": "uprof_pin"}))]
-    #[case::non_claude_model("mistral-large-2411", json!({}))]
-    fn claude_only_entries_skip_other_models(#[case] model: &str, #[case] expected: Value) {
+    #[case::model_takes_the_profile_id(true, json!({"anthropic-user-profile-id": "uprof_pin"}))]
+    #[case::model_without_profile_id_support(false, json!({}))]
+    fn profile_id_entries_apply_only_to_models_that_take_it(
+        #[case] takes_user_profile_id: bool,
+        #[case] expected: Value,
+    ) {
         let configured: ProviderSpecificHeaders = serde_json::from_value(json!({
             "custom_llm_provider": "azure_ai",
             "extra_headers": {"anthropic-user-profile-id": "uprof_pin"},
-            "claude_models_only": true
+            "user_profile_id_models_only": true
         }))
         .unwrap();
         assert_eq!(
             Value::Object(get_provider_specific_headers(
                 Some(&configured),
                 "azure_ai",
-                model,
+                takes_user_profile_id,
                 &Map::new()
             )),
             expected
@@ -205,21 +210,23 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude_model("claude-sonnet-5-5", json!({}))]
-    #[case::claude_model_in_any_case("Claude-Sonnet-5-5", json!({}))]
-    #[case::non_claude_model("mistral-large-2411", json!({"authorization": "Bearer caller"}))]
-    fn non_claude_entries_skip_claude_models(#[case] model: &str, #[case] expected: Value) {
+    #[case::model_takes_the_profile_id(true, json!({}))]
+    #[case::model_without_profile_id_support(false, json!({"authorization": "Bearer caller"}))]
+    fn non_profile_id_entries_skip_models_that_take_it(
+        #[case] takes_user_profile_id: bool,
+        #[case] expected: Value,
+    ) {
         let configured: ProviderSpecificHeaders = serde_json::from_value(json!({
             "custom_llm_provider": "azure_ai",
             "extra_headers": {"authorization": "Bearer caller"},
-            "non_claude_models_only": true
+            "non_user_profile_id_models_only": true
         }))
         .unwrap();
         assert_eq!(
             Value::Object(get_provider_specific_headers(
                 Some(&configured),
                 "azure_ai",
-                model,
+                takes_user_profile_id,
                 &Map::new()
             )),
             expected
@@ -247,7 +254,7 @@ mod tests {
             Value::Object(get_provider_specific_headers(
                 Some(&configured),
                 "anthropic",
-                "claude-haiku-5-5",
+                true,
                 deployment.as_object().unwrap()
             )),
             expected
@@ -273,7 +280,7 @@ mod tests {
             Value::Object(get_provider_specific_headers(
                 Some(&pinned),
                 "anthropic",
-                "claude-haiku-5-5",
+                true,
                 configured.as_object().unwrap()
             )),
             expected
@@ -299,7 +306,7 @@ mod tests {
             Value::Object(get_provider_specific_headers(
                 Some(&pinned),
                 "anthropic",
-                "claude-haiku-5-5",
+                true,
                 configured.as_object().unwrap()
             )),
             expected
@@ -336,7 +343,7 @@ mod tests {
             Value::Object(get_provider_specific_headers(
                 Some(&entries),
                 "anthropic",
-                "claude-haiku-5-5",
+                true,
                 configured.as_object().unwrap()
             )),
             expected

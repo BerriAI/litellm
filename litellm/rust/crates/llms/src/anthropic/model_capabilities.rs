@@ -95,6 +95,7 @@ pub fn anthropic_model_capabilities(
         supports_speed: provider == "anthropic"
             && flag(exact(catalog, name), "supports_speed") == Some(true),
         supports_mid_conversation_system: probe.supports("supports_mid_conversation_system"),
+        supports_anthropic_user_profile_id: probe.supports("supports_anthropic_user_profile_id"),
         effort_tiers: SupportedEffortTiers {
             minimal: probe.supports("supports_minimal_reasoning_effort"),
             low: probe.supports("supports_low_reasoning_effort"),
@@ -897,6 +898,10 @@ mod tests {
                     (
                         "supports_mid_conversation_system",
                         capabilities.supports_mid_conversation_system,
+                    ),
+                    (
+                        "supports_anthropic_user_profile_id",
+                        capabilities.supports_anthropic_user_profile_id,
                     ),
                     (
                         "supports_xhigh_reasoning_effort",

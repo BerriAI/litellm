@@ -147,6 +147,7 @@ async def test_bedrock_mantle_claude_async_completion_inlines_document_url_sourc
 
 RISK_ANSWER = {"tier": 2, "summary": "ok"}
 MANTLE_CLAUDE_ROUTES = ("bedrock_mantle/anthropic.claude-scripted-9", "bedrock/mantle/anthropic.claude-scripted-9")
+MANTLE_USER_PROFILE_ID_ROUTES = ("bedrock_mantle/anthropic.claude-sonnet-5-5", "bedrock/mantle/anthropic.claude-sonnet-5-5")
 
 
 def _json_schema_stream_kwargs(model):
@@ -315,14 +316,14 @@ def _text_message(request: httpx.Request) -> httpx.Response:
     )
 
 
-@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+@pytest.mark.parametrize("model", MANTLE_USER_PROFILE_ID_ROUTES)
 @pytest.mark.parametrize("user_profile_id,expected_fields", [("uprof_01", {"user_profile_id": "uprof_01"}), (None, {})])
 def test_mantle_claude_completion_sends_a_proxy_user_profile_id_in_the_body(
     model: str, user_profile_id: str | None, expected_fields: dict[str, str]
 ) -> None:
     from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 
-    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    proxy_request_data: Final[dict[str, object]] = {}  # mutable-ok: the function under test writes into it
     add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id=user_profile_id)
     respond: Final = MagicMock(wraps=_text_message)
 
@@ -341,7 +342,7 @@ def test_mantle_claude_completion_sends_a_proxy_user_profile_id_in_the_body(
     assert "anthropic-user-profile-id" not in respond.call_args.args[0].headers
 
 
-@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+@pytest.mark.parametrize("model", MANTLE_USER_PROFILE_ID_ROUTES)
 @pytest.mark.parametrize(
     "caller_value",
     [
@@ -355,7 +356,7 @@ def test_mantle_claude_completion_sends_the_proxy_user_profile_id_over_a_caller_
 ) -> None:
     from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 
-    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    proxy_request_data: Final[dict[str, object]] = {}  # mutable-ok: the function under test writes into it
     add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
     respond: Final = MagicMock(wraps=_text_message)
 

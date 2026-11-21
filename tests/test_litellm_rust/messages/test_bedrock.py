@@ -958,6 +958,23 @@ async def test_bedrock_mantle_sends_the_proxy_user_profile_id_in_the_body(
 
 
 @pytest.mark.asyncio
+async def test_bedrock_mantle_sends_no_proxy_user_profile_id_to_a_claude_named_model_the_cost_map_does_not_flag(
+    server: RecordingServer,
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    proxy_request: Final[dict[str, object]] = {}  # mutable-ok: the proxy helper fills the request it is handed
+    add_provider_specific_headers_to_request(data=proxy_request, headers={}, user_profile_id="uprof_pinned")
+
+    await _mantle(_RUST_ENTRY, server, model="bedrock_mantle/anthropic.claude-unlisted-deployment", **proxy_request)
+
+    assert_served_natively(server)
+    [rust_sent] = server.requests
+    assert _sent_user_profile(rust_sent) == (None, None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model", _MANTLE_ROUTES)
 @pytest.mark.parametrize(
     ("extra_headers", "profile_id"),

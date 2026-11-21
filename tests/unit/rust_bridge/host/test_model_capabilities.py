@@ -35,6 +35,7 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
         supports_xhigh_reasoning_effort=True,
         supports_sampling_params=False,
         supports_mid_conversation_system=True,
+        supports_anthropic_user_profile_id=True,
     )
 
     capabilities: Final = anthropic_model_capabilities("anthropic/claude-test-adaptive", None)
@@ -42,6 +43,7 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
     assert capabilities["supports_adaptive_thinking"]
     assert capabilities["supports_output_config"]
     assert capabilities["supports_mid_conversation_system"]
+    assert capabilities["supports_anthropic_user_profile_id"]
     assert not capabilities["supports_legacy_thinking"]
     assert not capabilities["supports_sampling_params"]
     assert capabilities["effort_tiers"] == {
@@ -61,6 +63,7 @@ def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> Non
     assert not capabilities["supports_reasoning"]
     assert not capabilities["supports_adaptive_thinking"]
     assert not capabilities["supports_mid_conversation_system"]
+    assert not capabilities["supports_anthropic_user_profile_id"]
     assert capabilities["effort_tiers"] == dict.fromkeys(("minimal", "low", "medium", "high", "xhigh", "max"), False)
 
 

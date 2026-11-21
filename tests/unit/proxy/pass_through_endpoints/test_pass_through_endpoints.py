@@ -6699,7 +6699,15 @@ async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
         pytest.param(
             True, _SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", None, ["uprof_key"], id="claude-body-gets-the-pin"
         ),
-        pytest.param(True, _SERVER_ANTHROPIC_KEY, {}, "Claude-Opus-5-5", None, ["uprof_key"], id="claude-in-any-case"),
+        pytest.param(
+            True,
+            _SERVER_ANTHROPIC_KEY,
+            {},
+            "claude-unlisted-deployment",
+            None,
+            [],
+            id="unmapped-claude-name-gets-nothing",
+        ),
         pytest.param(True, _SERVER_ANTHROPIC_KEY, {}, "gpt-5.5", None, [], id="other-model-gets-nothing"),
         pytest.param(
             True,

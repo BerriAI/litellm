@@ -1353,9 +1353,28 @@ def test_count_tokens_sends_the_user_profile_id_inference_would_send(
         caller=UserAPIKeyAuth(metadata=dict(key_metadata)),
         claude={
             name: value
-            for name, value in _ANTHROPIC_CLAUDE.items()
+            for name, value in {**_ANTHROPIC_CLAUDE, "model": "anthropic/claude-sonnet-5-5"}.items()
             if configured_api_key or "authorization" not in client_headers or name != "api_key"
         },
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
+
+
+@pytest.mark.parametrize(
+    "key_metadata,client_headers",
+    [({"anthropic_user_profile_id": "uprof_pinned"}, {}), ({}, {"anthropic-user-profile-id": "uprof_client"})],
+    ids=["key_pin", "client_header"],
+)
+def test_count_tokens_sends_no_user_profile_id_to_a_claude_named_model_the_cost_map_does_not_flag(
+    monkeypatch: pytest.MonkeyPatch, key_metadata: Mapping[str, str], client_headers: Mapping[str, str]
+) -> None:
+    response: Final = _count_on_claude(
+        monkeypatch,
+        _count_api_expecting(None),
+        client_headers,
+        caller=UserAPIKeyAuth(metadata=dict(key_metadata)),
+        claude={**_ANTHROPIC_CLAUDE, "model": "anthropic/claude-unlisted-deployment"},
     )
 
     assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
