@@ -8674,6 +8674,58 @@ async def test_bedrock_native_count_tokens_refuses_a_caller_whose_tags_no_deploy
 
 
 @pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_never_counts_on_another_teams_deployment_named_by_id(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException):
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "model": "team-a-deployment"},
+            model_list=(
+                _bedrock_count_deployment(
+                    "model_name_team-a_1",
+                    "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-team-b-caller", team_id="team-b"),
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_saved_alias_target_the_key_may_not_call(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(ProxyException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            model_list=(
+                _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "public-deployment"}),
+                _bedrock_count_deployment("private-bedrock", _BEDROCK_COUNT_MODEL, {"id": "private-deployment"}),
+            ),
+            caller=UserAPIKeyAuth(
+                models=[_BEDROCK_COUNT_ALIAS],
+                router_settings={"model_group_alias": {_BEDROCK_COUNT_ALIAS: "private-bedrock"}},
+            ),
+        )
+
+    assert str(refused.value.code) == "403"
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_bedrock_native_count_tokens_for_a_model_the_router_does_not_serve_logs_no_error(
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,

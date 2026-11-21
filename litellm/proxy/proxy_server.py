@@ -540,6 +540,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     proxy_exception_from_route_error,
     refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
+    resolve_per_request_model_group_alias,
     saved_router_weights,
     should_return_raw_model_name,
     sse_error_payload,
@@ -1117,7 +1118,7 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.router_api import ChangeSet, deployment_id, router_init_args
+from litellm.router_api import ChangeSet, deployment_id, deployment_usable_by_team, router_init_args
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
@@ -15921,6 +15922,12 @@ class CountRoute:
     routable: tuple[Mapping[str, object], ...]
     deployment: Mapping[str, object] | None
     miss: Exception | None = None
+    team_id: str | None = None
+
+    def usable_deployment(self) -> Mapping[str, object] | None:
+        if self.deployment is not None:
+            return self.deployment
+        return next((d for d in self.routable if deployment_usable_by_team(d, self.team_id)), None)
 
 
 def _count_context_management(
@@ -16352,6 +16359,15 @@ async def _routed_count_deployment(
     return routed if isinstance(routed, Mapping) else None
 
 
+async def _caller_served_count_model(model: str, caller: UserAPIKeyAuth | None, settings: Mapping[str, object]) -> str:
+    if caller is None:
+        return model
+    prepared: Final = request_served_model(model, caller, None, llm_router)
+    if llm_router is None:
+        return prepared
+    return await resolve_per_request_model_group_alias(prepared, settings, caller, llm_router) or prepared
+
+
 async def route_count(
     model: str,
     responses_request: Mapping[str, object] | None,
@@ -16359,9 +16375,7 @@ async def route_count(
     request_routing: Mapping[str, object] = MappingProxyType({}),
 ) -> CountRoute:
     settings: Final = await _caller_router_settings(caller)
-    served: Final = (
-        model if caller is None else request_served_model(model, caller, settings.get("model_group_alias"), llm_router)
-    )
+    served: Final = await _caller_served_count_model(model, caller, settings)
     select_request: Final = {
         "model": served,
         **_responses_routing_kwargs(responses_request),
@@ -16376,6 +16390,7 @@ async def route_count(
         routable=routable,
         deployment=routed if isinstance(routed, Mapping) else None,
         miss=routed if isinstance(routed, Exception) else None,
+        team_id=None if caller is None else caller.team_id,
     )
 
 
@@ -16423,7 +16438,7 @@ async def _count_request_tokens(
         litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
     )
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
-        deployment or next(iter(count_route.routable), None) or {}
+        deployment or count_route.usable_deployment() or {}
     )
     cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
     settings: Final = await asyncify(resolve_token_count_settings)(

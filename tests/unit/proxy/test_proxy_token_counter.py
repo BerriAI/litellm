@@ -251,6 +251,21 @@ async def test_count_runs_on_the_deployment_the_callers_team_routes_to(
     assert response.model_used == expected_model_used
 
 
+@pytest.mark.asyncio
+async def test_count_refuses_a_saved_alias_target_the_key_may_not_call(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _team_scoped_router())
+
+    with pytest.raises(ProxyException) as refused:
+        await count_request_tokens(
+            request=TokenCountRequest(model="public-model", messages=[{"role": "user", "content": "hello"}]),
+            caller=UserAPIKeyAuth(
+                models=["public-model"], router_settings={"model_group_alias": {"public-model": "shared-model"}}
+            ),
+        )
+
+    assert str(refused.value.code) == "403"
+
+
 def _tag_routed_router(tag_routing_prefix: str, model_name: str = "tagged-model") -> Router:
     return Router(
         model_list=[

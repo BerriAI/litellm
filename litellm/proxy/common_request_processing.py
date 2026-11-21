@@ -1071,7 +1071,7 @@ async def _authorize_response_file_search_vector_stores(
         )
 
 
-async def _resolve_per_request_model_group_alias(
+async def resolve_per_request_model_group_alias(
     requested_model: object,
     router_settings: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
@@ -1143,7 +1143,7 @@ async def hierarchical_router_settings_updates(
     # This avoids expensive Router instantiation on each request
     router_weights: Final = saved_router_weights(router_settings)
     alias_target: Final = (
-        await _resolve_per_request_model_group_alias(
+        await resolve_per_request_model_group_alias(
             requested_model=requested_model,
             router_settings=router_settings,
             user_api_key_dict=user_api_key_dict,

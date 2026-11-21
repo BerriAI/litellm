@@ -1783,7 +1783,8 @@ async def _bedrock_count_tokens(
         route: Final = await route_count(
             model, None, user_api_key_dict, request_routing_metadata(request, request_body, user_api_key_dict)
         )
-        if route.miss is not None and not isinstance(route.miss, RouterRateLimitError):
+        deployment: Final = route.usable_deployment()
+        if route.miss is not None and (deployment is None or not isinstance(route.miss, RouterRateLimitError)):
             raise rejected_token_count(
                 HTTPException(
                     status_code=int(proxy_exception_status_code(str(route.miss), "400")),
@@ -1792,7 +1793,6 @@ async def _bedrock_count_tokens(
                 litellm_call_id,
                 model,
             )
-        deployment: Final = route.deployment if route.deployment is not None else next(iter(route.routable), None)
         model_litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
         deployment_model: Final = None if model_litellm_params is None else model_litellm_params.get("model")
         resolved_model: Final = deployment_model if isinstance(deployment_model, str) else model
@@ -1836,6 +1836,8 @@ async def _bedrock_count_tokens(
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
+    except ProxyException as e:
+        raise rejected_token_count(e, litellm_call_id, _optional_str(request_body.get("model")))
     except Exception as e:
         verbose_proxy_logger.error("Error in handle_bedrock_count_tokens: %s", e)
         raise HTTPException(status_code=500, detail={"error": f"CountTokens processing error: {e}"})
