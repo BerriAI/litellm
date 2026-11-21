@@ -4681,3 +4681,20 @@ def test_token_breakdown_uses_supplied_pricing_without_catalog_lookup(rate: floa
         10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost
     )
     assert output_cost == pytest.approx(3 * breakdown.rates.output_cost_per_token)
+
+
+def test_billable_input_tokens_are_never_negative() -> None:
+    """Cache reads reported outside `prompt_tokens` must not produce a credit.
+
+    Anthropic reports `cache_read_input_tokens` in addition to (not inside)
+    `prompt_tokens`, so subtracting them can exceed the prompt count. The negative
+    result used to reach `batch_cost_calculator`, where it was billed as a negative
+    prompt cost.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_billable_input_tokens
+
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=1, cache_read_input_tokens=5000)
+    assert get_billable_input_tokens(usage) == 0
+
+    partial: Final = Usage(prompt_tokens=100, completion_tokens=1, cache_read_input_tokens=40)
+    assert get_billable_input_tokens(partial) == 60
