@@ -1469,6 +1469,55 @@ async def test_transform_request_replays_redacted_thinking_only_to_claude(
     }
 
 
+# Synthetic stand-in shaped like the redactedContent Converse returned for openai.gpt-6-luna and
+# openai.gpt-5.6-luna in November 2026: base64 of ASCII text holding underscores, which is never base64 itself
+_GPT_REDACTED_CONTENT: Final = base64.b64encode(b"abc_" + base64.b64encode(b"synthetic gpt reasoning")).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model, litellm_params, replays_redacted",
+    [
+        ("openai.gpt-6-luna", {}, True),
+        ("us.openai.gpt-5.6-luna", {}, True),
+        ("converse/global.openai.gpt-6-sol", {}, True),
+        ("us.openai.gpt-6.1-sol", {}, True),
+        (_APPLICATION_PROFILE_ARN, {"base_model": "openai.gpt-6-luna"}, True),
+        (_APPLICATION_PROFILE_ARN, {"base_model": "bedrock/us.openai.gpt-5.6-luna"}, True),
+        ("arn:aws:bedrock:us-west-2:123456789012:provisioned-model/abc123", {"base_model": "openai.gpt-6-luna"}, True),
+        ("us.openai.gpt-5.5", {}, False),
+        ("openai.gpt-oss-120b-1:0", {}, False),
+        (_APPLICATION_PROFILE_ARN, {"base_model": "openai.gpt-oss-120b-1:0"}, False),
+        ("us.amazon.nova-pro-v1:0", {}, False),
+        ("us.amazon.nova-pro-v1:0", {"base_model": "openai.gpt-6-luna"}, False),
+        (_APPLICATION_PROFILE_ARN, {}, False),
+    ],
+)
+async def test_transform_request_replays_openai_gpt_redacted_reasoning_exactly_as_converse_returned_it(
+    use_async: bool, model: str, litellm_params: dict[str, str], replays_redacted: bool
+):
+    config: Final = AmazonConverseConfig()
+    returned_blocks: Final = config._transform_thinking_blocks([{"redactedContent": _GPT_REDACTED_CONTENT}])
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "thinking_blocks": returned_blocks},
+        {"role": "user", "content": "again"},
+    ]
+    kwargs: Final = dict(model=model, messages=messages, optional_params={}, litellm_params=dict(litellm_params))
+
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": [{"reasoningContent": {"redactedContent": _GPT_REDACTED_CONTENT}}, {"text": "hello"}]
+        if replays_redacted
+        else [{"text": "hello"}],
+    }
+
+
 def test_transform_request_drops_lookaround_regex_around_pre_formatted_tool_blocks():
     """Blocks that arrive already in Bedrock shape, like Nova's grounding ``systemTool``, pass through as sent."""
     grounding: Final = {"systemTool": {"name": "nova_grounding"}}

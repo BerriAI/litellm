@@ -4352,6 +4352,7 @@ import httpx
 
 from litellm.types.llms.bedrock import (
     BedrockConverseReasoningContentBlock,
+    BedrockConverseReasoningTarget,
     BedrockConverseReasoningTextBlock,
     BedrockToolSpec,
     SearchResultBlock,
@@ -5632,14 +5633,14 @@ class BedrockConverseMessagesProcessor:
         model_info: Mapping[str, object] | None = None,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
-            bedrock_converse_accepts_redacted_thinking,
+            bedrock_converse_reasoning_target,
             bedrock_converse_rejects_assistant_prefill,
             bedrock_converse_rejects_signed_thinking,
         )
 
         contents: list[BedrockMessageBlock] = []
         msg_i = 0
-        to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+        reasoning_target: Final = bedrock_converse_reasoning_target(model, base_model)
         drop_signed_thinking: Final = bedrock_converse_rejects_signed_thinking(model, base_model)
 
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
@@ -5815,7 +5816,7 @@ class BedrockConverseMessagesProcessor:
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
                         _thinking_in_replay_order(_assistant_content, thinking_blocks),
-                        to_claude=to_claude,
+                        reasoning_target=reasoning_target,
                         drop_signed=drop_signed_thinking,
                     )
                 )
@@ -5913,7 +5914,7 @@ class BedrockConverseMessagesProcessor:
         converse_messages: Final = _ensure_document_messages_have_text(
             _rename_duplicate_bedrock_document_names(contents)
         )
-        if not (to_claude and converse_messages):
+        if not (reasoning_target == "claude" and converse_messages):
             return converse_messages
         return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
 
@@ -5921,17 +5922,17 @@ class BedrockConverseMessagesProcessor:
     def translate_thinking_blocks_to_reasoning_content_blocks(
         thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
         *,
-        to_claude: bool = False,
+        reasoning_target: BedrockConverseReasoningTarget = "other",
         drop_signed: bool = False,
     ) -> list[BedrockContentBlock]:
         return [
             BedrockContentBlock(
                 reasoningContent=BedrockConverseMessagesProcessor._to_reasoning_content_block(
-                    thinking_block, to_claude=to_claude
+                    thinking_block, reasoning_target=reasoning_target
                 )
             )
             for thinking_block in thinking_blocks
-            if not (to_claude and is_encrypted_reasoning_block(thinking_block))
+            if not (reasoning_target != "other" and is_encrypted_reasoning_block(thinking_block))
             and not (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
         ]
 
@@ -5957,12 +5958,14 @@ class BedrockConverseMessagesProcessor:
     def _to_reasoning_content_block(
         thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
         *,
-        to_claude: bool,
+        reasoning_target: BedrockConverseReasoningTarget,
     ) -> BedrockConverseReasoningContentBlock:
-        match thinking_block:
-            case {"type": "redacted_thinking", "data": str() as data} if to_claude and data.strip():
+        match thinking_block, reasoning_target:
+            case {"type": "redacted_thinking", "data": str() as data}, "claude" if data.strip():
                 return BedrockConverseReasoningContentBlock(redactedContent=converse_redacted_content(data))
-            case {"signature": signature} if signature is not None:
+            case {"type": "redacted_thinking", "data": str() as data}, "openai_gpt" if data.strip():
+                return BedrockConverseReasoningContentBlock(redactedContent=data)
+            case {"signature": signature}, _ if signature is not None:
                 return BedrockConverseReasoningContentBlock(
                     reasoningText=BedrockConverseReasoningTextBlock(
                         text=BedrockConverseMessagesProcessor._thinking_text(thinking_block), signature=signature
@@ -6118,14 +6121,14 @@ def _bedrock_converse_messages_pt(
     - Conversation blocks and tool result blocks cannot be provided in the same turn. Issue: https://github.com/BerriAI/litellm/issues/6053
     """
     from litellm.llms.bedrock.common_utils import (
-        bedrock_converse_accepts_redacted_thinking,
+        bedrock_converse_reasoning_target,
         bedrock_converse_rejects_assistant_prefill,
         bedrock_converse_rejects_signed_thinking,
     )
 
     contents: list[BedrockMessageBlock] = []
     msg_i = 0
-    to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+    reasoning_target: Final = bedrock_converse_reasoning_target(model, base_model)
     drop_signed_thinking: Final = bedrock_converse_rejects_signed_thinking(model, base_model)
 
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
@@ -6301,7 +6304,7 @@ def _bedrock_converse_messages_pt(
             converted_thinking_blocks = (
                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
                     _thinking_in_replay_order(_assistant_content, thinking_blocks),
-                    to_claude=to_claude,
+                    reasoning_target=reasoning_target,
                     drop_signed=drop_signed_thinking,
                 )
             )
@@ -6396,7 +6399,7 @@ def _bedrock_converse_messages_pt(
             )
 
     converse_messages: Final = _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
-    if not (to_claude and converse_messages):
+    if not (reasoning_target == "claude" and converse_messages):
         return converse_messages
     return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
 
