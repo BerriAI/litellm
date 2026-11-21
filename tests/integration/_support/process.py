@@ -739,12 +739,13 @@ def private_configuration(config: Path, directory: Path) -> Path:
     return destination
 
 
-def pool_limit_for_prisma(connections: int) -> int:
+def pool_limit_for_prisma(connections: int, *, rust_spend_log_writer: bool = True) -> int:
     """The smallest ``database_connection_pool_limit`` that leaves Prisma ``connections`` on the writer after the
-    Rust writer pool's share, which includes the spend log writer's reserve since the ledger is on by default."""
+    Rust writer pool's share, which includes the spend log writer's reserve since the ledger is on by default.
+    Pass ``rust_spend_log_writer=False`` for a proxy configured with ``use_spend_logs_ledger: false``."""
     if connections < 1:
         raise ValueError(f"Prisma needs at least one connection, not {connections}")
-    reserved: Final = rust_writer_reserve(rust_spend_log_writer=True)
+    reserved: Final = rust_writer_reserve(rust_spend_log_writer=rust_spend_log_writer)
     return next(
         total
         for total in range(MIN_CONNECTION_LIMIT, connections + reserved + 1)

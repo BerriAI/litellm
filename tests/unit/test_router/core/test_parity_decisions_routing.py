@@ -20,7 +20,7 @@ from litellm.router_core import RouterCore
 from litellm.types.decisions import OpenAIDecisionInputMessage
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost, patch_direct_endpoints
-from tests.unit.test_router.core.scripted_host import auth_error, deployment
+from tests.unit.test_router.core.scripted_host import auth_error, deployment, rate_limit
 
 MakeCore = Callable[..., RouterCore]
 
@@ -117,6 +117,28 @@ def test_the_route_filter_runs_before_order(make_core: MakeCore, host: EndpointH
     _call(core, op, model="e", **QUESTION)
 
     assert host.deployments_called(op) == ["p7-openai"]
+
+
+_T1_PUBLIC: Final = {"team_id": "T1", "team_public_model_name": "team-e"}
+_T2_PUBLIC: Final = {"team_id": "T2", "team_public_model_name": "team-e"}
+
+
+def test_adecisions_walks_the_order_tiers_of_the_litellm_metadata_team(
+    make_core: MakeCore, host: EndpointHost
+) -> None:
+    host.answer("openai/t1-first", rate_limit())
+    core: Final = make_core(
+        model_list=[
+            deployment("t1-first", "t1-first", order=1, model_info=_T1_PUBLIC),
+            deployment("t2-first", "t2-first", order=2, model_info=_T2_PUBLIC),
+            deployment("t1-second", "t1-second", order=3, model_info=_T1_PUBLIC),
+        ],
+        num_retries=0,
+    )
+
+    _call(core, "adecisions", model="team-e", litellm_metadata={"user_api_key_team_id": "T1"}, **QUESTION)
+
+    assert host.deployments_called("adecisions") == ["t1-first", "t1-second"]
 
 
 def test_the_route_filter_runs_before_cooldown(make_core: MakeCore, host: EndpointHost) -> None:

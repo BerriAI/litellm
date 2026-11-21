@@ -86,7 +86,7 @@ AZURE_RESPONSES_REQUEST: Final[Mapping[str, JsonValue]] = {
     ],
 }
 
-_AZURE_RESPONSES_BRIDGE_REQUEST_CAPTURED: Final[Mapping[str, JsonValue]] = {
+AZURE_RESPONSES_BRIDGE_REQUEST_CAPTURED: Final[Mapping[str, JsonValue]] = {
     "input": [
         {
             "type": "message",
@@ -179,7 +179,7 @@ _AZURE_RESPONSES_BRIDGE_REQUEST_CAPTURED: Final[Mapping[str, JsonValue]] = {
 }
 
 AZURE_RESPONSES_BRIDGE_REQUEST: Final[Mapping[str, JsonValue]] = with_leading_system_message(
-    _AZURE_RESPONSES_BRIDGE_REQUEST_CAPTURED
+    AZURE_RESPONSES_BRIDGE_REQUEST_CAPTURED
 )
 
 AZURE_RESPONSES_RESPONSE: Final[Mapping[str, JsonValue]] = {
