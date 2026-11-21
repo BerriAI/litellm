@@ -3166,6 +3166,7 @@ def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
     assert type(mapped.__context__) is SSOTokenLoadError
 
 
+@pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize(
     ("sts_failure", "raised", "status"),
     (
@@ -3180,7 +3181,7 @@ def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
         ),
         pytest.param(("invalid_web_identity_token", "", "", "bad"), "AwsAuthError", 401, id="invalid-web-identity"),
         pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", None, id="sts-unreachable"),
-        pytest.param(None, "ValueError", None, id="no-sts-call"),
+        pytest.param(None, "AuthenticationError", 401, id="no-sts-call"),
     ),
 )
 def test_a_bedrock_mantle_sts_failure_raises_the_class_the_mantle_signer_lets_through(
@@ -3976,18 +3977,67 @@ async def test_anthropic_messages_drops_diagnostics_a_provider_rejects_when_aske
     assert "diagnostics" not in bodies[0]
 
 
-@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.fixture
+def unavailable_container_credentials(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", f"http://127.0.0.1:{server.server_port}/credentials")
+    yield
+    server.shutdown()
+
+
+@pytest.mark.usefixtures("no_aws_credentials", "unavailable_container_credentials")
 @pytest.mark.parametrize("kind", ("unavailable", "replay"))
-def test_a_bedrock_mantle_credential_failure_rust_cannot_name_stays_the_retryable_mantle_value_error(
-    kind: str,
-) -> None:
+def test_a_bedrock_mantle_credential_source_outage_stays_the_retryable_mantle_value_error(kind: str) -> None:
     from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
 
     mapped: Final = messages_host.map_failure(
         _credential_failure(kind),
-        {"model": _BEDROCK_MANTLE, "messages": [], "api_base": "https://mantle.test"},
+        {"model": _BEDROCK_MANTLE, "messages": [], "aws_region_name": "us-east-1"},
         "bedrock_mantle",
     )
 
     assert type(mapped) is ValueError
     assert str(mapped) == MANTLE_AUTH_FAILED
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+def test_a_bedrock_mantle_sso_profile_without_a_usable_token_answers_401(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from botocore.exceptions import SSOTokenLoadError
+
+    config: Final = tmp_path / "config"
+    config.write_text(
+        "[profile logged-out-sso]\n"
+        "sso_session = litellm-unit-test-session-never-logged-in\n"
+        "sso_account_id = 111111111111\n"
+        "sso_role_name = Dev\n"
+        "[sso-session litellm-unit-test-session-never-logged-in]\n"
+        "sso_start_url = https://example.awsapps.com/start\n"
+        "sso_region = us-west-2\n"
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("unavailable"),
+        {
+            "model": _BEDROCK_MANTLE,
+            "messages": [],
+            "aws_region_name": "us-east-1",
+            "aws_profile_name": "logged-out-sso",
+        },
+        "bedrock_mantle",
+    )
+
+    assert type(mapped) is litellm.AuthenticationError
+    assert type(mapped.__context__) is SSOTokenLoadError

@@ -913,39 +913,9 @@ def _sts_failure(failure: object) -> Exception | None:
     return EndpointConnectionError(endpoint_url="AWS STS") if kind == "unreachable" else None
 
 
-def _bedrock_credential_failure(
-    error: Exception, request: Mapping[str, object], request_provider: str
-) -> Exception | None:
-    """The exception Python's bedrock config raises while signing a call whose credentials Rust
-    could not acquire, from botocore's `NoCredentialsError` to an STS or `AwsAuthError` failure. Only a
-    Bedrock invoke call (`replay`) runs Python's signing again; Rust names the Mantle routes' failure."""
-    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
-    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED, BedrockMantleAuthError
-
-    kind: Final = getattr(error, "messages_credential_failure", None)
-    if not isinstance(kind, str):
-        return None
-    known: Final = _signing_failure(kind, optional_str(getattr(error, "messages_missing_profile", None)))
-    if request_provider == "bedrock_mantle":
-        sts: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
-        if sts is not None:
-            return _raised(sts)
-        if isinstance(known, AwsAuthError):
-            return _raised(known)
-        return _raised(
-            BedrockMantleAuthError()
-            if kind in ("no_credentials", "profile_not_found")
-            else ValueError(MANTLE_AUTH_FAILED)
-        )
-    if known is not None:
-        return _raised(known)
-    if kind == "unavailable":
-        from botocore.exceptions import NoCredentialsError
-
-        sts_failure: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
-        return _raised(sts_failure if sts_failure is not None else NoCredentialsError())
-    # TODO: Rust migration: this reruns Python's signing on Bedrock invoke to produce the exception for credential
-    # failures Rust does not name yet. Have Rust name each kind (as it does for `profile_not_found`) and drop the replay.
+def _python_signing_failure(request: Mapping[str, object]) -> Exception | None:
+    # TODO: Rust migration: this reruns Python's signing to produce the exception for credential failures Rust
+    # does not name yet. Have Rust name each kind (as it does for `profile_not_found`) and drop the replay.
     call: Final = _provider_call(request)
     if call is None:
         return None
@@ -963,6 +933,41 @@ def _bedrock_credential_failure(
     except Exception as python_failure:  # noqa: BLE001  # the exception Python's signing raises is the answer
         return python_failure
     return None
+
+
+def _bedrock_credential_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str
+) -> Exception | None:
+    """The exception Python's bedrock config raises while signing a call whose credentials Rust
+    could not acquire, from botocore's `NoCredentialsError` to an STS or `AwsAuthError` failure. A failure
+    Rust does not name runs Python's signing again for its exception."""
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED, BedrockMantleAuthError
+
+    kind: Final = getattr(error, "messages_credential_failure", None)
+    if not isinstance(kind, str):
+        return None
+    known: Final = _signing_failure(kind, optional_str(getattr(error, "messages_missing_profile", None)))
+    if request_provider == "bedrock_mantle":
+        sts: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
+        if sts is not None:
+            return _raised(sts)
+        if isinstance(known, AwsAuthError):
+            return _raised(known)
+        if kind in ("no_credentials", "profile_not_found"):
+            return _raised(BedrockMantleAuthError())
+        replayed: Final = _python_signing_failure(request)
+        return _raised(
+            replayed if replayed is not None and is_aws_credential_error(replayed) else ValueError(MANTLE_AUTH_FAILED)
+        )
+    if known is not None:
+        return _raised(known)
+    if kind == "unavailable":
+        from botocore.exceptions import NoCredentialsError
+
+        sts_failure: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
+        return _raised(sts_failure if sts_failure is not None else NoCredentialsError())
+    return _python_signing_failure(request)
 
 
 def _sent_base(
