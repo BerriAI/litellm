@@ -9712,6 +9712,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/login/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login Resume
+         * @description Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in
+         */
+        get: operations["login_resume_login_resume_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/app_budget_groups": {
         parameters: {
             query?: never;
@@ -30548,18 +30568,6 @@ export interface components {
             max_budget: number;
             /** Reset At */
             reset_at?: string | null;
-        };
-        /**
-         * BudgetLimitEntry
-         * @description A single budget window with its own limit and independent reset schedule.
-         */
-        BudgetLimitEntry: {
-            /** Budget Duration */
-            budget_duration: string;
-            /** Max Budget */
-            max_budget: number;
-            /** Reset At */
-            reset_at?: string | null;
             /**
              * Window Start
              * @description Server-managed start of the current spend window.
@@ -30765,7 +30773,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -36018,7 +36026,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -36182,7 +36190,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -37668,7 +37676,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39357,7 +39365,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39493,7 +39501,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39587,7 +39595,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -42916,7 +42924,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -43063,7 +43071,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -43209,7 +43217,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -44506,7 +44514,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -46224,7 +46232,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -51342,7 +51350,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -51504,7 +51512,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
@@ -53511,7 +53519,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -54052,7 +54060,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -54190,7 +54198,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -54296,7 +54304,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -55128,7 +55136,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Limits Usage */
             budget_limits_usage?: {
                 [key: string]: {
@@ -70528,6 +70536,26 @@ export interface operations {
         };
     };
     login_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    login_resume_login_resume_get: {
         parameters: {
             query?: never;
             header?: never;

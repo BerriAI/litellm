@@ -27,7 +27,6 @@ from collections.abc import (
     Collection,
     Container,
     Iterable,
-    Iterator,
     Mapping,
     MutableMapping,
     Sequence,
@@ -660,8 +659,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     get_management_object_ttl,
-    model_access_group_cache_key,
-    project_cache_key,
     tag_cache_key,
 )
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
@@ -703,9 +700,6 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManage
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_RETENTION_JOB,
     SPEND_LOG_SIZE_CHECK_JOB,
-)
-from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
-    build_window_spend_transaction,
 )
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
@@ -943,19 +937,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
-    end_user_counter,
     is_unavailable,
-    key_counter,
-    key_window_counter,
-    model_access_group_counter,
-    org_counter,
-    project_counter,
-    tag_counter,
-    team_counter,
-    team_member_counter,
-    team_window_counter,
-    user_counter,
-    user_window_counter,
 )
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
@@ -1035,36 +1017,30 @@ from litellm.proxy.shutdown.scheduled_jobs import (
     pause_scheduled_jobs,
     stop_in_flight_scheduler_jobs,
 )
+from litellm.proxy.spend_tracking import legacy_spend_counters
 from litellm.proxy.spend_tracking.background_interaction_settlement import (
     install_background_interaction_settlement,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
-    get_budget_window_start,
     release_cancelled_budget_reservation,
     release_unbound_budget_reservation,
-    stamp_budget_reservation_actual_cost,
 )
-from litellm.proxy.spend_tracking.committed_spend import (
-    committed_spend_key,
-    committed_spend_keys,
-    has_committed_twin,
-    seed_committed_spend,
-)
+from litellm.proxy.spend_tracking.rust_spend_counters import charge_spend_counters
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
-    bind_spend_counter_keys,
     forget_spend_counter,
     post_call_counter_keys,
     read_batched_spend_counter,
     record_spend_counter_value,
     spend_counter_batch_scope,
 )
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import capture_spend_logs_ledger_setting
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -1451,9 +1427,30 @@ async def _flush_spend_on_shutdown() -> None:
     await _flush_spend_logs_queue_on_shutdown()
 
 
+async def flush_rust_callbacks_on_shutdown() -> None:
+    from litellm.integrations.custom_logger_v2.rust import flush_rust_loggers
+    from litellm.litellm_core_utils.litellm_logging import (
+        _in_memory_loggers,  # pyright: ignore[reportPrivateUsage]  # dynamic per-key loggers are held only here
+    )
+
+    await flush_rust_loggers(
+        (*litellm.logging_callback_manager.get_all_callbacks(), *litellm.input_callback, *_in_memory_loggers)
+    )
+
+
+async def _bounded_rust_flush(flush_rust: Callable[[], Awaitable[None]], timeout: float) -> None:
+    try:
+        await asyncio.wait_for(flush_rust(), timeout=timeout)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "Rust callback shutdown flush did not finish within %.3fs; their queued rows may be lost", timeout
+        )
+
+
 async def _flush_spend_around_logging_drain_on_shutdown(
     flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
     *,
+    flush_rust: Callable[[], Awaitable[None]] = flush_rust_callbacks_on_shutdown,
     worker: LoggingWorker = GLOBAL_LOGGING_WORKER,
     clock: Callable[[], float] = time.monotonic,
     drain_tasks: Callable[[float], Awaitable[None]] = drain_logging_tasks,
@@ -1481,7 +1478,9 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
-    await flush_spend()
+    _ = await asyncio.gather(
+        flush_spend(), _bounded_rust_flush(flush_rust, GracefulShutdownManager.remaining(clock=clock))
+    )
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1644,7 +1643,12 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    connections: Final = rust_connections(os.environ)
+    from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
+
+    connections: Final = rust_connections(
+        os.environ,
+        rust_spend_log_writer=spend_log_writer_runs_in_rust(general_settings_view()),
+    )
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
@@ -1654,6 +1658,18 @@ async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) 
     )
     resources.push_async_callback(database.aclose)
     return database
+
+
+async def _install_rust_spend_log_writer(resources: AsyncExitStack, database: database_runtime.Database | None) -> None:
+    if database is None or database.native is None:
+        return
+    from litellm.proxy.db.rust_spend_log_writer import (
+        install_rust_spend_log_writer,
+        uninstall_rust_spend_log_writer,
+    )
+
+    if await install_rust_spend_log_writer(database.prisma, database.native, general_settings_view()) is not None:
+        resources.push_async_callback(uninstall_rust_spend_log_writer, database.prisma)
 
 
 def _forget_prisma_client() -> None:
@@ -1797,7 +1813,15 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     settings: Final = general_settings_view()
     enforce_fips_mode(settings)
     if configure_pool_budget_from_settings.get() and prisma_client is None:
-        resources.enter_context(with_configured_connection_budget(settings.get("database_connection_pool_limit")))
+        from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
+
+        resources.enter_context(
+            with_configured_connection_budget(
+                settings.get("database_connection_pool_limit"),
+                rust_spend_log_writer=spend_log_writer_runs_in_rust(settings),
+            )
+        )
+    resources.callback(capture_spend_logs_ledger_setting(settings))
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -1831,6 +1855,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
 
     database: Final = existing_database or await _own_database(resources, prisma_client)
+    await _install_rust_spend_log_writer(resources, database)
 
     await migrate_if_requested(
         environ=os.environ,
@@ -3525,11 +3550,29 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 spend_event_producer: SpendEventProducer | None = None
 
 
+def _register_rust_spend_loggers() -> bool:
+    from litellm.proxy.spend_tracking.rust_spend_log_rows import uses_spend_logs_ledger
+
+    if not uses_spend_logs_ledger():
+        return False
+    from litellm.proxy.hooks.rust_spend_logger import rust_spend_loggers
+
+    logger: Final = rust_spend_loggers(prisma_client)
+    if logger is None:
+        return False
+    litellm.logging_callback_manager.add_litellm_callback(logger)  # pyright: ignore[reportArgumentType]  # the callback list also holds V2 callbacks
+    litellm.logging_callback_manager.add_litellm_async_success_callback(logger)
+    return True
+
+
 def cost_tracking():
     global prisma_client, spend_event_producer
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
+        if _register_rust_spend_loggers():
+            litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
+            return
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
         db_logger: Final = ProxyDBLogger(spend_event_producer)
         litellm.logging_callback_manager.add_litellm_callback(db_logger)
@@ -3856,6 +3899,7 @@ async def increment_spend_counters(
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
     customer_counters: Sequence[BudgetCounter] = (),
+    customer_hierarchy: object = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3866,7 +3910,30 @@ async def increment_spend_counters(
 
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
+
+    With the ledger the whole step runs in Rust, the customer hierarchy in
+    ``customer_hierarchy`` charged in the same batch read and pipeline.
+
+    Deprecated: the ledger-off branch below is frozen and lives in
+    ``legacy_spend_counters``. Delete it together with the ledger-off setting.
     """
+    if windows_from_ledger:
+        await charge_spend_counters(
+            token=token,
+            team_id=team_id,
+            user_id=user_id,
+            response_cost=response_cost,
+            org_id=org_id,
+            budget_reservation=budget_reservation,
+            end_user_id=end_user_id,
+            tags=tags,
+            model_access_groups=model_access_groups,
+            project_id=project_id,
+            committed_spend_scope=committed_spend_scope,
+            customer_counters=customer_counters,
+            customer_hierarchy=customer_hierarchy,
+        )
+        return
     with spend_counter_batch_scope(
         spend_counter_store,
         counter_keys=post_call_counter_keys(
@@ -3881,7 +3948,7 @@ async def increment_spend_counters(
         )
         | frozenset(counter.counter_key for counter in customer_counters),
     ):
-        await _increment_spend_counters_batched(
+        await legacy_spend_counters.increment_spend_counters_batched(  # pyright: ignore[reportUnknownMemberType]  # the frozen ledger-off step, moved out unchanged
             token=token,
             team_id=team_id,
             user_id=user_id,
@@ -4057,609 +4124,6 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
     return budget_limits
 
 
-async def _increment_spend_counters_batched(
-    token: str | None,
-    team_id: str | None,
-    user_id: str | None,
-    response_cost: float | None,
-    org_id: str | None,
-    budget_reservation: dict | None,
-    end_user_id: str | None,
-    tags: list[str] | None,
-    request_started_at: datetime | None,
-    model_access_groups: Sequence[str] | None,
-    project_id: str | None = None,
-    committed_spend_scope: EntitySpendCounterKeys | None = None,
-    windows_from_ledger: bool = False,
-    customer_counters: Sequence[BudgetCounter] = (),
-):
-    """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
-    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments.
-    """
-    committed_counter_keys: Final = (
-        tuple(counter_key for counter_key in committed_spend_scope.tracked() if has_committed_twin(counter_key))
-        if committed_spend_scope is not None and response_cost is not None and response_cost > 0
-        else ()
-    )
-    bind_spend_counter_keys(frozenset(committed_spend_keys(committed_counter_keys)))
-    reservation_update: Final = await _reconcile_budget_reservation_for_counter_update(
-        budget_reservation=budget_reservation,
-        response_cost=response_cost,
-    )
-    reserved_counter_keys: Final = reservation_update.reserved_counter_keys
-
-    if response_cost is None or response_cost == 0:
-        await _apply_spend_counter_increments(pending=reservation_update.pending)
-        stamp_budget_reservation_actual_cost(budget_reservation=budget_reservation, actual_cost=response_cost)
-        if budget_reservation is not None:
-            budget_reservation["finalized"] = True
-        return
-
-    cost: Final[float] = response_cost
-
-    async def _resolved_window_increment(
-        entity_type: Litellm_EntityType,
-        entity_id: str,
-        window_counter: str,
-        duration: str,
-        window_start: datetime | None,
-        window_reset_at: datetime | str | None,
-    ) -> PendingSpendIncrement | None:
-        pending_window: Final = (
-            await _prepare_window_spend_counter_increment(
-                counter_key=window_counter,
-                entity_type=(
-                    entity_type.value.capitalize()
-                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM, Litellm_EntityType.USER)
-                    else entity_type.value
-                ),
-                entity_id=entity_id,
-                window_duration=duration,
-                window_start=window_start,
-                increment=cost,
-            )
-            if window_counter not in reserved_counter_keys
-            else None
-        )
-        if not windows_from_ledger:
-            await _enqueue_window_spend_row_update(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                reset_at=window_reset_at,
-                window_duration=duration,
-                window_start=window_start,
-                increment=cost,
-                request_started_at=request_started_at,
-            )
-        return pending_window
-
-    async def _window_increment(
-        entity_type: Litellm_EntityType, entity_id: str, window: object
-    ) -> PendingSpendIncrement | None:
-        duration: Final = (
-            window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
-        )
-        duration_text: Final = TypeAdapter(str).validate_python(duration)
-        window_reset_at: Final = (
-            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-        )
-        window_counter: Final = (
-            key_window_counter(entity_id, duration_text)
-            if entity_type is Litellm_EntityType.KEY
-            else user_window_counter(entity_id, duration_text)
-            if entity_type is Litellm_EntityType.USER
-            else team_window_counter(entity_id, duration_text)
-        )
-        return await _resolved_window_increment(
-            entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
-        )
-
-    async def _customer_windows() -> tuple[PendingSpendIncrement | BaseException, ...]:
-        pending: Final = await asyncio.gather(
-            *(
-                _resolved_window_increment(
-                    Litellm_EntityType(counter.entity_type),
-                    counter.entity_id,
-                    counter.counter_key,
-                    counter.window_duration,
-                    counter.window_start,
-                    counter.reset_at,
-                )
-                for counter in customer_counters
-                if counter.window_duration is not None
-            ),
-            return_exceptions=True,
-        )
-        return tuple(item for item in pending if item is not None)
-
-    async def _window_increments(
-        entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
-    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        if not isinstance(budget_limits, (list, tuple)):
-            return ()
-        window_pending: Final = await asyncio.gather(
-            *(_window_increment(entity_type, entity_id, window) for window in budget_limits), return_exceptions=True
-        )
-        return tuple(item for item in window_pending if item is not None)
-
-    async def _cached_window_increments(
-        entity_type: Litellm_EntityType, entity_id: str, cache_key: str
-    ) -> tuple[_SpendScopeItem, ...]:
-        cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
-        if cached is None:
-            return (_UncachedBudgetWindows(entity_type=entity_type, entity_id=entity_id),)
-        return await _window_increments(entity_type, entity_id, _cached_budget_limits(cached))
-
-    async def _stored_window_increments(
-        uncached: _UncachedBudgetWindows,
-    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        return await _window_increments(
-            uncached.entity_type,
-            uncached.entity_id,
-            await _stored_budget_limits(uncached.entity_type, uncached.entity_id),
-        )
-
-    async def _key_scope(key_token: str) -> tuple[_SpendScopeItem, ...]:
-        # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
-        # hashes raw "sk-..." keys before they reach the callback). The
-        # startswith("sk-") check is a safety net matching update_cache —
-        # if a raw key somehow arrives, hash it; otherwise use as-is to
-        # avoid double-hashing (budget checks read valid_token.token which
-        # is single-hashed).
-        hashed_token: Final = (
-            hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
-        )
-        key_counter_key: Final = key_counter(hashed_token)
-        key_pending: Final[tuple[PendingSpendIncrement, ...]] = (
-            ()
-            if key_counter_key in reserved_counter_keys
-            else (
-                await _prepare_spend_counter_increment(
-                    counter_key=key_counter_key,
-                    source_cache_key=hashed_token,
-                    increment=cost,
-                ),
-            )
-        )
-
-        return key_pending + await _cached_window_increments(Litellm_EntityType.KEY, hashed_token, hashed_token)
-
-    async def _team_scope(scope_team_id: str) -> tuple[_SpendScopeItem, ...]:
-        team_counter_key: Final = team_counter(scope_team_id)
-        team_pending: Final[tuple[PendingSpendIncrement, ...]] = (
-            ()
-            if team_counter_key in reserved_counter_keys
-            else (
-                await _prepare_spend_counter_increment(
-                    counter_key=team_counter_key,
-                    source_cache_key=f"team_id:{scope_team_id}",
-                    increment=cost,
-                ),
-            )
-        )
-
-        return team_pending + await _cached_window_increments(
-            Litellm_EntityType.TEAM, scope_team_id, f"team_id:{scope_team_id}"
-        )
-
-    async def _team_member_scope(
-        scope_user_id: str, scope_team_id: str
-    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        team_member_counter_key: Final = team_member_counter(scope_user_id, scope_team_id)
-        if team_member_counter_key in reserved_counter_keys:
-            return ()
-        return (
-            await _prepare_spend_counter_increment(
-                counter_key=team_member_counter_key,
-                source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
-                increment=cost,
-            ),
-        )
-
-    async def _user_scope(scope_user_id: str) -> tuple[_SpendScopeItem, ...]:
-        user_counter_key: Final = user_counter(scope_user_id)
-        pending: Final = (
-            ()
-            if user_counter_key in reserved_counter_keys
-            else (
-                await _prepare_spend_counter_increment(
-                    counter_key=user_counter_key,
-                    source_cache_key=scope_user_id,
-                    increment=cost,
-                ),
-            )
-        )
-        return pending + await _cached_window_increments(Litellm_EntityType.USER, scope_user_id, scope_user_id)
-
-    scope_coros: Final = tuple(
-        coro
-        for coro in (
-            _customer_windows() if customer_counters else None,
-            _key_scope(token) if token is not None else None,
-            _team_scope(team_id) if team_id is not None else None,
-            _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
-            _user_scope(user_id) if user_id is not None else None,
-            _prepare_end_user_and_tag_spend_increments(
-                end_user_id=end_user_id,
-                tags=tags,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if end_user_id is not None or tags is not None
-            else None,
-            _prepare_model_access_group_spend_increments(
-                model_access_groups=model_access_groups,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if model_access_groups
-            else None,
-            _prepare_org_spend_increment(
-                org_id=org_id,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if org_id is not None
-            else None,
-            _prepare_project_spend_increment(
-                project_id=project_id,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if project_id is not None
-            else None,
-            _prepare_committed_spend_increments(counter_keys=committed_counter_keys, increment=cost)
-            if committed_counter_keys
-            else None,
-        )
-        if coro is not None
-    )
-
-    # return_exceptions so a failing scope does not leave its siblings running
-    # as orphaned tasks that race the caller's reservation-counter invalidation;
-    # all scopes settle, then the first error propagates as before.
-    scope_items: Final = tuple(_flatten_spend_scopes(await asyncio.gather(*scope_coros, return_exceptions=True)))
-    uncached_windows: Final = tuple(item for item in scope_items if isinstance(item, _UncachedBudgetWindows))
-    await _apply_spend_counter_increments(
-        pending=reservation_update.pending
-        + tuple(item for item in scope_items if isinstance(item, PendingSpendIncrement))
-    )
-    stored_window_items: Final = (
-        tuple(
-            _flatten_spend_scopes(
-                await asyncio.gather(
-                    *(_stored_window_increments(uncached) for uncached in uncached_windows), return_exceptions=True
-                )
-            )
-        )
-        if uncached_windows
-        else ()
-    )
-    stored_window_pending: Final = tuple(
-        item for item in stored_window_items if isinstance(item, PendingSpendIncrement)
-    )
-    if stored_window_pending:
-        await _apply_spend_counter_increments(pending=stored_window_pending)
-    stamp_budget_reservation_actual_cost(budget_reservation=budget_reservation, actual_cost=response_cost)
-    scope_errors: Final = tuple(item for item in scope_items + stored_window_items if isinstance(item, BaseException))
-    if scope_errors:
-        raise scope_errors[0]
-
-    if budget_reservation is not None:
-        budget_reservation["finalized"] = True
-
-
-@dataclass(frozen=True, slots=True)
-class _UncachedBudgetWindows:
-    entity_type: Litellm_EntityType
-    entity_id: str
-
-
-_SpendScopeItem: TypeAlias = PendingSpendIncrement | BaseException | _UncachedBudgetWindows
-
-
-def _flatten_spend_scopes(
-    scope_results: Sequence[tuple[_SpendScopeItem, ...] | BaseException],
-) -> Iterator[_SpendScopeItem]:
-    for scope in scope_results:
-        if isinstance(scope, BaseException):
-            yield scope
-            continue
-        yield from scope
-
-
-@dataclass(frozen=True, slots=True)
-class _ReservationCounterUpdate:
-    """The reserved counters the direct increment must skip, and the adjustments that settle them on the actual
-    cost, still to be written; both empty when the reservation could not be reconciled and was dropped.
-    """
-
-    reserved_counter_keys: frozenset[str] = frozenset()
-    pending: tuple[PendingSpendIncrement, ...] = ()
-
-
-async def _reconcile_budget_reservation_for_counter_update(
-    budget_reservation: dict | None,
-    response_cost: float | None,
-) -> _ReservationCounterUpdate:
-    if budget_reservation is None or budget_reservation.get("finalized") is True:
-        return _ReservationCounterUpdate()
-
-    from litellm.proxy.spend_tracking.budget_reservation import (
-        get_reserved_counter_keys,
-        invalidate_budget_reservation_counters,
-        reconcile_budget_reservation,
-    )
-
-    reserved_counter_keys: Final = get_reserved_counter_keys(budget_reservation=budget_reservation)
-    try:
-        pending: Final = await reconcile_budget_reservation(
-            budget_reservation=budget_reservation,
-            actual_cost=response_cost or 0.0,
-            finalize=False,
-            apply_consistent=False,
-        )
-    except Exception:
-        verbose_proxy_logger.warning(
-            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and falling back to direct increment",
-            exc_info=True,
-        )
-        try:
-            await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
-        except Exception:
-            verbose_proxy_logger.exception(
-                "Failed to invalidate reserved counters after reservation reconciliation failed"
-            )
-        return _ReservationCounterUpdate()
-    return _ReservationCounterUpdate(reserved_counter_keys=frozenset(reserved_counter_keys), pending=pending)
-
-
-async def _committed_spend_seeded(counter_key: str) -> bool:
-    return await _is_spend_counter_cache_warm(committed_spend_key(counter_key)) or await seed_committed_spend(
-        spend_counter_store=spend_counter_store, prisma_client=prisma_client, counter_key=counter_key
-    )
-
-
-async def _prepare_committed_spend_increments(
-    counter_keys: tuple[str, ...], increment: float
-) -> tuple[PendingSpendIncrement, ...]:
-    seeded: Final = await asyncio.gather(*(_committed_spend_seeded(counter_key) for counter_key in counter_keys))
-    return tuple(
-        PendingSpendIncrement(counter_key=committed_spend_key(counter_key), increment=increment)
-        for counter_key, is_seeded in zip(counter_keys, seeded)
-        if is_seeded
-    )
-
-
-async def _prepare_end_user_and_tag_spend_increments(
-    end_user_id: str | None,
-    tags: list[str] | None,
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement | BaseException, ...]:
-    unique_tags: Final = (
-        tuple(dict.fromkeys(tag for tag in tags if tag and isinstance(tag, str))) if tags is not None else ()
-    )
-    results: Final = await asyncio.gather(
-        *(
-            coro
-            for coro in (
-                _prepare_unreserved_spend_counter_increment(
-                    counter_key=end_user_counter(end_user_id),
-                    source_cache_key=end_user_cache_key(end_user_id),
-                    increment=response_cost,
-                    reserved_counter_keys=reserved_counter_keys,
-                )
-                if end_user_id is not None
-                else None,
-                *(
-                    _prepare_unreserved_spend_counter_increment(
-                        counter_key=tag_counter(tag_name),
-                        source_cache_key=tag_cache_key(tag_name),
-                        increment=response_cost,
-                        reserved_counter_keys=reserved_counter_keys,
-                    )
-                    for tag_name in unique_tags
-                ),
-            )
-            if coro is not None
-        ),
-        return_exceptions=True,
-    )
-    return tuple(item for item in results if item is not None)
-
-
-async def _prepare_model_access_group_spend_increments(
-    model_access_groups: Sequence[object],
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement | BaseException, ...]:
-    """Charge the model access groups that authorized this request.
-
-    Without this the counter auth reads is written only by the reservation path, so
-    ``disable_budget_reservation`` would leave ``_model_access_group_max_budget_check`` enforcing
-    against the DB row's spend, which lags by up to the cache TTL.
-
-    Typed ``object`` rather than ``str`` because the names reach the cost callback out of request
-    metadata, which the coercion upstream filters to a list but not to strings. A non-string that
-    slipped through would build a counter key nothing else ever reads.
-    """
-    unique_groups: Final = tuple(
-        dict.fromkeys(group for group in model_access_groups if group and isinstance(group, str))
-    )
-    results: Final = await asyncio.gather(
-        *(
-            _prepare_unreserved_spend_counter_increment(
-                counter_key=model_access_group_counter(group),
-                source_cache_key=model_access_group_cache_key(group),
-                increment=response_cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            for group in unique_groups
-        ),
-        return_exceptions=True,
-    )
-    return tuple(item for item in results if item is not None)
-
-
-async def _prepare_org_spend_increment(
-    org_id: str | None,
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement, ...]:
-    if org_id is None:
-        return ()
-
-    pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=org_counter(org_id),
-        source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
-        increment=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
-    )
-    return (pending,) if pending is not None else ()
-
-
-async def _prepare_project_spend_increment(
-    project_id: str | None,
-    response_cost: float,
-    reserved_counter_keys: set[str],
-) -> tuple[PendingSpendIncrement, ...]:
-    if project_id is None:
-        return ()
-
-    pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=project_counter(project_id),
-        source_cache_key=project_cache_key(project_id),
-        increment=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
-    )
-    return (pending,) if pending is not None else ()
-
-
-async def _prepare_unreserved_spend_counter_increment(
-    counter_key: str,
-    source_cache_key: str | list[str],
-    increment: float,
-    reserved_counter_keys: set[str],
-) -> PendingSpendIncrement | None:
-    if counter_key in reserved_counter_keys:
-        return None
-
-    return await _prepare_spend_counter_increment(
-        counter_key=counter_key,
-        source_cache_key=source_cache_key,
-        increment=increment,
-    )
-
-
-async def _prepare_spend_counter_increment(
-    counter_key: str,
-    source_cache_key: str | list[str],
-    increment: float,
-) -> PendingSpendIncrement:
-    """
-    Initialize counter from the authoritative DB spend value if not yet
-    set, then return the pending increment for the caller to apply in one
-    pipelined Redis call.
-
-    On first access per pod:
-    1. Check spend_counter_store (Redis, then this worker's memory)
-    2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
-       Falls back to the cached object's `.spend` via user_api_key_cache
-       only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
-    4. Increment is returned for the caller to apply via pipeline
-    """
-    with service_target(SPEND_COUNTERS_TARGET):
-        await ensure_spend_counter_initialized(
-            counter_key=counter_key,
-            source_cache_key=source_cache_key,
-        )
-    return PendingSpendIncrement(counter_key=counter_key, increment=increment)
-
-
-async def _enqueue_window_spend_row_update(
-    entity_type: Litellm_EntityType,
-    entity_id: str,
-    reset_at: datetime | str | None,
-    window_duration: str,
-    window_start: datetime | None,
-    increment: float,
-    request_started_at: datetime | None,
-) -> None:
-    """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
-    the window, so enforcement can read a maintained total instead of
-    aggregating LiteLLM_SpendLogs.
-
-    request_started_at is this request's LiteLLM_SpendLogs startTime; the flush
-    stops the one-time seed there so a request its increment already covers is
-    not counted twice.
-
-    Enqueued even when the cache increment was skipped for a reserved counter:
-    the reservation only pre-charged the counter, and the row still owes the
-    actual cost.
-
-    Windows with no reset_at slide with wall clock, so their window_start moves
-    on every request and no single row can represent them. Those are left to
-    the read path's LiteLLM_SpendLogs fallback rather than rewritten per
-    request.
-    """
-    if window_start is None or not reset_at:
-        return
-    try:
-        await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
-            build_window_spend_transaction(
-                entity_type=entity_type.value,
-                entity_id=entity_id,
-                window_duration=window_duration,
-                window_start=window_start,
-                spend=increment,
-                started_at=request_started_at,
-                reset_at=reset_at,
-            )
-        )
-    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
-        verbose_proxy_logger.debug(
-            "Unable to enqueue budget window spend update for %s=%s window=%s: %s",
-            entity_type.value,
-            entity_id,
-            window_duration,
-            e,
-        )
-
-
-async def _prepare_window_spend_counter_increment(
-    counter_key: str,
-    entity_type: str,
-    entity_id: str,
-    window_duration: str | None,
-    window_start: datetime | None,
-    increment: float,
-) -> PendingSpendIncrement | None:
-    if window_start is None:
-        verbose_proxy_logger.warning(
-            "Skipping spend counter increment for invalid budget window %s",
-            counter_key,
-        )
-        return None
-
-    with service_target(SPEND_COUNTERS_TARGET):
-        initialized: Final = await ensure_window_spend_counter_initialized(
-            counter_key=counter_key,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            window_duration=window_duration,
-            window_start=window_start,
-        )
-    if initialized is False:
-        return None
-    return PendingSpendIncrement(counter_key=counter_key, increment=increment)
-
-
 async def ensure_spend_counter_initialized(
     counter_key: str,
     source_cache_key: str | list[str],
@@ -4822,7 +4286,9 @@ async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: fl
     await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
 
 
-async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
+async def _apply_spend_counter_increments(  # pyright: ignore[reportUnusedFunction]  # called by legacy_spend_counters
+    pending: Sequence[PendingSpendIncrement],
+) -> None:
     if _defer_spend_counter_increments(pending):
         return
     try:

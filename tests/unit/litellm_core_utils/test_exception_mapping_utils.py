@@ -3557,6 +3557,40 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.request.content == b""
 
 
+def test_openai_compatible_error_relayed_as_json_text_keeps_its_param_and_plain_message(
+    quiet_exception_mapping: None,
+) -> None:
+    upstream_message: Final = "max_tokens must be at least 1, got -5. (parameter=max_tokens, value=-5)"
+    relayed_text: Final = json.dumps(
+        {"error": {"message": upstream_message, "type": "BadRequestError", "param": "max_tokens", "code": 400}}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=relayed_text),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param == "max_tokens"
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {upstream_message}"
+
+
+@pytest.mark.parametrize("message", ("plain text failure", '{"error": "plain text failure"}', "[1, 2]"))
+def test_openai_compatible_error_without_a_relayed_error_object_keeps_its_message(
+    message: str, quiet_exception_mapping: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=message),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param is None
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {message}"
+
+
 _PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", api_base="https://api.githubcopilot.com")
 _APP_SESSION: Final = GithubCopilotUserSession(token="ghs-app", api_base="https://api.githubcopilot.com", is_app=True)
 

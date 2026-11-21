@@ -43,7 +43,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.models.budget import BudgetLimits
+from litellm.models.budget import BudgetLimitList, BudgetLimits
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -2014,6 +2014,7 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    budget_limits: BudgetLimitList | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
@@ -2130,7 +2131,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     enforced_file_expires_after: dict | None = None
     router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
-    budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
+    budget_limits: BudgetLimitList | None = None
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
     model_max_budget: GenericBudgetConfigType | None = Field(
         default=None,

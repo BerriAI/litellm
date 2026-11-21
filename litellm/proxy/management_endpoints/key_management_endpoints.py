@@ -1284,10 +1284,8 @@ def _check_budget_limits_delegation_ceiling(
     team_table: LiteLLM_TeamTableCachedObj | None,
 ) -> None:
     """
-    Enforce three invariants on `budget_limits`:
+    Enforce two invariants on `budget_limits`:
 
-    - Every `budget_limits[*].max_budget` must be a finite number; applies
-      to every caller including proxy admin.
     - A CLI session token caller may not set `budget_limits` on a personal
       key (one with no `team_id`); mirrors the scalar `max_budget` guard in
       `_common_key_generation_helper`.
@@ -1295,12 +1293,6 @@ def _check_budget_limits_delegation_ceiling(
     """
     if not budget_limits:
         return
-    non_finite: Final = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
-    if non_finite is not None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
-        )
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if is_ui_session_team_key:
