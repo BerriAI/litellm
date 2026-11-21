@@ -108,7 +108,7 @@ class AgenticLoopRequestPatch(LiteLLMBaseModel):
     tools: list[dict[str, object]] | None = None
     max_tokens: int | None = None
     optional_params: dict[str, object] = Field(default_factory=dict)
-    kwargs: dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, object] = Field(default_factory=dict)
 
 
 class AgenticLoopPlan(LiteLLMBaseModel):

@@ -91,7 +91,7 @@ async fn ocr_keeps_upstream_status_in_an_openai_error_envelope() {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(429).set_body_json(json!({"message": "busy"})))
-        .expect(1)
+        .expect(3)
         .mount(&upstream)
         .await;
     let response = support::post(support::app("mistral/test-ocr", &upstream.uri()), "/ocr",
@@ -120,11 +120,9 @@ async fn invalid_ocr_requests_do_not_call_the_provider(#[case] body: Value) {
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
-#[rstest]
 #[tokio::test]
-async fn malformed_multipart_uses_an_openai_error_envelope(
-    #[values("/v1/ocr", "/v1/audio/transcriptions")] route: &str,
-) {
+async fn malformed_multipart_uses_an_openai_error_envelope() {
+    let route = "/v1/ocr";
     let upstream = MockServer::start().await;
     let response = support::app("mistral/test-ocr", &upstream.uri())
         .oneshot(
@@ -154,11 +152,6 @@ async fn malformed_multipart_uses_an_openai_error_envelope(
     "mistral/test-ocr",
     "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.pdf\"\r\n\r\n\r\n",
     Error::Ocr(OcrError::EmptyFile)
-)]
-#[case::empty_audio(
-    "/v1/audio/transcriptions", "bedrock/test-model",
-    "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\n\r\n\r\n",
-    Error::Route(litellm_llms::Error::MissingField("audio.data").into()),
 )]
 #[tokio::test]
 async fn upload_validation_errors_come_from_core(

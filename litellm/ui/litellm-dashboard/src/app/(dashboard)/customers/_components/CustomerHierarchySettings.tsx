@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -11,17 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import {
-  buildCustomerHierarchyPatch,
-  customerEntityId,
-  customerHierarchyFields,
-  CUSTOMER_HIERARCHY_FORM_ERRORS,
-  type CustomerHierarchyEntity,
-  type CustomerHierarchyFields,
-  type CustomerHierarchyPatch,
-  type Organization,
-} from "./customerHierarchyForms";
+import { customerEntityId, type CustomerHierarchyEntity, type Organization } from "./customerHierarchyForms";
 
+import { useCustomerHierarchyForm } from "./useCustomerHierarchyForm";
 import CustomerHierarchyBudgetFields from "./CustomerHierarchyBudgetFields";
 
 interface Props {
@@ -30,28 +21,6 @@ interface Props {
   onSaved: () => void;
   onDeleted: () => void;
 }
-
-const saveEntity = async (id: string, patch: CustomerHierarchyPatch): Promise<void> => {
-  switch (patch.kind) {
-    case "organization":
-      await fetchClient.PATCH("/management/v1/customer_organizations/{customer_org_id}", {
-        params: { path: { customer_org_id: id } },
-        body: patch.body,
-      });
-      return;
-    case "team":
-      await fetchClient.PATCH("/management/v1/customer_teams/{customer_team_id}", {
-        params: { path: { customer_team_id: id } },
-        body: patch.body,
-      });
-      return;
-    case "member":
-      await fetchClient.PATCH("/management/v1/customer_members/{customer_member_id}", {
-        params: { path: { customer_member_id: id } },
-        body: patch.body,
-      });
-  }
-};
 
 const deleteEntity = async (entity: CustomerHierarchyEntity): Promise<void> => {
   const id = customerEntityId(entity);
@@ -88,13 +57,12 @@ const DELETE_MESSAGES = {
 function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
-  const initial = customerHierarchyFields(entity);
-  const [fields, setFields] = useState(initial);
-  const [pending, setPending] = useState<"save" | "delete" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const form = useCustomerHierarchyForm(entity, organization, onSaved);
+  const { fields, update, reset, dirty, error, save } = form;
+  const [deleting, setDeleting] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const dirty = JSON.stringify(fields) !== JSON.stringify(initial);
+  const pending = form.pending || deleting;
   const id = customerEntityId(entity);
   const kindLabel = t(KIND_LABELS[entity.kind]);
   const kind = kindLabel.toLocaleLowerCase();
@@ -103,30 +71,8 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
     { label: t("customerPortal.hierarchy.alias"), value: entity.record.alias },
     { label: t("customerPortal.hierarchy.identifier"), value: id, code: true },
   ];
-  const update = <K extends keyof CustomerHierarchyFields>(key: K, value: CustomerHierarchyFields[K]) =>
-    setFields((current) => ({ ...current, [key]: value }));
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const result = buildCustomerHierarchyPatch(entity, fields);
-    if (!result.ok) {
-      setError(t(CUSTOMER_HIERARCHY_FORM_ERRORS[result.error]));
-      return;
-    }
-    setPending("save");
-    setError(null);
-    try {
-      await saveEntity(id, result.patch);
-      toast.success(t("customerPortal.hierarchy.saved"));
-      onSaved();
-    } catch (cause) {
-      setError(extractProxyErrorMessage(cause));
-    } finally {
-      setPending(null);
-    }
-  };
-
   const remove = async () => {
-    setPending("delete");
+    setDeleting(true);
     setDeleteError(null);
     try {
       await deleteEntity(entity);
@@ -136,14 +82,14 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
     } catch (cause) {
       setDeleteError(extractProxyErrorMessage(cause));
     } finally {
-      setPending(null);
+      setDeleting(false);
     }
   };
 
   return (
-    <div className="w-full max-w-3xl space-y-8">
+    <div className="w-full space-y-8">
       <form onSubmit={(event) => void save(event)} className="space-y-7">
-        <fieldset disabled={pending !== null} className="space-y-7">
+        <fieldset disabled={pending} className="space-y-7">
           <section className="space-y-4" aria-labelledby="hierarchy-general-title">
             <h2 id="hierarchy-general-title" className="text-base font-medium">
               {t("customerPortal.hierarchy.profileTitle")}
@@ -170,7 +116,6 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
             fields={fields}
             onChange={update}
             idPrefix="customer-hierarchy"
-            operation="edit"
           />
         </fieldset>
         {error && (
@@ -179,19 +124,11 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
           </p>
         )}
         <div className="flex justify-end gap-2 border-t pt-4">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending !== null || !dirty}
-            onClick={() => {
-              setFields(initial);
-              setError(null);
-            }}
-          >
+          <Button type="button" variant="outline" disabled={pending || !dirty} onClick={reset}>
             {t("customerPortal.hierarchy.reset")}
           </Button>
-          <Button type="submit" disabled={pending !== null || !dirty}>
-            {t(pending === "save" ? "customerPortal.hierarchy.saving" : "customerPortal.hierarchy.save")}
+          <Button type="submit" disabled={pending || !dirty}>
+            {t(form.pending ? "customerPortal.hierarchy.saving" : "customerPortal.hierarchy.save")}
           </Button>
         </div>
       </form>
@@ -210,7 +147,7 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
           type="button"
           variant="outline"
           className="text-destructive"
-          disabled={pending !== null}
+          disabled={pending}
           onClick={() => {
             setDeleteError(null);
             setDeleteOpen(true);
@@ -230,7 +167,7 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
         requiredConfirmation={id}
         onCancel={() => setDeleteOpen(false)}
         onOk={() => void remove()}
-        confirmLoading={pending === "delete"}
+        confirmLoading={deleting}
         errorMessage={deleteError}
       />
     </div>

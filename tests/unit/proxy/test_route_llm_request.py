@@ -5,7 +5,7 @@ import json
 import threading
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
@@ -21,8 +21,8 @@ from fastapi import HTTPException
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import model_less_team_deployment
 from litellm.proxy.route_llm_request import (
@@ -35,6 +35,7 @@ from litellm.proxy.route_llm_request import (
     user_config_routers,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router_api import RouterSettings
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
@@ -3074,13 +3075,17 @@ def _mock_deployment(model_name: str, **deployment_limits: int) -> dict[str, obj
 
 
 async def _settle_router_accounting() -> None:
-    try:
-        await GLOBAL_LOGGING_WORKER.flush()
-    finally:
-        await GLOBAL_LOGGING_WORKER.stop()
-    while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
-        _, still_running = await asyncio.wait(pending, timeout=5)
-        assert not still_running, still_running
+    while True:
+        try:
+            await drain_logging_tasks()
+            await GLOBAL_LOGGING_WORKER.flush()
+        finally:
+            await GLOBAL_LOGGING_WORKER.stop()
+        while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
+            _, still_running = await asyncio.wait(pending, timeout=5)
+            assert not still_running, still_running
+        if GLOBAL_LOGGING_WORKER.pending_count == 0:
+            return
 
 
 def _is_periodic_sync(task: asyncio.Task[object]) -> bool:
@@ -3227,7 +3232,10 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
     deployment_limits: Mapping[str, int],
     arrives_with_logging_obj: bool,
     with_redis: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    now: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     await _wait_out_a_rate_limit_minute_rollover()
     callbacks_before: Final = _global_router_callbacks()
     outcomes: Final = [
@@ -3269,8 +3277,14 @@ async def test_overlapping_user_config_requests_share_one_rpm_limit(fake_redis_p
 @pytest.mark.parametrize("proxy_router_shares_redis", [True, False])
 @pytest.mark.asyncio
 async def test_a_proxy_router_on_the_same_strategy_leaves_the_user_config_limit_unchanged(
-    fake_redis_port: int, routing_strategy: str, limited_by: str, proxy_router_shares_redis: bool
+    fake_redis_port: int,
+    routing_strategy: str,
+    limited_by: str,
+    proxy_router_shares_redis: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    now: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     deployment_limits: Final = {"rpm": 3} if limited_by == "rpm" else {"tpm": await _tpm_for_three_requests()}
 
     def request() -> Coroutine[None, None, str]:

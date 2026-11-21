@@ -31,6 +31,8 @@ _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
         "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
+        "litellm/proxy/common_utils/hook_cache.py",
+        "litellm/proxy/common_utils/state_cache.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
         "litellm/router_rust/routing_stores.py",
         "litellm/router_utils/routing_prefetch.py",
@@ -83,7 +85,6 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/proxy/ui_crud_endpoints/latest_release_endpoints.py",
         "litellm/responses/litellm_completion_transformation/transformation.py",
         "litellm/router_rust/surface/model_info.py",
-        "litellm/router_utils/client_initalization_utils.py",
         "litellm/router_utils/pre_call_checks/prompt_caching_deployment_check.py",
         "litellm/router_utils/router_callbacks/track_deployment_metrics.py",
         "litellm/secret_managers/cyberark_secret_manager.py",
