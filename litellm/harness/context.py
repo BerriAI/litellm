@@ -29,6 +29,22 @@ class GatewayTarget:
 
 
 @dataclass
+class CostTracker:
+    known: float = 0.0
+    unknown_calls: int = 0
+
+    def add(self, cost: float | None) -> None:
+        if cost is None:
+            self.unknown_calls += 1
+            return
+        self.known += cost
+
+    @property
+    def total(self) -> float | None:
+        return None if self.unknown_calls else self.known
+
+
+@dataclass
 class SessionContext:
     """Everything a handler and config need for a session. Owned by the runtime."""
 
@@ -58,5 +74,9 @@ class SessionContext:
     # Usage for in-process harnesses that call LiteLLM directly (no model endpoint).
     input_tokens: int = 0
     output_tokens: int = 0
-    cost: float = 0.0
+    costs: CostTracker = field(default_factory=CostTracker)
     calls: int = 0
+
+    @property
+    def cost(self) -> float | None:
+        return self.costs.total
