@@ -8,7 +8,7 @@ use crate::{
     connection::{Connection, SentinelConnection},
 };
 
-// litellm/proxy/common_utils/auth_cache_invalidation_pubsub.py: _BACKOFF_INITIAL_SECONDS, _BACKOFF_MAX_SECONDS
+// litellm/proxy/common_utils/cache_invalidation_pubsub.py: _BACKOFF_INITIAL_SECONDS, _BACKOFF_MAX_SECONDS
 const BACKOFF_INITIAL: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 

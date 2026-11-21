@@ -127,7 +127,7 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
     customer keeps being served unrestricted until the TTL expires: auth reads end users
     cache-first, and the cached restricted-id registry decides whether the row is read at all.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
     from litellm.proxy.proxy_server import user_api_key_cache

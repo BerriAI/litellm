@@ -9,7 +9,7 @@ use litellm_redis_client::Operation;
 use litellm_redis_store::{
     Number,
     auth_cache::{AuthCache, AuthObject, Settings},
-    auth_cache_invalidation::{self, AuthCacheInvalidation, Invalidation, channel},
+    cache_invalidation::{self, CacheInvalidation, Invalidation, channel},
     spend_counters::{SpendCounter, SpendCounters},
 };
 use litellm_redis_testing::{RedisDeployment, RedisServer, TcpProxy, Topology, eventually};
@@ -29,7 +29,7 @@ fn evict(cache_key: &str) -> Invalidation {
     Invalidation::Evict(cache_key.to_owned())
 }
 
-/// The payloads `tests/unit/redis/stores/test_auth_cache_invalidation.py` checks against Python's
+/// The payloads `tests/unit/redis/stores/test_cache_invalidation.py` checks against Python's
 /// own `json.dumps`.
 #[rstest]
 #[case(evict("team_id:t1"), r#"{"cache_key": "team_id:t1"}"#)]
@@ -92,8 +92,8 @@ async fn every_worker_receives_what_one_publishes(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
     let deployment = RedisDeployment::start(topology).await.unwrap();
-    let publisher = AuthCacheInvalidation::new(connect(&deployment), None, Handle::current());
-    let subscriber = AuthCacheInvalidation::new(connect(&deployment), None, Handle::current());
+    let publisher = CacheInvalidation::new(connect(&deployment), None, Handle::current());
+    let subscriber = CacheInvalidation::new(connect(&deployment), None, Handle::current());
     let mut received = subscriber.subscribe();
     let sent = set("spend:key:abc", Number::Float(1.5), Some(Number::Int(60)));
 
@@ -141,7 +141,7 @@ async fn a_namespace_the_client_does_not_carry_prefixes_the_channel_on_the_wire(
     const PREFIXED: &str = "prod:litellm_proxy.auth_cache_invalidation";
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
     let client = connect(&deployment);
-    let invalidation = AuthCacheInvalidation::new(client.clone(), Some("prod"), Handle::current());
+    let invalidation = CacheInvalidation::new(client.clone(), Some("prod"), Handle::current());
     let mut on_the_wire = client.subscribe(PREFIXED);
     let mut decoded = invalidation.subscribe();
 
@@ -189,12 +189,12 @@ async fn an_open_breaker_does_not_hold_back_an_invalidation() {
         },
         Box::new(|_| {}),
     );
-    let publisher = AuthCacheInvalidation::new(
+    let publisher = CacheInvalidation::new(
         connect_guarded(&deployment, breaker.clone()),
         None,
         Handle::current(),
     );
-    let subscriber = AuthCacheInvalidation::new(connect(&deployment), None, Handle::current());
+    let subscriber = CacheInvalidation::new(connect(&deployment), None, Handle::current());
     let mut received = subscriber.subscribe();
     eventually(async || {
         assert!(publisher.publish(&evict("subscribed")));
@@ -228,7 +228,7 @@ async fn an_open_breaker_does_not_hold_back_an_invalidation() {
 async fn a_bulk_eviction_is_one_pipeline() {
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
     let (client, trips) = connect_observed(&deployment);
-    let invalidation = AuthCacheInvalidation::new(client, None, Handle::current());
+    let invalidation = CacheInvalidation::new(client, None, Handle::current());
 
     invalidation
         .broadcast_evictions(&["a".to_owned(), "b".to_owned(), "c".to_owned()])
@@ -242,8 +242,7 @@ async fn a_bulk_eviction_is_one_pipeline() {
 async fn a_redis_that_never_answers_drops_publishes_past_the_waiting_cap_and_bounds_a_bulk_wait() {
     let server = RedisServer::start().await.unwrap();
     let proxy = TcpProxy::start(server.port()).await.unwrap();
-    let invalidation =
-        AuthCacheInvalidation::new(connect_port(proxy.port()), None, Handle::current());
+    let invalidation = CacheInvalidation::new(connect_port(proxy.port()), None, Handle::current());
     proxy.blackhole_open_connections();
 
     let accepted = (0..1100)
@@ -271,7 +270,7 @@ async fn a_set_for_a_key_that_is_no_spend_counter_writes_nothing(#[case] outside
         .set_local(&team, Value::from("cached"), None)
         .unwrap();
 
-    auth_cache_invalidation::apply(
+    cache_invalidation::apply(
         &set(outside, Number::Float(9.0), None),
         &auth_cache,
         &spend_counters,
@@ -301,7 +300,7 @@ async fn an_eviction_drops_this_workers_copies_and_a_set_writes_only_spend_count
         .set_local(&AuthObject::User("a".repeat(64)), Value::from("user"), None)
         .unwrap();
 
-    auth_cache_invalidation::apply(
+    cache_invalidation::apply(
         &set("spend:key:abc", Number::Float(2.5), Some(Number::Int(60))),
         &auth_cache,
         &spend_counters,
@@ -316,9 +315,9 @@ async fn an_eviction_drops_this_workers_copies_and_a_set_writes_only_spend_count
         Some(Value::from("cached"))
     );
 
-    auth_cache_invalidation::apply(&evict("team_id:t1"), &auth_cache, &spend_counters);
-    auth_cache_invalidation::apply(&evict(&"a".repeat(64)), &auth_cache, &spend_counters);
-    auth_cache_invalidation::apply(&evict("spend:key:abc"), &auth_cache, &spend_counters);
+    cache_invalidation::apply(&evict("team_id:t1"), &auth_cache, &spend_counters);
+    cache_invalidation::apply(&evict(&"a".repeat(64)), &auth_cache, &spend_counters);
+    cache_invalidation::apply(&evict("spend:key:abc"), &auth_cache, &spend_counters);
 
     assert_eq!(auth_cache.get_local(&team).unwrap(), None);
     assert_eq!(auth_cache.len_local().unwrap(), (0, 0));

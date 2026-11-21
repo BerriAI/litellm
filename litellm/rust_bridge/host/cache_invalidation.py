@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from litellm.redis.stores.auth_cache_invalidation import PythonCaches
+from litellm.redis.stores.cache_invalidation import PythonCaches
 
 
 def apply(caches: PythonCaches, cache_key: str, new_value: float | None, ttl: float | None) -> None:

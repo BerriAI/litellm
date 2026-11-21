@@ -29,7 +29,7 @@ const BULK_EVICTION_WAIT: Duration = Duration::from_secs(2);
 /// connection at once, and past 1024 waiting ones a new one is dropped with a warning, so a Redis
 /// that accepts connections but never replies cannot wedge the pool or the request.
 #[derive(Clone)]
-pub struct AuthCacheInvalidation {
+pub struct CacheInvalidation {
     client: RedisClient,
     channel: Arc<str>,
     runtime: Handle,
@@ -37,7 +37,7 @@ pub struct AuthCacheInvalidation {
     pending: Arc<AtomicUsize>,
 }
 
-impl AuthCacheInvalidation {
+impl CacheInvalidation {
     /// `namespace` is `RedisCache.namespace`, which main prefixed the channel with. The client's
     /// own namespace misses one assigned to the `RedisCache` after it was built.
     pub fn new(client: RedisClient, namespace: Option<&str>, runtime: Handle) -> Self {
@@ -58,7 +58,7 @@ impl AuthCacheInvalidation {
         &self.channel
     }
 
-    /// `publish_auth_cache_invalidation`: one `PUBLISH` in the background. `false` when it was
+    /// `publish_cache_invalidation`: one `PUBLISH` in the background. `false` when it was
     /// dropped because too many publishes are already waiting.
     pub fn publish(&self, invalidation: &Invalidation) -> bool {
         let payload = invalidation.encode().into_bytes();

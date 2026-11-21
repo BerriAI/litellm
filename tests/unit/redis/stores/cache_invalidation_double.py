@@ -1,4 +1,4 @@
-"""A stand-in for ``NativeAuthCacheInvalidation``: every publish is recorded and delivered to each joined worker, as
+"""A stand-in for ``NativeCacheInvalidation``: every publish is recorded and delivered to each joined worker, as
 the shared channel delivers it to every pod, the publisher included."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation, PythonCaches
+from litellm.redis.stores.cache_invalidation import CacheInvalidation, PythonCaches
 
 Message = tuple[str, float | None, float | None]
 
@@ -56,6 +56,6 @@ class FakeChannel:
         self.started = False
 
 
-def channel(*workers: Worker) -> tuple[AuthCacheInvalidation, FakeChannel]:
+def channel(*workers: Worker) -> tuple[CacheInvalidation, FakeChannel]:
     fake: FakeChannel = FakeChannel(workers=list(workers))
-    return AuthCacheInvalidation(fake), fake
+    return CacheInvalidation(fake), fake

@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use litellm_host_python::{PythonContext, attach_blocking};
 use litellm_redis_store::{
     auth_cache::AuthCache,
-    auth_cache_invalidation::{self, AuthCacheInvalidation, Invalidation},
+    cache_invalidation::{self, CacheInvalidation, Invalidation},
     spend_counters::SpendCounters,
 };
 use parking_lot::Mutex;
@@ -14,15 +14,15 @@ use tokio::task::AbortHandle;
 use super::{PyNumber, auth_cache::NativeAuthCache, spend_counters::NativeSpendCounters};
 use crate::{execution::run_async_value, redis::client::NativeRedisClient};
 
-const HOST_MODULE: &str = "litellm.rust_bridge.host.auth_cache_invalidation";
+const HOST_MODULE: &str = "litellm.rust_bridge.host.cache_invalidation";
 
 /// The auth cache invalidation channel: publishes in the background, and while started applies
 /// every message to the native auth cache and spend counters, then hands it to the host for the
 /// caches still in Python (`python_caches`, held opaquely). The subscription ends at `stop` or when
 /// this is dropped.
-#[pyclass(frozen, name = "NativeAuthCacheInvalidation")]
-pub(crate) struct NativeAuthCacheInvalidation {
-    channel: AuthCacheInvalidation,
+#[pyclass(frozen, name = "NativeCacheInvalidation")]
+pub(crate) struct NativeCacheInvalidation {
+    channel: CacheInvalidation,
     auth_cache: Arc<AuthCache>,
     spend_counters: Arc<SpendCounters>,
     apply_python: Arc<Py<PyAny>>,
@@ -32,7 +32,7 @@ pub(crate) struct NativeAuthCacheInvalidation {
 }
 
 #[pymethods]
-impl NativeAuthCacheInvalidation {
+impl NativeCacheInvalidation {
     #[new]
     fn new(
         py: Python<'_>,
@@ -43,7 +43,7 @@ impl NativeAuthCacheInvalidation {
         python_caches: Py<PyAny>,
     ) -> PyResult<Self> {
         Ok(Self {
-            channel: AuthCacheInvalidation::new(
+            channel: CacheInvalidation::new(
                 client.client.clone(),
                 namespace,
                 litellm_host_python::runtime_handle()?,
@@ -104,7 +104,7 @@ impl NativeAuthCacheInvalidation {
         let context = self.context.clone();
         let task = self.channel.runtime().spawn(async move {
             while let Some(invalidation) = messages.next().await {
-                auth_cache_invalidation::apply(&invalidation, &auth_cache, &spend_counters);
+                cache_invalidation::apply(&invalidation, &auth_cache, &spend_counters);
                 let apply_python = apply_python.clone();
                 let python_caches = python_caches.clone();
                 let applied = attach_blocking(context.clone(), move |py| {
@@ -136,7 +136,7 @@ impl NativeAuthCacheInvalidation {
     }
 }
 
-impl NativeAuthCacheInvalidation {
+impl NativeCacheInvalidation {
     fn unsubscribe(&self) {
         if let Some(task) = self.subscription.lock().take() {
             task.abort();
@@ -144,7 +144,7 @@ impl NativeAuthCacheInvalidation {
     }
 }
 
-impl Drop for NativeAuthCacheInvalidation {
+impl Drop for NativeCacheInvalidation {
     fn drop(&mut self) {
         self.unsubscribe();
     }

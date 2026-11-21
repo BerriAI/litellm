@@ -9,7 +9,7 @@ from typing import Final, Literal
 import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+import litellm.proxy.common_utils.cache_invalidation_pubsub as pubsub_module
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -24,9 +24,9 @@ from litellm.proxy.management_helpers.team_roster_sync import (
 )
 from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
 from litellm.redis.stores.auth_cache import AuthObject
-from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation
+from litellm.redis.stores.cache_invalidation import CacheInvalidation
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
-from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel
+from tests.unit.redis.stores.cache_invalidation_double import FakeChannel
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
 TEAM: Final = "t1"
@@ -560,7 +560,7 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
 
 
 def _install_channel(monkeypatch: pytest.MonkeyPatch, handle: FakeChannel) -> None:
-    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", AuthCacheInvalidation(handle))
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", CacheInvalidation(handle))
 
 
 def _broadcast_keys(handle: FakeChannel) -> frozenset[str]:

@@ -41,7 +41,7 @@ from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_local
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheValue
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team

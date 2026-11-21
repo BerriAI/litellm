@@ -5,20 +5,20 @@ import pytest
 from litellm._internal_context import current_service_target
 from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
-    publish_auth_cache_invalidation,
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthObject
-from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation
-from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel, Worker, channel
+from litellm.redis.stores.cache_invalidation import CacheInvalidation
+from tests.unit.redis.stores.cache_invalidation_double import FakeChannel, Worker, channel
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, *workers: Worker) -> FakeChannel:
     invalidation, fake = channel(*workers)
-    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", invalidation)
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", invalidation)
     return fake
 
 
@@ -26,8 +26,8 @@ def _install(monkeypatch: pytest.MonkeyPatch, *workers: Worker) -> FakeChannel:
 async def test_publish_sends_an_eviction_or_a_value_on_the_shared_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     fake: Final = _install(monkeypatch)
 
-    await publish_auth_cache_invalidation(cache_key="project_id:p-1")
-    await publish_auth_cache_invalidation(cache_key="spend:key:k-1", new_value=0.0, ttl=60)
+    await publish_cache_invalidation(cache_key="project_id:p-1")
+    await publish_cache_invalidation(cache_key="spend:key:k-1", new_value=0.0, ttl=60)
 
     assert fake.published == [("project_id:p-1", None, None), ("spend:key:k-1", 0.0, 60)]
 
@@ -74,7 +74,7 @@ async def test_evict_and_broadcast_publishes_under_the_auth_objects_service_targ
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     handle: Final = _TargetRecordingChannel()
-    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", AuthCacheInvalidation(handle))
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", CacheInvalidation(handle))
 
     await evict_and_broadcast(cache_keys=("user-a", "user-b"), user_api_key_cache=UserApiKeyCache())
 

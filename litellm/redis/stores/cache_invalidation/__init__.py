@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING, Final, Protocol
 from litellm._internal_context import with_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import AUTH_OBJECTS_TARGET
-from litellm.rust_bridge._native import NativeAuthCacheInvalidation
+from litellm.rust_bridge._native import NativeCacheInvalidation
 
 if TYPE_CHECKING:
     from litellm.redis.stores.auth_cache import AuthCacheStore
     from litellm.redis.stores.connection import RedisStores
     from litellm.redis.stores.spend_counters import SpendCounterStore
 
-__all__ = ["AuthCacheInvalidation", "AuthCacheInvalidationHandle", "PythonCaches", "connect_invalidation"]
+__all__ = ["CacheInvalidation", "CacheInvalidationHandle", "PythonCaches", "connect_invalidation"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +38,7 @@ class PythonCaches:
             notify(cache_key)
 
 
-class AuthCacheInvalidationHandle(Protocol):
+class CacheInvalidationHandle(Protocol):
     @property
     def channel(self) -> str: ...
     def publish(self, cache_key: str, new_value: float | None = None, ttl: float | None = None) -> bool: ...
@@ -47,12 +47,12 @@ class AuthCacheInvalidationHandle(Protocol):
     def stop(self) -> None: ...
 
 
-class AuthCacheInvalidation:
+class CacheInvalidation:
     """The ``litellm_proxy.auth_cache_invalidation`` channel every worker shares, all native: publishes go out in the
     background and never fail the caller, and the subscription applies each message to the native auth cache and
     spend counters, then to ``PythonCaches``."""
 
-    def __init__(self, handle: AuthCacheInvalidationHandle) -> None:
+    def __init__(self, handle: CacheInvalidationHandle) -> None:
         self._handle: Final = handle
 
     @property
@@ -83,13 +83,13 @@ def connect_invalidation(
     auth_cache: AuthCacheStore,
     spend_counters: SpendCounterStore,
     python_caches: PythonCaches,
-) -> AuthCacheInvalidation | None:
+) -> CacheInvalidation | None:
     """None without a Redis client. ``namespace`` is ``RedisCache.namespace``, which prefixes the channel; the native
     client's own namespace misses one assigned to the ``RedisCache`` after it was built. Both stores must be native,
     since Rust applies each message to them: one that is not raises, so a worker can never run with invalidation
     silently off."""
     if redis.client is None:
         return None
-    return AuthCacheInvalidation(
-        NativeAuthCacheInvalidation(redis.client, namespace, auth_cache.native, spend_counters.native, python_caches)
+    return CacheInvalidation(
+        NativeCacheInvalidation(redis.client, namespace, auth_cache.native, spend_counters.native, python_caches)
     )

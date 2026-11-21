@@ -11492,15 +11492,15 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.redis.stores.auth_cache_invalidation import PythonCaches
-    from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
+    from litellm.redis.stores.cache_invalidation import PythonCaches
+    from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
 
     remote_spend_counter_in_memory_cache = InMemoryCache()
     remote_spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:team_member:user-1:team-1", 999.0)
     invalidation, fake = channel(
         Worker(UserApiKeyCache(), PythonCaches(copies=(remote_spend_counter_in_memory_cache,)))
     )
-    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", invalidation)
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", invalidation)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
@@ -11540,8 +11540,8 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.redis.stores.auth_cache_invalidation import PythonCaches
-    from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
+    from litellm.redis.stores.cache_invalidation import PythonCaches
+    from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
 
     local_spend_counter_cache = DualCache()
     local_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
@@ -11549,7 +11549,7 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
     invalidation, _ = channel(
         Worker(local_user_api_key_cache, PythonCaches(copies=(local_spend_counter_cache.in_memory_cache,)))
     )
-    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", invalidation)
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", invalidation)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock

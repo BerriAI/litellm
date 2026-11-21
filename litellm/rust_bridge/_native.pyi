@@ -1950,7 +1950,7 @@ class NativeAuthCache:
     def len_local(self) -> LocalSizes: ...
 
 @final
-class NativeAuthCacheInvalidation:
+class NativeCacheInvalidation:
     def __new__(
         cls,
         client: NativeRedisClient,
@@ -1958,7 +1958,7 @@ class NativeAuthCacheInvalidation:
         auth_cache: NativeAuthCache,
         spend_counters: NativeSpendCounters,
         python_caches: object,
-    ) -> NativeAuthCacheInvalidation: ...
+    ) -> NativeCacheInvalidation: ...
     @property
     def channel(self) -> str: ...
     def publish(self, cache_key: str, new_value: float | None = None, ttl: float | None = None) -> bool: ...

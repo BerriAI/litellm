@@ -105,7 +105,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 from litellm.redis.stores.auth_cache import AuthObject
-from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
+from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.proxy.rust_auth_stores import (
@@ -2520,7 +2520,7 @@ async def test_refresh_cached_team_broadcasts_team_and_alias_invalidations(
         published(cache_key)
 
     monkeypatch.setattr(team_endpoints, "cache_team_object", record_cache_team_object)
-    monkeypatch.setattr(team_endpoints, "publish_auth_cache_invalidation", record_publish)
+    monkeypatch.setattr(team_endpoints, "publish_cache_invalidation", record_publish)
 
     await team_endpoints.refresh_cached_team(
         team_row=LiteLLM_TeamTable(team_id="team-refresh", team_alias=team_alias),
@@ -2546,7 +2546,7 @@ async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatc
     cache, _auth_store = shared_cache()
     proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.internal_usage_cache.dual_cache = None
-    monkeypatch.setattr(team_endpoints, "publish_auth_cache_invalidation", record_publish)
+    monkeypatch.setattr(team_endpoints, "publish_cache_invalidation", record_publish)
 
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await team_endpoints.refresh_cached_team(
@@ -2577,7 +2577,7 @@ async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkey
     )
     cache: Final = UserApiKeyCache()
     publish: Final = AsyncMock()
-    monkeypatch.setattr(auth_checks, "publish_auth_cache_invalidation", publish)
+    monkeypatch.setattr(auth_checks, "publish_cache_invalidation", publish)
 
     team: Final = await get_team_object(
         team_id=team_id,
@@ -2662,7 +2662,7 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=update)
     cache: Final = UserApiKeyCache()
     invalidation, fake = channel()
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.cache_invalidation", invalidation)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
@@ -10325,7 +10325,7 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
         for obj in (*expected_objects, unrelated):
             worker_cache.set_cache(key=obj, value="cached")
     invalidation, fake = channel(Worker(peer_cache))
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.cache_invalidation", invalidation)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
@@ -10358,7 +10358,7 @@ async def test_deleting_a_500_member_team_reaches_every_member_cache_on_other_wo
     from litellm.proxy.management_endpoints.team_endpoints import _evict_deleted_team_member_cache
 
     invalidation, fake = channel()
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.cache_invalidation", invalidation)
     members: Final = tuple(f"member-{index:03d}" for index in range(500))
 
     await _evict_deleted_team_member_cache(
@@ -16218,7 +16218,7 @@ async def test_team_member_add_evicts_the_new_members_cached_user_row_on_every_w
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation", broadcast
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation", broadcast
     )
 
     updated_team = MagicMock()

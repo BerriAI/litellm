@@ -2538,7 +2538,7 @@ async def test_user_model_budget_update_by_email_refreshes_cached_user(mocker: M
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2581,7 +2581,7 @@ async def test_user_status_update_refreshes_cached_user(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2641,7 +2641,7 @@ async def test_user_update_keeps_existing_budget_reset_when_the_duration_is_rese
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2705,7 +2705,7 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2775,7 +2775,7 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2834,7 +2834,7 @@ async def test_bulk_user_spend_reset_clears_every_users_spend_counters(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
     invalidated: Final = mocker.patch(  # test-quality-ok: observe the spend counter boundary
@@ -2880,7 +2880,7 @@ async def test_bulk_user_update_that_expires_inside_the_transaction_changes_no_u
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2918,7 +2918,7 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2975,7 +2975,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
     admin: Final = UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -3027,7 +3027,7 @@ async def test_user_update_reaches_cached_user_on_every_worker(
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update, user_update
     from litellm.proxy.proxy_server import proxy_config
-    from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
+    from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
     from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
         BulkUpdateUserRequest,
         UpdateUserRequestNoUserIDorEmail,
@@ -3116,7 +3116,7 @@ async def test_user_update_reaches_cached_user_on_every_worker(
         "litellm.proxy.proxy_server.user_api_key_cache", handling_worker_cache
     )
     invalidation, _ = channel(Worker(other_worker_cache))
-    mocker.patch.object(proxy_config, "auth_cache_invalidation", invalidation)
+    mocker.patch.object(proxy_config, "cache_invalidation", invalidation)
 
     handling_user_before: Final = await get_user_object(
         user_id=saved_user.user_id,
@@ -5100,7 +5100,7 @@ async def test_user_update_broadcasts_the_entitlement_invalidation_to_other_work
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: substitute the cache dependency
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -5709,7 +5709,7 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
         "litellm.proxy.proxy_server.proxy_logging_obj", None
     )  # test-quality-ok: delete_user reads it off proxy_server at call time
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 

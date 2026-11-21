@@ -110,7 +110,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
 from litellm.redis.stores.auth_cache import AuthObject
-from litellm.redis.stores.auth_cache_invalidation import PythonCaches
+from litellm.redis.stores.cache_invalidation import PythonCaches
 from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
@@ -124,7 +124,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 from tests.unit.proxy.rust_auth_stores import FakeTeamStore, JwtMapping, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
-from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel, Worker, channel
+from tests.unit.redis.stores.cache_invalidation_double import FakeChannel, Worker, channel
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -5955,7 +5955,7 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
 
 def _install_channel(monkeypatch: pytest.MonkeyPatch, *workers: Worker) -> FakeChannel:
     invalidation, fake = channel(*workers)
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.cache_invalidation", invalidation)
     return fake
 
 
@@ -9169,7 +9169,7 @@ async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
     with patch(  # test-quality-ok: pub/sub broadcast to other workers has no HTTP boundary to fake
-        "litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation"
+        "litellm.proxy.auth.auth_checks.publish_cache_invalidation"
     ) as mock_publish:
         mock_publish.return_value = None
         await delete_cache_key_object(
@@ -14937,7 +14937,7 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
             new_callable=AsyncMock,
         ),
         patch(  # test-quality-ok: captures the cross-worker broadcast without a redis instance
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             publish_mock,
         ),
     ):
@@ -23904,7 +23904,7 @@ async def test_invalidate_cached_object_permissions_broadcasts_to_other_workers(
     user_api_key_cache, _ = shared_cache(FakeAuthCache(fail=NativeRedisStoreError("transport", "redis down")))
 
     with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=AsyncMock,
     ) as mock_publish:
         await invalidate_cached_object_permissions(

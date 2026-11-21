@@ -23,8 +23,8 @@ from fastapi import HTTPException, Request, status
 
 import litellm
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
-from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel
-from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation
+from tests.unit.redis.stores.cache_invalidation_double import FakeChannel
+from litellm.redis.stores.cache_invalidation import CacheInvalidation
 import httpx
 from prisma import Prisma
 from litellm._service_logger import ServiceTypes
@@ -2652,7 +2652,7 @@ class _GatedChannel(FakeChannel):
 def _install_channel(monkeypatch: pytest.MonkeyPatch, handle: FakeChannel) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", AuthCacheInvalidation(handle))
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", CacheInvalidation(handle))
 
 
 @pytest.mark.asyncio

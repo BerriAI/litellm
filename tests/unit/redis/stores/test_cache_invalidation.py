@@ -11,11 +11,11 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import AUTH_OBJECTS_TARGET
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthCacheStore, AuthObject
-from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation, PythonCaches, connect_invalidation
+from litellm.redis.stores.cache_invalidation import CacheInvalidation, PythonCaches, connect_invalidation
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
-from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel, Message
+from tests.unit.redis.stores.cache_invalidation_double import FakeChannel, Message
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 _PAYLOAD: Final = TypeAdapter(dict[str, object])
@@ -173,7 +173,7 @@ class _TargetRecordingChannel(FakeChannel):
 @pytest.mark.asyncio
 async def test_broadcast_evictions_skips_an_empty_batch_and_sends_the_rest_in_one() -> None:
     handle: Final = _TargetRecordingChannel()
-    invalidation: Final = AuthCacheInvalidation(handle)
+    invalidation: Final = CacheInvalidation(handle)
 
     await invalidation.broadcast_evictions([])
     await invalidation.broadcast_evictions(["team_id:t-1", "user-1"])

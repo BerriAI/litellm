@@ -13,8 +13,8 @@ from litellm.proxy.mcp_server.byok_credential_cache import (
 from litellm.proxy.mcp_server.operations import (
     _invalidate_byok_cred_cache,  # pyright: ignore[reportPrivateUsage]  # the broadcast every BYOK mutation runs
 )
-from litellm.redis.stores.auth_cache_invalidation import PythonCaches
-from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
+from litellm.redis.stores.cache_invalidation import PythonCaches
+from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +37,7 @@ def test_a_cached_negative_lookup_is_distinguishable_from_a_miss():
 async def test_peer_worker_invalidation_message_evicts_the_cached_credential(monkeypatch: pytest.MonkeyPatch):
     """The key a mutating worker broadcasts must be the key every other worker caches under."""
     invalidation, fake = channel()
-    monkeypatch.setattr(proxy_server.proxy_config, "auth_cache_invalidation", invalidation)
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", invalidation)
     await _invalidate_byok_cred_cache("mallory", "srv-byok")
     cache_byok_credential("mallory", "srv-byok", "sk-revoked")
     cache_byok_credential("alice", "srv-byok", "sk-kept")

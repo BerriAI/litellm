@@ -9,20 +9,18 @@ from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation
+    from litellm.redis.stores.cache_invalidation import CacheInvalidation
 
 _BULK_EVICTION_WAIT_SECONDS: Final = 2.0
 
 
-def _channel() -> "AuthCacheInvalidation | None":
+def _channel() -> "CacheInvalidation | None":
     from litellm.proxy.proxy_server import proxy_config
 
-    return proxy_config.auth_cache_invalidation
+    return proxy_config.cache_invalidation
 
 
-async def publish_auth_cache_invalidation(
-    cache_key: str, new_value: float | None = None, ttl: float | None = None
-) -> None:
+async def publish_cache_invalidation(cache_key: str, new_value: float | None = None, ttl: float | None = None) -> None:
     """
     Best-effort broadcast so every worker drops its local in-memory copy of a
     mutated management object; without this, only the handling worker and Redis
@@ -115,4 +113,4 @@ async def _evict_and_broadcast(cache_keys: Sequence[str], cache: "UserApiKeyCach
                 cache_key,
                 e,
             )
-        await publish_auth_cache_invalidation(cache_key=cache_key)
+        await publish_cache_invalidation(cache_key=cache_key)
