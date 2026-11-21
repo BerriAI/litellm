@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, ParseResultBytes, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -820,8 +820,14 @@ class RegisterGuardrailRequest(LiteLLMBaseModel):
     guardrail_info: dict[str, object] | None = None
     team_id: str | None = None
 
-    def get_litellm_params_dict(self) -> dict[str, Any]:
+    def get_litellm_params_dict(self) -> Mapping[str, object]:
         return dict(self.litellm_params)
+
+
+def _parsed_api_base(api_base: object) -> ParseResult | ParseResultBytes:
+    return urlparse(  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # urlparse raises its own error
+        api_base  # pyright: ignore[reportArgumentType]  # urlparse raises its own error
+    )
 
 
 class RegisterGuardrailResponse(LiteLLMBaseModel):
@@ -913,7 +919,7 @@ async def register_guardrail(
             status_code=400,
             detail="litellm_params.api_base is required for generic_guardrail_api",
         )
-    parsed: Final = urlparse(api_base)
+    parsed: Final = _parsed_api_base(api_base)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(
             status_code=400,

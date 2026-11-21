@@ -51,9 +51,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
+    float_of,
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
+    keyword_arguments,
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
@@ -196,6 +198,14 @@ class _SupportsGet(Protocol):
 def _declared_vision_support(deployment: Mapping[str, object]) -> object:
     model_info: Final = deployment.get("model_info")
     return require_attributes(model_info, _SupportsGet, "get").get("supports_vision") if model_info else None
+
+
+class _AdaptiveRouterPreferencesFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _deployment_model_info(deployment: DeploymentTypedDict) -> Mapping[str, object]:
+    return deployment.get("model_info") or {}
 
 
 _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProxyType(
@@ -3337,10 +3347,12 @@ class ComplexityRouter(CustomLogger):
                 model_to_cost[name] = 0.0
                 continue
             deployment = deployments[0]
-            mi_dict: dict[str, Any] = deployment.get("model_info") or {}
+            mi_dict = _deployment_model_info(deployment)
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
-                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+                model_to_prefs[name] = AdaptiveRouterPreferences.model_validate(
+                    _AdaptiveRouterPreferencesFields(**keyword_arguments(prefs_raw, AdaptiveRouterPreferences))
+                )
             else:
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
@@ -3348,7 +3360,7 @@ class ComplexityRouter(CustomLogger):
             cost = deployment.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
-            model_to_cost[name] = float(cost) if cost is not None else 0.0
+            model_to_cost[name] = float_of(cost) if cost is not None else 0.0
 
         self.adaptive_router = AdaptiveRouter(
             router_name=self.model_name,
@@ -4062,7 +4074,7 @@ class ComplexityRouter(CustomLogger):
     async def _model_group_can_serve(
         self,
         model_name: str,
-        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
+        messages: Sequence[Mapping[str, object]] | None,
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
     ) -> bool:

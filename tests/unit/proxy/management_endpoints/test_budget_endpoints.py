@@ -3,7 +3,7 @@
 import json
 import types
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,6 +16,7 @@ from prisma.builder import QueryBuilder
 import litellm.proxy.proxy_server as ps
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.timezone_utils import get_budget_window_reset_fields
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
 
@@ -624,6 +625,69 @@ def _capture_update_data(mock_table):
     return captured
 
 
+@pytest.mark.parametrize("duration", ("24h", "30d"))
+@pytest.mark.parametrize("year", (2020, 2099))
+def test_shared_budget_cap_edit_keeps_the_saved_schedule(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], duration: str, year: int
+) -> None:
+    client, _, table = client_and_mocks
+    table.find_unique = AsyncMock(return_value=types.SimpleNamespace(
+        budget_duration=duration, budget_reset_at=datetime(year, 7, 16, 4, tzinfo=timezone.utc),
+    ))
+    written: Final = _capture_update_data(table)
+
+    response: Final = client.post(
+        "/budget/update", json={"budget_id": "saved-schedule", "max_budget": 20, "budget_duration": duration}
+    )
+
+    assert response.status_code == 200
+    assert written["max_budget"] == 20
+    assert "budget_reset_at" not in written
+
+
+def test_daily_budget_edit_does_not_keep_a_monthly_reset_from_a_lagging_replica(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils import timezone_utils
+
+    client, database, reader_table = client_and_mocks
+    now: Final = datetime(2026, 11, 3, 5, 15, tzinfo=timezone.utc)
+    daily_reset: Final = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    monthly_reset: Final = datetime(2026, 12, 1, tzinfo=timezone.utc)
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return now if tz is None else now.astimezone(tz)
+
+    monkeypatch.setattr(timezone_utils, "datetime", FixedClock)
+    reader_table.find_unique.return_value = types.SimpleNamespace(
+        budget_duration="1d",
+        budget_reset_at=daily_reset,
+    )
+    writer_table: Final = MagicMock()
+    writer_table.find_unique = AsyncMock(
+        return_value=types.SimpleNamespace(
+            budget_duration="30d",
+            budget_reset_at=monthly_reset,
+        )
+    )
+
+    async def write(*, where: Mapping[str, object], data: Mapping[str, object]) -> Mapping[str, object]:
+        return {"budget_reset_at": monthly_reset, **where, **data}
+
+    reader_table.update = AsyncMock(side_effect=write)
+    writer_table.update = AsyncMock(side_effect=write)
+    database.tx.return_value.__aenter__.return_value.litellm_budgettable = writer_table
+
+    response: Final = client.post("/budget/update", json={"budget_id": "lagging-schedule", "budget_duration": "1d"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_duration"] == "1d"
+    assert datetime.fromisoformat(response.json()["budget_reset_at"]) == daily_reset
+
+
 @pytest.mark.asyncio
 async def test_update_budget_recomputes_reset_at_when_duration_changes(
     client_and_mocks,
@@ -822,3 +886,44 @@ async def test_delete_missing_budget_preserves_prisma_missing_record_error() -> 
     )
     with pytest.raises(RecordNotFoundError):
         await delete_unattached_customer_budget(table, "missing")
+
+
+def test_new_customer_window_start_is_set_by_the_server(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
+    client, _, _ = client_and_mocks
+    response: Final = client.post("/budget/new", json={
+        "budget_id": "windows",
+        "budget_limits": [{"budget_duration": "1mo", "max_budget": 10, "window_start": "2000-01-01T00:00:00Z"}],
+    })
+    assert response.status_code == 200, response.text
+    (window,) = response.json()["budget_limits"]
+    expected: Final = get_budget_window_reset_fields("1mo")
+    assert datetime.fromisoformat(window["window_start"]) == datetime.fromisoformat(expected["window_start"])
+    assert datetime.fromisoformat(window["reset_at"]) == datetime.fromisoformat(expected["reset_at"])
+
+
+def test_budget_update_keeps_the_stored_window_start(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
+    client, database, table = client_and_mocks
+    stored: Final = [{
+        "budget_duration": "1mo", "max_budget": 10.0,
+        "reset_at": "2030-02-01T00:00:00+00:00", "window_start": "2030-01-01T03:00:00+00:00",
+    }]
+    table.find_unique.return_value = types.SimpleNamespace(budget_limits=stored)
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": stored}])
+    response: Final = client.post("/budget/update", json={"budget_id": "shared", "budget_limits": [
+        {"budget_duration": "1mo", "max_budget": 20.0, "window_start": "2000-01-01T00:00:00Z"},
+    ]})
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_limits"] == [{**stored[0], "max_budget": 20.0}]
+
+
+def test_admin_set_customer_reset_keeps_a_derived_window_start(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+) -> None:
+    client, _, _ = client_and_mocks
+    window: Final = {"budget_duration": "1mo", "max_budget": 10, "reset_at": "2030-02-01T00:00:00+00:00"}
+    response: Final = client.post(
+        "/budget/new", json={"budget_id": "windows", "budget_limits": [{**window, "window_start": "2000-01-01T00:00:00Z"}]}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_limits"] == [window]

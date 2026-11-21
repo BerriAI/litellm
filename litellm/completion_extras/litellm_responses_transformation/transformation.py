@@ -6,7 +6,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -49,7 +49,9 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
     drops_unsupported_params,
+    has_attributes,
     iter_items,
+    require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
@@ -587,7 +589,11 @@ def _with_stream_block_index(
     )
 
 
-def _stream_output_index(chunk: Mapping[str, object]) -> int | None:
+class _StreamEvent(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def _stream_output_index(chunk: _StreamEvent) -> int | None:
     output_index: Final = chunk.get("output_index")
     return output_index if isinstance(output_index, int) and not isinstance(output_index, bool) else None
 
@@ -613,7 +619,7 @@ def _tool_item_arguments(raw_item: object) -> str | None:
     return arguments if isinstance(arguments, str) and arguments else None
 
 
-def _starts_streaming_tool_arguments(chunk: Mapping[str, object]) -> bool:
+def _starts_streaming_tool_arguments(chunk: _StreamEvent) -> bool:
     event_type: Final = _responses_event_type(chunk)
     if event_type in _TOOL_ARGUMENTS_DELTA_EVENTS:
         return bool(chunk.get("delta"))
@@ -622,7 +628,7 @@ def _starts_streaming_tool_arguments(chunk: Mapping[str, object]) -> bool:
     return False
 
 
-def _complete_tool_arguments(chunk: Mapping[str, object]) -> str | None:
+def _complete_tool_arguments(chunk: _StreamEvent) -> str | None:
     event_type: Final = _responses_event_type(chunk)
     if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
         return _tool_item_arguments(chunk.get("item"))
@@ -671,7 +677,7 @@ def _reasoning_done_thinking_blocks(
 
 
 def _reasoning_done_stream_chunk(
-    chunk: Mapping[str, object],
+    chunk: _StreamEvent,
     summary_streamed_outputs: frozenset[int | None],
 ) -> ModelResponseStream | None:
     event_type: Final = chunk.get("type")
@@ -826,7 +832,7 @@ def _assistant_phase_field(msg: object, replay_openai_history: bool, drop_params
             return {PHASE_FIELD: phase}
 
 
-def _responses_event_type(chunk: Mapping[str, object]) -> object:
+def _responses_event_type(chunk: _StreamEvent) -> object:
     event_type: Final = chunk.get("type")
     return event_type.value if isinstance(event_type, ResponsesAPIStreamEvents) else event_type
 
@@ -848,7 +854,7 @@ def _payload_type(payload: object) -> str | None:
         return None
 
 
-def _is_message_item_done(chunk: Mapping[str, object]) -> bool:
+def _is_message_item_done(chunk: _StreamEvent) -> bool:
     if _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
         return False
     return _payload_type(chunk.get("item")) == "message"
@@ -1001,6 +1007,14 @@ def _without_dropped_defer_loading(
     return {**{key: value for key, value in tool.items() if key != "defer_loading"}, **kept}
 
 
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _LegacyDictable(Protocol):
+    def dict(self) -> object: ...
+
+
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     """
     Handler for transforming /chat/completions api requests to litellm.responses requests
@@ -1045,7 +1059,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return _flat_responses_tool_choice(choice_type, nested_name)
         return tool_choice
 
-    def _handle_raw_dict_response_item(self, item: dict[str, Any], index: int) -> tuple["Choices | None", int]:
+    def _handle_raw_dict_response_item(self, item: Mapping[str, object], index: int) -> tuple["Choices | None", int]:
         """
         Handle raw dict response items from Responses API (e.g., GPT-5 Codex format).
 
@@ -1056,7 +1070,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         Returns:
             Tuple of (Choice object or None, updated index)
         """
-        from litellm.types.utils import Choices, Message
+        from litellm.types.utils import Choices
 
         item_type: Final = item.get("type")
 
@@ -1076,12 +1090,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                             content_item.get("annotations", None)
                         )
-                        msg = Message(
-                            role=item.get("role", "assistant"),
-                            content=response_text if response_text else "",
-                            annotations=annotations,
+                        choice = Choices(
+                            message={
+                                "role": item.get("role", "assistant"),
+                                "content": response_text if response_text else "",
+                                "annotations": annotations,
+                            },
+                            finish_reason="stop",
+                            index=index,
                         )
-                        choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
 
         # function_call / custom_tool_call dicts are intercepted and accumulated by
@@ -1754,7 +1771,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return []
 
     @classmethod
-    def _recover_output_items_from_logging(cls, logging_obj: "LiteLLMLoggingObj") -> list[dict[str, object]]:
+    def _recover_output_items_from_logging(cls, logging_obj: object) -> list[dict[str, object]]:
         model_call_details: Final = getattr(logging_obj, "model_call_details", {}) or {}
         original_response: Final = model_call_details.get("original_response")
         return cls._recover_output_items_from_raw_sse(original_response)
@@ -1764,7 +1781,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         model: str,
         raw_response: "BaseModel",
         model_response: "ModelResponse",
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: object,
         request_data: dict,
         messages: list["AllMessageValues"],
         optional_params: dict,
@@ -2214,7 +2231,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     @staticmethod
     def _convert_annotations_to_chat_format(
-        annotations: list[Any] | None,
+        annotations: Iterable[object] | None,
     ) -> list[ChatCompletionAnnotation] | None:
         """
         Convert annotations from Responses API to Chat Completions format.
@@ -2229,9 +2246,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for annotation in annotations:
             try:
                 # Convert Pydantic models to dicts (handles both v1 and v2)
-                if hasattr(annotation, "model_dump"):
+                if has_attributes(annotation, _ModelDumpable, "model_dump"):
                     annotation_dict = annotation.model_dump()
-                elif hasattr(annotation, "dict"):
+                elif has_attributes(annotation, _LegacyDictable, "dict"):
                     annotation_dict = annotation.dict()
                 elif isinstance(annotation, dict):
                     annotation_dict = annotation
@@ -2301,7 +2318,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if index != -1:
             str_line = str_line[index + 5 :]
 
-        return self.chunk_parser(json.loads(str_line))
+        return self.chunk_parser(_DECODED_JSON.validate_python(json.loads(str_line)))
 
     @staticmethod
     def _sequential_tool_call_index(
@@ -2323,7 +2340,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
     @staticmethod
     def translate_responses_chunk_to_openai_stream(
-        parsed_chunk: dict | BaseModel,
+        parsed_chunk: object,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
         replays_openai_history: bool = False,
         structured_output: bool = False,
@@ -2359,7 +2376,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             raise ValueError("Chat provider: Empty parsed_chunk")
 
         if isinstance(parsed_chunk, BaseModel):
-            parsed_chunk = parsed_chunk.model_dump()
+            parsed_chunk = _DECODED_JSON.validate_python(parsed_chunk.model_dump())
         if not isinstance(parsed_chunk, dict):
             raise ValueError(f"Chat provider: Invalid chunk type {type(parsed_chunk)}")
 
@@ -2609,7 +2626,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ]
         )
 
-    def chunk_parser(self, chunk: dict[str, object]) -> "ModelResponseStream":
+    def chunk_parser(self, chunk: object) -> "ModelResponseStream":
         """
         Parse a Responses API streaming chunk and convert to OpenAI format.
 
@@ -2620,45 +2637,46 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
-        self._remember_served_service_tier(chunk)
-        self._remember_message_phase(chunk)
+        event: Final = require_attributes(chunk, _StreamEvent, "get")
+        self._remember_served_service_tier(event)
+        self._remember_message_phase(event)
         reasoning_chunk: Final = (
-            _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)
+            _reasoning_done_stream_chunk(event, self._summary_streamed_outputs)
             if self._streams_reasoning_signatures
             else None
         )
-        output_index: Final = _stream_output_index(chunk) or 0
+        output_index: Final = _stream_output_index(event) or 0
         unstreamed_tool_arguments: Final = (
-            _complete_tool_arguments(chunk)
+            _complete_tool_arguments(event)
             if output_index in self._tool_call_index_map and output_index not in self._tool_arguments_streamed_outputs
             else None
         )
         translated: Final = (
             self._empty_content_chunk()
-            if self._is_text_delta_after_structured_answer(chunk)
+            if self._is_text_delta_after_structured_answer(event)
             else reasoning_chunk
             if reasoning_chunk is not None
             else _tool_arguments_stream_chunk(unstreamed_tool_arguments, self._tool_call_index_map[output_index])
             if unstreamed_tool_arguments
             else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                chunk,
+                event,
                 tool_call_index_map=self._tool_call_index_map,
                 replays_openai_history=self._replays_openai_history,
                 structured_output=self._structured_output,
-                item_phase=self._item_phase(chunk),
+                item_phase=self._item_phase(event),
                 reasoning_summary_streamed=self._reasoning_summary_streamed,
             )
         )
-        if unstreamed_tool_arguments or _starts_streaming_tool_arguments(chunk):
+        if unstreamed_tool_arguments or _starts_streaming_tool_arguments(event):
             self._tool_arguments_streamed_outputs = self._tool_arguments_streamed_outputs | {output_index}
-        if self._structured_output and _is_message_item_done(chunk):
+        if self._structured_output and _is_message_item_done(event):
             self._first_message_item_done = True
-        if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
+        if _responses_event_type(event) == "response.reasoning_summary_text.delta" and event.get("delta"):
             self._reasoning_summary_streamed = True
-            self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(chunk)}
+            self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(event)}
         return self._with_served_service_tier(self._with_stream_scoped_id(translated))
 
-    def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
+    def _is_text_delta_after_structured_answer(self, chunk: _StreamEvent) -> bool:
         """Under a structured response_format the first message item is the whole answer, so
         text from any later message item is dropped, matching the non-stream fold."""
         return (
@@ -2673,7 +2691,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)])
 
-    def _remember_message_phase(self, chunk: Mapping[str, object]) -> None:
+    def _remember_message_phase(self, chunk: _StreamEvent) -> None:
         if (
             not self._replays_openai_history
             or _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value
@@ -2684,11 +2702,11 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if isinstance(output_index, int) and phase is not None:
             self._message_phases = MappingProxyType({**self._message_phases, output_index: phase})
 
-    def _item_phase(self, chunk: Mapping[str, object]) -> Phase | None:
+    def _item_phase(self, chunk: _StreamEvent) -> Phase | None:
         output_index: Final = chunk.get("output_index")
         return self._message_phases.get(output_index) if isinstance(output_index, int) else None
 
-    def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
+    def _remember_served_service_tier(self, chunk: _StreamEvent) -> None:
         response_payload: Final = chunk.get("response")
         if not isinstance(response_payload, dict):
             return

@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import asdict
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias, runtime_checkable
@@ -40,6 +41,11 @@ class HostedRust(Protocol):
     def start(
         self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, host: object, /
     ) -> Execution: ...
+
+
+@runtime_checkable
+class FlushableRust(Protocol):
+    def flush(self) -> Awaitable[object]: ...
 
 
 def _streamless(execution: Execution, head: object) -> object:
@@ -199,6 +205,10 @@ class RustLogger(CustomLoggerV2):
         state: Final = ctx.state.handle if isinstance(ctx.state, RustState) else None
         return verdict(await self._handled(hook, fields, call, state))
 
+    async def flush_rust(self) -> None:
+        if isinstance(self.rust, FlushableRust):
+            _ = await self.rust.flush()
+
     def _handled(
         self, hook: Hook, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object
     ) -> Awaitable[object]:
@@ -253,11 +263,24 @@ def _namespace(rust: RustHandle, manifest: WireManifest) -> dict[str, object]:  
 
 
 def rust_logger(
-    rust: RustHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
+    rust: RustHandle,
+    projections: Mapping[Field, Projection] = NO_PROJECTIONS,
+    host: object = None,
+    base: type[RustLogger] = RustLogger,
 ) -> RustLogger:
     manifest: Final = WireManifest.model_validate_json(rust.manifest())
-    cls: Final = type(manifest.selection.name, (RustLogger,), _namespace(rust, manifest))
+    cls: Final = type(manifest.selection.name, (base,), _namespace(rust, manifest))
     return cls(rust, projections, host)
+
+
+async def flush_rust_loggers(callbacks: Iterable[object]) -> None:
+    loggers: Final = tuple(
+        {id(callback): callback for callback in callbacks if isinstance(callback, RustLogger)}.values()
+    )
+    results: Final = await asyncio.gather(*(logger.flush_rust() for logger in loggers), return_exceptions=True)
+    for logger, result in zip(loggers, results, strict=True):
+        if isinstance(result, BaseException):
+            _LOGGER.error("flushing rust callback %s failed: %r", type(logger).__name__, result, exc_info=result)
 
 
 def contract_table() -> Mapping[str, object]:
@@ -284,6 +307,7 @@ def contract_table() -> Mapping[str, object]:
 
 __all__ = [
     "ABORT_ERRORS",
+    "FlushableRust",
     "HostedRust",
     "Projection",
     "RustHandle",
@@ -291,6 +315,7 @@ __all__ = [
     "RustState",
     "WireAbort",
     "contract_table",
+    "flush_rust_loggers",
     "register_abort_error",
     "rust_logger",
     "verdict",

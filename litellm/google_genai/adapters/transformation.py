@@ -3,7 +3,7 @@ import re
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Any, Final, TypeAlias, TypeVar, cast
+from typing import Annotated, Final, TypeAlias, TypeVar, cast
 
 from pydantic import (
     AllowInfNan,
@@ -20,6 +20,7 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
@@ -57,7 +58,11 @@ from litellm.types.utils import (
 )
 
 _JsonDict: TypeAlias = dict[str, object]
-_JsonDictList: TypeAlias = list[_JsonDict]
+
+
+class _GenAICompletionRequest(TypedDict, extra_items=object):
+    model: ReadOnly[str]
+    messages: ReadOnly[list[AllMessageValues]]
 
 
 class _ToolCallAccumulator(TypedDict):
@@ -379,6 +384,10 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
     )
 
 
+def _is_single_content(contents: object) -> bool:
+    return isinstance(contents, dict)
+
+
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
     """
     Wrapper for streaming Google GenAI generate_content responses.
@@ -552,11 +561,11 @@ class GoogleGenAIAdapter:
     def translate_generate_content_to_completion(
         self,
         model: str,
-        contents: _JsonDictList | _JsonDict,
+        contents: object,
         config: Mapping[str, object] | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
         **kwargs,
-    ) -> dict[str, Any]:
+    ) -> _GenAICompletionRequest:
         """
         Transform generate_content request to litellm completion format
 
@@ -576,21 +585,18 @@ class GoogleGenAIAdapter:
         tool_config: Final = kwargs.get("toolConfig") or kwargs.get("tool_config")
 
         # Normalize contents to list format
-        if isinstance(contents, dict):
-            contents_list = [contents]
-        else:
-            contents_list = contents
+        contents_list: Final = [contents] if _is_single_content(contents) else contents
 
         # Transform contents to OpenAI messages format
         messages: Final = self._transform_contents_to_messages(contents_list, system_instruction=system_instruction)
 
         # Create base request as dict (which is compatible with ChatCompletionRequest)
         config_fields: Final = _validated(_CONFIG_FIELDS, config) or {}
-        completion_request: Final[_JsonDict] = {
-            "model": model,
-            "messages": messages,
+        completion_request: Final = _GenAICompletionRequest(
+            model=model,
+            messages=messages,
             **_completion_params(config_fields, model, litellm_params.custom_llm_provider if litellm_params else None),
-        }
+        )
 
         #########################################################
         # Supported OpenAI chat completion params
@@ -629,7 +635,7 @@ class GoogleGenAIAdapter:
         #########################################################
         # forward any litellm specific params
         #########################################################
-        completion_request_dict = dict(completion_request)
+        completion_request_dict = completion_request.copy()
         if litellm_params:
             completion_request_dict = self._add_generic_litellm_params_to_request(
                 completion_request_dict=completion_request_dict,
@@ -640,9 +646,9 @@ class GoogleGenAIAdapter:
 
     def _add_generic_litellm_params_to_request(
         self,
-        completion_request_dict: _JsonDict,
+        completion_request_dict: _GenAICompletionRequest,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> _JsonDict:
+    ) -> _GenAICompletionRequest:
         """Add generic litellm params to request. e.g add api_base, api_key, api_version, etc.
 
         Args:
@@ -712,7 +718,7 @@ class GoogleGenAIAdapter:
 
     def _transform_contents_to_messages(
         self,
-        contents: Sequence[object],
+        contents: object,
         system_instruction: _GenAISystemInstruction | None = None,
     ) -> list[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
@@ -722,7 +728,10 @@ class GoogleGenAIAdapter:
             if system_parts and "text" in system_parts[0]
             else ()
         )
-        return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
+        return [
+            *system_messages,
+            *chain.from_iterable(_genai_content_messages(content) for content in iter_items(contents)),
+        ]
 
     def translate_completion_to_generate_content(
         self,
