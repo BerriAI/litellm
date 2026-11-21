@@ -273,12 +273,29 @@ class RelayRejection(TypedDict):
     error: ReadOnly[str]
 
 
-def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
+def _deployment_model_and_provider(litellm_params: LiteLLMParamsTypedDict) -> tuple[str, str | None]:
     model: Final = litellm_params.get("model", "")
     try:
-        return get_llm_provider(model=model, custom_llm_provider=litellm_params.get("custom_llm_provider"))[0]
+        resolved_model, provider, _, _ = get_llm_provider(
+            model=model, custom_llm_provider=litellm_params.get("custom_llm_provider")
+        )
+        return resolved_model, provider
     except litellm.BadRequestError:
-        return model
+        return model, None
+
+
+def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
+    return _deployment_model_and_provider(litellm_params)[0]
+
+
+_AZURE_RELAY_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
+
+
+def _is_group_served_by_azure(llm_router: litellm.Router, model_group: str) -> bool:
+    deployments: Final = tuple(llm_router.registry().deployments(model_group) or ())
+    return bool(deployments) and all(
+        _deployment_model_and_provider(row["litellm_params"])[1] in _AZURE_RELAY_PROVIDERS for row in deployments
+    )
 
 
 def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
@@ -2879,6 +2896,8 @@ async def _relay_azure_body_model_group(
     request_body: Final = await get_request_body(request)
     model: Final = _optional_str(request_body.get("model"))
     if model is None or not is_passthrough_request_using_router_model(request_body, llm_router):
+        return None
+    if not _is_group_served_by_azure(llm_router, model):
         return None
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     return await open_sse_before_first_byte(
