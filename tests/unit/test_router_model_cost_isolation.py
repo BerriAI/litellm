@@ -3035,6 +3035,46 @@ def test_deployment_model_cost_payload_includes_builtin_service_tier_pricing() -
         litellm.get_model_info.cache_clear()
 
 
+def test_deployment_model_cost_payload_records_the_vertex_location():
+    """
+    A Vertex deployment's configured location is part of what the deployment
+    contributes under its id: routes whose logging object never receives the
+    deployment's litellm_params price from this entry. The location is
+    deployment-scoped, so the shared backend key must not pick it up.
+    """
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("vertex-location-id", "gemini-2.5-flash", "vertex_ai/gemini-2.5-flash")
+    }
+    locations_before = {
+        key: entry.get("vertex_location") for key, entry in litellm.model_cost.items() if isinstance(entry, dict)
+    }
+    try:
+        Router(
+            model_list=[
+                Deployment(
+                    model_name="vertex-global",
+                    litellm_params=LiteLLM_Params(
+                        model="vertex_ai/gemini-2.5-flash",
+                        vertex_project="test-project",
+                        vertex_location="global",
+                    ),
+                    model_info=ModelInfo(id="vertex-location-id"),
+                ).to_json(exclude_none=True)
+            ]
+        )
+
+        assert litellm.model_cost["vertex-location-id"]["vertex_location"] == "global"
+        changed = {
+            key
+            for key, entry in litellm.model_cost.items()
+            if isinstance(entry, dict) and entry.get("vertex_location") != locations_before.get(key)
+        }
+        assert changed == {"vertex-location-id"}
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_register_deployment_in_model_cost_writes_both_key_families():
     """
     A deployment contributes its full model_info under its unique id and the
