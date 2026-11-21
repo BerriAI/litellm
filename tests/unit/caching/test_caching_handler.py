@@ -3442,12 +3442,14 @@ async def test_cached_stream_rejects_a_response_without_choices(
     )
 
     assert isinstance(replay, CustomStreamWrapper)
-    with pytest.raises(MidStreamFallbackError, match="no 'choices'") as error:
-        if call_type == CallTypes.acompletion.value:
+    if call_type == CallTypes.acompletion.value:
+        with pytest.raises(MidStreamFallbackError, match="no 'choices'") as async_error:
             await anext(replay)
-        else:
+        assert isinstance(async_error.value.original_exception, litellm.APIError)
+    else:
+        with pytest.raises(MidStreamFallbackError, match="no 'choices'") as sync_error:
             next(replay)
-    assert isinstance(error.value.original_exception, litellm.APIError)
+        assert isinstance(sync_error.value.original_exception, litellm.APIError)
 
 
 def test_sync_set_cache_skips_response_without_output():
