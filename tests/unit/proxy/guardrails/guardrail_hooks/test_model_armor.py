@@ -4014,6 +4014,24 @@ async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
 
 
 @pytest.mark.asyncio
+async def test_streaming_hook_scans_anthropic_sse_text_split_over_data_lines():
+    split_delta: Final = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,\n'
+        b'data: "delta":{"type":"text_delta","text":"my card is 4111-1111-1111-1111"}}\n\n'
+    )
+    chunks: Final = (*_ANTHROPIC_SSE_CHUNKS[:2], split_delta, *_ANTHROPIC_SSE_CHUNKS[3:])
+    guardrail: Final = _surface_guardrail()
+    post: Final = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_called_once()
+    assert "my card is 4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert b"4111" not in b"".join(item for item in delivered if isinstance(item, bytes))
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_scans_responses_api_events_instead_of_crashing():
     """A /v1/responses stream arrives as typed Responses events, which stream_chunk_builder
     cannot subscript. The final response.completed event carries the text to scan."""
@@ -4140,6 +4158,25 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
             (b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
              b'"delta":{"type":"text_delta","text":"hi"}}\n\n',),
             id="anthropic-sse-without-message-start",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0].replace(
+                    b'"content":[]', b'"content":[{"type":"text","text":"my card is 4111-1111-1111-1111"}]'
+                ),
+                *_ANTHROPIC_SSE_CHUNKS[1:],
+            ),
+            id="anthropic-sse-with-text-in-message-start",
+        ),
+        pytest.param(
+            (
+                *_ANTHROPIC_SSE_CHUNKS[:4],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"text","text":"my card is 4111-1111-1111-1111"}}\n\n',
+                _ANTHROPIC_SSE_CHUNKS[3],
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="anthropic-sse-reusing-a-block-index",
         ),
         pytest.param(None, id="responses-stream-without-completed-event"),
         pytest.param("created", id="responses-stream-cut-off-after-response-created"),

@@ -155,12 +155,16 @@ def _sent_by_the_failed_upstream(chunk: bytes, block_left_open: int | None, end_
     return block_left_open is None or anthropic_sse_stopped_block_index(event) != block_left_open
 
 
-def _sse_chunks_of_events(events: Sequence[str]) -> tuple[bytes, ...]:
+def anthropic_sse_chunks_of_events(events: Sequence[str]) -> tuple[bytes, ...]:
     return tuple(f"{event}\n\n".encode() for event in events)
 
 
 def anthropic_sse_chunks_from_response(
-    assembled: ModelResponse, source_chunks: Sequence[object] = (), *, keep_explanations: bool = False
+    assembled: ModelResponse,
+    source_chunks: Sequence[object] = (),
+    *,
+    keep_explanations: bool = False,
+    error_events: Sequence[str] | None = None,
 ) -> tuple[bytes, ...]:
     """Re-emit a rewritten response as the SSE events of the ``source_chunks`` stream it replaces.
 
@@ -173,16 +177,17 @@ def anthropic_sse_chunks_from_response(
     block left open unless another block follows it, and with no finished text block when it read
     no text, since Claude Code does not retry a stream that shows a finished block. A response that
     cannot be re-emitted, such as one with a tool input that cannot be parsed, leaves a failed stream
-    its error alone.
+    its error alone. ``error_events`` stands in for the source stream's own, for a caller that rewrote
+    their text.
     """
-    error_events: Final = anthropic_sse_error_events(source_chunks)
+    sent_error_events: Final = anthropic_sse_error_events(source_chunks) if error_events is None else error_events
     try:
-        return _rebuilt_sse_chunks(assembled, source_chunks, error_events, keep_explanations)
+        return _rebuilt_sse_chunks(assembled, source_chunks, sent_error_events, keep_explanations)
     except Exception:
-        if not error_events:
+        if not sent_error_events:
             raise
         verbose_proxy_logger.warning("Failed Anthropic stream could not be rebuilt, sending its upstream error alone")
-        return _sse_chunks_of_events(error_events)
+        return anthropic_sse_chunks_of_events(sent_error_events)
 
 
 def _rebuilt_sse_chunks(
@@ -216,5 +221,5 @@ def _rebuilt_sse_chunks(
     end_events_sent: Final = _MESSAGE_END_EVENT_TYPES & anthropic_sse_event_types(source_chunks)
     return (
         *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, block_left_open, end_events_sent)),
-        *_sse_chunks_of_events(error_events),
+        *anthropic_sse_chunks_of_events(error_events),
     )

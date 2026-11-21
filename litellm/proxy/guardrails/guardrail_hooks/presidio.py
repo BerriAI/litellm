@@ -20,7 +20,7 @@ from itertools import accumulate, count, pairwise
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -52,10 +52,12 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
+    anthropic_sse_chunks_of_events,
+    anthropic_sse_error_events,
+    anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     has_unreadable_json_event,
     is_anthropic_sse_stream,
-    model_response_text,
 )
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -92,6 +94,7 @@ _PRESIDIO_ANONYMIZE_ADAPTER: Final[TypeAdapter[_PresidioAnonymizeResponse | None
     _PresidioAnonymizeResponse | None
 )
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 class _JsonResponse(Protocol):
@@ -162,6 +165,29 @@ def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[
         len(all_chunks),
     )
     yield from all_chunks
+
+
+async def _masked_json_strings(value: JsonValue, mask: Callable[[str], Awaitable[str]]) -> JsonValue:
+    match value:
+        case str():
+            return await mask(value)
+        case list():
+            return [await _masked_json_strings(item, mask) for item in value]
+        case dict():
+            return {key: await _masked_json_strings(item, mask) for key, item in value.items()}
+        case _:
+            return value
+
+
+async def _masked_error_event(event: str, mask: Callable[[str], Awaitable[str]]) -> str:
+    """The upstream ``error`` event with every string value in its data masked."""
+    event_line, data_prefix, payload = event.partition("\ndata: ")
+    try:
+        error: Final = _JSON_VALUE.validate_json(payload)
+    except ValidationError:
+        return f"{event_line}{data_prefix}{await mask(payload)}"
+    masked_error: Final = await _masked_json_strings(error, mask)
+    return event if masked_error == error else f"{event_line}{data_prefix}{json.dumps(masked_error)}"
 
 
 async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
@@ -1365,12 +1391,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Process an Anthropic native message dict for PII masking/unmasking.
         Handles content blocks with type == "text".
         """
-        metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens: Final = metadata.get("pii_tokens", {})
-        if not pii_tokens and mode == "unmask":
-            verbose_proxy_logger.debug("No pii_tokens in metadata for Anthropic response unmask")
-        presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
-
+        pii_processed_text: Final = self._pii_text_processor(request_data, mode)
         content: Final = response.get("content")
         if not isinstance(content, list):
             return response
@@ -1381,28 +1402,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             text_value = block.get("text")
             if text_value is None:
                 continue
-            if mode == "unmask":
-                block["text"] = self._unmask_pii_text(text_value, pii_tokens)
-            elif mode == "mask":
-                block["text"] = await self.check_pii(
-                    text=text_value,
-                    output_parse_pii=False,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
+            block["text"] = await pii_processed_text(text_value)
 
         return response
 
-    async def _process_response_for_pii(
+    def _pii_text_processor(
         self,
-        response: ModelResponse,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: check_pii records its guardrail trace on the request dict
         mode: Literal["mask", "unmask"],
-    ) -> ModelResponse:
-        """
-        Helper to recursively process a ModelResponse for PII.
-        Handles all choices and tool calls.
-        """
+    ) -> Callable[[str], Awaitable[str]]:
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
         if not pii_tokens and mode == "unmask":
@@ -1421,6 +1429,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         request_data=request_data,
                     )
 
+        return pii_processed_text
+
+    async def _process_response_for_pii(
+        self,
+        response: ModelResponse,
+        request_data: dict,
+        mode: Literal["mask", "unmask"],
+    ) -> ModelResponse:
+        """
+        Helper to recursively process a ModelResponse for PII.
+        Handles all choices and tool calls.
+        """
+        pii_processed_text: Final = self._pii_text_processor(request_data, mode)
         for choice in response.choices:
             message: Message | None = getattr(choice, "message", None)
             if message is None:
@@ -1592,22 +1613,27 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
     ) -> tuple[object, ...]:
+        """The frames the client gets: only what Presidio read and masked, or a refusal.
+
+        The upstream's own frames go out only when no upstream error cut the stream, every client reads
+        them as assembly does, and masking changed nothing. A stream a client could read another way is
+        refused, since its PII could sit where assembly never looked.
+        """
         rest_chunks: Final = [chunk async for chunk in rest]
         chunks: Final = (first_chunk, *rest_chunks)
+        error_events: Final = anthropic_sse_error_events(chunks)
+        masked: Final = self._pii_text_processor(request_data, "mask")
+        masked_error_events: Final = tuple([await _masked_error_event(event, masked) for event in error_events])
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True, through_upstream_error=True)
-        if assembled is None:
-            if has_unreadable_json_event(chunks):
-                raise self._unreadable_stream_refusal()
-            verbose_proxy_logger.warning(
-                "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "
-                "Output PII masking was skipped for this response."
-            )
-            return chunks
-        original_text: Final = model_response_text(assembled)
+        if assembled is None and masked_error_events:
+            return anthropic_sse_chunks_of_events(masked_error_events)
+        if assembled is None or not anthropic_sse_reads_alike(chunks):
+            raise self._unreadable_stream_refusal()
+        unmasked: Final = assembled.model_dump_json()
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
-        if model_response_text(assembled) == original_text:
+        if not error_events and assembled.model_dump_json() == unmasked:
             return chunks
-        return anthropic_sse_chunks_from_response(assembled, chunks)
+        return anthropic_sse_chunks_from_response(assembled, chunks, error_events=masked_error_events)
 
     @staticmethod
     def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:
@@ -1791,14 +1817,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return _presidio_config
 
         return None
-
-    def print_verbose(self, print_statement) -> None:
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa: T201
-        except Exception:
-            pass
 
     @log_guardrail_information
     async def apply_guardrail(

@@ -2166,33 +2166,18 @@ async def test_anthropic_native_response_non_text_blocks_untouched():
 
 
 @pytest.mark.asyncio
-async def test_streaming_bytes_chunks_are_yielded_not_discarded():
-    """
-    Regression test: bytes chunks (Anthropic native SSE) should be yielded
-    through the streaming hook, not silently discarded.
-    """
-
-    guardrail = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        apply_to_output=True,
+async def test_streaming_bytes_chunks_without_pii_are_yielded_as_sent():
+    chunks: Final = (
+        _message_start_sse(),
+        *_text_block_sse(0, "Hello"),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        *_MESSAGE_END_SSE,
     )
 
-    byte_chunk = b'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n'
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, chunks)]
 
-    async def mock_stream():
-        yield byte_chunk
-
-    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
-    chunks = []
-    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=mock_user_api_key,
-        response=mock_stream(),
-        request_data={},
-    ):
-        chunks.append(chunk)
-
-    assert any(isinstance(c, bytes) for c in chunks), "bytes chunks must not be discarded"
-    assert byte_chunk in chunks
+    assert tuple(collected) == chunks
 
 
 @pytest.mark.asyncio
@@ -2537,11 +2522,6 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstream_error_are_masked_and_keep_the_error():
-    guardrail: Final = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        apply_to_output=True,
-        mock_redacted_text={"text": "<CREDIT_CARD>"},
-    )
     upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
     byte_chunks: Final = (
         _anthropic_sse(
@@ -2572,16 +2552,8 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
         _anthropic_sse("error", upstream_error),
     )
 
-    async def mock_stream() -> AsyncIterator[bytes]:
-        for chunk in byte_chunks:
-            yield chunk
-
-    collected: Final = [
-        chunk
-        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=mock_stream(), request_data={}
-        )
-    ]
+    async with _guardrail_over_regex_presidio(PiiEntityType.CREDIT_CARD, _CARD_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, byte_chunks)]
 
     joined: Final = b"".join(collected).decode()
     assert "4111" not in joined
@@ -2592,11 +2564,6 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_with_a_tool_input_that_is_not_json_send_the_upstream_error_alone():
-    guardrail: Final = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        apply_to_output=True,
-        mock_redacted_text={"text": "<CREDIT_CARD>"},
-    )
     upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
     byte_chunks: Final = (
         _anthropic_sse(
@@ -2628,18 +2595,252 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_with_a_tool_input_t
         _anthropic_sse("error", upstream_error),
     )
 
-    async def mock_stream() -> AsyncIterator[bytes]:
-        for chunk in byte_chunks:
-            yield chunk
-
-    collected: Final = [
-        chunk
-        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=mock_stream(), request_data={}
-        )
-    ]
+    async with _guardrail_over_regex_presidio(PiiEntityType.CREDIT_CARD, _CARD_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, byte_chunks)]
 
     assert b"".join(collected).decode() == f"event: error\ndata: {json.dumps(upstream_error)}\n\n"
+
+
+_PHONE: Final = "212-555-0147"
+_PHONE_PATTERN: Final = re.compile(r"\d{3}-\d{3}-\d{4}")
+_CARD_PATTERN: Final = re.compile(r"\d{4} \d{4} \d{4} \d{4}")
+_MESSAGE_END_SSE: Final = (
+    _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+    _anthropic_sse("message_stop", {"type": "message_stop"}),
+)
+
+
+def _message_start_sse(*content: dict[str, str]) -> bytes:
+    return _anthropic_sse(
+        "message_start",
+        {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": list(content), "usage": {}}},
+    )
+
+
+def _text_block_sse(index: int, *texts: str) -> tuple[bytes, ...]:
+    return (
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+        ),
+        *(
+            _anthropic_sse(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}},
+            )
+            for text in texts
+        ),
+    )
+
+
+def _block_stop_sse(index: int) -> bytes:
+    return _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": index})
+
+
+def _regex_presidio_app(entity_type: PiiEntityType, pattern: re.Pattern[str]) -> web.Application:
+    async def analyze(request: web.Request) -> web.Response:
+        text: Final = _ANALYZE_REQUEST.validate_json(await request.read()).get("text") or ""
+        return web.json_response(
+            [
+                PresidioAnalyzeResponseItem(
+                    entity_type=entity_type.value,
+                    start=match.start(),
+                    end=match.end(),
+                    score=0.75,
+                    analysis_explanation=None,
+                )
+                for match in pattern.finditer(text)
+            ]
+        )
+
+    async def anonymize(request: web.Request) -> web.Response:
+        text: Final = _ANONYMIZE_REQUEST.validate_json(await request.read())["text"]
+        return web.json_response(_PresidioAnonymizeReply(text=pattern.sub(f"<{entity_type.value}>", text), items=()))
+
+    app: Final = web.Application()
+    app.router.add_post("/analyze", analyze)
+    app.router.add_post("/anonymize", anonymize)
+    return app
+
+
+@asynccontextmanager
+async def _guardrail_over_regex_presidio(
+    entity_type: PiiEntityType, pattern: re.Pattern[str], action: PiiAction
+) -> AsyncIterator[OPTIONAL_PresidioPIIMasking]:
+    async with TestServer(_regex_presidio_app(entity_type, pattern)) as server:
+        guardrail: Final = OPTIONAL_PresidioPIIMasking(
+            apply_to_output=True,
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={entity_type: action},
+        )
+        try:
+            yield guardrail
+        finally:
+            await guardrail._close_http_session()
+
+
+def _post_call_stream(guardrail: OPTIONAL_PresidioPIIMasking, chunks: Sequence[bytes]) -> AsyncIterator[object]:
+    async def upstream() -> AsyncIterator[bytes]:
+        for chunk in chunks:
+            yield chunk
+
+    return guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=upstream(), request_data={}
+    )
+
+
+def _phone_error_sse(*, terminated: bool = True) -> bytes:
+    frame: Final = _anthropic_sse(
+        "error",
+        {"type": "error", "error": {"type": "overloaded_error", "message": f"Overloaded while calling {_PHONE}"}},
+    )
+    return frame if terminated else frame.rstrip(b"\n")
+
+
+_PHONE_IN_A_SPLIT_DATA_LINE: Final = (
+    b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0,\n'
+    + f'data: "delta": {{"type": "text_delta", "text": "Call me at {_PHONE}."}}}}\n\n'.encode()
+)
+_PHONE_IN_A_TOOL_INPUT: Final = (
+    _message_start_sse(),
+    _anthropic_sse(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "call", "input": {}},
+        },
+    ),
+    _anthropic_sse(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": json.dumps({"number": _PHONE})},
+        },
+    ),
+    _block_stop_sse(0),
+    _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {}}),
+    _anthropic_sse("message_stop", {"type": "message_stop"}),
+)
+_STREAMS_WITH_A_READABLE_PHONE: Final = {
+    "text-delta": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure. ", f"Call me at {_PHONE}."),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
+    "split-data-lines": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure. "),
+        _PHONE_IN_A_SPLIT_DATA_LINE,
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
+    "tool-input": _PHONE_IN_A_TOOL_INPUT,
+    "error-after-text": (_message_start_sse(), *_text_block_sse(0, "Sure, one moment."), _phone_error_sse()),
+    "error-alone": (_phone_error_sse(),),
+}
+_STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
+    "text-in-message-start": (
+        _message_start_sse({"type": "text", "text": f"Call me at {_PHONE}."}),
+        *_text_block_sse(0, "Sure."),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
+    "reused-block-index": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure."),
+        _block_stop_sse(0),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": f"Call {_PHONE}."}},
+        ),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
+    "unterminated-error-frame": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure, one moment."),
+        _phone_error_sse(terminated=False),
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream", _STREAMS_WITH_A_READABLE_PHONE.values(), ids=_STREAMS_WITH_A_READABLE_PHONE.keys())
+async def test_apply_to_output_streaming_anthropic_sse_masks_pii_in_every_frame_a_client_reads(
+    upstream: tuple[bytes, ...],
+):
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+    joined: Final = b"".join(chunk for chunk in collected if isinstance(chunk, bytes)).decode()
+    assert len(joined) > 0 and all(isinstance(chunk, bytes) for chunk in collected)
+    assert _PHONE not in joined
+    assert "<PHONE_NUMBER>" in joined
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream", _STREAMS_WITH_A_READABLE_PHONE.values(), ids=_STREAMS_WITH_A_READABLE_PHONE.keys())
+async def test_apply_to_output_streaming_anthropic_sse_blocks_pii_in_every_frame_a_client_reads(
+    upstream: tuple[bytes, ...],
+):
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.BLOCK) as guardrail:
+        with pytest.raises(BlockedPiiEntityError):
+            await anext(_post_call_stream(guardrail, upstream))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", [PiiAction.MASK, PiiAction.BLOCK])
+@pytest.mark.parametrize(
+    "upstream", _STREAMS_A_CLIENT_READS_ANOTHER_WAY.values(), ids=_STREAMS_A_CLIENT_READS_ANOTHER_WAY.keys()
+)
+async def test_apply_to_output_streaming_anthropic_sse_refuses_a_stream_a_client_reads_another_way(
+    upstream: tuple[bytes, ...], action: PiiAction
+):
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, action) as guardrail:
+        with pytest.raises(GuardrailRaisedException, match="could not read the upstream stream"):
+            await anext(_post_call_stream(guardrail, upstream))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_error", "sent_error"),
+    [
+        (
+            b'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+            b'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+        ),
+        (
+            f'event: error\ndata: {{"type":"error","error":{{"type":"api_error","message":"Call {_PHONE}","code":529}}}}\n\n'.encode(),
+            b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Call <PHONE_NUMBER>", "code": 529}}\n\n',
+        ),
+        (
+            f'event: error\ndata: {{"type":"error","error":{{"type":"api_error","details":["Call {_PHONE}"]}}}}\n\n'.encode(),
+            b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "details": ["Call <PHONE_NUMBER>"]}}\n\n',
+        ),
+        (
+            f"event: error\ndata: Overloaded while calling {_PHONE}\n\n".encode(),
+            b"event: error\ndata: Overloaded while calling <PHONE_NUMBER>\n\n",
+        ),
+        (b"event: error\n\n", b"event: error\n\n"),
+    ],
+    ids=["no-pii-sent-as-is", "pii-in-message", "pii-in-a-list", "pii-in-plain-text", "no-data"],
+)
+async def test_apply_to_output_streaming_anthropic_sse_ends_with_the_upstream_error_masked(
+    upstream_error: bytes, sent_error: bytes
+):
+    upstream: Final = (_message_start_sse(), *_text_block_sse(0, "Sure, one moment."), upstream_error)
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+    joined: Final = b"".join(chunk for chunk in collected if isinstance(chunk, bytes))
+    assert joined.endswith(sent_error)
+    assert joined.count(b"event: error") == 1
+    assert b"Sure, one moment." in joined
 
 
 def _anthropic_sse_chunks_led_by_a_non_object_data_line(*, line_in_its_own_chunk: bool) -> tuple[bytes, ...]:
