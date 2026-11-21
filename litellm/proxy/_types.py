@@ -2207,6 +2207,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {set(CALLBACK_VAR_NAMES)}")
             if key in OTEL_DESTINATION_VARS and not isinstance(value, str):
                 raise ValueError(f"{key} must be a string, got {type(value).__name__}")
+            if value is None:
+                continue
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
             if key == "langfuse_environment":
