@@ -22,11 +22,8 @@ export const FONT_SIZE_HEADER = 16;
 // Colors
 export const COLOR_BORDER = "var(--color-border)";
 export const COLOR_BACKGROUND = "var(--color-background)";
-export const COLOR_BG_LIGHT = "var(--color-muted)";
 
 // Spacing
-export const SPACING_SMALL = 4;
 export const SPACING_MEDIUM = 8;
 export const SPACING_LARGE = 12;
 export const SPACING_XLARGE = 16;
-export const SPACING_XXLARGE = 24;
