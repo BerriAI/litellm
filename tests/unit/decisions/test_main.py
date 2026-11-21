@@ -3871,6 +3871,33 @@ async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
 
 
 @pytest.mark.asyncio
+async def test_azure_ai_decision_keeps_assets_on_the_wire_under_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.asystemone(
+        model="azure_ai/decision-1",
+        state="Attached picture: image:pic.jpg",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        assets={"pic.jpg": {"type": "image", "format": "jpg", "data_base64": "AA=="}},
+        api_base="https://res.services.ai.azure.com",
+        api_key="<redacted>",
+        drop_params=True,
+    )
+
+    assert route.called
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "decision-1",
+        "state": "Attached picture: image:pic.jpg",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "assets": {"pic.jpg": {"type": "image", "format": "jpg", "data_base64": "AA=="}},
+    }
+
+
+@pytest.mark.asyncio
 async def test_azure_ai_systemone_uses_its_decisions_pricing_fields(
     respx_mock: respx.MockRouter, decisions_pricing_fields: None
 ) -> None:

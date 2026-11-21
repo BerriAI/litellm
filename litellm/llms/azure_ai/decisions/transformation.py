@@ -35,6 +35,9 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
             else super().get_input_limits("Microsoft-Decision-1", custom_llm_provider, headers)
         )
 
+    def supports_assets(self, headers: Mapping[str, str]) -> bool:
+        return True
+
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return "Missing AZURE_AI_API_BASE - set AZURE_AI_API_BASE or pass api_base, e.g. https://<resource>.services.ai.azure.com"
 
