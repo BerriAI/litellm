@@ -272,7 +272,7 @@ class LensExporter(CustomLogger):
         self.limits: Final = limits
         self.upload_timeout: Final = upload_timeout
         self.serialize_slots: Final = asyncio.Semaphore(MAX_SERIALIZATIONS)
-        self.content_tasks: Final[set["asyncio.Task[bytes | ContentState]"]] = set()  # mutable-ok: bounded content jobs
+        self.content_tasks: Final[set[asyncio.Task[bytes | ContentState]]] = set()  # mutable-ok: bounded content jobs
         self.native_uploads = 0
         self.pending_content_bytes = 0
         self.closing = False
