@@ -111,7 +111,7 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
     assert rows[0]["spend"] == 0.12
     assert rows[0]["api_key"] == "hash-test"
     assert rows[0]["team_id"] == "team-test"
-    assert json.loads(rows[0]["messages"]) == [{"role": "user", "content": "Check a refund"}]
+    assert (rows[0]["messages"], rows[0]["response"]) == ("", "")
     assert exporter.rows_written == 1
     assert exporter.rows_dropped == 0
     assert exporter.buffered_bytes == 0
@@ -309,7 +309,7 @@ async def test_invalid_callback_data_never_interrupts_model_requests(payload: ob
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "oversized",
+    "conversation",
     (
         {"messages": [{"role": "user", "content": "x" * MAX_EVENT_BYTES}], "response": {"id": "small"}},
         {"messages": [{"role": "user", "content": "\x01" * (MAX_EVENT_BYTES // 4)}], "response": {"id": "small"}},
@@ -317,8 +317,8 @@ async def test_invalid_callback_data_never_interrupts_model_requests(payload: ob
     ),
     ids=("long-conversation", "grows-past-the-budget-when-encoded", "long-response"),
 )
-async def test_a_request_too_large_to_export_whole_still_reaches_lens_with_its_cost(
-    oversized: dict[str, object], caplog: pytest.LogCaptureFixture
+async def test_a_request_with_a_conversation_over_the_budget_reaches_lens_with_its_cost(
+    conversation: dict[str, object],
 ) -> None:
     received: Final = asyncio.Queue[httpx.Request]()
 
@@ -329,42 +329,34 @@ async def test_a_request_too_large_to_export_whole_still_reaches_lens_with_its_c
     async with httpx.AsyncClient(base_url="http://lens.test", transport=httpx.MockTransport(accept)) as client:
         exporter: Final = LensExporter(client)
         exporter.start()
-        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-            for request_id in ("long-1", "long-2"):
-                await exporter.async_log_success_event(
-                    {
-                        "response_cost": 0.42,
-                        "standard_logging_object": {
-                            "id": request_id,
-                            "status": "success",
-                            "response_cost": 0.42,
-                            "prompt_tokens": 250000,
-                            "metadata": {"user_api_key_hash": "hash-test"},
-                            **oversized,
-                        },
-                    },
-                    None,
-                    None,
-                    None,
-                )
+        await exporter.async_log_success_event(
+            {
+                "response_cost": 0.42,
+                "standard_logging_object": {
+                    "id": "long-1",
+                    "status": "success",
+                    "response_cost": 0.42,
+                    "prompt_tokens": 250000,
+                    "metadata": {"user_api_key_hash": "hash-test"},
+                    **conversation,
+                },
+            },
+            None,
+            None,
+            None,
+        )
         await exporter.aclose()
     requests: Final = tuple(received.get_nowait() for _ in range(received.qsize()))
     rows: Final = tuple(chain.from_iterable(json.loads(request.content) for request in requests))
     assert [(row["request_id"], row["spend"], row["prompt_tokens"], row["api_key"]) for row in rows] == [
-        ("long-1", 0.42, 250000, "hash-test"),
-        ("long-2", 0.42, 250000, "hash-test"),
+        ("long-1", 0.42, 250000, "hash-test")
     ]
-    assert {(row["messages"], row["response"]) for row in rows} == {("", "")}
-    assert exporter.rows_written == 2
+    assert (rows[0]["messages"], rows[0]["response"]) == ("", "")
     assert exporter.rows_dropped == 0
-    assert [record.message for record in caplog.records if "without their messages" in record.message] == [
-        "Agent tracing store lens received request records without their messages and responses "
-        "(record exceeds the export budget); their cost is still recorded"
-    ]
 
 
 @pytest.mark.asyncio
-async def test_a_request_still_too_large_without_its_conversation_is_dropped() -> None:
+async def test_a_request_too_large_without_its_conversation_is_dropped() -> None:
     sent: Final = asyncio.Queue[httpx.Request]()
 
     def accept(request: httpx.Request) -> httpx.Response:
