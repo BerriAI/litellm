@@ -3916,8 +3916,14 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        client_model: Final = get_client_requested_model(request) or self.data.get("model")
-        requested_model_from_client: Final[str | None] = client_model if isinstance(client_model, str) else None
+        body_model_missing: Final = object()
+        body_model: Final = self.data.get("model", body_model_missing)
+        requested_model_from_client: Final[str | None] = get_client_requested_model(request) or (
+            body_model if isinstance(body_model, str) else None
+        )
+        path_model_for_response: Final = (
+            model if route_type == "acompletion" and body_model is body_model_missing else None
+        )
         self._debug_log_request_payload()
 
         if skip_pre_call_logic:
@@ -4339,10 +4345,11 @@ class ProxyBaseLLMRequestProcessing:
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
-        if requested_model_from_client:
+        response_model: Final = requested_model_from_client or path_model_for_response
+        if response_model:
             response = _override_openai_response_model(  # rebind-ok: a frozen response comes back as a copy
                 response_obj=response,
-                requested_model=requested_model_from_client,
+                requested_model=response_model,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
                 return_raw_model_name=should_return_raw_model_name(self.data),
             )

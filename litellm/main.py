@@ -8778,6 +8778,9 @@ async def atranscription(
                 sync_calculated_duration: Final = calculate_request_duration(file)
                 if sync_calculated_duration is not None:
                     response.set_audio_transcription_duration(sync_calculated_duration)
+                    response.report_duration_usage_when_provider_sent_none(sync_calculated_duration)
+            else:
+                response.report_duration_usage_when_provider_sent_none(existing_duration)
 
         return response
     except Exception as e:
@@ -9127,6 +9130,9 @@ def transcription(
                 )
         elif calculated_duration is not None:
             response.set_audio_transcription_duration(calculated_duration)
+            response.report_duration_usage_when_provider_sent_none(calculated_duration)
+    elif isinstance(response, TranscriptionResponse):
+        response.report_duration_usage_when_provider_sent_none(getattr(response, "duration", None))
 
     return response
 

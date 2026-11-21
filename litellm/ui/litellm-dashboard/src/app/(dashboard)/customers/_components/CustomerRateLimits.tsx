@@ -52,19 +52,6 @@ export function CustomerRateLimitControls({ id, tpm, rpm, disabled, placeholder,
 const hasCustomerRateLimits = (limits?: CustomerRateLimits | null): boolean =>
   [limits?.tpm_limit, limits?.rpm_limit].some((limit) => limit != null);
 
-export function CustomerRateLimitFields(props: RateFieldsProps) {
-  const { t } = useTranslation();
-  return (
-    <fieldset className="min-w-0 space-y-2">
-      <legend className="text-sm font-medium">{t("customerPortal.rateLimits.title")}</legend>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <CustomerRateLimitControls {...props} />
-      </div>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.rateLimits.hint")}</p>
-    </fieldset>
-  );
-}
-
 export function CustomerRateLimitSummary({ limits }: { limits?: CustomerRateLimits | null }) {
   const { t } = useTranslation();
   if (!hasCustomerRateLimits(limits)) return null;

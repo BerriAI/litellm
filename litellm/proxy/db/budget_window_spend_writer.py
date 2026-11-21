@@ -68,6 +68,16 @@ _ROLL_WINDOW_SPEND_SQL: Final = (
     "AND window_start < ($4::timestamptz AT TIME ZONE 'UTC')"
 )
 
+_ROLL_WINDOW_SPEND_ROWS_SQL: Final = (
+    'UPDATE "LiteLLM_BudgetWindowSpend" AS stored SET '
+    "window_start = pending.window_start, spend = 0, "
+    "updated_at = ($5::text::timestamptz AT TIME ZONE 'UTC') "
+    "FROM (SELECT duration, starts::timestamptz AT TIME ZONE 'UTC' AS window_start "
+    "FROM unnest($3::text[], $4::text[]) AS windows(duration, starts)) AS pending "
+    "WHERE stored.entity_type = $1 AND stored.entity_id = $2 "
+    "AND stored.window_duration = pending.duration AND stored.window_start < pending.window_start"
+)
+
 _OPEN_WINDOW_SPEND_SQL: Final = (
     'INSERT INTO "LiteLLM_BudgetWindowSpend" '
     "(entity_type, entity_id, window_duration, window_start, spend, created_at, updated_at) "
@@ -196,6 +206,10 @@ class _UpsertTransaction(Protocol):
     def batch_(self) -> _UpsertBatchManager: ...
 
     async def query_raw(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+
+class WindowSpendRollTransaction(Protocol):
+    async def execute_raw(self, query: LiteralString, *args: object) -> int: ...
 
 
 class _UpsertTransactionManager(Protocol):
@@ -555,6 +569,31 @@ async def roll_window_spend_row(
             window_duration,
             to_naive_utc(new_window_start),
             to_naive_utc(datetime.now(timezone.utc)),
+        )
+
+
+async def roll_window_spend_rows(
+    transaction: WindowSpendRollTransaction,
+    entity_type: str,
+    entity_id: str,
+    windows: Sequence[tuple[str, datetime]],
+) -> None:
+    """Roll an entity's distinct windows in one statement, within its JSON write transaction."""
+    if not windows:
+        return
+    normalized: Final = tuple((duration, to_naive_utc(start)) for duration, start in windows)
+    unique: Final = tuple(
+        (duration, max(start for _, start in entries))
+        for duration, entries in groupby(sorted(normalized), key=lambda window: window[0])
+    )
+    async with db_span("roll_window_spend_row", "LiteLLM_BudgetWindowSpend"):
+        await transaction.execute_raw(
+            _ROLL_WINDOW_SPEND_ROWS_SQL,
+            entity_type,
+            entity_id,
+            tuple(duration for duration, _ in unique),
+            tuple(start.replace(tzinfo=timezone.utc).isoformat() for _, start in unique),
+            datetime.now(timezone.utc).isoformat(),
         )
 
 

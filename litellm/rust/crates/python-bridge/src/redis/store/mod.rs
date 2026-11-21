@@ -186,8 +186,13 @@ pyo3::create_exception!(
 
 /// What every native store raises, its kind telling a caller which failures it may drop.
 fn kind_error(error: Error) -> PyErr {
+    store_error(&error)
+}
+
+/// [`kind_error`] for an error the caller keeps.
+pub(crate) fn store_error(error: &Error) -> PyErr {
     let kind: &'static str = error.kind().into();
-    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(&error).to_string()))
+    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(error).to_string()))
 }
 
 /// A store op declared on the batch the caller's `NativeSend` picked, answered as `reply` shapes it.

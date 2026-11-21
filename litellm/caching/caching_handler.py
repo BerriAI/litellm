@@ -143,16 +143,29 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
 
 
 def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
+    obj: Final = cached_result.get("object")
+    if obj == "response":
+        return False
     cached_id: Final = cached_result.get("id")
     if isinstance(cached_id, str) and cached_id.startswith("chatcmpl"):
         return True
-    obj: Final = cached_result.get("object")
     if isinstance(obj, str):
         return obj.startswith("chat.completion")
     return "choices" in cached_result
 
 
 _SSE_EVENT_DATA: Final = TypeAdapter(Mapping[str, object])
+
+
+_CACHED_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _stored_finish_reason_indices(cached_result: Mapping[str, object]) -> frozenset[int]:
+    try:
+        choices: Final = _CACHED_CHOICES.validate_python(cached_result.get("choices"))
+    except ValidationError:
+        return frozenset()
+    return frozenset(index for index, choice in enumerate(choices) if choice.get("finish_reason") is not None)
 
 
 def _sse_event_data(line: str) -> Mapping[str, object] | None:
@@ -1155,6 +1168,7 @@ class LLMCachingHandler:
                 cached_result = convert_to_model_response_object(
                     response_object=cached_result,
                     model_response_object=ModelResponse(),
+                    preserve_stored_finish_reason=True,
                 )
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
@@ -1228,6 +1242,7 @@ class LLMCachingHandler:
                     cached_result = convert_to_model_response_object(
                         response_object=cached_result,
                         model_response_object=ModelResponse(),
+                        preserve_stored_finish_reason=True,
                     )
             else:
                 from litellm.responses.streaming_iterator import (
@@ -1290,6 +1305,7 @@ class LLMCachingHandler:
             model=model,
             custom_llm_provider="cached_response",
             logging_obj=logging_obj,
+            stored_finish_reason_indices=_stored_finish_reason_indices(cached_result),
         )
 
     async def async_set_cache(
