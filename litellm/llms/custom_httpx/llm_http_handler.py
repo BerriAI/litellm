@@ -287,7 +287,7 @@ def _rust_responses_websocket_enabled(
     return decision(context) is not Decision.PYTHON
 
 
-from .http_handler import get_shared_realtime_ssl_context, realtime_ssl_for_url
+from .http_handler import realtime_ssl_for_url
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -7344,7 +7344,7 @@ class BaseLLMHTTPHandler:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        ws_url = responses_api_provider_config.get_websocket_url(
+        ws_url: str = responses_api_provider_config.get_websocket_url(
             api_base=api_base,
             litellm_params=dict(litellm_params),
         )
@@ -7359,11 +7359,7 @@ class BaseLLMHTTPHandler:
                 ws_url = urlunparse(_parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()})))
 
         try:
-            ssl_context = get_shared_realtime_ssl_context()
-            if ws_url.startswith("wss://") and ssl_context is False:
-                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context: Final = realtime_ssl_for_url(ws_url)
 
             logging_obj.pre_call(
                 input=None,
