@@ -1062,18 +1062,18 @@ async def get_auto_router_session(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
-    row: Final = await AutoRouterSessionRepository(prisma_client).find_latest_for_key(
-        user_api_key_dict.api_key, bounded_session_id(session_id)
+    api_key: Final = user_api_key_dict.api_key
+    # Keyless callers (e.g. a `lite login` session) have no rows in the per-key table.
+    row: Final = (
+        await AutoRouterSessionRepository(prisma_client).find_latest_for_key(api_key, bounded_session_id(session_id))
+        if api_key
+        else None
     )
     if row is None:
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
-    total: Final = (
-        await proxy_logging_obj.session_spend_totals.read(user_api_key_dict.api_key, session_id)
-        if user_api_key_dict.api_key
-        else None
-    )
+    total: Final = await proxy_logging_obj.session_spend_totals.read(api_key, session_id) if api_key else None
     saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
     _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
