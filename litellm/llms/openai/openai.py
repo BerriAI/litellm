@@ -36,7 +36,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     run_chat_completion_agentic_hooks,
 )
-from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import (
     speech_create_params,
@@ -805,7 +805,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
 
             if headers:
-                inference_params["extra_headers"] = headers
+                caller_headers: Final = cast("Mapping[str, object]", headers)  # cast-ok: untyped request headers
+                sent_params: Final = cast("Mapping[str, object]", inference_params)  # cast-ok: untyped optional_params
+                provider_headers: Final = as_str_mapping(sent_params.get("extra_headers")) or {}
+                caller_names: Final = frozenset(name.lower() for name in caller_headers)
+                inference_params["extra_headers"] = {
+                    **{name: value for name, value in provider_headers.items() if name.lower() not in caller_names},
+                    **caller_headers,
+                }
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message="Missing model or messages")
 
