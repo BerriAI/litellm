@@ -48,6 +48,7 @@ export default function AppSettingsDialog({ resource, onClose }: { resource: App
           resource={resource}
           app={app.data}
           profiles={groups.data.default_budgets}
+          defaultBudgetId={groups.data.default_budget_template_id}
           onClose={onClose}
           onPendingChange={setPending}
         />

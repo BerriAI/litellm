@@ -22,8 +22,61 @@ from litellm.types.proxy.management_endpoints.apps import (
     AppResourceType,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
-from tests.unit.proxy.management_helpers.test_apps import AppDatabase, profile, seed_resources
+from tests.unit.proxy.management_helpers.test_apps import (
+    AppDatabase,
+    configure_default_profile,
+    profile,
+    seed_resources,
+)
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice", ("default", "none", "custom", "preset"))
+async def test_new_groups_and_selected_apps_use_independent_defaults_without_changing_existing_caps(
+    choice: str,
+) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    groups: Final = AppGroupStore(store)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    existing: Final = await store.create(AppCreate(resource_id="chat", budget=Budget(max_budget=50)), "admin")
+    assert isinstance(existing, App)
+    group_catalog: Final = await configure_default_profile(store, BudgetGroupScope.APP_GROUP)
+    app_catalog: Final = await configure_default_profile(store, BudgetGroupScope.APP)
+    other: Final = await profile(store, "Other", 200, BudgetGroupScope.APP_GROUP)
+    selection: Final = {
+        "default": AppGroupCreate(name="Default"),
+        "none": AppGroupCreate(name="None", budget_id=None),
+        "custom": AppGroupCreate(name="Custom", budget=Budget(max_budget=300)),
+        "preset": AppGroupCreate(name="Preset", budget_id=other),
+    }[choice]
+    created: Final = await groups.create(
+        selection.model_copy(
+            update={
+                "apps": tuple(
+                    AppGroupApp(resource_type=AppResourceType.TEAM, resource_id=id) for id in ("chat", "search")
+                )
+            }
+        ),
+        "admin",
+    )
+    assert isinstance(created, AppGroup)
+    assert (created.budget.max_budget if created.budget else None) == {
+        "default": 100,
+        "none": None,
+        "custom": 300,
+        "preset": 200,
+    }[choice]
+    if choice == "default":
+        assert created.budget_id == group_catalog.default_budget_template_id
+    search: Final = await store.by_resource(AppResourceType.TEAM, "search")
+    assert isinstance(search, App) and search.budget_id == app_catalog.default_budget_template_id
+    chat: Final = await store.get(existing.app_id)
+    assert isinstance(chat, App) and chat.budget_id == existing.budget_id and chat.budget == existing.budget
+    renamed: Final = await groups.patch(created.app_group_id, AppGroupPatch(name="Renamed"), "admin")
+    assert isinstance(renamed, AppGroup) and renamed.budget_id == created.budget_id
 
 
 @pytest.mark.asyncio

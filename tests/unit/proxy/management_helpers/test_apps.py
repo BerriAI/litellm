@@ -28,6 +28,8 @@ from litellm.types.proxy.management_endpoints.apps import (
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
+    BudgetGroupChange,
+    BudgetGroups,
     BudgetGroupsUpdate,
     BudgetTemplate,
     MemberPatch,
@@ -264,6 +266,79 @@ async def profile(
         },
     )
     return budget_id
+
+
+async def configure_default_profile(store: AppStore, scope: BudgetGroupScope) -> BudgetGroups:
+    current: Final = await store.customers.get_budget_groups(None, scope=scope)
+    assert isinstance(current, BudgetGroups)
+    saved: Final = await store.customers.configure_templates(
+        None,
+        BudgetGroupsUpdate(
+            expected_revision=current.budget_groups_revision,
+            default_budgets=(BudgetGroupChange(name="Default", max_budget=100),),
+            default_budget_template="Default",
+        ),
+        "admin",
+        scope=scope,
+    )
+    assert isinstance(saved, BudgetGroups)
+    assert saved.default_budget_template_id == saved.default_budgets[0].budget_id
+    assert await store.customers.get_budget_groups(None, scope=scope) == saved
+    return saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", (BudgetGroupScope.ORGANIZATION, BudgetGroupScope.APP, BudgetGroupScope.APP_GROUP))
+async def test_default_catalog_selection_can_be_cleared_and_rejects_stale_updates(scope: BudgetGroupScope) -> None:
+    store: Final = AppStore(AppDatabase(), NOW)
+    selected: Final = await configure_default_profile(store, scope)
+    patch: Final = BudgetGroupsUpdate(
+        expected_revision=selected.budget_groups_revision,
+        default_budgets=tuple(
+            BudgetGroupChange.model_validate(group.model_dump()) for group in selected.default_budgets
+        ),
+        default_budget_template=None,
+    )
+    cleared: Final = await store.customers.configure_templates(None, patch, "admin", scope=scope)
+    assert isinstance(cleared, BudgetGroups) and cleared.default_budget_template_id is None
+    assert cleared.default_budgets == selected.default_budgets
+    assert await store.customers.get_budget_groups(None, scope=scope) == cleared
+    assert await store.customers.configure_templates(None, patch, "admin", scope=scope) == Failure(
+        ErrorCode.CONFIGURATION_CONFLICT
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice", ("default", "none", "custom", "preset"))
+async def test_new_apps_use_their_catalog_default_unless_a_budget_is_explicit(choice: str) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    existing: Final = await store.create(AppCreate(resource_id="chat"), "admin")
+    assert isinstance(existing, App) and existing.budget_id is None
+    catalog: Final = await configure_default_profile(store, BudgetGroupScope.APP)
+    await configure_default_profile(store, BudgetGroupScope.ORGANIZATION)
+    other: Final = await profile(store, "Other", 200, BudgetGroupScope.APP)
+    selection: Final = {
+        "default": AppCreate(resource_id="search"),
+        "none": AppCreate(resource_id="search", budget_id=None),
+        "custom": AppCreate(resource_id="search", budget=Budget(max_budget=300)),
+        "preset": AppCreate(resource_id="search", budget_id=other),
+    }[choice]
+    created: Final = await store.create(selection, "admin")
+    assert isinstance(created, App)
+    assert (created.budget.max_budget if created.budget else None) == {
+        "default": 100,
+        "none": None,
+        "custom": 300,
+        "preset": 200,
+    }[choice]
+    if choice == "default":
+        assert created.budget_id == catalog.default_budget_template_id
+    assert await store.create(AppCreate(resource_id="chat"), "admin") == existing
+    unchanged: Final = await store.patch(existing.app_id, AppPatch(auto_create_customers=False), "admin")
+    assert isinstance(unchanged, App) and unchanged.budget_id is None
 
 
 @pytest.fixture

@@ -2467,7 +2467,7 @@ def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(
     assert created.status_code == 200, created.text
     assert http.get(f"/management/v1/{other_catalog}").json() == empty
     app: Final = BudgetGroups.model_validate_json(created.content)
-    rejected_default: Final = http.patch(
+    selected_default: Final = http.patch(
         path,
         json={
             "expected_revision": app.budget_groups_revision,
@@ -2475,14 +2475,18 @@ def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(
             "default_budgets": [{"budget_id": app.default_budgets[0].budget_id, "name": "Tier 1"}],
         },
     )
-    assert rejected_default.status_code == 422, rejected_default.text
+    supports_default: Final = catalog in ("app_budget_groups", "app_group_budget_groups")
+    assert selected_default.status_code == (200 if supports_default else 422), selected_default.text
+    configured: Final = BudgetGroups.model_validate_json(selected_default.content) if supports_default else app
+    assert configured.default_budget_template_id == (app.default_budgets[0].budget_id if supports_default else None)
+    assert http.get(f"/management/v1/{other_catalog}").json() == empty
     assert app.default_budgets[0].budget_id != organization.default_budgets[0].budget_id
     assert app.default_budgets[0].rpm_limit == 100
     assert http.get("/management/v1/customer_organization_budget_groups").json() == organization.model_dump(mode="json")
     wrong_scope: Final = http.patch(
         path,
         json={
-            "expected_revision": app.budget_groups_revision,
+            "expected_revision": configured.budget_groups_revision,
             "default_budget_template": None,
             "default_budgets": [{"budget_id": organization.default_budgets[0].budget_id, "name": "Wrong scope"}],
         },
@@ -2501,7 +2505,7 @@ def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(
         http, {"budget_id": organization.default_budgets[0].budget_id, "name": "Scale", "tpm_limit": 2000}
     )
     assert updated.default_budgets[0].tpm_limit == 2000
-    assert http.get(path).json() == app.model_dump(mode="json")
+    assert http.get(path).json() == configured.model_dump(mode="json")
     rejected: Final = http.post(
         "/management/v1/customer_organizations",
         json={"customer_org_id": "wrong-scope", "budget_id": app.default_budgets[0].budget_id},

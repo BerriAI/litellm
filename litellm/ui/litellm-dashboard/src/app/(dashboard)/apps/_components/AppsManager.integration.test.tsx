@@ -225,8 +225,34 @@ describe("App groups", () => {
     expect(screen.getByRole("textbox", { name: "Search app groups" })).toHaveValue("Product");
   });
 
-  it("creates a group using the app group budget catalog", async () => {
+  it("shows ten app groups per page and opens a group from the next page", async () => {
+    network.routes["GET /management/v1/app_groups"] = () =>
+      Array.from({ length: 11 }, (_, index) => ({
+        ...appGroup,
+        app_group_id: `group-${index + 1}`,
+        name: `Group ${String(index + 1).padStart(2, "0")}`,
+      }));
+    const user = userEvent.setup();
+    render(<AppGroupsPage />);
+    const table = within(await screen.findByRole("table", { name: "App groups" }));
+    await table.findByRole("button", { name: "Group 10", exact: true });
+    expect(table.getAllByRole("row")).toHaveLength(11);
+    expect(table.queryByRole("button", { name: "Group 11", exact: true })).not.toBeInTheDocument();
+    expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("10");
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    const group = await table.findByRole("button", { name: "Group 11", exact: true });
+    expect(table.getAllByRole("row")).toHaveLength(2);
+    await user.click(group);
+    expect(await screen.findByRole("heading", { name: "Group 11", exact: true })).toBeInTheDocument();
+  });
+
+  it("preselects the catalog default when creating a group with selected apps", async () => {
     network.routes["POST /management/v1/app_groups"] = () => appGroup;
+    network.routes["GET /management/v1/app_group_budget_groups"] = () => ({
+      default_budgets: [overallPreset],
+      default_budget_template_id: overallPreset.budget_id,
+      budget_groups_revision: "g".repeat(64),
+    });
     resources = [resource, { resource_type: "team", resource_id: "team-search", alias: "search", app_id: null }];
     const user = userEvent.setup();
     render(<AppGroupsPage />);
@@ -239,7 +265,7 @@ describe("App groups", () => {
     await user.click(await screen.findByRole("option", { name: /chat/ }));
     await user.click(await screen.findByRole("option", { name: /search/ }));
     await user.keyboard("{Escape}");
-    await chooseAppOption(user, dialog.getByRole("combobox", { name: "Budget source" }), /^App Standard/);
+    expect(dialog.getByRole("combobox", { name: "Budget source" })).toHaveTextContent("App Standard");
     await user.click(dialog.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(network.writes).toHaveLength(1));
     const expected = {
@@ -296,6 +322,21 @@ async function openAppSettings(settings?: Partial<App>) {
   await user.click(await screen.findByRole("button", { name: "Edit chat" }));
   return user;
 }
+
+it.each(["default", "none", "existing"])("respects the app catalog default with a %s choice", async (choice) => {
+  network.routes["GET /management/v1/app_budget_groups"] = () => ({
+    default_budgets: [overallPreset],
+    default_budget_template_id: overallPreset.budget_id,
+    budget_groups_revision: "a".repeat(64),
+  });
+  const user = await openAppSettings(choice === "existing" ? { budget_id: null, budget: null } : undefined);
+  const source = await screen.findByRole("combobox", { name: "Overall app budget" });
+  expect(source).toHaveTextContent(choice === "existing" ? "No limit" : "App Standard");
+  if (choice === "none") await chooseAppOption(user, source, /^No limit/);
+  expect(await saveAppSettings(user, choice === "existing" ? "PATCH" : "POST")).toMatchObject({
+    budget_id: choice === "default" ? overallPreset.budget_id : null,
+  });
+});
 
 it("saves the selected app on its Settings page and keeps member defaults untouched", async () => {
   configureApp({ auto_create_customers: true, customer_margin: 0.025 });

@@ -304,7 +304,7 @@ async def configure_app_customer_organization_budget_groups(
 @router.get(
     "/app_budget_groups",
     response_model=BudgetGroups,
-    description="List reusable overall app budget groups and their revision, independently of app × customer "
+    description="List reusable overall app budget groups, their new-app default and revision, independently of app × customer "
     "organization groups. Proxy admins only.",
 )
 @management_endpoint_wrapper
@@ -318,7 +318,8 @@ async def get_app_budget_groups(
     "/app_budget_groups",
     response_model=BudgetGroups,
     description="Save the complete overall app budget group list with its expected_revision. "
-    "default_budget_template must be null. Existing groups retain omitted settings and window reset dates. "
+    "default_budget_template names the group assigned to new apps that omit budget and budget_id, or null for no default. "
+    "Existing groups retain omitted settings and window reset dates. "
     "Stale revisions or referenced deletions return 409. Proxy admins only.",
 )
 @management_endpoint_wrapper
@@ -333,7 +334,7 @@ async def configure_app_budget_groups(
 @router.get(
     "/app_group_budget_groups",
     response_model=BudgetGroups,
-    description="List reusable app group budget groups and their revision, independently of app × customer "
+    description="List reusable app group budget groups, their new-group default and revision, independently of app × customer "
     "organization groups. Proxy admins only.",
 )
 @management_endpoint_wrapper
@@ -348,8 +349,9 @@ async def get_app_group_budget_groups(
 @router.patch(
     "/app_group_budget_groups",
     response_model=BudgetGroups,
-    description="Save the complete overall app budget group list with its expected_revision. "
-    "default_budget_template must be null. Existing groups retain omitted settings and window reset dates. "
+    description="Save the complete app group budget group list with its expected_revision. "
+    "default_budget_template names the group assigned to new app groups that omit budget and budget_id, or null for no default. "
+    "Existing groups retain omitted settings and window reset dates. "
     "Stale revisions or referenced deletions return 409. Proxy admins only.",
 )
 @management_endpoint_wrapper

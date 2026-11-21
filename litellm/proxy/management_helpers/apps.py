@@ -24,6 +24,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchyStore,
     PrismaRecord,
     budget_group_ids,
+    default_budget_group_id,
     effective_member_budget,
     organization_budget_group_ids,
     override_expiry,
@@ -511,7 +512,7 @@ class AppStore:
 
             if await AppGroupRepository(self).table.find_unique(where={"app_group_id": data.app_group_id}) is None:
                 return AppFailure(404, "App group not found.")
-        if data.budget_id is not None or data.default_tier_budget_id is not None:
+        if isinstance(data, AppCreate) or data.budget_id is not None or data.default_tier_budget_id is not None:
             await self.customers.lock_customer_identities()
         if not await self.valid_profile(data.default_tier_budget_id):
             return AppFailure(422, "The default profile must be an existing customer budget group.")
@@ -643,11 +644,15 @@ class AppStore:
         actor: str,
         scope: BudgetGroupScope,
         inherited_id: str | None = None,
+        *,
+        apply_default: bool = False,
     ) -> str | None:
         if data.budget_id is not None:
             return data.budget_id
         if "budget" not in data.model_fields_set:
-            return data.budget_id if "budget_id" in data.model_fields_set else current_id
+            if "budget_id" in data.model_fields_set:
+                return data.budget_id
+            return await default_budget_group_id(self.config, scope) if apply_default else current_id
         return await self.customers.private_budget_patch(
             current_id,
             data,
@@ -661,7 +666,11 @@ class AppStore:
 
     async def fields(self, data: AppPatch | AppCreate, actor: str, current: App | None = None) -> Mapping[str, object]:
         budget_id: Final = await self.linked_budget_id(
-            current.budget_id if current else None, app_budget_selection(data), actor, BudgetGroupScope.APP
+            current.budget_id if current else None,
+            app_budget_selection(data),
+            actor,
+            BudgetGroupScope.APP,
+            apply_default=current is None,
         )
         member_id: Final = await self.linked_budget_id(
             current.default_customer_member_budget_id if current else None,
@@ -670,7 +679,7 @@ class AppStore:
             BudgetGroupScope.APP_MEMBER,
         )
         return {
-            **({"budget_id": budget_id} if {"budget", "budget_id"} & data.model_fields_set else {}),
+            **({"budget_id": budget_id} if current is None or {"budget", "budget_id"} & data.model_fields_set else {}),
             **(
                 {"default_tier_budget_id": data.default_tier_budget_id}
                 if "default_tier_budget_id" in data.model_fields_set

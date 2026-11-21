@@ -70,6 +70,7 @@ export default function AppGroupBudgetDialog({ target, onClose }: { target: Grou
           resources={managed.resources.data ?? []}
           apps={managed.apps.data ?? []}
           profiles={catalog.data.default_budgets}
+          defaultBudgetId={target.kind === "group" ? catalog.data.default_budget_template_id : null}
           onClose={onClose}
           onPendingChange={setPending}
         />
@@ -83,6 +84,7 @@ function GroupBudgetForm({
   resources,
   apps,
   profiles,
+  defaultBudgetId,
   onClose,
   onPendingChange,
 }: {
@@ -90,6 +92,7 @@ function GroupBudgetForm({
   resources: readonly AppResource[];
   apps: readonly App[];
   profiles: BudgetGroups["default_budgets"];
+  defaultBudgetId?: string | null;
   onClose: () => void;
   onPendingChange: (pending: boolean) => void;
 }) {
@@ -111,7 +114,7 @@ function GroupBudgetForm({
           .map((app) => app.resource_id),
         description: target.group?.description ?? "",
         organization: target.kind === "organization" ? target.organization?.customer_org_id ?? "" : "",
-        ...budgetSelectionFields(entity, profiles),
+        ...budgetSelectionFields(entity, profiles, defaultBudgetId),
       },
       parse: (fields) => {
         if (target.kind === "group" && !fields.name.trim()) return { ok: false, error: t("apps.groups.nameRequired") };

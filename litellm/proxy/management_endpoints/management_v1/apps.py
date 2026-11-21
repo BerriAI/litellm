@@ -113,7 +113,9 @@ async def list_app_resource_models(resource_type: AppResourceType, resource_id: 
     "",
     response_model=App,
     status_code=201,
-    description="Configure budget policy for an existing resource of the gateway app type. Proxy admins only.",
+    description="Configure budget policy for an existing resource of the gateway app type. Newly configured apps "
+    "inherit the overall app catalog default when budget and budget_id are omitted. Explicit null disables the cap. "
+    "Existing app bindings keep their settings. Proxy admins only.",
 )
 async def create_app(data: AppCreate, store: Store, actor: Actor) -> App:
     return await store.with_budget_usage(resolve(await store.create(data, actor)))

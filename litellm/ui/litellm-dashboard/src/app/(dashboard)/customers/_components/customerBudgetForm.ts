@@ -183,14 +183,17 @@ interface BudgetSelectionOwner {
 
 type BudgetPreset = Budget & { budget_id: string };
 
-export const budgetSelectionFields = (entity: BudgetSelectionOwner | undefined, presets: readonly BudgetPreset[]) => {
+export const budgetSelectionFields = (
+  entity: BudgetSelectionOwner | undefined,
+  presets: readonly BudgetPreset[],
+  defaultBudgetId?: string | null,
+) => {
+  const selectedId = entity ? entity.budget_id : defaultBudgetId;
   const customSource = entity?.budget ? "custom" : "inherit";
   return {
     budget: budgetEditorFields(entity?.budget),
     policy: entity?.budget,
-    budgetSource: presets.some((preset) => preset.budget_id === entity?.budget_id)
-      ? `profile:${entity?.budget_id}`
-      : customSource,
+    budgetSource: presets.some((preset) => preset.budget_id === selectedId) ? `profile:${selectedId}` : customSource,
   };
 };
 

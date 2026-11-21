@@ -22,7 +22,6 @@ import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerEntityBudgetDialog from "./CustomerEntityBudgetDialog";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
-import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
 import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
 import CustomerMemberSearch from "./CustomerMemberSearch";
 import { customerUsageEntity, isCustomerUsageIdentifier, type CustomerUsageEntity } from "./customerUsageApi";
@@ -421,7 +420,6 @@ export default function CustomerHierarchyManager() {
     );
 
   const entity = selected.entity;
-  const showOrganizationApps = entity.kind === "organization" && (tab === "teams" || tab === "members");
   const currentScope = {
     org: scope.org,
     team: selected.team?.customer_team_id ?? null,
@@ -438,13 +436,6 @@ export default function CustomerHierarchyManager() {
     <CustomerDetailLayout label={t("customerPortal.hierarchy.title")}>
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
       <CustomerHierarchyNavigation scope={currentScope} active={tab} />
-      {showOrganizationApps && (
-        <CustomerOrganizationApps
-          key={scope.org}
-          organizationId={scope.org}
-          organizationAlias={selected.organization.alias}
-        />
-      )}
       {selected.member && (
         <CustomerMemberApps
           key={selected.member.customer_member_id}

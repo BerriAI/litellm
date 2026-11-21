@@ -9741,7 +9741,7 @@ export interface paths {
         };
         /**
          * Get App Budget Groups
-         * @description List reusable overall app budget groups and their revision, independently of app × customer organization groups. Proxy admins only.
+         * @description List reusable overall app budget groups, their new-app default and revision, independently of app × customer organization groups. Proxy admins only.
          */
         get: operations["get_app_budget_groups_management_v1_app_budget_groups_get"];
         put?: never;
@@ -9751,7 +9751,7 @@ export interface paths {
         head?: never;
         /**
          * Configure App Budget Groups
-         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template must be null. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template names the group assigned to new apps that omit budget and budget_id, or null for no default. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
          */
         patch: operations["configure_app_budget_groups_management_v1_app_budget_groups_patch"];
         trace?: never;
@@ -9813,7 +9813,7 @@ export interface paths {
         };
         /**
          * Get App Group Budget Groups
-         * @description List reusable app group budget groups and their revision, independently of app × customer organization groups. Proxy admins only.
+         * @description List reusable app group budget groups, their new-group default and revision, independently of app × customer organization groups. Proxy admins only.
          */
         get: operations["get_app_group_budget_groups_management_v1_app_group_budget_groups_get"];
         put?: never;
@@ -9823,7 +9823,7 @@ export interface paths {
         head?: never;
         /**
          * Configure App Group Budget Groups
-         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template must be null. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         * @description Save the complete app group budget group list with its expected_revision. default_budget_template names the group assigned to new app groups that omit budget and budget_id, or null for no default. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
          */
         patch: operations["configure_app_group_budget_groups_management_v1_app_group_budget_groups_patch"];
         trace?: never;
@@ -9840,7 +9840,10 @@ export interface paths {
         put?: never;
         /**
          * Create App Group
-         * @description Create an app group from selected apps and an optional custom budget or app group budget preset. Proxy admins only.
+         * @description Create an app group from selected apps and an optional custom budget or app group budget preset.
+         *
+         *     Omit budget and budget_id to use the app group catalog default. Explicit null disables the shared cap.
+         *     Proxy admins only.
          */
         post: operations["create_app_group_management_v1_app_groups_post"];
         delete?: never;
@@ -9913,7 +9916,7 @@ export interface paths {
         put?: never;
         /**
          * Create App
-         * @description Configure budget policy for an existing resource of the gateway app type. Proxy admins only.
+         * @description Configure budget policy for an existing resource of the gateway app type. Newly configured apps inherit the overall app catalog default when budget and budget_id are omitted. Explicit null disables the cap. Existing app bindings keep their settings. Proxy admins only.
          */
         post: operations["create_app_management_v1_apps_post"];
         delete?: never;

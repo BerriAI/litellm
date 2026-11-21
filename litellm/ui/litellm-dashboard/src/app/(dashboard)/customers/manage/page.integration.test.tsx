@@ -470,9 +470,9 @@ describe("customer hierarchy management", () => {
     const table = await screen.findByRole("table", { name: "Customer teams" });
     expect(within(table).getByRole("link", { name: "Product" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Example customer" })).toBeInTheDocument();
-    const globalBudget = screen.getByRole("region", { name: "Current budget" });
-    const appBudgets = screen.getByRole("region", { name: "App budgets" });
-    expect(globalBudget.compareDocumentPosition(appBudgets) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Current budget" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "App budgets" })).not.toBeInTheDocument();
+    expect(requestedUrls().some((url) => url.pathname.startsWith("/management/v1/apps"))).toBe(false);
     expect(screen.getByRole("progressbar", { name: "Recorded budget spend" })).toHaveAttribute("aria-valuenow", "12");
     expect(
       requestedUrls()
@@ -596,6 +596,8 @@ describe("customer hierarchy management", () => {
       onUrlUpdate,
     });
     const table = await screen.findByRole("table", { name: "Customer members" });
+    expect(screen.queryByRole("region", { name: "App budgets" })).not.toBeInTheDocument();
+    expect(requestedUrls().some((url) => url.pathname.startsWith("/management/v1/apps"))).toBe(false);
     expect(within(table).queryByRole("link", { name: "Member One" })).not.toBeInTheDocument();
     const search = screen.getByRole("searchbox", { name: "Search members by name or ID" });
     const searches = () =>

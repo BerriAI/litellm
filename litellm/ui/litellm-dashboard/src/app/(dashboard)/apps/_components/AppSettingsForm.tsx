@@ -27,9 +27,13 @@ import { customerAppParsers } from "../../customers/_components/CustomerHierarch
 
 const appHref = createSerializer(customerAppParsers);
 
-const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default_budgets"]) => {
+const appDefaultsFields = (
+  app: App | undefined,
+  profiles: BudgetGroups["default_budgets"],
+  defaultBudgetId?: string | null,
+) => {
   return {
-    ...budgetSelectionFields(app, profiles),
+    ...budgetSelectionFields(app, profiles, defaultBudgetId),
     autoCreate: app?.auto_create_customers ?? true,
     surcharge: appSurchargeField(app?.customer_margin),
     appGroupId: app?.app_group_id ?? null,
@@ -40,12 +44,14 @@ export default function AppSettingsForm({
   resource,
   app,
   profiles,
+  defaultBudgetId,
   onClose,
   onPendingChange,
 }: {
   resource: AppResource;
   app?: App;
   profiles: BudgetGroups["default_budgets"];
+  defaultBudgetId?: string | null;
   onClose?: () => void;
   onPendingChange?: (pending: boolean) => void;
 }) {
@@ -54,7 +60,7 @@ export default function AppSettingsForm({
   const appGroups = useAppGroups();
   const { fields, setFields, update, pending, error, save, dirty } = useCustomerBudgetForm(
     {
-      initial: appDefaultsFields(app, profiles),
+      initial: appDefaultsFields(app, profiles, defaultBudgetId),
       parse: (fields) => {
         const budget = budgetSelectionValue(fields, app?.budget);
         if (!budget.ok) return { ok: false, error: t(budget.error) };

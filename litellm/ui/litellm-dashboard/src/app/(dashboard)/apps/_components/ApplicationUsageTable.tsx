@@ -40,7 +40,11 @@ export default function ApplicationUsageTable({
 }) {
   const { t } = useTranslation();
   const defaultPrefix = kind === "groups" ? "groups_" : "";
-  const tableOptions = { ...APPLICATION_TABLE, keyPrefix: keyPrefix ?? defaultPrefix };
+  const tableOptions = {
+    ...APPLICATION_TABLE,
+    defaultPageSize: kind === "groups" ? 10 : APPLICATION_TABLE.defaultPageSize,
+    keyPrefix: keyPrefix ?? defaultPrefix,
+  };
   const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } =
     useUrlTableState(tableOptions);
   const columns = APPLICATION_COLUMNS.map((column) =>
@@ -131,6 +135,7 @@ export default function ApplicationUsageTable({
       <DataTablePagination
         page={currentPage}
         pageSize={pageSize}
+        pageSizeOptions={kind === "groups" ? [10, 25, 50, 100] : undefined}
         rowCount={sortedRows.length}
         onPageChange={(page) => onPaginationChange({ pageIndex: page, pageSize })}
         onPageSizeChange={(size) => onPaginationChange({ pageIndex: 0, pageSize: size })}

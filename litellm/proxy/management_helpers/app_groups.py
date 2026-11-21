@@ -103,7 +103,11 @@ class AppGroupStore:
         from prisma import Json
 
         selected: Final = await self.apps.linked_budget_id(
-            current_id, app_budget_selection(data), actor, BudgetGroupScope.APP_GROUP
+            current_id,
+            app_budget_selection(data),
+            actor,
+            BudgetGroupScope.APP_GROUP,
+            apply_default=isinstance(data, AppGroupCreate),
         )
         return {
             **data.model_dump(include={"name", "description"}, exclude_unset=True),
@@ -112,7 +116,11 @@ class AppGroupStore:
                 if "metadata" in data.model_fields_set
                 else {}
             ),
-            **({"budget_id": selected} if {"budget", "budget_id"} & data.model_fields_set else {}),
+            **(
+                {"budget_id": selected}
+                if isinstance(data, AppGroupCreate) or {"budget", "budget_id"} & data.model_fields_set
+                else {}
+            ),
             "updated_by": actor,
         }
 
