@@ -813,9 +813,13 @@ async def _azure_live_upstream(
             )
         ),
     )
-    if isinstance(upstream, AzureLiveApiBaseMissing):
-        raise ValueError("api_base is required for Azure Live session calls")
-    return upstream
+    match upstream:
+        case AzureLiveApiBaseMissing():
+            raise ValueError("api_base is required for Azure Live session calls")
+        case LiveUpstream():
+            return upstream
+        case _:
+            assert_never(upstream)
 
 
 async def _alive_session(
