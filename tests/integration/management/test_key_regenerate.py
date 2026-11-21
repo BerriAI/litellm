@@ -160,10 +160,18 @@ async def test_key_regenerate_explicit_null_cannot_remove_capped_limit(
     admin = actors.keys[Actor.PROXY_ADMIN]
     headers = {"Authorization": f"Bearer {admin.cleartext}"}
     limited = await create_scratch_key(
-        gateway_client, admin.cleartext, resources.prefix, user_id=admin.user_id, key_alias=f"{resources.prefix}-limited"
+        gateway_client,
+        admin.cleartext,
+        resources.prefix,
+        user_id=admin.user_id,
+        key_alias=f"{resources.prefix}-limited",
     )
     unlimited = await create_scratch_key(
-        gateway_client, admin.cleartext, resources.prefix, user_id=admin.user_id, key_alias=f"{resources.prefix}-unlimited"
+        gateway_client,
+        admin.cleartext,
+        resources.prefix,
+        user_id=admin.user_id,
+        key_alias=f"{resources.prefix}-unlimited",
     )
     seeded = await gateway_client.post("/key/update", headers=headers, json={"key": limited, "duration": "1h"})
     assert seeded.status_code == 200, seeded.text

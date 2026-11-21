@@ -13627,6 +13627,65 @@ def test_enforce_upperbound_allows_within_limit_on_update(monkeypatch):
     assert data.max_budget == 5.0
 
 
+_CAPS_ON_EVERY_FIELD: Final = LiteLLM_UpperboundKeyGenerateParams(
+    duration="2h",
+    max_budget=100.0,
+    max_parallel_requests=10,
+    tpm_limit=1000,
+    rpm_limit=100,
+    budget_duration="60d",
+)
+_KEY_STORING_EVERY_LIMIT: Final = LiteLLM_VerificationToken(
+    token="hashed-limited",
+    expires=datetime(2099, 1, 1, tzinfo=timezone.utc),
+    max_budget=10.0,
+    max_parallel_requests=5,
+    tpm_limit=100,
+    rpm_limit=10,
+    budget_duration="30d",
+)
+_CAPPED_KEY_FIELDS: Final = (
+    "duration",
+    "max_budget",
+    "max_parallel_requests",
+    "tpm_limit",
+    "rpm_limit",
+    "budget_duration",
+)
+
+
+@pytest.mark.parametrize("field", _CAPPED_KEY_FIELDS)
+def test_enforce_upperbound_rejects_null_removing_a_stored_capped_limit(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", _CAPS_ON_EVERY_FIELD)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_upperbound_key_params(
+            UpdateKeyRequest(key="sk-test", **{field: None}),
+            fill_defaults=False,
+            existing_key_row=_KEY_STORING_EVERY_LIMIT,
+        )
+
+    cap: Final = getattr(_CAPS_ON_EVERY_FIELD, field)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": f"{field} cannot be removed, max limit set in config - max_value={cap}"}
+
+
+@pytest.mark.parametrize("field", _CAPPED_KEY_FIELDS)
+def test_enforce_upperbound_allows_null_on_a_field_with_no_cap(monkeypatch: pytest.MonkeyPatch, field: str) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        _CAPS_ON_EVERY_FIELD.model_copy(update={field: None}),
+    )
+    data: Final = UpdateKeyRequest(key="sk-test", **{field: None})
+
+    _enforce_upperbound_key_params(data, fill_defaults=False, existing_key_row=_KEY_STORING_EVERY_LIMIT)
+
+    assert getattr(data, field) is None
+
+
 def test_enforce_upperbound_duration_over_limit(monkeypatch):
     """Test that duration exceeding upperbound is rejected."""
     import litellm
