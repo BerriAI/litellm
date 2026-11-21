@@ -34,6 +34,12 @@ _MP3_SAMPLES_PER_FRAME: Final = 576
 _MP3_ENCODER_DELAY_SAMPLES: Final = 1105
 _MPEG2_LAYER3_KBPS: Final = (0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160)
 _MPEG2_SAMPLE_RATES: Final = (22050, 24000, 16000)
+_ADTS_HEADER_BYTES: Final = 7
+_ADTS_SAMPLE_RATES: Final = (96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
+_AAC_SAMPLES_PER_BLOCK: Final = 1024
+_AAC_ENCODER_DELAY_SAMPLES: Final = 1024
+_FLAC_FIXED_BLOCK_SYNC: Final = b"\xff\xf8"
+_FLAC_MIN_FRAME_BYTES: Final = 9
 
 
 class _SpeechUsage(BaseModel):
@@ -112,6 +118,104 @@ def _opus_seconds(head: bytes, tail: bytes) -> Fraction | None:
     return Fraction(played, _OPUS_GRANULES_PER_SECOND)
 
 
+class _AdtsFrames:
+    """Walks AAC ADTS frame headers as the audio arrives, since only they say how much audio the stream holds."""
+
+    def __init__(self) -> None:
+        self._carry = b""
+        self._skip = 0
+        self._blocks = 0
+        self._sample_rate = 0
+        self._broken = False
+
+    def feed(self, audio: bytes) -> None:
+        if self._broken:
+            return
+        data: Final = self._carry + audio
+        at = self._skip
+        while at + _ADTS_HEADER_BYTES <= len(data):
+            header = data[at : at + _ADTS_HEADER_BYTES]
+            length = (header[3] & 3) << 11 | header[4] << 3 | header[5] >> 5
+            rate_index = header[2] >> 2 & 0xF
+            if header[0] != 0xFF or header[1] & 0xF6 != 0xF0 or length < _ADTS_HEADER_BYTES or rate_index > 12:
+                self._broken = True
+                return
+            self._sample_rate = _ADTS_SAMPLE_RATES[rate_index]
+            self._blocks += (header[6] & 3) + 1
+            at += length
+        self._carry = data[at:]
+        self._skip = max(at - len(data), 0)
+
+    def seconds(self) -> Fraction | None:
+        if self._broken or self._carry or self._skip or self._blocks == 0:
+            return None
+        return Fraction(self._blocks * _AAC_SAMPLES_PER_BLOCK - _AAC_ENCODER_DELAY_SAMPLES, self._sample_rate)
+
+
+def _crc(data: bytes, polynomial: int, bits: int) -> int:
+    top: Final = 1 << bits - 1
+    crc = 0
+    for byte in data:
+        crc ^= byte << bits - 8
+        for _ in range(8):
+            crc = (crc << 1 ^ polynomial if crc & top else crc << 1) & (1 << bits) - 1
+    return crc
+
+
+def _flac_block_size(code: int, extra: bytes) -> int | None:
+    if code == 0:
+        return None
+    if code == 1:
+        return 192
+    if code <= 5:
+        return 576 << code - 2
+    if code <= 7:
+        return int.from_bytes(extra[: code - 5], "big") + 1
+    return 256 << code - 8
+
+
+def _flac_frame_end_samples(frame: bytes, block_size: int) -> int | None:
+    """Samples played once this fixed-block frame, the last of its stream, ends. None unless both its CRCs hold."""
+    if len(frame) < _FLAC_MIN_FRAME_BYTES:
+        return None
+    number_bytes: Final = max(8 - (frame[4] ^ 0xFF).bit_length(), 1)
+    size_code: Final = frame[2] >> 4
+    rate_code: Final = frame[2] & 0xF
+    size_at: Final = 4 + number_bytes
+    header_end: Final = size_at + max(size_code - 5, 0) * (size_code <= 7) + (rate_code >= 12) + (rate_code >= 13)
+    last_block: Final = _flac_block_size(size_code, frame[size_at:header_end])
+    if (
+        number_bytes == 8
+        or last_block is None
+        or last_block > block_size
+        or len(frame) < header_end + 3
+        or _crc(frame[:header_end], 0x07, 8) != frame[header_end]
+        or _crc(frame[:-2], 0x8005, 16) != int.from_bytes(frame[-2:], "big")
+    ):
+        return None
+    lead: Final = frame[4] & 0xFF >> number_bytes if number_bytes > 1 else frame[4]
+    number = lead
+    for byte in frame[5:size_at]:
+        number = number << 6 | byte & 0x3F
+    return number * block_size + last_block
+
+
+def _flac_seconds(head: bytes, tail: bytes) -> Fraction | None:
+    block_size: Final = int.from_bytes(head[10:12], "big")
+    sample_rate: Final = int.from_bytes(head[18:21], "big") >> 4
+    if head[:4] != b"fLaC" or head[4] & 0x7F or head[8:10] != head[10:12] or block_size == 0 or sample_rate == 0:
+        return None
+    samples: Final = next(
+        (
+            played
+            for found in reversed(tuple(re.finditer(_FLAC_FIXED_BLOCK_SYNC, tail)))
+            if (played := _flac_frame_end_samples(tail[found.start() :], block_size)) is not None
+        ),
+        None,
+    )
+    return None if samples is None else Fraction(samples, sample_rate)
+
+
 def _accepted_speed(speed: object) -> Fraction | None:
     if isinstance(speed, bool) or not isinstance(speed, (int, float)):
         return None
@@ -128,8 +232,11 @@ class BilledAudioClock:
         self._head = b""
         self._tail = b""
         self._total = 0
+        self._adts: Final = _AdtsFrames() if self._format == "aac" else None
 
     def feed(self, audio: bytes) -> None:
+        if self._adts is not None:
+            self._adts.feed(audio)
         if len(self._head) < _HEAD_BYTES:
             self._head = (self._head + audio)[:_HEAD_BYTES]
         self._tail = (self._tail + audio)[-_OGG_MAX_PAGE_BYTES:]
@@ -145,6 +252,10 @@ class BilledAudioClock:
                 return _mp3_seconds(self._head, self._total)
             case "opus":
                 return _opus_seconds(self._head, self._tail)
+            case "flac":
+                return _flac_seconds(self._head, self._tail)
+            case "aac":
+                return None if self._adts is None else self._adts.seconds()
             case _:
                 return None
 

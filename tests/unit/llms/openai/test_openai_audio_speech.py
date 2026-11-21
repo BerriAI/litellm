@@ -354,17 +354,50 @@ def _ogg_page(granule: int, body: bytes) -> bytes:
 _OPUS: Final = _ogg_page(0, b"OpusHead\x01\x01" + _OPUS_PRE_SKIP.to_bytes(2, "little") + bytes(7)) + _ogg_page(
     48000 * _SECONDS + _OPUS_PRE_SKIP, bytes(40)
 )
+_AAC_FRAMES: Final = 76
+_AAC: Final = (b"\xff\xf1\x58\x40\x02\x1f\xfc" + bytes(9)) * _AAC_FRAMES
+_AAC_BILLED_TOKENS: Final = (_AAC_FRAMES - 1) * 1024 * 20 // 24000
+_FLAC_BLOCK: Final = 2304
+_FLAC_HEAD: Final = (
+    b"fLaC\x80\x00\x00\x22"
+    + _FLAC_BLOCK.to_bytes(2, "big") * 2
+    + bytes(6)
+    + (24000 << 44 | 15 << 36).to_bytes(8, "big")
+    + bytes(16)
+)
 
 
-def _speech_sse(audio: bytes) -> bytes:
-    return b'data: {"type":"speech.audio.delta","audio":"%s"}\n\ndata: {"type":"speech.audio.done","usage":%s}\n\n' % (
-        base64.b64encode(audio),
-        json.dumps({"input_tokens": 6, "output_tokens": _REPORTED_TOKENS, "total_tokens": 56}).encode(),
+def _crc(data: bytes, polynomial: int, bits: int) -> int:
+    crc = 0
+    for byte in data:
+        crc ^= byte << bits - 8
+        for _ in range(8):
+            crc = (crc << 1 ^ polynomial if crc >> bits - 1 else crc << 1) & (1 << bits) - 1
+    return crc
+
+
+def _flac_frame(header: bytes, samples: bytes = bytes(30)) -> bytes:
+    body: Final = header + bytes([_crc(header, 0x07, 8)]) + samples
+    return body + _crc(body, 0x8005, 16).to_bytes(2, "big")
+
+
+_FLAC: Final = _FLAC_HEAD + _flac_frame(b"\xff\xf8\x40\x08\x00") + _flac_frame(b"\xff\xf8\x20\x08\x1f")
+_FLAC_LONG: Final = _FLAC_HEAD + _flac_frame(b"\xff\xf8\x70\x08\xc3\x88\x04\x7f")
+_FLAC_LONG_BILLED_TOKENS: Final = (200 * _FLAC_BLOCK + 1152) * 20 // 24000
+
+
+def _speech_sse(audio: bytes, delta_bytes: int | None = None) -> bytes:
+    step: Final = delta_bytes or len(audio) or 1
+    return b"".join(
+        b'data: {"type":"speech.audio.delta","audio":"%s"}\n\n' % base64.b64encode(audio[start : start + step])
+        for start in range(0, len(audio), step)
+    ) + b'data: {"type":"speech.audio.done","usage":%s}\n\n' % (
+        json.dumps({"input_tokens": 6, "output_tokens": _REPORTED_TOKENS, "total_tokens": 56}).encode()
     )
 
 
-def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object]) -> int:
-    sse: Final = _speech_sse(audio)
+def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object], delta_bytes: int | None = None) -> int:
+    sse: Final = _speech_sse(audio, delta_bytes)
     response: Final = OpenAIChatCompletion().audio_speech(
         model="gpt-4o-mini-tts",
         input="hello",
@@ -405,6 +438,21 @@ def _billed_audio_tokens(audio: bytes, optional_params: dict[str, object]) -> in
         pytest.param(_MP3, {}, _BILLED_TOKENS - 1, id="mp3 is the default format"),
         pytest.param(_PCM, {"response_format": "pcm", "speed": 2.0}, _BILLED_TOKENS * 2, id="sped up audio"),
         pytest.param(_PCM, {"response_format": "pcm", "speed": 0.5}, _BILLED_TOKENS // 2, id="slowed audio"),
+        pytest.param(_AAC, {"response_format": "aac"}, _AAC_BILLED_TOKENS, id="aac drops the encoder delay"),
+        pytest.param(_AAC, {"response_format": "aac", "speed": 2.0}, _AAC_BILLED_TOKENS * 2, id="sped up aac"),
+        pytest.param(_FLAC, {"response_format": "flac"}, _BILLED_TOKENS, id="flac"),
+        pytest.param(
+            _FLAC_HEAD + _flac_frame(b"\xff\xf8\x20\x08\x1f", _flac_frame(b"\xff\xf8\x20\x08\x7f")[:-2] + bytes(2)),
+            {"response_format": "flac"},
+            _BILLED_TOKENS,
+            id="flac whose last frame holds samples that look like a later frame",
+        ),
+        pytest.param(
+            _FLAC_LONG,
+            {"response_format": "flac"},
+            _FLAC_LONG_BILLED_TOKENS,
+            id="flac whose last frame spells out its number and size in more bytes",
+        ),
     ],
 )
 def test_token_priced_speech_bills_the_length_of_the_audio_not_the_tokens_the_done_event_reports(
@@ -416,7 +464,18 @@ def test_token_priced_speech_bills_the_length_of_the_audio_not_the_tokens_the_do
 @pytest.mark.parametrize(
     ("audio", "response_format"),
     [
-        pytest.param(_PCM, "aac", id="a format whose length is not read"),
+        pytest.param(_PCM, "aac", id="aac that is not adts frames"),
+        pytest.param(_AAC[:-1], "aac", id="aac cut off inside a frame"),
+        pytest.param(b"", "aac", id="aac with no frames"),
+        pytest.param(_AAC, "webm", id="a format whose length is not read"),
+        pytest.param(_FLAC[:-1] + b"\x01", "flac", id="flac whose last frame fails its checksum"),
+        pytest.param(_FLAC.replace(b"\x08\x1f", b"\x08\x1e"), "flac", id="flac whose last header fails its checksum"),
+        pytest.param(_FLAC.replace(b"fLaC", b"fLaX"), "flac", id="flac without its marker"),
+        pytest.param(
+            _FLAC.replace(_FLAC_BLOCK.to_bytes(2, "big") * 2, bytes(2) + _FLAC_BLOCK.to_bytes(2, "big")),
+            "flac",
+            id="flac whose blocks vary in size",
+        ),
         pytest.param(_PCM, "wav", id="wav without its header"),
         pytest.param(_MP3 + b"\x00", "mp3", id="mp3 that is not whole frames"),
         pytest.param(_OPUS.replace(b"OpusHead", b"OpusTags"), "opus", id="ogg without an opus header"),
@@ -426,6 +485,11 @@ def test_token_priced_speech_falls_back_to_the_reported_tokens_when_the_audio_le
     audio: bytes, response_format: str
 ):
     assert _billed_audio_tokens(audio, {"response_format": response_format}) == _REPORTED_TOKENS
+
+
+@pytest.mark.parametrize("delta_bytes", [1, 5, 16, 23])
+def test_token_priced_speech_counts_aac_frames_that_arrive_split_across_events(delta_bytes: int):
+    assert _billed_audio_tokens(_AAC, {"response_format": "aac"}, delta_bytes) == _AAC_BILLED_TOKENS
 
 
 @pytest.mark.parametrize("speed", [0.1, 4.5, 0, -1, True, "2"])
