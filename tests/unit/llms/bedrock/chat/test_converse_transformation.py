@@ -8638,7 +8638,9 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_no_tools():
     (#24158, #27138)."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}, guards_tool_results=False
+    )
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -8677,7 +8679,9 @@ def test_neutralize_orphaned_tool_blocks_rewrites_tool_result_only_history():
         {"role": "tool", "tool_call_id": "call_xyz", "content": "lookup result"},
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}, guards_tool_results=False
+    )
 
     assert not any(m.get("role") in ("tool", "function") for m in result)
     serialized = json.dumps(result)
@@ -8714,7 +8718,9 @@ def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
         },
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}, guards_tool_results=False
+    )
 
     rewritten = next(m for m in result if m.get("role") == "user" and m is not messages[0])
     text = rewritten["content"]
@@ -8740,7 +8746,9 @@ def test_neutralize_orphaned_tool_blocks_noop_when_no_tool_history():
     """Plain conversation with no tool blocks is returned unchanged."""
     messages = [{"role": "user", "content": "hi"}]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}, guards_tool_results=False
+    )
 
     assert result is messages
 
