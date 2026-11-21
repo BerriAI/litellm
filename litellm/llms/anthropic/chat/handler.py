@@ -24,6 +24,7 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
@@ -93,10 +94,12 @@ if TYPE_CHECKING:
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _loads_stream_chunk(payload: str) -> dict[str, object]:
-    return json.loads(payload)
+def _loads_stream_chunk(payload: str) -> dict[str, object] | None:
+    decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    return decoded if is_str_keyed_dict(decoded) else None
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -1523,7 +1526,7 @@ class ModelResponseIterator:
         # Try to parse as valid JSON first
         try:
             data_json: Final = _loads_stream_chunk(data_str)
-            return self.chunk_parser(chunk=data_json)
+            return None if data_json is None else self.chunk_parser(chunk=data_json)
         except json.JSONDecodeError:
             # Switch to accumulation mode and start accumulating
             self.chunk_type = "accumulated_json"
@@ -1642,7 +1645,7 @@ class ModelResponseIterator:
             except ValueError as e:
                 raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream | None:
         """
         Convert a string chunk to a GenericStreamingChunk
 
@@ -1663,6 +1666,6 @@ class ModelResponseIterator:
 
         if str_line.startswith("data:"):
             data_json: Final = _loads_stream_chunk(str_line[5:])
-            return self.chunk_parser(chunk=data_json)
+            return None if data_json is None else self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)

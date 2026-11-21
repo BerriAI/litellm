@@ -221,11 +221,6 @@ def collapse_pure_text_chunks(
     return out
 
 
-def _has_non_object_data(event_str: str) -> bool:
-    data_start: Final = event_str.find("data:")
-    return data_start != -1 and not event_str[data_start + len("data:") :].lstrip().startswith("{")
-
-
 def build_complete_streaming_response_legacy(
     all_chunks: Sequence[str | bytes],
     litellm_logging_obj: LiteLLMLoggingObj,
@@ -262,8 +257,6 @@ def build_complete_streaming_response_legacy(
                 # providers emit. Match the whole SSE line so a valid chunk whose
                 # text payload happens to contain "[DONE]" is not dropped.
                 if any(line.strip() == "data: [DONE]" for line in event_str.split("\n")):
-                    continue
-                if _has_non_object_data(event_str):
                     continue
                 transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                     chunk=event_str

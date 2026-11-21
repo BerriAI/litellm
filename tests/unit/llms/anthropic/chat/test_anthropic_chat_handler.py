@@ -1477,6 +1477,51 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
     assert json.loads(route.calls[0].request.content)["stream"] is True
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("non_object_frame", ["data: 5\n\n", "event: ping\ndata: null\n\n", "data: [1]\n\n"])
+async def test_anthropic_chat_stream_skips_a_data_line_that_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, non_object_frame: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_non_object",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [],
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Blue sky."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}},
+        {"type": "message_stop"},
+    )
+    frames: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            text="".join((*frames[:2], non_object_frame, *frames[2:])),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks: Final = await _collect_anthropic_stream(
+        sync_mode,
+        model="anthropic/claude-sonnet-5-5",
+        api_key="test-key",
+        messages=[{"role": "user", "content": "Describe the weather"}],
+        stream=True,
+    )
+
+    assert _streamed_text(list(chunks)) == "Blue sky."
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
 _SNOOZE_TOOL: Final = {
     "type": "function",
     "function": {

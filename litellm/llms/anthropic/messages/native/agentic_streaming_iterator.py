@@ -24,7 +24,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes
 from litellm.types.integrations.custom_logger import AgenticLoopLimitError, AgenticLoopSafetyError
 
 if TYPE_CHECKING:
@@ -80,10 +80,12 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
             continue
         data_str = stripped[len("data:") :].strip()
         try:
-            data = _DECODED_JSON.validate_python(json.loads(data_str))
+            data = as_str_mapping(_DECODED_JSON.validate_python(json.loads(data_str)))
         except (json.JSONDecodeError, ValueError):
             continue
-        event_type = current_event_type or decoded_json_object(data).get("type", "")
+        if data is None:
+            continue
+        event_type = current_event_type or data.get("type", "")
         current_event_type = None
         events.append((event_type, data))
     return events
