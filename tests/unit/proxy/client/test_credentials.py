@@ -155,6 +155,20 @@ def test_update_display_name_targets_the_whole_credential_name(client, base_url,
     assert request.prepare().url == f"{base_url}/credentials/{path}"
 
 
+@pytest.mark.parametrize(("credential_name", "path"), [("team?prod", "team%3Fprod"), ("a/b#c", "a%2Fb%23c")])
+def test_delete_targets_the_whole_credential_name(client, base_url, credential_name, path):
+    request = client.delete(credential_name, return_request=True)
+
+    assert request.prepare().url == f"{base_url}/credentials/{path}"
+
+
+@pytest.mark.parametrize(("credential_name", "path"), [("team?prod", "team%3Fprod"), ("a/b#c", "a%2Fb%23c")])
+def test_get_targets_the_whole_credential_name(client, base_url, credential_name, path):
+    request = client.get(credential_name, return_request=True)
+
+    assert request.prepare().url == f"{base_url}/credentials/by_name/{path}"
+
+
 @responses.activate
 def test_create_mock_response(client):
     """Test create with a mocked successful response"""
