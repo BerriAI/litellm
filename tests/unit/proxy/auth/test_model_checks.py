@@ -990,6 +990,28 @@ def test_get_key_models_all_team_models_keeps_mixed_team_entries():
     assert set(result) == {"model-a", "model-b", "restricted-model"}
 
 
+def test_get_key_models_all_team_models_keeps_team_models_when_team_has_all_proxy_models():
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": "team-1",
+            "team_models": [
+                SpecialModelNames.all_proxy_models.value,
+                "team-model-x",
+            ],
+        },
+    )()
+
+    result = get_key_models(user_api_key_dict, ["proxy-a", "proxy-b"], {})
+
+    assert result == ["proxy-a", "proxy-b", "team-model-x"]
+
+
 def test_get_team_models_all_team_models_expands():
     """GH#30619: all-team-models in team_models should expand."""
     from litellm.proxy.auth.model_checks import get_team_models
