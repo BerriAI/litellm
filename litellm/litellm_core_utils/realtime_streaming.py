@@ -988,6 +988,12 @@ class RealTimeStreaming:
         self._translation_usage_finalized = True
 
     async def _send_to_backend(self, message: str) -> bool:
+        if self._awaiting_setup_complete:
+            await self._hold_client_content_until_setup_complete(message)
+            return False
+        return await self._forward_to_backend(message)
+
+    async def _forward_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
 
         If a provider_config is set the message is first passed through
@@ -1271,9 +1277,19 @@ class RealTimeStreaming:
         self._held_client_content = (*self._held_client_content, message)
         self._held_client_content_bytes += len(message.encode("utf-8"))
 
+    async def _release_content_held_for_setup_complete(self) -> None:
+        """Frames that arrive while these are being sent queue up behind them,
+        so the gate only opens once nothing is left to send."""
+        while self._held_client_content:
+            held = self._collapse_buffered_audio_messages(list(self._held_client_content))
+            self._held_client_content = ()
+            self._held_client_content_bytes = 0
+            self._held_client_content_deadline = None
+            for message in held:
+                await self._forward_to_backend(message)
+        self._awaiting_setup_complete = False
+
     async def _send_held_client_content(self) -> None:
-        if self._awaiting_setup_complete:
-            return
         held: Final = self._held_client_content
         self._held_client_content = ()
         self._held_client_content_bytes = 0
@@ -1824,8 +1840,7 @@ class RealTimeStreaming:
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._awaiting_setup_complete:
-                    self._awaiting_setup_complete = False
-                    await self._send_held_client_content()
+                    await self._release_content_held_for_setup_complete()
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
                     self._backend_setup_complete = True
                     self._flushing_pending_messages_until_setup = True
@@ -2403,9 +2418,6 @@ class RealTimeStreaming:
                 # actually forward to the backend.
                 self.store_input(message=message)
 
-                if self._awaiting_setup_complete and msg_type != "session.update":
-                    await self._hold_client_content_until_setup_complete(message)
-                    continue
                 if self._holds_client_content(msg_type, message):
                     self._hold_client_content(message)
                     continue

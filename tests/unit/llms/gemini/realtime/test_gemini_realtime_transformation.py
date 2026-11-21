@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.llms.gemini.realtime.transformation import GEMINI_LIVE_DOCUMENTED_VOICES, GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+from litellm.types.realtime import RealtimeResponseTransformInput
 
 
 def test_gemini_realtime_transformation_session_created():
@@ -2512,7 +2513,7 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
     assert input_details.get("google_maps_grounding_requests") is None
 
 
-def _transform_input(**overrides: object) -> dict:
+def _transform_input(**overrides: object) -> RealtimeResponseTransformInput:
     base: Final[dict[str, object]] = {
         "session_configuration_request": json.dumps(
             {"setup": {"model": "gemini-3.8-live", "generationConfig": {"responseModalities": ["VIDEO"]}}}
@@ -2524,7 +2525,7 @@ def _transform_input(**overrides: object) -> dict:
         "current_item_chunks": [],
         "current_delta_type": None,
     }
-    return {**base, **overrides}
+    return cast(RealtimeResponseTransformInput, {**base, **overrides})
 
 
 _AVATAR_SESSION: Final = {"output_modalities": ["video"], "avatar": "Ben", "avatar_video_bitrate_bps": 1_500_000}
@@ -2553,8 +2554,8 @@ def test_ai_studio_drops_avatar_and_video_under_drop_params():
 
 
 def test_gemini_session_update_without_avatar_has_no_avatar_config():
-    config = GeminiRealtimeConfig()
-    messages = config.transform_realtime_request(
+    config: Final = GeminiRealtimeConfig()
+    messages: Final = config.transform_realtime_request(
         json.dumps({"type": "session.update", "session": {"modalities": ["audio"]}}),
         "gemini-3.8-live",
         session_configuration_request=None,
@@ -2565,8 +2566,8 @@ def test_gemini_session_update_without_avatar_has_no_avatar_config():
 def test_gemini_video_inline_data_becomes_output_video_delta():
     """A model turn carrying [video/mp4, audio/pcm] parts -> one output_video.delta
     with the mp4 bytes and one output_audio.delta with ONLY the pcm bytes."""
-    config = GeminiRealtimeConfig()
-    frame = {
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {
         "serverContent": {
             "modelTurn": {
                 "parts": [
@@ -2576,12 +2577,12 @@ def test_gemini_video_inline_data_becomes_output_video_delta():
             }
         }
     }
-    result = config.transform_realtime_response(
+    result: Final = config.transform_realtime_response(
         json.dumps(frame), "gemini-3.8-live", MagicMock(), realtime_response_transform_input=_transform_input()
     )
-    events = result["response"]
-    video = [e for e in events if e["type"] == "response.output_video.delta"]
-    audio = [e for e in events if e["type"] == "response.output_audio.delta"]
+    events: Final = result["response"]
+    video: Final = [e for e in events if e["type"] == "response.output_video.delta"]
+    audio: Final = [e for e in events if e["type"] == "response.output_audio.delta"]
     assert len(video) == 1 and len(audio) == 1
     assert video[0]["delta"] == "bXA0"
     assert video[0]["mime_type"] == "video/mp4"
@@ -2593,9 +2594,9 @@ def test_gemini_video_inline_data_becomes_output_video_delta():
 
 
 def test_gemini_video_only_frame_emits_no_audio_delta():
-    config = GeminiRealtimeConfig()
-    frame = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
-    result = config.transform_realtime_response(
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
+    result: Final = config.transform_realtime_response(
         json.dumps(frame),
         "gemini-3.8-live",
         MagicMock(),
@@ -2603,7 +2604,7 @@ def test_gemini_video_only_frame_emits_no_audio_delta():
             current_output_item_id="item_1", current_response_id="resp_1", current_delta_type="audio"
         ),
     )
-    types = [e["type"] for e in result["response"]]
+    types: Final = [e["type"] for e in result["response"]]
     assert types == ["response.output_video.delta"], types
     # The response stays open and bound to the same item: the audio/item done
     # events close it later, exactly as for an audio-only turn.
@@ -2612,8 +2613,8 @@ def test_gemini_video_only_frame_emits_no_audio_delta():
 
 
 def test_gemini_video_output_tokens_survive_response_done():
-    config = GeminiRealtimeConfig()
-    frame = {
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {
         "serverContent": {"turnComplete": True},
         "usageMetadata": {
             "candidatesTokenCount": 50,
@@ -2623,7 +2624,7 @@ def test_gemini_video_output_tokens_survive_response_done():
             ],
         },
     }
-    result = config.transform_realtime_response(
+    result: Final = config.transform_realtime_response(
         json.dumps(frame),
         "gemini-3.8-live",
         MagicMock(),
@@ -2631,9 +2632,9 @@ def test_gemini_video_output_tokens_survive_response_done():
             current_output_item_id="item_1", current_response_id="resp_1", current_delta_type="audio"
         ),
     )
-    done = [e for e in result["response"] if e["type"] == "response.done"]
+    done: Final = [e for e in result["response"] if e["type"] == "response.done"]
     assert len(done) == 1
-    otd = done[0]["response"]["usage"]["output_token_details"]
+    otd: Final = done[0]["response"]["usage"]["output_token_details"]
     assert otd["audio_tokens"] == 8
     assert otd["video_tokens"] == 42
 
@@ -2641,12 +2642,12 @@ def test_gemini_video_output_tokens_survive_response_done():
 def test_gemini_video_only_frame_never_opens_a_response():
     """Avatar video flows continuously, outside any turn: a video-only frame opens no
     response and leaves the delta state untouched; the transcript opens the spoken turn."""
-    config = GeminiRealtimeConfig()
-    frame = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
-    result = config.transform_realtime_response(
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
+    result: Final = config.transform_realtime_response(
         json.dumps(frame), "gemini-3.8-live", MagicMock(), realtime_response_transform_input=_transform_input()
     )
-    types = [e["type"] for e in result["response"]]
+    types: Final = [e["type"] for e in result["response"]]
     assert types == ["response.output_video.delta"], types
     assert result["response"][0]["response_id"] is None
     assert result["current_response_id"] is None
@@ -2657,9 +2658,9 @@ def test_gemini_video_only_frame_never_opens_a_response():
 def test_gemini_transcript_opened_response_is_closed_by_generation_complete():
     """With avatar video no audio part ever arrives: the spoken turn is opened by its
     transcript and generationComplete must still close the item (audio.done + item.done)."""
-    config = GeminiRealtimeConfig()
-    state = _transform_input()
-    first = config.transform_realtime_response(
+    config: Final = GeminiRealtimeConfig()
+    state: Final = _transform_input()
+    first: Final = config.transform_realtime_response(
         json.dumps({"serverContent": {"outputTranscription": {"text": "Bonjour, je "}}}),
         "gemini-3.8-live",
         MagicMock(),
@@ -2673,13 +2674,13 @@ def test_gemini_transcript_opened_response_is_closed_by_generation_complete():
         current_conversation_id=first["current_conversation_id"],
         current_delta_type=first["current_delta_type"],
     )
-    done = config.transform_realtime_response(
+    done: Final = config.transform_realtime_response(
         json.dumps({"serverContent": {"generationComplete": True}}),
         "gemini-3.8-live",
         MagicMock(),
         realtime_response_transform_input=state,
     )
-    types = [e["type"] for e in done["response"]]
+    types: Final = [e["type"] for e in done["response"]]
     assert "response.output_audio.done" in types and "response.output_item.done" in types, types
-    item_done = next(e for e in done["response"] if e["type"] == "response.output_item.done")
+    item_done: Final = next(e for e in done["response"] if e["type"] == "response.output_item.done")
     assert item_done["item"]["id"] == first["current_output_item_id"]

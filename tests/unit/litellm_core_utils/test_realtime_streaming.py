@@ -6288,20 +6288,16 @@ async def test_unbridged_backend_receives_session_update_and_response_create_as_
     assert tuple(json.loads(call.args[0]) for call in backend_ws.send.call_args_list) == client_events
 
 
-@pytest.mark.asyncio
-async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatch):
-    """Vertex answers content sent before an avatar setupComplete with
-    "Session is not set up yet" and never replies to it."""
-    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+_AVATAR_UPDATE: Final = json.dumps(
+    {"type": "session.update", "session": {"output_modalities": ["video"], "avatar": "Ben", "turn_detection": None}}
+)
+
+
+def _avatar_streaming(client_messages: Sequence[str]) -> tuple[RealTimeStreaming, MagicMock]:
     from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
-    avatar_update: Final = json.dumps(
-        {"type": "session.update", "session": {"output_modalities": ["video"], "avatar": "Ben"}}
-    )
     client_ws: Final = MagicMock()
-    client_ws.receive_text = AsyncMock(
-        side_effect=[avatar_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, ConnectionClosed(None, None)]
-    )
+    client_ws.receive_text = AsyncMock(side_effect=[*client_messages, ConnectionClosed(None, None)])
     client_ws.send_text = AsyncMock()
     backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock()
@@ -6313,12 +6309,94 @@ async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatc
         provider_config=VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1"),
         model="gemini-3.8-live",
     )
+    return streaming, backend_ws
+
+
+def _backend_frame_kinds(backend_ws: MagicMock) -> list[str]:
+    return [next(iter(json.loads(call.args[0]))) for call in backend_ws.send.await_args_list]
+
+
+def _audio_append(audio: str) -> str:
+    return json.dumps({"type": "input_audio_buffer.append", "audio": audio})
+
+
+@pytest.mark.asyncio
+async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatch):
+    """Vertex answers content sent before an avatar setupComplete with
+    "Session is not set up yet" and never replies to it."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    streaming, backend_ws = _avatar_streaming([_AVATAR_UPDATE, _TEXT_ITEM_CREATE, _RESPONSE_CREATE])
 
     await streaming.client_ack_messages()
     sent_before_setup_complete: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     await streaming.backend_to_client_send_messages()
-    sent_after_setup_complete: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
 
     assert [next(iter(frame)) for frame in sent_before_setup_complete] == ["setup"]
     assert sent_before_setup_complete[0]["setup"]["avatarConfig"] == {"avatarName": "Ben"}
-    assert [next(iter(frame)) for frame in sent_after_setup_complete] == ["setup", "clientContent"]
+    assert _backend_frame_kinds(backend_ws) == ["setup", "clientContent"]
+
+
+@pytest.mark.asyncio
+async def test_avatar_setup_holds_the_commit_that_triggered_it_behind_its_audio(monkeypatch):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    commit: Final = json.dumps({"type": "input_audio_buffer.commit"})
+    streaming, backend_ws = _avatar_streaming([_AVATAR_UPDATE, _audio_append("AAAA"), commit])
+
+    await streaming.client_ack_messages()
+    kinds_before_setup_complete: Final = _backend_frame_kinds(backend_ws)
+    await streaming.backend_to_client_send_messages()
+
+    assert kinds_before_setup_complete == ["setup"]
+    frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    audio_position: Final = next(
+        index for index, frame in enumerate(frames) if "audio" in frame.get("realtimeInput", {})
+    )
+    end_position: Final = next(
+        index for index, frame in enumerate(frames) if "activityEnd" in frame.get("realtimeInput", {})
+    )
+    assert 0 < audio_position < end_position
+
+
+@pytest.mark.asyncio
+async def test_avatar_setup_drops_audio_the_client_cleared_while_waiting(monkeypatch):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    clear: Final = json.dumps({"type": "input_audio_buffer.clear"})
+    streaming, backend_ws = _avatar_streaming(
+        [_AVATAR_UPDATE, _TEXT_ITEM_CREATE, _audio_append("DISCARDED"), clear, _audio_append("KEPT")]
+    )
+
+    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
+
+    sent_audio: Final = [
+        frame["realtimeInput"]["audio"]["data"]
+        for frame in (json.loads(call.args[0]) for call in backend_ws.send.await_args_list)
+        if "audio" in frame.get("realtimeInput", {})
+    ]
+    assert sent_audio == ["KEPT"]
+
+
+@pytest.mark.asyncio
+async def test_frame_arriving_while_held_content_is_released_stays_behind_it(monkeypatch):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    streaming, backend_ws = _avatar_streaming(
+        [_AVATAR_UPDATE, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, _audio_append("FIRST"), _audio_append("SECOND")]
+    )
+    await streaming.client_ack_messages()
+    arrived: Final = asyncio.Event()
+
+    async def client_frame_arrives_mid_release(frame: str) -> None:
+        if "FIRST" in frame and not arrived.is_set():
+            arrived.set()
+            await streaming._send_to_backend(_audio_append("LATE"))
+
+    backend_ws.send = AsyncMock(side_effect=client_frame_arrives_mid_release)
+
+    await streaming.backend_to_client_send_messages()
+
+    sent_audio: Final = [
+        frame["realtimeInput"]["audio"]["data"]
+        for frame in (json.loads(call.args[0]) for call in backend_ws.send.await_args_list)
+        if "audio" in frame.get("realtimeInput", {})
+    ]
+    assert sent_audio == ["FIRST", "SECOND", "LATE"]
