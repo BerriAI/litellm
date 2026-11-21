@@ -5121,7 +5121,7 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
 
 
 class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
-    async def _error_response_cost(self, raise_the_follow_up_error: bool) -> float:
+    async def _error_response_cost(self, serve_the_first_call: bool) -> float:
         from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
         from litellm.types.utils import ModelResponse, Usage
 
@@ -5147,20 +5147,19 @@ class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
         async def failing_follow_up() -> ModelResponse:
             raise follow_up_error
 
-        with pytest.raises(litellm.RateLimitError):
-            await bill_first_round_on_failure(
-                failing_follow_up(),
-                logging_obj=logging_obj,
-                response=ModelResponse(
-                    model="gpt-4o", usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
-                ),
-                stream=False,
-            )
+        if serve_the_first_call:
+            with pytest.raises(litellm.RateLimitError):
+                await bill_first_round_on_failure(
+                    failing_follow_up(),
+                    logging_obj=logging_obj,
+                    response=ModelResponse(
+                        model="gpt-4o", usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
+                    ),
+                    stream=False,
+                )
         with pytest.raises(ProxyException) as raised:
             await processing_obj.handle_llm_api_exception(
-                e=follow_up_error
-                if raise_the_follow_up_error
-                else litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o"),
+                e=follow_up_error,
                 user_api_key_dict=caller,
                 proxy_logging_obj=proxy_logging,
             )
@@ -5170,10 +5169,10 @@ class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
     async def test_the_error_response_reports_the_served_first_call_its_failure_row_bills(self) -> None:
         price: Final = litellm.model_cost["gpt-4o"]
 
-        assert await self._error_response_cost(raise_the_follow_up_error=True) == pytest.approx(
+        assert await self._error_response_cost(serve_the_first_call=True) == pytest.approx(
             559 * price["input_cost_per_token"] + 113 * price["output_cost_per_token"]
         )
-        assert await self._error_response_cost(raise_the_follow_up_error=False) == 0
+        assert await self._error_response_cost(serve_the_first_call=False) == 0
 
 
 @pytest.mark.asyncio

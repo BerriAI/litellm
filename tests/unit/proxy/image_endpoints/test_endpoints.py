@@ -1,12 +1,13 @@
 import asyncio
 import copy
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from queue import Queue
 from types import SimpleNamespace
 from typing import Any, Dict, Final, cast
 
+import httpx
 import orjson
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -451,6 +452,23 @@ class _ImageRouterHandler(litellm.CustomLLM):
             raise litellm.RateLimitError(message="primary failed", llm_provider="image-regression", model=model)
         return ImageResponse(created=1, data=[ImageObject(url="https://images.example/generated.png")])
 
+    async def aimage_edit(
+        self,
+        model: str,
+        image: object,
+        prompt: str | None,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        return await self.aimage_generation(
+            model, prompt or "", model_response, api_key, api_base, optional_params, logging_obj
+        )
+
 
 def _image_generation_client(
     monkeypatch: pytest.MonkeyPatch,
@@ -749,7 +767,25 @@ def test_failed_image_generation_spend_row_records_aimage_generation(monkeypatch
     assert (payload["status"], payload["call_type"]) == ("failure", "aimage_generation")
 
 
-def test_failed_image_generation_spend_row_bills_what_the_provider_served(monkeypatch: pytest.MonkeyPatch) -> None:
+def _send_generation(client: TestClient) -> httpx.Response:
+    return client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+
+
+def _send_edit(client: TestClient) -> httpx.Response:
+    return client.post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={"model": "A", "prompt": "add a hat"},
+    )
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_failed_image_request_bills_what_the_provider_served_in_its_spend_row_and_cost_header(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
@@ -761,12 +797,13 @@ def test_failed_image_generation_spend_row_bills_what_the_provider_served(monkey
     handler.billed_before_failure = (litellm.Usage(prompt_tokens=16, completion_tokens=2240, total_tokens=2256), 0.25)
     try:
         with client:
-            response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+            response: Final = send(client)
     finally:
         ProxyLogging._callback_capabilities_cache.clear()
 
     assert response.status_code == 429, response.text
     db_call: Final = spend_writer.update_database.call_args.kwargs
+    assert float(response.headers["x-litellm-response-cost"]) == db_call["response_cost"]
     payload: Final = get_logging_payload(
         kwargs=db_call["kwargs"],
         response_obj=db_call["completion_response"],

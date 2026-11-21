@@ -5310,12 +5310,11 @@ class ProxyBaseLLMRequestProcessing:
             model_id=model_id,
             version=version,
             response_cost=(
-                failure_row_response_cost(self.data)
-                if failed_in_agentic_follow_up
-                else _litellm_logging_obj.finalized_cost.amount
-                if isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
+                _litellm_logging_obj.finalized_cost.amount
+                if not failed_in_agentic_follow_up
+                and isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
                 and _litellm_logging_obj.finalized_cost is not None
-                else 0
+                else failure_row_response_cost(_REQUEST_FIELDS.validate_python(self.data))
             ),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,

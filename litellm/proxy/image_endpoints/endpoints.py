@@ -1,6 +1,6 @@
 import asyncio
 import io
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
@@ -31,10 +31,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
-    litellm_call_id_headers,
+    failed_call_headers,
     openai_error_param,
     openai_error_type,
 )
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
@@ -42,6 +43,7 @@ from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
 _IMAGE_GENERATION_MODEL_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
@@ -239,12 +241,15 @@ async def image_generation(
             dispatched_call_type=CallTypes.aimage_generation.value,
         )
         log_llm_api_exception(e, litellm_call_id)
+        failure_headers: Final = failed_call_headers(
+            litellm_call_id, failure_row_response_cost(_REQUEST_FIELDS.validate_python(data))
+        )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
                 param=openai_error_param(e),
-                headers=litellm_call_id_headers(litellm_call_id),
+                headers=failure_headers,
                 code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
@@ -253,7 +258,7 @@ async def image_generation(
                 message=getattr(e, "message", error_msg),
                 type=openai_error_type(e, error_status_code(e, 500)),
                 param=openai_error_param(e),
-                headers=litellm_call_id_headers(litellm_call_id),
+                headers=failure_headers,
                 openai_code=getattr(e, "code", None),
                 code=error_status_code(e, 500),
             )
