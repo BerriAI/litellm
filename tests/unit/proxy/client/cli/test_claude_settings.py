@@ -406,6 +406,27 @@ class TestMergeClaudeSettings:
         assert "model" not in merged
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
 
+    def test_a_static_token_sends_claude_codes_own_traces_to_the_proxy_under_that_token(self):
+        merged = merge_claude_settings({"env": {"OTEL_LOG_USER_PROMPTS": "0"}}, "http://127.0.0.1:4000/", StaticToken("token-abc"))
+        telemetry = {key: value for key, value in merged["env"].items() if key.startswith(("OTEL_", "CLAUDE_CODE_"))}
+        assert telemetry == {
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1",
+            "OTEL_TRACES_EXPORTER": "otlp",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+            "OTEL_LOG_USER_PROMPTS": "1",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4000",
+            "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer token-abc",
+        }
+
+    def test_a_helper_login_leaves_telemetry_as_it_was_because_its_key_cannot_be_written_down(self):
+        merged = merge_claude_settings({"env": {"OTEL_TRACES_EXPORTER": "console"}}, "http://127.0.0.1:4000/", HELPER)
+        telemetry = {key: value for key, value in merged["env"].items() if key.startswith("OTEL_")}
+        assert telemetry == {"OTEL_TRACES_EXPORTER": "console"}
+        assert "CLAUDE_CODE_ENABLE_TELEMETRY" not in merged["env"]
+
     def test_a_helper_lands_top_level_and_blanks_the_token_a_shell_export_would_win_with(self):
         settings = {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-expired-login", "ANTHROPIC_API_KEY": "leaked"}}
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", HELPER)
@@ -571,6 +592,14 @@ UNDO_SCENARIOS = {
                 "env.ANTHROPIC_AUTH_TOKEN",
                 "env.ENABLE_TOOL_SEARCH",
                 "env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+                "env.CLAUDE_CODE_ENABLE_TELEMETRY",
+                "env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA",
+                "env.CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+                "env.OTEL_TRACES_EXPORTER",
+                "env.OTEL_EXPORTER_OTLP_PROTOCOL",
+                "env.OTEL_LOG_USER_PROMPTS",
+                "env.OTEL_EXPORTER_OTLP_ENDPOINT",
+                "env.OTEL_EXPORTER_OTLP_HEADERS",
                 "statusLine",
             },
             "kept": (),

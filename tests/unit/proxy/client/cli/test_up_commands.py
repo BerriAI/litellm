@@ -79,6 +79,14 @@ class TestMergeClaudeSettings:
         assert merged["env"] == {
             "ANTHROPIC_BASE_URL": "http://localhost:4000",
             "ANTHROPIC_AUTH_TOKEN": "sk-fresh",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1",
+            "OTEL_TRACES_EXPORTER": "otlp",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+            "OTEL_LOG_USER_PROMPTS": "1",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4000",
+            "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer sk-fresh",
             "ENABLE_TOOL_SEARCH": "true",
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         }

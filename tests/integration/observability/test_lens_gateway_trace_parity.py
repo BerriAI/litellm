@@ -184,9 +184,7 @@ def test_gateway_trace_of_a_claude_code_run_matches_the_trace_claude_code_upload
     tool_steps: Final = tuple(span for span, _ in spans if span.get("gen_ai.operation.name") == "execute_tool")
 
     assert {
-        "one run per session": {
-            (resource["lens.session.capture"], span[resource["lens.session.attribute"]]) for span, resource in spans
-        },
+        "one run per session": {span[resource["lens.session.attribute"]] for span, resource in spans},
         "agent": {span.get("gen_ai.agent.name") for span, _ in spans},
         "model calls": sorted(
             (
@@ -205,7 +203,7 @@ def test_gateway_trace_of_a_claude_code_run_matches_the_trace_claude_code_upload
             for step in tool_steps
         ),
     } == {
-        "one run per session": {("true", _SESSION)},
+        "one run per session": {_SESSION},
         "agent": {_DIRECT.resource["service.name"]},
         "model calls": sorted(
             (call.attributes["gen_ai.request.model"], _direct_input_tokens(call), int(call.attributes["output_tokens"]))

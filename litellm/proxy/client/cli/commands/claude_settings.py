@@ -58,6 +58,18 @@ ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 ENABLE_GATEWAY_MODEL_DISCOVERY_KEY: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 ANTHROPIC_MODEL_KEY: Final = "ANTHROPIC_MODEL"
+OTLP_ENDPOINT_KEY: Final = "OTEL_EXPORTER_OTLP_ENDPOINT"
+OTLP_HEADERS_KEY: Final = "OTEL_EXPORTER_OTLP_HEADERS"
+TELEMETRY_ENV: Final = MappingProxyType(
+    {
+        "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+        "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+        "CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1",
+        "OTEL_TRACES_EXPORTER": "otlp",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_LOG_USER_PROMPTS": "1",
+    }
+)
 ANTHROPIC_DEFAULT_MODEL_ENV_KEYS: Final = (
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -71,6 +83,9 @@ OWNED_ENV_KEYS: Final = (
     ANTHROPIC_AUTH_TOKEN_KEY,
     ANTHROPIC_API_KEY_KEY,
     ANTHROPIC_MODEL_KEY,
+    *TELEMETRY_ENV,
+    OTLP_ENDPOINT_KEY,
+    OTLP_HEADERS_KEY,
 )
 OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, MODEL_KEY, STATUS_LINE_KEY)
 OWNED_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in OWNED_ENV_KEYS), *OWNED_TOP_LEVEL_KEYS)
@@ -463,6 +478,19 @@ def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping
     return dict(chain(settings.items(), ((STATUS_LINE_KEY, entry),)))
 
 
+def _telemetry_env(base_url: str, credential: ClaudeCredential) -> tuple[tuple[str, str], ...]:
+    """Claude Code's own spans, sent to the gateway that takes its model calls and under the same key, so
+    each typed message arrives as a turn. An `apiKeyHelper` key changes on renewal and telemetry has no
+    place to rerun it, so that login keeps telemetry off."""
+    if not isinstance(credential, StaticToken):
+        return ()
+    return (
+        *TELEMETRY_ENV.items(),
+        (OTLP_ENDPOINT_KEY, base_url.rstrip("/")),
+        (OTLP_HEADERS_KEY, f"Authorization=Bearer {credential.token}"),
+    )
+
+
 def merge_claude_settings(
     settings: Mapping[str, JsonValue],
     base_url: str,
@@ -479,7 +507,7 @@ def merge_claude_settings(
     exported in the shell would otherwise win over the helper. The other credential slots are removed either
     way, since Claude Code given two credentials may send the wrong one.
     ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
-    missing. `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
+    missing. A StaticToken also turns on Claude Code's trace telemetry, pointed at the proxy (see _telemetry_env). `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
     `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
     group. Apart from those tier keys, exactly OWNED_PATHS are touched.
     """
@@ -494,6 +522,7 @@ def merge_claude_settings(
             ((key, value) for key, value in current_env.items() if key not in _CREDENTIAL_ENV_KEYS),
             ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
             ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token if isinstance(credential, StaticToken) else ""),),
+            _telemetry_env(base_url, credential),
             ((ANTHROPIC_MODEL_KEY, default_model),) if default_model is not None else (),
             ((key, tier_model) for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS if tier_model is not None),
         )

@@ -1327,7 +1327,7 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         attribute.key: attribute.value.string_value
         for attribute in chain.from_iterable(resource.resource.attributes for resource in resources)
         if attribute.key.startswith("lens.")
-    } == {"lens.session.capture": "true", "lens.session.attribute": "gen_ai.conversation.id"}
+    } == {"lens.session.attribute": "gen_ai.conversation.id"}
     model_call: Final = {item.key: item.value.string_value for item in spans["chat gpt-4o-mini"].attributes}
     assert (model_call["gen_ai.conversation.id"], model_call["gen_ai.agent.name"]) == ("session-1", "claude-code")
     tool_step: Final = spans["execute_tool Bash"]

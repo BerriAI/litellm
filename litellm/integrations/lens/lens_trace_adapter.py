@@ -406,6 +406,8 @@ LENS_TRACE_CALLBACK: Final = "lens"
 
 
 _AGENT_TRACE: Final[ContextVar[Context | None]] = ContextVar("lens_agent_trace", default=None)
+_FILED_BY_SESSION: Final[ContextVar[bool]] = ContextVar("lens_filed_by_session", default=False)
+_SESSION_FILED_AGENTS: Final = frozenset({"claude-code"})
 
 
 class _ProxyRequest(BaseModel):
@@ -467,7 +469,7 @@ class _LensTraceLogger(OpenTelemetryV2):
     @override
     def _span_session(self, call: LLMCallEvent) -> str | None:
         """Lens files a span that names a session under that session; one in the agent's trace must stay there."""
-        return call.session_id if _AGENT_TRACE.get() is None else None
+        return call.session_id if _AGENT_TRACE.get() is None or _FILED_BY_SESSION.get() else None
 
     @override
     def _close_llm_call(
@@ -491,9 +493,11 @@ class _LensTraceLogger(OpenTelemetryV2):
             carrier.span.set_attributes(facts)
         token: Final = _CALL_FACTS.set(facts)
         placed: Final = _AGENT_TRACE.set(agent_trace)
+        filed: Final = _FILED_BY_SESSION.set(made_by.agent in _SESSION_FILED_AGENTS)
         try:
             span: Final = super()._close_llm_call(shown, start_time, end_time)
         finally:
+            _FILED_BY_SESSION.reset(filed)
             _AGENT_TRACE.reset(placed)
             _CALL_FACTS.reset(token)
         session_id: Final = call.session_id or made_by.derived_session
@@ -537,7 +541,7 @@ async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None
                     kind="otlp_http",
                     traces_endpoint=connection.endpoint(LENS_TRACE_PATH),
                     headers=f"Authorization=Bearer {connection.token}",
-                    resource_attributes={"lens.session.capture": "true", "lens.session.attribute": _SESSION_ATTRIBUTE},
+                    resource_attributes={"lens.session.attribute": _SESSION_ATTRIBUTE},
                 )
             ],
             capture_message_content=CaptureMessageContent.SPAN_ONLY,

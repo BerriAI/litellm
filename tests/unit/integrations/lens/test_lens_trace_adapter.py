@@ -1,11 +1,20 @@
+import asyncio
 import json
 from pathlib import Path
 from typing import Final
 
 import pytest
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import get_current_span
 
+from litellm.integrations.otel.plumbing import providers
+from litellm.types.utils import CaptureMessageContent
+
 from litellm.integrations.lens.lens_trace_adapter import (
+    LENS_TRACE_CALLBACK,
+    _LensTraceConfig,
+    _LensTraceLogger,
     AgentCall,
     ToolExchange,
     agent_trace_of,
@@ -412,3 +421,77 @@ def test_a_call_whose_request_names_the_agents_span_is_placed_under_it() -> None
 )
 def test_a_call_that_names_no_agent_span_keeps_the_gateways_own_trace(kwargs: dict[str, object]) -> None:
     assert agent_trace_of(kwargs) is None
+
+
+SESSION_ID: Final = "e96634a3-fa28-4083-b354-55542e2dca01"
+
+
+def _span_of_a_call_placed_by(user_agent: str, headers: dict[str, str]) -> ReadableSpan:
+    """The span Lens receives for one model call an agent made through the gateway with a session id."""
+    config: Final = _LensTraceConfig(exporter="in_memory", capture_message_content=CaptureMessageContent.SPAN_ONLY)
+    exporter: Final = InMemorySpanExporter()
+    trace_logger: Final = _LensTraceLogger(
+        config=config,
+        tracer_provider=providers.build_tracer_provider(config, exporter=exporter),
+        callback_name=LENS_TRACE_CALLBACK,
+    )
+    kwargs: Final = {
+        "standard_logging_object": {
+            "call_type": "acompletion",
+            "custom_llm_provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "stream": False,
+            "model_parameters": {},
+            "response": {"id": "resp_1", "model": "claude-haiku-4-5", "choices": [{"finish_reason": "stop"}]},
+            "metadata": {"user_agent": user_agent, "user_api_key_hash": "key-hash"},
+            "messages": [{"role": "user", "content": "Fix add in calc.py"}],
+            "api_base": "https://api.anthropic.com/v1",
+            "status": "success",
+            "litellm_call_id": "call_1",
+            "response_cost": 0.002,
+            "hidden_params": {},
+        },
+        "litellm_params": {
+            "metadata": {},
+            "litellm_session_id": SESSION_ID,
+            "proxy_server_request": {"headers": headers},
+        },
+        "api_call_start_time": 100.0,
+    }
+    trace_logger.log_pre_api_call("claude-haiku-4-5", [], kwargs)
+    asyncio.run(trace_logger.async_log_success_event(kwargs, None, 100.0, 100.5))
+    (span,) = exporter.get_finished_spans()
+    return span
+
+
+_IN_AGENT_TRACE: Final = {"traceparent": f"00-{AGENT_TRACE_ID}-{AGENT_SPAN_ID}-01"}
+
+
+@pytest.mark.parametrize(
+    ("user_agent", "headers", "names_session"),
+    (
+        pytest.param("claude-cli/2.1.330 (external, cli)", _IN_AGENT_TRACE, True, id="claude-code-in-its-own-trace"),
+        pytest.param("opencode/1.19.6", _IN_AGENT_TRACE, False, id="another-agent-in-its-own-trace"),
+        pytest.param("opencode/1.19.6", {}, True, id="another-agent-in-the-gateways-trace"),
+    ),
+)
+def test_a_claude_code_call_in_the_agents_trace_still_names_its_session_and_other_agents_do_not(
+    user_agent: str, headers: dict[str, str], names_session: bool
+) -> None:
+    span: Final = _span_of_a_call_placed_by(user_agent, headers)
+
+    assert span.attributes is not None
+    assert span.attributes.get("gen_ai.conversation.id") == (SESSION_ID if names_session else None)
+
+
+def test_a_claude_code_call_that_names_its_session_keeps_the_trace_and_parent_the_agent_gave_it() -> None:
+    span: Final = _span_of_a_call_placed_by("claude-cli/2.1.330 (external, cli)", _IN_AGENT_TRACE)
+
+    assert span.parent is not None
+    assert (format(span.context.trace_id, "032x"), format(span.parent.span_id, "016x")) == (
+        AGENT_TRACE_ID,
+        AGENT_SPAN_ID,
+    )
