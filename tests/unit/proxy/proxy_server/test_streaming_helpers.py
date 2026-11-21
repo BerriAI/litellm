@@ -428,6 +428,61 @@ def test_responses_failure_event_keeps_the_upstream_message_when_no_fallback_was
     assert failure.response.error["message"] == "FLASH-ERROR"
 
 
+def test_responses_failure_event_handles_upstream_400_with_nested_error() -> None:
+    error: Final = litellm.BadRequestError(
+        message="Invalid input",
+        model="gpt-6.1-sol",
+        llm_provider="bedrock",
+        body={
+            "error": {
+                "message": "Configuration updates are not supported with this model.",
+                "type": "invalid_request_error",
+            }
+        },
+    )
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["message"] == "Configuration updates are not supported with this model."
+    assert failure.response.error["code"] == "invalid_request_error"
+
+
+def test_responses_failure_event_handles_upstream_400_with_direct_message() -> None:
+    error: Final = litellm.BadRequestError(
+        message="Invalid input",
+        model="gpt-6.1-sol",
+        llm_provider="bedrock",
+        body={"message": "Configuration updates are not supported with this model."},
+    )
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["message"] == "Configuration updates are not supported with this model."
+    assert failure.response.error["code"] == "invalid_request_error"
+
+
+def test_responses_failure_event_handles_upstream_400_with_malformed_body() -> None:
+    error: Final = litellm.BadRequestError(
+        message="fallback message",
+        model="gpt-6.1-sol",
+        llm_provider="bedrock",
+        body={"unexpected": ["extra", "data"], "status_code": "invalid_int", "message": {"nested": "obj"}},
+    )
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["code"] == "invalid_request_error"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("guardrail_error", "error_object"),
