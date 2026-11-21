@@ -424,3 +424,22 @@ async def test_held_rates_survive_a_later_refresh() -> None:
     assert dict(first.snapshot.units_per_eur) == {"EUR": 1.0, "USD": 1.25, "GBP": 0.5, "JPY": 125.0}
     with pytest.raises(TypeError):
         first.snapshot.units_per_eur["GBP"] = 9.0
+
+
+def test_all_usd_rates_are_empty_without_a_feed() -> None:
+    assert EcbReferenceRates(clock=_Clock(_at(DAY))).usd_rates() == {}
+
+
+async def test_all_usd_rates_list_every_held_currency_except_usd_until_they_go_stale() -> None:
+    clock: Final = _Clock(_at(DAY))
+    rates: Final = await _rates_holding(_feed(), clock)
+
+    fresh: Final = rates.usd_rates()
+    clock.now = _at(DAY + timedelta(days=8))
+
+    assert fresh == {
+        "EUR": UsdRate(currency="EUR", usd_per_unit=1.25, rate_date=DAY, source="ecb"),
+        "GBP": HELD_GBP,
+        "JPY": UsdRate(currency="JPY", usd_per_unit=0.01, rate_date=DAY, source="ecb"),
+    }
+    assert rates.usd_rates() == {}

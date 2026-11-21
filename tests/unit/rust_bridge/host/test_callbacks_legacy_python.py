@@ -478,8 +478,9 @@ def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
         pytest.param(True, False, id="the_native_relay_does_not"),
     ],
 )
+@pytest.mark.parametrize("detached", [False, True], ids=["attached", "detached"])
 async def test_a_native_stream_failure_logs_like_the_python_chunk_processor(
-    monkeypatch: pytest.MonkeyPatch, relayed: bool, logs: bool
+    monkeypatch: pytest.MonkeyPatch, relayed: bool, logs: bool, detached: bool
 ) -> None:
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
@@ -487,24 +488,30 @@ async def test_a_native_stream_failure_logs_like_the_python_chunk_processor(
 
     logged: Final[list[tuple[object, ...]]] = []
     scheduled: Final[list[Mapping[str, object]]] = []
+    reported: Final[list[Exception]] = []
 
     async def schedule(**kwargs: object) -> None:
         scheduled.append(MappingProxyType(dict(kwargs)))
 
+    async def report(_logger: Logging, error: Exception) -> None:
+        reported.append(error)
+
     monkeypatch.setattr(verbose_proxy_logger, "error", lambda *args: logged.append(args))
     monkeypatch.setattr(PassThroughStreamingHandler, "schedule_stream_failure_logging", schedule)
     logger: Final = _supplied_logger()
+    logger.on_detached_stream_failure = report
     logger.model_call_details["cache_hit"] = False
     cut: Final = httpx.ReadError("cut")
 
     head: Final = MessagesStreamHead()
     head.relayed = relayed
 
-    await legacy.stream_failure(logger, "anthropic", {}, [b"event: ping\n\n"], cut, head)
+    await legacy.stream_failure(logger, "anthropic", {}, [b"event: ping\n\n"], cut, head, detached)
 
     assert logged == ([("Error in chunk_processor: %s", cut)] if logs else [])
     assert "cache_hit" not in logger.model_call_details
     assert scheduled[0]["exception"] is cut
+    assert reported == ([cut] if detached else [])
 
 
 @pytest.mark.asyncio

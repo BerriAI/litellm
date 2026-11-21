@@ -237,3 +237,9 @@ class EcbReferenceRates:
             rate_date=snapshot.rate_date,
             source="ecb",
         )
+
+    def usd_rates(self) -> Mapping[str, UsdRate]:
+        state: Final = self._state
+        currencies: Final = () if state is None else tuple(c for c in state.snapshot.units_per_eur if c != "USD")
+        lookups: Final = tuple(self.usd_per_unit(currency) for currency in currencies)
+        return MappingProxyType({rate.currency: rate for rate in lookups if isinstance(rate, UsdRate)})

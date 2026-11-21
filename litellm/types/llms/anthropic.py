@@ -252,7 +252,7 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str
-    input: dict
+    input: ReadOnly[object]
     cache_control: dict | ChatCompletionCachedContent | None
     caller: ToolCaller | None
 
@@ -747,7 +747,7 @@ class AnthropicResponseContentBlockToolUse(LiteLLMBaseModel):
 class AnthropicResponseContentBlockThinking(LiteLLMBaseModel):
     type: Literal["thinking"]
     thinking: str
-    signature: str | None
+    signature: str
 
 
 class AnthropicResponseContentBlockRedactedThinking(LiteLLMBaseModel):

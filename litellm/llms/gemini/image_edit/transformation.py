@@ -1,5 +1,5 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -7,6 +7,7 @@ import httpx
 from httpx._types import RequestFiles
 
 import litellm
+from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -65,6 +66,11 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             parse_image_config_string=True,
         )
 
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        return image_request_count(
+            image_edit_optional_request_params.get("sampleCount"), model=model, llm_provider="gemini"
+        )
+
     def validate_environment(
         self,
         headers: dict,
@@ -98,7 +104,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -173,8 +179,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
         return model_response
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
-        images: list[FileTypes]
+    def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[dict[str, object]]:
+        images: Sequence[object]
         if isinstance(image, list):
             images = image
         else:
@@ -198,7 +204,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         return inline_parts
 
-    def _read_all_bytes(self, image: FileTypes) -> bytes:
+    def _read_all_bytes(self, image: object) -> bytes:
         if isinstance(image, bytes):
             return image
         if isinstance(image, BytesIO):

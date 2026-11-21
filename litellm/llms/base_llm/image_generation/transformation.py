@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -125,6 +126,14 @@ class BaseImageGenerationConfig(ABC):
             api_key=api_key,
             json_mode=json_mode,
         )
+
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        """
+        Number of identical upstream requests the handler sends and merges into one response.
+
+        Override for providers that return one image per call, so a caller's `n` still yields `n` images.
+        """
+        return 1
 
     def use_multipart_form_data(self) -> bool:
         """

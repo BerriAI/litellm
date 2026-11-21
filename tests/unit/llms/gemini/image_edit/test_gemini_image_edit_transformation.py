@@ -121,7 +121,7 @@ class TestGeminiImageEditTransformation:
         assert base64.b64decode(inline_data["data"]) == image_bytes
 
         generation_config = request_body["generationConfig"]
-        assert generation_config["candidateCount"] == 2
+        assert "candidateCount" not in generation_config
         assert generation_config["imageConfig"]["aspectRatio"] == "16:9"
         assert generation_config["imageConfig"]["imageSize"] == "2K"
 

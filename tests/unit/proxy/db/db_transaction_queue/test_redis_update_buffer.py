@@ -591,7 +591,8 @@ async def test_restore_transactions_to_redis_pushes_only_provided(redis_update_b
 
 
 @pytest.mark.asyncio
-async def test_restored_window_spend_transactions_drain_back_unchanged(redis_update_buffer, mock_redis_cache):
+@pytest.mark.parametrize("reset_at", [None, "2026-08-31T00:00:00+00:00"])
+async def test_restored_window_spend_transactions_drain_back_unchanged(redis_update_buffer, mock_redis_cache, reset_at):
     """A window commit that fails after the destructive lpop must be re-pushed
     in the store path's encoding, so the next drain returns the same increments."""
     from litellm.constants import REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
@@ -607,6 +608,7 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=3.0,
             started_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+            reset_at=reset_at,
         ),
     )
     mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1])
@@ -615,6 +617,7 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
 
     rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
     assert [op["key"] for op in rpush_list] == [REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY]
+    assert json.loads(rpush_list[0]["values"][0]) == [{**window_transactions[0], "request_ids": []}]
 
     mock_redis_cache.async_lpop_pipeline = AsyncMock(
         return_value=[None, None, None, None, None, None, list(rpush_list[0]["values"])]

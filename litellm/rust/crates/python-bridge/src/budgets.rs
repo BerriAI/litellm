@@ -1,20 +1,30 @@
 use std::sync::Arc;
 
 use litellm_callbacks_budgets::{
-    BudgetCounterSpend, BudgetPlan, BudgetReservation, Budgets, Check, EngineError, ErrorKind,
-    Settle, decide,
+    BudgetCounterSpend, BudgetPlan, BudgetReservation, Budgets, Check, CounterStep, EngineError,
+    ErrorKind, Settle, decide,
 };
-use litellm_host_python::{Pythonized, from_py_argument, json_from_py, run_async_value, to_py};
+use litellm_host_python::{
+    Execution, Pythonized, from_py_argument, json_from_py, run_async_value, to_py,
+};
 use pyo3::{
     exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
+    types::PyDict,
 };
 use serde::de::DeserializeOwned;
 
-use crate::redis::store::spend_counters::NativeSpendCounters;
+use crate::redis::store::{request::NativeRequestRedis, spend_counters::NativeSpendCounters};
 
 fn from_model<T: DeserializeOwned>(model: &Bound<'_, PyAny>) -> PyResult<T> {
     from_py_argument(&model.call_method0("model_dump")?)
+}
+
+fn from_optional_record<T: DeserializeOwned>(record: &Bound<'_, PyAny>) -> PyResult<Option<T>> {
+    if record.is_none() {
+        return Ok(None);
+    }
+    from_record(record).map(Some)
 }
 
 fn from_record<T: DeserializeOwned>(record: &Bound<'_, PyAny>) -> PyResult<T> {
@@ -58,6 +68,28 @@ impl NativeBudgets {
                 .map(Pythonized)
                 .map_err(PyRuntimeError::new_err)
         })
+    }
+
+    /// The post-call counter step for one charged request, as an execution the proxy drives with
+    /// `host` answering its host calls. `record` is `reservation` as its typed record; the step
+    /// stamps the outcome on `reservation` itself.
+    #[pyo3(signature = (step, record, reservation, request, host, /))]
+    fn charge_counters(
+        &self,
+        #[pyo3(from_py_with = from_py_argument)] step: CounterStep,
+        #[pyo3(from_py_with = from_optional_record)] record: Option<BudgetReservation>,
+        reservation: Option<Py<PyDict>>,
+        request: Option<PyRef<'_, NativeRequestRedis>>,
+        host: Py<PyAny>,
+    ) -> Execution {
+        crate::budget_counters::start(
+            Arc::clone(&self.0),
+            step,
+            record,
+            reservation,
+            request.map(|request| request.0.clone()),
+            host,
+        )
     }
 
     fn settle<'py>(

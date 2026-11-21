@@ -36,7 +36,7 @@ from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject, Usage
 
 _LIVE_EVENT_FRAME_ADAPTER: Final = TypeAdapter(dict[str, object])
 _LIVE_USAGE_EVENT_TYPES: Final = frozenset({"session.usage.updated", "session.closed"})
-_LIVE_WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws"})
+LIVE_WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws"})
 _LIVE_SESSION_CLOSE_FRAME: Final = '{"type": "session.close"}'
 
 
@@ -82,6 +82,12 @@ class _LivePreCallArgs(TypedDict):
     api_base: ReadOnly[str]
     headers: ReadOnly[Mapping[str, str]]
     complete_input_dict: ReadOnly[_LivePreCallInput]
+
+
+@dataclass(frozen=True, slots=True)
+class LiveUpstream:
+    url: str
+    headers: Mapping[str, str]
 
 
 class LiveClientWebSocket(Protocol):
@@ -406,8 +412,16 @@ class OpenAILiveSessions(OpenAIRealtime):
     @staticmethod
     def _construct_live_url(api_base: str) -> str:
         parsed_url: Final = urlsplit(api_base)
-        websocket_scheme: Final = _LIVE_WEBSOCKET_SCHEMES.get(parsed_url.scheme, parsed_url.scheme)
+        websocket_scheme: Final = LIVE_WEBSOCKET_SCHEMES.get(parsed_url.scheme, parsed_url.scheme)
         return urlunsplit((websocket_scheme, parsed_url.netloc, "/v1/live/sessions", "", ""))
+
+    def _openai_upstream(self, api_base: str | None, api_key: str | None) -> LiveUpstream:
+        if api_key is None:
+            raise ValueError("api_key is required for OpenAI Live session calls")
+        return LiveUpstream(
+            url=self._construct_live_url(api_base or self._get_default_api_base()),
+            headers=self._get_additional_headers(api_key),
+        )
 
     async def async_live_session(
         self,
@@ -418,14 +432,13 @@ class OpenAILiveSessions(OpenAIRealtime):
         session_start: Mapping[str, object],
         api_base: str | None,
         api_key: str | None,
+        upstream: LiveUpstream | None = None,
     ) -> None:
-        if api_key is None:
-            raise ValueError("api_key is required for OpenAI Live session calls")
+        resolved_upstream: Final = upstream if upstream is not None else self._openai_upstream(api_base, api_key)
         from websockets.exceptions import InvalidStatus
 
-        resolved_api_base: Final = api_base or self._get_default_api_base()
-        url: Final = self._construct_live_url(resolved_api_base)
-        headers: Final = self._get_additional_headers(api_key)
+        url: Final = resolved_upstream.url
+        headers: Final = resolved_upstream.headers
         ssl_config: Final = self._get_ssl_config(url)
         session: Final = as_str_mapping(session_start.get("session"))
         if session is None:

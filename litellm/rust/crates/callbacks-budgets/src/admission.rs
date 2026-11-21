@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use litellm_callbacks::{BudgetPlan, BudgetReservation, ReservationEntry};
-use litellm_redis_store::spend_counters::SpendCounters;
+use litellm_callbacks::{BudgetPlan, BudgetReservation, Host, ReservationEntry};
+use litellm_redis_store::{RequestRedis, spend_counters::SpendCounters};
 use litellm_tracing::Logger;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
+    charge::{self, CounterOutcome, CounterStep},
     engine::{self, BudgetCounterSpend, EngineError, Reservation, Settle, Settlement, UNAVAILABLE},
     plan::Plan,
     window::Moment,
@@ -25,6 +26,8 @@ pub enum Admission {
     },
 }
 
+/// The budget engine over one spend counter store: admission holds, settlements, and the post-call
+/// counter step.
 pub struct Budgets {
     store: Arc<SpendCounters>,
     logger: Option<Logger>,
@@ -87,6 +90,10 @@ impl Budgets {
         }
     }
 
+    pub fn store(&self) -> &Arc<SpendCounters> {
+        &self.store
+    }
+
     pub fn with_logger(self, logger: Logger) -> Self {
         Self {
             logger: Some(logger),
@@ -104,6 +111,24 @@ impl Budgets {
     pub async fn settle(&self, request: &Settle<'_>) -> Result<Settlement, EngineError> {
         self.logged(engine::settle(&self.store, request, &Moment::now()))
             .await
+    }
+
+    /// The whole post-call counter step for one charged request; see [`charge::charge_counters`].
+    pub async fn charge_counters(
+        &self,
+        host: &Host,
+        request: Option<&RequestRedis>,
+        step: &CounterStep,
+        reservation: Option<&BudgetReservation>,
+    ) -> CounterOutcome {
+        self.logged(charge::charge_counters(
+            &self.store,
+            host,
+            request,
+            step,
+            reservation,
+        ))
+        .await
     }
 
     pub async fn admit(
