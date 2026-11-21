@@ -442,14 +442,14 @@ def _tool_names_by_turn(proxy_server_requests: Sequence[Mapping[str, object] | N
     return tuple(_tool_names_sent_with(request, loads, turn) for turn, request in enumerate(proxy_server_requests))
 
 
-def _rebuilt_from_cold_storage(spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object]) -> bool:
+def _rebuilt_from_cold_storage(spend_log: Mapping[str, object], proxy_server_request: Mapping[str, object]) -> bool:
     return "input" not in proxy_server_request and LITELLM_TRUNCATED_PAYLOAD_FIELD in str(
         spend_log.get("proxy_server_request")
     )
 
 
 def _declared_tool_names(
-    spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
+    spend_log: Mapping[str, object], proxy_server_request: Mapping[str, object] | None
 ) -> frozenset[str]:
     if proxy_server_request is None or not _rebuilt_from_cold_storage(spend_log, proxy_server_request):
         return frozenset()
