@@ -8,7 +8,7 @@ from litellm.proxy.mcp_server.events.admission import admit, binding_for, screen
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import ensure_sealable, open_cursor, seal_cursor
 from litellm.proxy.mcp_server.events.errors import EventsFailure, internal_error
-from litellm.proxy.mcp_server.events.observability import EventActivity
+from litellm.proxy.mcp_server.events.observability import EventActivity, EventOutcome
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import routing_headers
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
@@ -56,11 +56,12 @@ async def poll(
     sealed: Final = seal_cursor(binding, upstream.cursor, runtime.now())
     if isinstance(sealed, Error):
         return Error(sealed.error)
-    for outcome, amount, event_ids in (
+    outcomes: Final[tuple[tuple[EventOutcome, int, tuple[str, ...]], ...]] = (
         ("delivered", len(admitted.events), tuple(item.event_id for item in admitted.events)),
         ("throttled", admitted.throttled, ()),
         ("blocked", admitted.blocked, ()),
-    ):
+    )
+    for outcome, amount, event_ids in outcomes:
         if amount:
             await runtime.record(
                 EventActivity(

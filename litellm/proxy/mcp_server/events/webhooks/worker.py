@@ -80,12 +80,17 @@ class DeliveryWorker:
     async def run_forever(self) -> None:
         next_housekeeping = 0.0  # rebind-ok: monotonic deadline of the next expiry sweep
         while True:
-            handled: Final = await self._run_guarded()
-            if time.monotonic() >= next_housekeeping:
-                await self._expire_guarded()
-                next_housekeeping = time.monotonic() + _HOUSEKEEPING_SECONDS
-            if not handled:
-                await asyncio.sleep(_IDLE_SECONDS)
+            next_housekeeping = await self._tick(next_housekeeping)
+
+    async def _tick(self, next_housekeeping: float) -> float:
+        """One delivery batch, a sweep when due, and an idle pause when nothing was due; returns the next sweep time."""
+        handled: Final = await self._run_guarded()
+        due: Final = time.monotonic() >= next_housekeeping
+        if due:
+            await self._expire_guarded()
+        if not handled:
+            await asyncio.sleep(_IDLE_SECONDS)
+        return time.monotonic() + _HOUSEKEEPING_SECONDS if due else next_housekeeping
 
     async def _run_guarded(self) -> int:
         try:

@@ -1,7 +1,8 @@
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -32,10 +33,6 @@ class _Rows:
         self.rows.append((activity, caller))
 
 
-async def _broken(_activity: EventActivity, _caller: UserAPIKeyAuth) -> None:
-    raise ConnectionError("spend log queue down")
-
-
 @pytest.mark.asyncio
 async def test_an_attributed_outcome_writes_one_log_row() -> None:
     rows: Final = _Rows()
@@ -52,16 +49,29 @@ async def test_an_outcome_without_a_caller_writes_no_log_row() -> None:
 
 @pytest.mark.asyncio
 async def test_a_failing_log_writer_never_reaches_the_client() -> None:
-    await record(_activity(), write=_broken)
+    attempts: Final[list[str]] = []  # mutable-ok: records the write attempt
+
+    async def broken(activity: EventActivity, _caller: UserAPIKeyAuth) -> None:
+        attempts.append(activity.outcome)
+        raise ConnectionError("spend log queue down")
+
+    await record(_activity(), write=broken)
+    assert attempts == ["delivered"]
+
+
+_LOGGED: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
 
 
 class _Captured(CustomLogger):
     def __init__(self) -> None:
-        super().__init__()
-        self.metadata: list[object] = []  # mutable-ok: captured success payloads
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger.__init__ is untyped
+        self.metadata: list[JsonValue] = []  # mutable-ok: captured success payloads
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:  # noqa: ANN001  # CustomLogger signature
-        self.metadata.append((kwargs.get("litellm_params") or {}).get("metadata"))
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        params: Final = _LOGGED.validate_python(kwargs.get("litellm_params"), from_attributes=False)
+        self.metadata.append(params.get("metadata"))
 
 
 @pytest.fixture

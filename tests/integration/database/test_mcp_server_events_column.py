@@ -7,13 +7,14 @@ import pytest
 from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 from litellm.proxy.mcp_server.db import _prepare_mcp_server_data
 from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
+from litellm.proxy.utils import PrismaClient
 from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
 from tests.integration._support.prisma_clients import connected_proxy_prisma
 
 EVENTS: Final = MCPServerEventsConfig(enabled=True, allowed_events=("build.*",))
 
 
-async def _stored(client, server_id: str) -> MCPServerEventsConfig | None:  # noqa: ANN001  # the proxy Prisma wrapper
+async def _stored(client: PrismaClient, server_id: str) -> MCPServerEventsConfig | None:
     row: Final = await client.db.litellm_mcpservertable.find_unique(where={"server_id": server_id})
     return _stored_events_config(row.events if row is not None else None)
 

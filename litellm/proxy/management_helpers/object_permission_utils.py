@@ -702,9 +702,8 @@ def _extract_requested_mcp_server_ids(
         server_ids.update(mcp_servers)
         server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
 
-    for column in ("mcp_tool_permissions", "mcp_event_permissions"):
-        per_server = object_permission.get(column)  # rebind-ok: one permission column per iteration
-        if isinstance(per_server, dict):
+    for per_server in (object_permission.get("mcp_tool_permissions"), object_permission.get("mcp_event_permissions")):
+        if per_server is not None:
             server_ids.update(per_server.keys())
 
     return server_ids

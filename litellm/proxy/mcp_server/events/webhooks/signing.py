@@ -52,12 +52,16 @@ def verify(secret_candidates: Sequence[bytes], headers: Mapping[str, str], body:
     webhook_id: Final = headers.get("webhook-id")
     timestamp: Final = headers.get("webhook-timestamp")
     signatures: Final = (headers.get("webhook-signature") or "").split()
-    if not webhook_id or not signatures or not timestamp or not (timestamp.isascii() and timestamp.isdigit()):
+    if not webhook_id or not signatures or not _is_unix_seconds(timestamp):
         return False
     if abs(now - int(timestamp or "0")) > _TOLERANCE_SECONDS:
         return False
     expected: Final = tuple(sign(secret, webhook_id, int(timestamp or "0"), body) for secret in secret_candidates)
     return any(_matches_any(candidate, expected) for candidate in signatures)
+
+
+def _is_unix_seconds(timestamp: str | None) -> bool:
+    return timestamp is not None and timestamp.isascii() and timestamp.isdigit()
 
 
 def _matches_any(candidate: str, expected: tuple[str, ...]) -> bool:
