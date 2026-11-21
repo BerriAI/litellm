@@ -479,6 +479,14 @@ def test_virtual_key_mapping_counts_as_configured_when_any_issuer_sets_the_claim
     assert jwt_auth.is_virtual_key_mapping_configured() is is_configured
 
 
+@pytest.mark.parametrize("field", ["audience", "public_key_url"])
+def test_litellm_jwtauth_refuses_an_empty_global_audience_or_jwks_url(field: str) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    with pytest.raises(ValidationError, match=field):
+        _ = LiteLLM_JWTAuth(**{field: ""})
+
+
 def test_new_user_request_loudly_rejects_a_password():
     """
     /user/new has never persisted a password (the field used to be silently
