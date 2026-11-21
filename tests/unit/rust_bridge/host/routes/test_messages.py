@@ -3150,7 +3150,12 @@ def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
 
     mapped: Final = messages_host.map_failure(
         _credential_failure("replay"),
-        {"model": _BEDROCK_INVOKE, "messages": [], "aws_region_name": "us-east-1", "aws_profile_name": "logged-out-sso"},
+        {
+            "model": _BEDROCK_INVOKE,
+            "messages": [],
+            "aws_region_name": "us-east-1",
+            "aws_profile_name": "logged-out-sso",
+        },
         "bedrock",
     )
 
@@ -3175,7 +3180,7 @@ def test_a_bedrock_sso_profile_without_a_usable_token_answers_401(
         ),
         pytest.param(("invalid_web_identity_token", "", "", "bad"), "AwsAuthError", 401, id="invalid-web-identity"),
         pytest.param(("unreachable", "", "", ""), "EndpointConnectionError", None, id="sts-unreachable"),
-        pytest.param(None, "AuthenticationError", 401, id="no-sts-call"),
+        pytest.param(None, "ValueError", None, id="no-sts-call"),
     ),
 )
 def test_a_bedrock_mantle_sts_failure_raises_the_class_the_mantle_signer_lets_through(
@@ -3616,12 +3621,11 @@ def test_a_refused_reply_raises_an_api_error_500(
 
 
 @pytest.mark.usefixtures("no_aws_credentials")
-@pytest.mark.parametrize("kind", ("no_credentials", "replay"))
-def test_a_bedrock_mantle_credential_failure_answers_401_with_the_mantle_auth_error(kind: str) -> None:
+def test_a_bedrock_mantle_credential_failure_answers_401_with_the_mantle_auth_error() -> None:
     from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
 
     mapped: Final = messages_host.map_failure(
-        _credential_failure(kind),
+        _credential_failure("no_credentials"),
         {"model": _BEDROCK_MANTLE, "messages": [], "api_base": "https://mantle.test"},
         "bedrock_mantle",
     )
@@ -3970,3 +3974,20 @@ async def test_anthropic_messages_drops_diagnostics_a_provider_rejects_when_aske
 
     assert _JSON_OBJECT.validate_python(response)["id"] == "msg_test"
     assert "diagnostics" not in bodies[0]
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize("kind", ("unavailable", "replay"))
+def test_a_bedrock_mantle_credential_failure_rust_cannot_name_stays_the_retryable_mantle_value_error(
+    kind: str,
+) -> None:
+    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure(kind),
+        {"model": _BEDROCK_MANTLE, "messages": [], "api_base": "https://mantle.test"},
+        "bedrock_mantle",
+    )
+
+    assert type(mapped) is ValueError
+    assert str(mapped) == MANTLE_AUTH_FAILED
