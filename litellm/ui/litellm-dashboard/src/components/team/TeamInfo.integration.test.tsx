@@ -890,7 +890,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
   });
 });
 
-describe("TeamInfoView - model settings", () => {
+describe("TeamInfoView - team settings", () => {
   const props = {
     teamId: "123",
     onUpdate: vi.fn(),
@@ -903,6 +903,39 @@ describe("TeamInfoView - model settings", () => {
 
   beforeEach(() => {
     seedDefaultMocks();
+  });
+
+  it("shows custom team metadata without opening the settings editor", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        caller_edit_access: {
+          kind: "team_admin",
+          editable_fields: ["metadata"],
+          proxy_controlled_metadata_keys: ["internal_setting"],
+        },
+        metadata: {
+          region: "us",
+          review_required: true,
+          tags: ["dev"],
+          require_trace_id: true,
+          internal_setting: "enabled",
+        },
+      }),
+    );
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} userModels={[]} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getByRole("heading", { name: "Metadata" })).toBeVisible();
+    expect(settings.getByText("region")).toBeVisible();
+    expect(settings.getByText("us")).toBeVisible();
+    expect(settings.getByText("review_required")).toBeVisible();
+    expect(settings.getByText("true")).toBeVisible();
+    expect(settings.getByText("tags")).toBeVisible();
+    expect(settings.getByText('["dev"]')).toBeVisible();
+    expect(settings.queryByText("require_trace_id")).not.toBeInTheDocument();
+    expect(settings.queryByText("internal_setting")).not.toBeInTheDocument();
   });
 
   it("submits the prompt storage restriction in team metadata", async () => {

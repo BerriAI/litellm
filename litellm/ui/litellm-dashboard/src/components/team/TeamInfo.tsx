@@ -1390,6 +1390,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+  const customMetadata = metadataObjectToPairs(
+    info.metadata,
+    teamEditAccess.kind === "team_admin"
+      ? new Set([...UI_MANAGED_METADATA_KEYS, ...teamEditAccess.proxyControlledMetadataKeys])
+      : UI_MANAGED_METADATA_KEYS,
+  );
 
   const memberDefaultsEditableFields = new Set(
     TEAM_ADMIN_SETTINGS_FIELDS.filter(
@@ -2630,6 +2636,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.createdAt")}</p>
                 <div>{new Date(info.created_at).toLocaleString()}</div>
+              </div>
+              <div>
+                <h4 className="font-medium">{t("teams.teamInfo.editForm.metadata")}</h4>
+                {customMetadata.length > 0 ? (
+                  <dl className="mt-2 divide-y rounded-md border text-sm">
+                    {customMetadata.map(({ key, value }) => (
+                      <div
+                        key={key}
+                        className="grid gap-1 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:gap-4"
+                      >
+                        <dt className="wrap-anywhere font-mono text-muted-foreground">{key}</dt>
+                        <dd className="whitespace-pre-wrap wrap-anywhere font-mono">{value || '""'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : (
+                  <p className="text-muted-foreground">{t("teams.teamInfo.settingsView.noMetadata")}</p>
+                )}
               </div>
               <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.models")}</p>

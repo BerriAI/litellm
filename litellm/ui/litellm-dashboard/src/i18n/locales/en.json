@@ -17078,6 +17078,7 @@
         "teamName": "Team Name",
         "teamId": "Team ID",
         "createdAt": "Created At",
+        "noMetadata": "No custom metadata",
         "models": "Models",
         "defaultMemberModels": "Default Member Models",
         "modelAliases": "Model Aliases",
