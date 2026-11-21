@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { visibleMenuGroups, type MenuGroup, menuGroups } from "@/components/LeftNav";
 import { toSiTerminology } from "@/lib/terminology";
 import { effectiveSessionRole, isViewOnlySessionRole } from "@/utils/roles";
-import { flattenNavItems, matchNavItems, paletteScopeForRoute, shortcutLabel, type PaletteNavItem } from "./utils";
+import { flattenNavItems, matchNavItems, paletteNavItems, paletteScopeForRoute, shortcutLabel, type PaletteNavItem } from "./utils";
 
 describe("paletteScopeForRoute", () => {
   it.each([
@@ -15,6 +15,12 @@ describe("paletteScopeForRoute", () => {
 });
 
 describe("flattenNavItems", () => {
+  it("discovers the recommender without a sidebar entry or role-gated navigation", () => {
+    expect(matchNavItems(paletteNavItems([]), "Model Recommender")).toEqual([
+      expect.objectContaining({ route: "model-recommender", label: "Model Recommender" }),
+    ]);
+    expect(flattenNavItems(menuGroups).some((item) => item.route === "model-recommender")).toBe(false);
+  });
   it("flattens visible leaves and skips external links", () => {
     const groups: MenuGroup[] = [
       {

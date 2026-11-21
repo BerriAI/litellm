@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { labelText, routeOf, sectionText, type MenuGroup } from "@/components/LeftNav";
 import { keepTerminology, type Term } from "@/lib/terminology";
 import i18n from "@/i18n/i18n";
+import { searchOnlyPages } from "@/components/page_metadata";
 
 export type PaletteScope = "keys" | "global";
 
@@ -56,6 +57,13 @@ export const matchNavItems = (items: readonly PaletteNavItem[], query: string): 
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
     .map(({ item }) => item);
 };
+
+export const paletteNavItems = (groups: readonly MenuGroup[], term: Term = keepTerminology): PaletteNavItem[] => [
+  ...flattenNavItems(groups, term),
+  ...searchOnlyPages.map((page) => ({
+    key: page.page, route: page.page, label: term(i18n.t(page.label)), section: term(i18n.t("modelRecommender.badge")),
+  })),
+];
 
 export const shortcutLabel = (platform: string, userAgent: string): string =>
   [platform, userAgent].some((value) => value.toLowerCase().includes("mac"))

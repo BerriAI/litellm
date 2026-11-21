@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from itertools import chain
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -24,6 +25,12 @@ class DeploymentParams(FrozenModel):
 
 class Deployment(FrozenModel):
     litellm_params: DeploymentParams
+
+
+def eligible_candidate(model: Candidate, request: RecommendationRequest) -> bool:
+    return matches(model, request.requirements) and (
+        not request.providers or not request.providers.isdisjoint(model.providers)
+    )
 
 
 def candidate(row: object, deployments: object) -> Candidate:
@@ -52,7 +59,7 @@ async def recommend_models(
     rows: Final = TypeAdapter(Mapping[str, tuple[object, ...]]).validate_python(listing)
     candidates: Final = tuple(candidate(row, ()) for row in rows.get("data", ()))
     chat: Final = tuple(c for c in candidates if c.mode == "chat")
-    eligible: Final = tuple(c for c in chat if matches(c, request.requirements))
+    eligible: Final = tuple(c for c in chat if eligible_candidate(c, request))
     group_names: Final = {
         c.model_group: (
             resolve_model_group_alias(llm_router.registry().aliases(), lookup[c.model_group]) or lookup[c.model_group]
@@ -68,7 +75,7 @@ async def recommend_models(
         for c in chat
     )
     external: Final = external_candidates(catalog or {}, gateway) if request.include_external else ()
-    resolved: Final = tuple(c for c in (*gateway, *external) if matches(c, request.requirements))
+    resolved: Final = tuple(c for c in (*gateway, *external) if eligible_candidate(c, request))
     benchmarks: Final = await cache.get() if request.priorities.intelligence and request.focus else ()
     speeds: Final = (
         await speed_cache.get(client, tuple(group_names[c.model_group] for c in eligible))
@@ -78,6 +85,7 @@ async def recommend_models(
     speed_by_group: Final = {speed.model_group: speed for speed in speeds}
     now: Final = datetime.now(timezone.utc).date().isoformat()
     return RecommendationResponse(
+        available_providers=tuple(sorted(frozenset(chain.from_iterable(c.providers for c in (*gateway, *external))))),
         recommendations=rank(
             resolved,
             request,

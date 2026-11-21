@@ -27,7 +27,7 @@ import { keyDetailHref } from "@/utils/entityLinks";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { useVisibleMenuGroups } from "./useVisibleMenuGroups";
-import { flattenNavItems, matchNavItems, paletteScopeForRoute, type PaletteNavItem, type PaletteScope } from "./utils";
+import { paletteNavItems, matchNavItems, paletteScopeForRoute, type PaletteNavItem, type PaletteScope } from "./utils";
 
 type PaletteEntry = {
   id: string;
@@ -120,7 +120,7 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
   const hasKeyError = scope === "keys" && keyResults.isError && keyResults.data === undefined;
   const visibleGroups = useVisibleMenuGroups();
   const term = useTerminology();
-  const navItems = useMemo(() => flattenNavItems(visibleGroups, term), [visibleGroups, term]);
+  const navItems = useMemo(() => paletteNavItems(visibleGroups, term), [visibleGroups, term]);
   const navMatches = useMemo(
     () => (scope === "global" || trimmedQuery ? matchNavItems(navItems, query) : []),
     [navItems, query, scope, trimmedQuery],

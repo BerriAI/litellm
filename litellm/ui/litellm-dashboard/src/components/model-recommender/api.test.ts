@@ -24,8 +24,9 @@ describe("recommender request state", () => {
       priorities: { intelligence: 0, speed: 3, cost: 1 },
       focus: ["coding", "agentic"],
       requirements: { reasoning: true, vision: false, function_calling: true, min_context_tokens: 128000 },
-      limit: 3,
+      limit: 10,
       include_external: false,
+      providers: [],
     };
     expect(buildRequest(state)).toEqual(expected);
   });

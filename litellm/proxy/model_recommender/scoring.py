@@ -131,5 +131,7 @@ def recommendation(
             function_calling=candidate.supports_function_calling,
         ),
         context_window=candidate.max_input_tokens,
+        input_cost_per_token=candidate.input_cost_per_token,
+        output_cost_per_token=candidate.output_cost_per_token,
         reasons=reasons(signals, len(candidates)),
     )

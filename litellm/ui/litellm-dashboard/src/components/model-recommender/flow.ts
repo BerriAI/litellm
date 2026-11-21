@@ -1,39 +1,50 @@
-import { createSerializer, parseAsArrayOf, parseAsBoolean, parseAsStringLiteral, type inferParserType } from "nuqs";
-import { buildRequest, FOCUS, type RecommenderState } from "./api";
+import {
+  createParser,
+  createSerializer,
+  parseAsArrayOf,
+  parseAsBoolean,
+  parseAsString,
+  parseAsStringLiteral,
+  type inferParserType,
+} from "nuqs";
+import { buildRequest, FOCUS, PRIORITIES, recommenderParsers, type RecommenderState } from "./api";
 
-export const GOALS = ["quality", "fastest", "cheapest", "balanced"] as const;
-export const PRESETS = {
-  quality: { intelligence: 3, speed: 1, cost: 1 },
-  fastest: { intelligence: 0, speed: 3, cost: 0 },
-  cheapest: { intelligence: 1, speed: 0, cost: 3 },
-  balanced: { intelligence: 2, speed: 2, cost: 2 },
-} as const;
+export const STEPS = ["1", "2", "3", "4", "5"] as const;
 export const flowParsers = {
-  step: parseAsStringLiteral(["1", "2", "3", "results"] as const).withDefault("1"),
+  step: createParser({
+    parse: (value) => (value === "results" ? ("5" as const) : STEPS.find((step) => step === value) ?? null),
+    serialize: String,
+  }).withDefault("1"),
+  intelligence: recommenderParsers.intelligence,
+  speed: recommenderParsers.speed,
+  cost: recommenderParsers.cost,
   focus: parseAsArrayOf(parseAsStringLiteral(FOCUS)).withDefault(["general"]),
-  goal: parseAsStringLiteral(GOALS).withDefault("balanced"),
   vision: parseAsBoolean.withDefault(false),
   function_calling: parseAsBoolean.withDefault(false),
   reasoning: parseAsBoolean.withDefault(false),
   long_context: parseAsBoolean.withDefault(false),
   include_external: parseAsBoolean.withDefault(false),
+  providers: parseAsArrayOf(parseAsString).withDefault([]),
 };
 export type Answers = inferParserType<typeof flowParsers>;
 export const EMPTY_ANSWERS: Answers = {
   step: "1",
   focus: ["general"],
-  goal: "balanced",
+  intelligence: 2,
+  speed: 2,
+  cost: 2,
   vision: false,
   function_calling: false,
   reasoning: false,
   long_context: false,
   include_external: false,
+  providers: [],
 };
-export const REQUIREMENTS = ["vision", "function_calling", "reasoning", "long_context"] as const;
+export const REQUIREMENTS = ["reasoning", "vision", "function_calling", "long_context"] as const;
 
 export function answersToRequest(answers: Answers) {
   const state: RecommenderState = {
-    ...PRESETS[answers.goal],
+    ...answers,
     focus: answers.focus.length ? answers.focus : ["general"],
     reasoning: answers.reasoning,
     vision: answers.vision,
@@ -44,7 +55,16 @@ export function answersToRequest(answers: Answers) {
   return buildRequest(state);
 }
 
-const serialize = createSerializer(flowParsers);
+export function weightMix(priorities: Pick<Answers, (typeof PRIORITIES)[number]>) {
+  const total = PRIORITIES.reduce((sum, key) => sum + priorities[key], 0);
+  return PRIORITIES.map((key) => ({ key, percent: total ? (priorities[key] / total) * 100 : 0 }));
+}
+
+export function toggleValue<T extends string>(values: readonly T[], value: T): T[] {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+export const serializeAnswers = createSerializer(flowParsers);
 export function recommenderHref(focus?: (typeof FOCUS)[number]): string {
-  return serialize("/model-recommender", focus ? { focus: [focus], step: "2" } : {});
+  return serializeAnswers("/model-recommender", focus ? { focus: [focus] } : {});
 }

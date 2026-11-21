@@ -8,7 +8,7 @@ export type RecommendationResponse = components["schemas"]["RecommendationRespon
 export type Recommendation = components["schemas"]["Recommendation"];
 export const FOCUS = ["general", "math", "coding", "agentic"] as const;
 export const PRIORITIES = ["intelligence", "speed", "cost"] as const;
-export const IMPORTANCE = ["Not considered", "Nice to have", "Important", "Critical"] as const;
+export const IMPORTANCE = ["Not considered", "Low importance", "Important", "Very important"] as const;
 const priority = createParser({
   parse: (value) => (/^[0-3]$/.test(value) ? Number(value) : null),
   serialize: String,
@@ -39,6 +39,7 @@ export type RecommenderState = {
   function_calling: boolean;
   context: number | null;
   include_external?: boolean;
+  providers?: string[];
 };
 
 export function buildRequest(state: RecommenderState): RecommendationRequest {
@@ -51,8 +52,9 @@ export function buildRequest(state: RecommenderState): RecommendationRequest {
       function_calling: state.function_calling,
       min_context_tokens: state.context,
     },
-    limit: 3,
+    limit: 10,
     include_external: state.include_external ?? false,
+    providers: state.providers ?? [],
   };
 }
 

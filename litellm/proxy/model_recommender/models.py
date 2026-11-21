@@ -28,6 +28,7 @@ class RecommendationRequest(FrozenModel):
     requirements: Requirements = Field(default_factory=Requirements)
     limit: int = Field(default=3, ge=1, le=20)
     include_external: bool = False
+    providers: frozenset[str] = frozenset()
 
 
 class Candidate(FrozenModel):
@@ -72,6 +73,8 @@ class Recommendation(FrozenModel):
     output_tokens_per_second: float | None
     capabilities: Requirements
     context_window: float | None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
     reasons: tuple[str, ...]
 
 
@@ -84,6 +87,7 @@ class DataSource(FrozenModel):
 
 
 class RecommendationResponse(FrozenModel):
+    available_providers: tuple[str, ...] = ()
     recommendations: tuple[Recommendation, ...]
     candidates_considered: int
     candidates_filtered: int

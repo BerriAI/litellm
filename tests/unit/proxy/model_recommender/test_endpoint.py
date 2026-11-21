@@ -99,3 +99,43 @@ async def test_external_catalog_is_opt_in_and_marks_recommendations(include_exte
     assert first.model_group == ("openai/external" if include_external else "chat")
     assert first.signals.speed.unknown
     assert all(c.on_gateway for c in response.recommendations) is (not include_external)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("providers", (frozenset(), frozenset({"anthropic"}), frozenset({"missing"})))
+async def test_provider_filter_keeps_pool_metadata(providers: frozenset[str]) -> None:
+    response: Final = await recommend_models(
+        RecommendationRequest(providers=providers, priorities=Priorities(intelligence=0, speed=0, cost=3)),
+        UserAPIKeyAuth(),
+        {
+            "data": (
+                {
+                    "model_group": "one",
+                    "mode": "chat",
+                    "providers": ("openai",),
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+                {
+                    "model_group": "two",
+                    "mode": "chat",
+                    "providers": ("anthropic",),
+                    "input_cost_per_token": 0.003,
+                    "output_cost_per_token": 0.004,
+                },
+            )
+        },
+        None,
+        {"one": "one", "two": "two"},
+        None,
+    )
+    expected: Final = (
+        frozenset({"one", "two"}) if not providers else frozenset({"two"}) if "anthropic" in providers else frozenset()
+    )
+    assert {model.model_group for model in response.recommendations} == expected
+    assert response.available_providers == ("anthropic", "openai")
+    assert response.candidates_filtered == 2 - len(expected)
+    assert all(
+        model.input_cost_per_token is not None and model.output_cost_per_token is not None
+        for model in response.recommendations
+    )

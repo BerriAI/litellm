@@ -29,6 +29,8 @@ import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/pane
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { recommenderHref } from "@/components/model-recommender/flow";
+import { uiHref } from "@/utils/uiHref";
 
 const MODEL_TAB_SLUGS = [
   "add",
@@ -200,6 +202,7 @@ export default function ModelsAndEndpointsPage() {
               <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.userDescription")}</p>
             )}
           </div>
+          <Button variant="outline" nativeButton={false} role="link" render={<a href={uiHref(recommenderHref())} />}>{t("modelRecommender.recommendModel")}</Button>
         </div>
 
         {modelId ? (

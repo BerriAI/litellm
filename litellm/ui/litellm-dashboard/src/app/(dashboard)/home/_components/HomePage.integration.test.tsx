@@ -113,12 +113,12 @@ const renderHome = () =>
   );
 
 describe("HomePage", () => {
-  it("links model questions to the prefilled second step and offers a fresh recommendation", () => {
+  it("links model questions to the first step with focus prefilled and offers a fresh recommendation", () => {
     renderHome();
     expect(screen.getByRole("heading", { name: "Find the right model" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Coding", exact: true })).toHaveAttribute(
       "href",
-      expect.stringMatching(/model-recommender\?step=2&focus=coding$/),
+      expect.stringMatching(/model-recommender\?focus=coding$/),
     );
     expect(screen.getByRole("link", { name: "Get a recommendation" })).toHaveAttribute(
       "href",

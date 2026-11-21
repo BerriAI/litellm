@@ -46219,6 +46219,8 @@ export interface components {
             capabilities: components["schemas"]["Requirements"];
             /** Context Window */
             context_window: number | null;
+            /** Input Cost Per Token */
+            input_cost_per_token?: number | null;
             /** Latency Seconds */
             latency_seconds: number | null;
             /** Model Group */
@@ -46228,6 +46230,8 @@ export interface components {
              * @default true
              */
             on_gateway: boolean;
+            /** Output Cost Per Token */
+            output_cost_per_token?: number | null;
             /** Output Tokens Per Second */
             output_tokens_per_second: number | null;
             /** Providers */
@@ -46258,10 +46262,20 @@ export interface components {
              */
             limit: number;
             priorities?: components["schemas"]["Priorities"];
+            /**
+             * Providers
+             * @default []
+             */
+            providers: string[];
             requirements?: components["schemas"]["Requirements"];
         };
         /** RecommendationResponse */
         RecommendationResponse: {
+            /**
+             * Available Providers
+             * @default []
+             */
+            available_providers: string[];
             /** Candidates Considered */
             candidates_considered: number;
             /** Candidates Filtered */
