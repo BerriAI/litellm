@@ -1820,6 +1820,34 @@
     "default_model_placeholder": "GigaChat-2"
   },
   {
+    "provider": "GMI",
+    "provider_display_name": "GMI Cloud",
+    "litellm_provider": "gmi",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.gmi-serving.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "gmi/deepseek-ai/DeepSeek-V3.2"
+  },
+  {
     "provider": "GITHUB",
     "provider_display_name": "Github",
     "litellm_provider": "github",

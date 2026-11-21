@@ -25,6 +25,7 @@ import featherlessLogo from "../../public/assets/logos/featherless.svg";
 import fireworksLogo from "../../public/assets/logos/fireworks.svg";
 import friendliLogo from "../../public/assets/logos/friendli.svg";
 import gigachatLogo from "../../public/assets/logos/gigachat.svg";
+import gmiLogo from "../../public/assets/logos/gmi.svg";
 import githubCopilotLogo from "../../public/assets/logos/github_copilot.svg";
 import googleLogo from "../../public/assets/logos/google.svg";
 import groqLogo from "../../public/assets/logos/groq.svg";
@@ -128,6 +129,7 @@ export enum Providers {
   FRIENDLIAI = "Friendliai",
   GALADRIEL = "Galadriel",
   GIGACHAT = "GigaChat",
+  GMI = "GMI Cloud",
   GITHUB_COPILOT = "Github Copilot",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
@@ -265,6 +267,7 @@ export const provider_map: Record<string, string> = {
   FRIENDLIAI: "friendliai",
   GALADRIEL: "galadriel",
   GIGACHAT: "gigachat",
+  GMI: "gmi",
   GITHUB_COPILOT: "github_copilot",
   Google_AI_Studio: "gemini",
   GradientAI: "gradient_ai",
@@ -397,6 +400,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.FireworksAI]: fireworksLogo.src,
   [Providers.FRIENDLIAI]: friendliLogo.src,
   [Providers.GIGACHAT]: gigachatLogo.src,
+  [Providers.GMI]: gmiLogo.src,
   [Providers.GITHUB_COPILOT]: githubCopilotLogo.src,
   [Providers.Google_AI_Studio]: googleLogo.src,
   [Providers.Groq]: groqLogo.src,
@@ -511,6 +515,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.EMPIRIOLABS]: "empiriolabs/aplomb-1",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
+  [Providers.GMI]: "gmi/deepseek-ai/DeepSeek-V3.2",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.HOSTINGER_ROUTER]: "hostinger_router/claude-sonnet-5",
   [Providers.JinaAI]: "jina_ai/",
