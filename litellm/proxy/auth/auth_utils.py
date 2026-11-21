@@ -2493,6 +2493,7 @@ _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/client_secrets",
     "/realtime/translations/client_secrets",
     "/realtime/calls",
+    "/live/sessions",
 )
 _MODEL_ROUTING_ID_FIELDS: Final = (
     "file_id",

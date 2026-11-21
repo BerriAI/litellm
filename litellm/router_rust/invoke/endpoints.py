@@ -1443,9 +1443,12 @@ def pinned_video_deployment(plan: Plan, request: Mapping[str, object]) -> Mappin
     return {"pinned_deployment_id": deployment_id} if deployment_id else {}
 
 
-def pinned_vector_store_file_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+def pinned_request_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+    """The deployment a call names because the upstream object it reaches lives on that deployment's account:
+    a vector store file, or a realtime session that already runs upstream."""
     deployment_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
-    if not plan.endpoint.startswith("avector_store_file_") or not isinstance(deployment_id, str) or not deployment_id:
+    pins: Final = plan.endpoint.startswith("avector_store_file_") or plan.endpoint == "_arealtime"
+    if not pins or not isinstance(deployment_id, str) or not deployment_id:
         return {}
     return {"pinned_deployment_id": deployment_id}
 
@@ -2597,7 +2600,7 @@ __all__ = [
     "generic_plan",
     "log_refused_call",
     "log_refused_call_sync",
-    "pinned_vector_store_file_deployment",
+    "pinned_request_deployment",
     "pinned_video_deployment",
     "plan_for",
     "prepare_request",

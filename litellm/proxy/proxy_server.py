@@ -14318,6 +14318,7 @@ async def _route_realtime_websocket_session(
     is_translation: bool = False,
     sideband_call_id: str | None = None,
     live_attach: LiveAttach | None = None,
+    pinned_deployment_id: str | None = None,
 ) -> None:
     # Only use explicit parameters, not all query params
     query_model: Final = route_model if is_translation else model
@@ -14343,6 +14344,10 @@ async def _route_realtime_websocket_session(
         data["live_session_start"] = live_session_start
     if live_attach is not None:
         data["live_attach"] = live_attach
+    if pinned_deployment_id:
+        from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
+
+        data[PINNED_DEPLOYMENT_KEY] = pinned_deployment_id
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list: Final = list(websocket.scope.get("headers") or [])

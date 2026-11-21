@@ -109,7 +109,7 @@ from litellm.router_rust.invoke.endpoints import (
     is_batch_upload,
     log_refused_call,
     log_refused_call_sync,
-    pinned_vector_store_file_deployment,
+    pinned_request_deployment,
     pinned_video_deployment,
     plan_for,
     reports_own_success,
@@ -2855,7 +2855,7 @@ class RustCore(
         fields: dict[str, object] = {"model": model}  # mutable-ok: built up below, later keys win  # rebind-ok: same
         fields.update(self._routing_fields(prepared, plan.pick_input(prepared)[0]))
         fields.update(pinned_video_deployment(plan, request))
-        fields.update(pinned_vector_store_file_deployment(plan, request))
+        fields.update(pinned_request_deployment(plan, request))
         fields.update(unrouted_fields(plan))
         fields.update(failover_fields(plan))
         fields.update(scoped_fallback_fields(plan, request))

@@ -497,9 +497,9 @@ class OpenAILiveSessions(OpenAIRealtime):
                                 logging_result, end_time=session_end_time, prefer_async_handlers=True
                             )
                         )
-                    logging_obj.model_call_details[  # rebind-ok: flags the shared logging object as already logged
-                        REALTIME_SESSION_SUCCESS_LOGGED_KEY
-                    ] = True
+                        logging_obj.model_call_details[  # rebind-ok: flags the shared logging object as already logged
+                            REALTIME_SESSION_SUCCESS_LOGGED_KEY
+                        ] = True
                     if session_ended_abnormally.is_set():
                         logging_obj.model_call_details[  # rebind-ok: flags the shared logging object for the router
                             REALTIME_SESSION_ENDED_ABNORMALLY_KEY

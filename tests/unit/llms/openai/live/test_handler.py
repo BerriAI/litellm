@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime
 from typing import Final, NoReturn, cast
 
@@ -1302,6 +1302,44 @@ async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
     assert get_deployment_successes_for_current_minute(router, "live-a") == counted_successes
 
 
+@pytest.mark.asyncio
+async def test_a_sideband_joins_on_the_deployment_that_created_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "live-voice",
+                "litellm_params": {"model": "openai/gpt-live-1", "api_key": f"key-{name}"},
+                "model_info": {"id": f"live-{name}"},
+            }
+            for name in ("a", "b", "c")
+        ],
+        num_retries=0,
+    )
+    reached: Final[list[Mapping[str, object]]] = []  # mutable-ok: collects what each attempt was called with
+
+    async def _arealtime(**kwargs: object) -> None:
+        reached.append(kwargs)
+
+    monkeypatch.setattr(litellm, "_arealtime", _arealtime)
+    for attempt in range(12):
+        await router._arealtime(  # the routed realtime endpoint the proxy's sideband calls
+            model="live-voice",
+            _pinned_deployment_id="live-c",
+            litellm_logging_obj=Logging(
+                model="gpt-live-1",
+                messages=[],
+                stream=False,
+                call_type="_arealtime",
+                start_time=datetime.now(),
+                litellm_call_id=f"sideband-{attempt}",
+                function_id=f"sideband-{attempt}",
+            ),
+        )
+
+    assert [call["api_key"] for call in reached] == ["key-c"] * 12, "only that deployment's account has the session"
+    assert all("_pinned_deployment_id" not in call for call in reached)
+
+
 def _attached_upstream() -> _FakeUpstream:
     """An upstream for a session that already runs: it speaks without waiting for a `session.start`."""
     upstream: Final = _FakeUpstream(
@@ -1341,3 +1379,6 @@ async def test_attached_live_session_joins_without_starting_or_closing_it_and_bi
     assert connector.url == "wss://api.openai.com/v1/live/sessions/live_abc/attach"
     assert upstream.sent_text.qsize() == 0, "an attached socket must not start or close the caller's session"
     assert logger.dispatch_count == expected_dispatches
+    assert (REALTIME_SESSION_SUCCESS_LOGGED_KEY in logger.model_call_details) is metered, (
+        "a caller's attach logs nothing, so the proxy must still release the budget hold and slot it took"
+    )

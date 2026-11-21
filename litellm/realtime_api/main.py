@@ -765,6 +765,11 @@ def _realtime_guardrail_configured(litellm_metadata: Mapping[str, object]) -> bo
     )
 
 
+def live_guardrails_configured(request_data: Mapping[str, object]) -> bool:
+    """Whether a guardrail would run on this request. Live sessions cannot run guardrails, so they are refused."""
+    return _realtime_guardrail_configured(_session_litellm_metadata(request_data))
+
+
 @dataclass(frozen=True, slots=True)
 class _LiveProviderUnsupported:
     provider: str
