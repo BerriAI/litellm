@@ -128,6 +128,7 @@ class AnthropicResponsesStreamWrapper:
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
       response.reasoning_text.delta      -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
+      response.function_call_arguments.done  -> content_block_delta (input_json_delta) if no delta came
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
       response.failed                    -> error (the stream ends without message_stop)
@@ -157,6 +158,7 @@ class AnthropicResponsesStreamWrapper:
         self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
+        self._tool_input_streamed_items: frozenset[str] = frozenset()
         self._sent_message_start = False
         self._sent_message_stop = False
         self._stream_failed = False
@@ -256,6 +258,20 @@ class AnthropicResponsesStreamWrapper:
             }
         )
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
+
+    def _stream_unstreamed_tool_input(self, item_id: object, arguments: object) -> None:
+        if not isinstance(item_id, str) or item_id in self._tool_input_streamed_items:
+            return
+        if item_id not in self._pending_tool_ids or not isinstance(arguments, str) or not arguments:
+            return
+        self._tool_input_streamed_items = self._tool_input_streamed_items | {item_id}
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": self._item_id_to_block_index[item_id],
+                "delta": {"type": "input_json_delta", "partial_json": arguments},
+            }
+        )
 
     def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
@@ -387,6 +403,8 @@ class AnthropicResponsesStreamWrapper:
                 if item_id
                 else self._current_block_index
             )
+            if item_id and delta:
+                self._tool_input_streamed_items = self._tool_input_streamed_items | {item_id}
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -394,6 +412,10 @@ class AnthropicResponsesStreamWrapper:
                     "delta": {"type": "input_json_delta", "partial_json": delta},
                 }
             )
+            return
+
+        if event_type == "response.function_call_arguments.done":
+            self._stream_unstreamed_tool_input(self._field(event, "item_id"), self._field(event, "arguments"))
             return
 
         # ---- output item done -> content_block_stop ----
@@ -408,6 +430,8 @@ class AnthropicResponsesStreamWrapper:
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 return
+            if self._field(item, "type") == "function_call":
+                self._stream_unstreamed_tool_input(item_id, self._field(item, "arguments"))
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",
