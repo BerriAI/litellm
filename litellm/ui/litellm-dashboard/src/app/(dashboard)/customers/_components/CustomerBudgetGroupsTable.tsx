@@ -1,3 +1,4 @@
+import type { BudgetGroupCatalogScope } from "./CustomerBudgetCatalog";
 import { useId } from "react";
 import { Plus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -42,7 +43,7 @@ export default function CustomerBudgetGroupsTable({
   groups: CustomerBudgetGroupFields[];
   defaultGroupId: string;
   disabled: boolean;
-  scope: "member" | "organization" | "app" | "overall-app" | "app-member";
+  scope: "member" | BudgetGroupCatalogScope;
   title: string;
   description: string;
   onUpdate: (id: string, patch: Partial<Omit<CustomerBudgetGroupFields, "id">>) => void;

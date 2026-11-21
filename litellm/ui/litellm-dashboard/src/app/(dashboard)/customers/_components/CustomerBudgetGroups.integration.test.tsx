@@ -100,6 +100,7 @@ describe("CustomerBudgetGroups", () => {
   });
 
   const catalogs = [
+    ["App group budget groups", "App Group Budget Groups", "/management/v1/app_group_budget_groups", "app-group"],
     ["Overall app budget groups", "Overall App Budget Groups", "/management/v1/app_budget_groups", "overall-app"],
     [
       "Organization budget groups",
@@ -125,6 +126,7 @@ describe("CustomerBudgetGroups", () => {
     const user = userEvent.setup();
     const { period, duration } = {
       "overall-app": { period: "No reset", duration: null },
+      "app-group": { period: "/ month", duration: "1mo" },
       organization: { period: "/ month", duration: "1mo" },
       app: { period: "Custom period", duration: "7d" },
       "app-member": { period: "/ year", duration: "12mo" },

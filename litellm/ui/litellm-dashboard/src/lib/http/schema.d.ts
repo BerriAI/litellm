@@ -9804,6 +9804,30 @@ export interface paths {
         patch: operations["configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch"];
         trace?: never;
     };
+    "/management/v1/app_group_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Group Budget Groups
+         * @description List reusable app group budget groups and their revision, independently of app × customer organization groups. Proxy admins only.
+         */
+        get: operations["get_app_group_budget_groups_management_v1_app_group_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Group Budget Groups
+         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template must be null. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_group_budget_groups_management_v1_app_group_budget_groups_patch"];
+        trace?: never;
+    };
     "/management/v1/app_groups": {
         parameters: {
             query?: never;
@@ -9816,7 +9840,7 @@ export interface paths {
         put?: never;
         /**
          * Create App Group
-         * @description Create a shared app group with an optional custom budget or existing app budget preset. Proxy admins only.
+         * @description Create an app group from selected apps and an optional custom budget or app group budget preset. Proxy admins only.
          */
         post: operations["create_app_group_management_v1_app_groups_post"];
         delete?: never;
@@ -28723,6 +28747,12 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
+        /** AppGroupApp */
+        AppGroupApp: {
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+        };
         /** AppGroupBudgetPut */
         AppGroupBudgetPut: {
             budget?: components["schemas"]["Budget"] | null;
@@ -28734,6 +28764,12 @@ export interface components {
         };
         /** AppGroupCreate */
         AppGroupCreate: {
+            /**
+             * Apps
+             * @description Apps selected by their gateway resource type and ID. When supplied, replaces membership. Omit to keep membership unchanged. An empty list removes all apps. Existing app budgets are preserved.
+             * @default []
+             */
+            apps: components["schemas"]["AppGroupApp"][];
             budget?: components["schemas"]["Budget"] | null;
             /**
              * Budget Id
@@ -28771,6 +28807,12 @@ export interface components {
         };
         /** AppGroupPatch */
         AppGroupPatch: {
+            /**
+             * Apps
+             * @description Apps selected by their gateway resource type and ID. When supplied, replaces membership. Omit to keep membership unchanged. An empty list removes all apps. Existing app budgets are preserved.
+             * @default []
+             */
+            apps: components["schemas"]["AppGroupApp"][];
             budget?: components["schemas"]["Budget"] | null;
             /**
              * Budget Id
@@ -70842,6 +70884,59 @@ export interface operations {
         };
     };
     configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_group_budget_groups_management_v1_app_group_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_group_budget_groups_management_v1_app_group_budget_groups_patch: {
         parameters: {
             query?: never;
             header?: never;

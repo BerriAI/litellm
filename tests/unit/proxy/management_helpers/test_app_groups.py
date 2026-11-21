@@ -7,6 +7,7 @@ from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope
 from litellm.types.proxy.management_endpoints.app_groups import (
     AppGroup,
+    AppGroupApp,
     AppGroupBudgetPut,
     AppGroupCreate,
     AppGroupOrganization,
@@ -58,7 +59,10 @@ async def test_groups_reuse_existing_presets_and_customizing_does_not_change_oth
     database: Final = AppDatabase()
     store: Final = AppStore(database, NOW)
     groups: Final = AppGroupStore(store)
-    preset: Final = await profile(store, "Shared policy", 10000, BudgetGroupScope.APP)
+    preset: Final = await profile(store, "Shared policy", 10000, BudgetGroupScope.APP_GROUP)
+    app_preset: Final = await profile(store, "App policy", 2000, BudgetGroupScope.APP)
+    rejected: Final = await groups.create(AppGroupCreate(name="Wrong catalog", budget_id=app_preset), "admin")
+    assert isinstance(rejected, AppFailure) and rejected.status == 422
     first: Final = await groups.create(AppGroupCreate(name="First", budget_id=preset), "admin")
     second: Final = await groups.create(AppGroupCreate(name="Second", budget_id=preset), "admin")
     assert isinstance(first, AppGroup) and isinstance(second, AppGroup)
@@ -96,3 +100,62 @@ async def test_customer_budget_is_scoped_to_one_group_and_uses_the_existing_cust
     assert missing == AppFailure(404, "Customer organization not found.")
     duplicate: Final = await groups.create(AppGroupCreate(name="Product"), "admin")
     assert isinstance(duplicate, AppFailure) and duplicate.status == 409
+
+
+@pytest.mark.asyncio
+async def test_group_membership_selects_existing_and_unconfigured_apps_and_preserves_budgets() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    groups: Final = AppGroupStore(store)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    existing: Final = await store.create(AppCreate(resource_id="chat", budget=Budget(max_budget=2000)), "admin")
+    assert isinstance(existing, App)
+    selection: Final = tuple(
+        AppGroupApp(resource_type=AppResourceType.TEAM, resource_id=id) for id in ("chat", "search")
+    )
+    created: Final = await groups.create(
+        AppGroupCreate(name="Selected apps", apps=selection, budget=Budget(max_budget=10000)), "admin"
+    )
+    assert isinstance(created, AppGroup)
+    assigned: Final = await store.list(0, 100)
+    assert {app.resource_id for app in assigned if app.app_group_id == created.app_group_id} == {"chat", "search"}
+    chat: Final = await store.get(existing.app_id)
+    assert isinstance(chat, App) and chat.budget == existing.budget
+    other: Final = await groups.create(AppGroupCreate(name="Other", apps=selection[:1]), "admin")
+    assert isinstance(other, AppGroup)
+    moved: Final = await store.get(existing.app_id)
+    assert isinstance(moved, App) and moved.app_group_id == other.app_group_id and moved.budget == existing.budget
+    unchanged: Final = await groups.patch(created.app_group_id, AppGroupPatch(name="Renamed"), "admin")
+    assert isinstance(unchanged, AppGroup)
+    search: Final = await store.by_resource(AppResourceType.TEAM, "search")
+    assert isinstance(search, App) and search.app_group_id == created.app_group_id
+    cleared: Final = await groups.patch(created.app_group_id, AppGroupPatch(apps=()), "admin")
+    assert isinstance(cleared, AppGroup)
+    ungrouped: Final = await store.get(search.app_id)
+    assert isinstance(ungrouped, App) and ungrouped.app_group_id is None
+    assert await store.get(existing.app_id) == moved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resource_type,resource_id", ((AppResourceType.TEAM, "missing"), (AppResourceType.PROJECT, "project"))
+)
+async def test_invalid_group_selection_leaves_group_and_existing_app_unchanged(
+    resource_type: AppResourceType, resource_id: str
+) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    groups: Final = AppGroupStore(store)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    existing: Final = await store.create(AppCreate(resource_id="chat"), "admin")
+    assert isinstance(existing, App)
+    selection: Final = (
+        AppGroupApp(resource_type=AppResourceType.TEAM, resource_id="chat"),
+        AppGroupApp(resource_type=resource_type, resource_id=resource_id),
+    )
+    rejected: Final = await groups.create(AppGroupCreate(name="Invalid", apps=selection), "admin")
+    assert isinstance(rejected, AppFailure) and rejected.status in (404, 422)
+    assert await groups.list(0, 100) == ()
+    assert await store.get(existing.app_id) == existing

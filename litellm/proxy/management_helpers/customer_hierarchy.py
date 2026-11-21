@@ -370,6 +370,7 @@ class BudgetGroupScope(str, Enum):
     ORGANIZATION = "customer_organization_budget_group_ids"
     APP_ORGANIZATION = "app_customer_organization_budget_group_ids"
     APP = "app_budget_group_ids"
+    APP_GROUP = "app_group_budget_group_ids"
     APP_MEMBER = "app_customer_member_budget_group_ids"
 
 

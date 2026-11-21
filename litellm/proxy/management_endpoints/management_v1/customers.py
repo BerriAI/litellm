@@ -331,6 +331,37 @@ async def configure_app_budget_groups(
 
 
 @router.get(
+    "/app_group_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable app group budget groups and their revision, independently of app × customer "
+    "organization groups. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_app_group_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(
+        await hierarchy.transaction(lambda store: store.get_budget_groups(None, scope=BudgetGroupScope.APP_GROUP))
+    )
+
+
+@router.patch(
+    "/app_group_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete overall app budget group list with its expected_revision. "
+    "default_budget_template must be null. Existing groups retain omitted settings and window reset dates. "
+    "Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_app_group_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_GROUP)
+
+
+@router.get(
     "/app_customer_member_budget_groups",
     response_model=BudgetGroups,
     description="List reusable app × customer member budget groups and their revision. "

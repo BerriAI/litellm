@@ -349,6 +349,8 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         ("GET", "/app_customer_organization_budget_groups", None),
         ("PATCH", "/app_customer_organization_budget_groups", {}),
         ("GET", "/app_budget_groups", None),
+        ("GET", "/app_group_budget_groups", None),
+        ("PATCH", "/app_group_budget_groups", {}),
         ("PATCH", "/app_budget_groups", {}),
         ("GET", "/app_customer_member_budget_groups", None),
         ("PATCH", "/app_customer_member_budget_groups", {}),
@@ -2437,7 +2439,13 @@ def test_explicit_organization_budget_selection_overrides_the_default(selection:
 
 
 @pytest.mark.parametrize(
-    "catalog", ("app_budget_groups", "app_customer_organization_budget_groups", "app_customer_member_budget_groups")
+    "catalog",
+    (
+        "app_budget_groups",
+        "app_group_budget_groups",
+        "app_customer_organization_budget_groups",
+        "app_customer_member_budget_groups",
+    ),
 )
 def test_app_and_organization_catalogs_have_independent_ids_edits_and_revisions(catalog: str) -> None:
     http: Final = client()

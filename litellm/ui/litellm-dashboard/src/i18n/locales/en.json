@@ -183,10 +183,17 @@
     },
     "groups": {
       "title": "App groups",
+      "count_one": "{{count}} app group",
+      "count_other": "{{count}} app groups",
+      "manageBudgetGroups": "Manage app group budget groups",
+      "selectApps": "Select apps",
+      "selectionHint": "Select the apps in this group. Each app belongs to one group. Selecting an app moves it from its previous group and keeps its own budget.",
+      "search": "Search app groups",
+      "noMatches": "No app groups match your search.",
       "hint": "Share a budget across related apps while keeping each app’s own limits.",
       "create": "Create app group",
       "edit": "Edit app group",
-      "empty": "Create a group, then assign apps in their settings.",
+      "empty": "Create an app group and select the apps that belong to it.",
       "choose": "Select app group",
       "notFound": "App group not found.",
       "name": "Group name",
@@ -200,7 +207,7 @@
       "customer": "Customer organization",
       "apps": "Apps in this group",
       "appLimitsHint": "App limits do not reserve funds. All apps share the group’s remaining budget.",
-      "noApps": "No apps assigned yet. Choose this group in an app’s settings.",
+      "noApps": "No apps selected. Edit this app group to add apps.",
       "editApp": "Edit app settings",
       "customers": "Customer organization budgets",
       "setCustomerBudget": "Set customer budget",
@@ -21053,6 +21060,10 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "appGroupBudgetGroups": {
+      "title": "App group budget groups",
+      "help": "Reusable budgets for an entire app group. Select a budget group when creating or editing an app group. Changes apply to every app group using that budget."
+    },
     "overallAppGroups": {
       "title": "Overall app budget groups",
       "help": "Presets for an app's total usage across all customer organizations and members. Blank means no limit."
@@ -21088,8 +21099,9 @@
     "budgetGroups": {
       "organizationDefault": "Use organization default",
       "organizationDefaultHelp": "Apply the configured default when this organization is created.",
-      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's usage within an app.",
+      "settingsHint": "Manage separate presets for app groups, apps, organizations, and each customer's usage within an app.",
       "overallAppTab": "Overall App Budget Groups",
+      "appGroupTab": "App Group Budget Groups",
       "overallTab": "Overall Organization Budget Groups",
       "appTab": "Per-App Organization Budget Groups",
       "appMemberTab": "App × member",

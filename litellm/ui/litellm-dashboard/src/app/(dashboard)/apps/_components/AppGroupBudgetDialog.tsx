@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { uiHref } from "@/utils/uiHref";
 import { Input } from "@/components/ui/input";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { fetchClient } from "@/lib/http/api";
@@ -19,7 +22,10 @@ import {
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 import { customerOrganizationsCall } from "../../customers/_components/customerOrganizations";
 import useAuthorized from "../../hooks/useAuthorized";
-import { useOverallAppBudgetGroups, useAppBudgetGroups } from "./useAppBudgetGroups";
+import { useAppGroupBudgetGroups, useAppBudgetGroups } from "./useAppBudgetGroups";
+import { useManagedApps } from "./useManagedApps";
+import { invalidateAppBudgets } from "./appApi";
+import type { App, AppResource } from "./appForms";
 import type { AppGroup, AppGroupOrganization } from "./appGroupApi";
 
 export type GroupBudgetTarget =
@@ -29,9 +35,17 @@ export type GroupBudgetTarget =
 export default function AppGroupBudgetDialog({ target, onClose }: { target: GroupBudgetTarget; onClose: () => void }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
-  const overall = useOverallAppBudgetGroups(target.kind === "group");
+  const overall = useAppGroupBudgetGroups(target.kind === "group");
   const organization = useAppBudgetGroups([], target.kind === "organization");
   const catalog = target.kind === "group" ? overall : organization;
+  const managed = useManagedApps(target.kind === "group");
+  const membershipQueries =
+    target.kind === "group"
+      ? [managed.definition, ...(managed.resourceType ? [managed.resources, managed.apps] : [])]
+      : [];
+  const queries = [catalog, ...membershipQueries];
+  const loading = queries.some((query) => query.isPending);
+  const failed = queries.find((query) => query.isError);
   const groupTitle = target.group ? "apps.groups.edit" : "apps.groups.create";
   return (
     <CustomerBudgetDialog
@@ -40,19 +54,21 @@ export default function AppGroupBudgetDialog({ target, onClose }: { target: Grou
       pending={pending}
       onClose={onClose}
     >
-      {catalog.isPending && (
+      {loading && (
         <p role="status" className="p-6">
           {t("apps.loading")}
         </p>
       )}
-      {catalog.isError && (
+      {failed && (
         <div className="p-6">
-          <ErrorState message={extractProxyErrorMessage(catalog.error)} onRetry={() => void catalog.refetch()} />
+          <ErrorState message={extractProxyErrorMessage(failed.error)} onRetry={() => void failed.refetch()} />
         </div>
       )}
-      {catalog.data && (
+      {catalog.data && !loading && !failed && (
         <GroupBudgetForm
           target={target}
+          resources={managed.resources.data ?? []}
+          apps={managed.apps.data ?? []}
           profiles={catalog.data.default_budgets}
           onClose={onClose}
           onPendingChange={setPending}
@@ -64,21 +80,25 @@ export default function AppGroupBudgetDialog({ target, onClose }: { target: Grou
 
 function GroupBudgetForm({
   target,
+  resources,
+  apps,
   profiles,
   onClose,
   onPendingChange,
 }: {
   target: GroupBudgetTarget;
+  resources: readonly AppResource[];
+  apps: readonly App[];
   profiles: BudgetGroups["default_budgets"];
   onClose: () => void;
   onPendingChange: (pending: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const { accessToken } = useAuthorized();
+  const { accessToken, userId } = useAuthorized();
   const queryClient = useQueryClient();
   const entity = target.kind === "group" ? target.group : target.organization;
   const organizations = useQuery({
-    queryKey: ["app-group-customer-options"],
+    queryKey: ["customer-organizations", userId],
     queryFn: ({ signal }) => customerOrganizationsCall(accessToken!, signal),
     enabled: target.kind === "organization" && Boolean(accessToken),
   });
@@ -86,6 +106,9 @@ function GroupBudgetForm({
     {
       initial: {
         name: target.group?.name ?? "",
+        appResources: apps
+          .filter((app) => target.group && app.app_group_id === target.group.app_group_id)
+          .map((app) => app.resource_id),
         description: target.group?.description ?? "",
         organization: target.kind === "organization" ? target.organization?.customer_org_id ?? "" : "",
         ...budgetSelectionFields(entity, profiles),
@@ -100,13 +123,16 @@ function GroupBudgetForm({
           ok: true,
           value: {
             name: fields.name.trim(),
+            selectedApps: resources
+              .filter((resource) => fields.appResources.includes(resource.resource_id))
+              .map(({ resource_type, resource_id }) => ({ resource_type, resource_id })),
             description: fields.description || null,
             organization: fields.organization,
             selection: budget.value,
           },
         };
       },
-      write: async ({ name, description, organization, selection }) => {
+      write: async ({ name, description, organization, selection, selectedApps }) => {
         if (target.kind === "organization") {
           await fetchClient.PUT("/management/v1/app_groups/{app_group_id}/customer_organizations/{customer_org_id}", {
             params: { path: { app_group_id: target.group.app_group_id, customer_org_id: organization } },
@@ -115,14 +141,14 @@ function GroupBudgetForm({
         } else if (target.group) {
           await fetchClient.PATCH("/management/v1/app_groups/{app_group_id}", {
             params: { path: { app_group_id: target.group.app_group_id } },
-            body: { name, description, ...selection },
+            body: { name, description, apps: selectedApps, ...selection },
           });
         } else {
-          await fetchClient.POST("/management/v1/app_groups", { body: { name, description, ...selection } });
+          await fetchClient.POST("/management/v1/app_groups", {
+            body: { name, description, apps: selectedApps, ...selection },
+          });
         }
-        await Promise.all(
-          ["app-groups", "app-group-organizations"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })),
-        );
+        await invalidateAppBudgets(queryClient);
         onClose();
       },
     },
@@ -142,10 +168,8 @@ function GroupBudgetForm({
     >
       {target.kind === "group" ? (
         <>
-          <div className="space-y-2">
-            <label htmlFor="app-group-name" className="text-sm font-medium">
-              {t("apps.groups.name")}
-            </label>
+          <Field>
+            <FieldLabel htmlFor="app-group-name">{t("apps.groups.name")}</FieldLabel>
             <Input
               id="app-group-name"
               required
@@ -153,23 +177,35 @@ function GroupBudgetForm({
               value={form.fields.name}
               onChange={(event) => form.update("name", event.target.value)}
             />
-          </div>
-          <div className="space-y-2">
-            <label htmlFor="app-group-description" className="text-sm font-medium">
-              {t("apps.groups.description")}
-            </label>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="app-group-apps">{t("apps.groups.apps")}</FieldLabel>
+            <MultiSelect
+              id="app-group-apps"
+              placeholder={t("apps.groups.selectApps")}
+              value={form.fields.appResources}
+              onValueChange={(value) => form.update("appResources", value)}
+              disabled={form.pending}
+              options={resources.map((resource) => ({
+                value: resource.resource_id,
+                label: resource.alias,
+                description: resource.resource_id,
+              }))}
+            />
+            <p className="text-xs text-muted-foreground">{t("apps.groups.selectionHint")}</p>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="app-group-description">{t("apps.groups.description")}</FieldLabel>
             <Input
               id="app-group-description"
               value={form.fields.description}
               onChange={(event) => form.update("description", event.target.value)}
             />
-          </div>
+          </Field>
         </>
       ) : (
-        <div className="space-y-2">
-          <label htmlFor="app-group-customer" className="text-sm font-medium">
-            {t("apps.groups.customer")}
-          </label>
+        <Field>
+          <FieldLabel htmlFor="app-group-customer">{t("apps.groups.customer")}</FieldLabel>
           <SearchSelect
             id="app-group-customer"
             className="w-full"
@@ -187,7 +223,7 @@ function GroupBudgetForm({
               onRetry={() => void organizations.refetch()}
             />
           )}
-        </div>
+        </Field>
       )}
       <CustomerBudgetEditor
         id="app-group-budget"
@@ -207,6 +243,11 @@ function GroupBudgetForm({
           inheritedOption: { label: t("customerPortal.createDialog.noLimit"), summary: t("apps.noAdditionalLimits") },
         }}
       />
+      {target.kind === "group" && (
+        <a className="text-sm text-primary hover:underline" href={`${uiHref("customers/settings")}?tab=app-group`}>
+          {t("apps.groups.manageBudgetGroups")}
+        </a>
+      )}
     </CustomerBudgetForm>
   );
 }

@@ -24,7 +24,7 @@ router: Final = APIRouter(
 
 @router.post("", response_model=AppGroup, status_code=201)
 async def create_app_group(data: AppGroupCreate, store: Store, actor: Actor) -> AppGroup:
-    """Create a shared app group with an optional custom budget or existing app budget preset. Proxy admins only."""
+    """Create an app group from selected apps and an optional custom budget or app group budget preset. Proxy admins only."""
     groups: Final = AppGroupStore(store)
     return await store.with_budget_usage(resolve(await groups.create(data, actor)))
 

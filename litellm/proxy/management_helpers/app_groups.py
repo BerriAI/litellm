@@ -12,8 +12,9 @@ from litellm.types.proxy.management_endpoints.app_groups import (
     AppGroupCreate,
     AppGroupOrganization,
     AppGroupPatch,
+    AppGroupSettings,
 )
-from litellm.types.proxy.management_endpoints.apps import AppFailure
+from litellm.types.proxy.management_endpoints.apps import App, AppCreate, AppFailure, AppPatch
 
 
 class AppGroupRepository(PrismaTableRepository[PrismaRecord]):
@@ -54,13 +55,55 @@ class AppGroupStore:
             return AppFailure(422, "Budget preset must belong to the selected budget catalog.")
         return None
 
+    async def validate_apps(self, data: AppGroupSettings) -> AppFailure | None:
+        if "apps" not in data.model_fields_set:
+            return None
+        definition: Final = await self.apps.lock_definition()
+        for selected in data.apps:
+            if selected.resource_type != definition.resource_type:
+                return AppFailure(422, "Selected apps must match the gateway app definition.")
+            if isinstance(
+                resource := await self.apps.resource(selected.resource_type, selected.resource_id), AppFailure
+            ):
+                return resource
+        return None
+
+    async def replace_apps(self, group_id: str, data: AppGroupSettings, actor: str) -> AppFailure | None:
+        if "apps" not in data.model_fields_set:
+            return None
+        selected: Final = frozenset((app.resource_type, app.resource_id) for app in data.apps)
+        current: Final = await self.apps.apps.find_many(where={"app_group_id": group_id})
+        for app in (App.model_validate(row.model_dump()) for row in current):
+            if (app.resource_type, app.resource_id) in selected:
+                continue
+            if isinstance(removed := await self.apps.patch(app.app_id, AppPatch(app_group_id=None), actor), AppFailure):
+                return removed
+        for binding in data.apps:
+            if isinstance(
+                configured := await self.apps.create(
+                    AppCreate(
+                        resource_type=binding.resource_type, resource_id=binding.resource_id, app_group_id=group_id
+                    ),
+                    actor,
+                ),
+                AppFailure,
+            ):
+                return configured
+            if configured.app_group_id == group_id:
+                continue
+            if isinstance(
+                assigned := await self.apps.patch(configured.app_id, AppPatch(app_group_id=group_id), actor), AppFailure
+            ):
+                return assigned
+        return None
+
     async def fields(
         self, data: AppGroupPatch | AppGroupCreate, current_id: str | None, actor: str
     ) -> Mapping[str, object]:
         from prisma import Json
 
         selected: Final = await self.apps.linked_budget_id(
-            current_id, app_budget_selection(data), actor, BudgetGroupScope.APP
+            current_id, app_budget_selection(data), actor, BudgetGroupScope.APP_GROUP
         )
         return {
             **data.model_dump(include={"name", "description"}, exclude_unset=True),
@@ -74,21 +117,29 @@ class AppGroupStore:
         }
 
     async def create(self, data: AppGroupCreate, actor: str) -> AppGroup | AppFailure:
+        membership_failure: Final = await self.validate_apps(data)
+        if membership_failure is not None:
+            return membership_failure
         await self.apps.customers.lock_customer_identities()
-        failure: Final = await self.validate_budget(data, BudgetGroupScope.APP)
+        failure: Final = await self.validate_budget(data, BudgetGroupScope.APP_GROUP)
         if failure is not None:
             return failure
         if await self.groups.find_unique(where={"name": data.name}) is not None:
             return AppFailure(409, "An app group with this name already exists.")
         row: Final = await self.groups.create(data={**await self.fields(data, None, actor), "created_by": actor})
-        return await self.response(row)
+        created: Final = await self.response(row)
+        assigned: Final = await self.replace_apps(created.app_group_id, data, actor)
+        return assigned if assigned is not None else created
 
     async def patch(self, app_group_id: str, data: AppGroupPatch, actor: str) -> AppGroup | AppFailure:
+        membership_failure: Final = await self.validate_apps(data)
+        if membership_failure is not None:
+            return membership_failure
         await self.apps.customers.lock_customer_identities()
         current: Final = await self.get(app_group_id)
         if isinstance(current, AppFailure):
             return current
-        failure: Final = await self.validate_budget(data, BudgetGroupScope.APP)
+        failure: Final = await self.validate_budget(data, BudgetGroupScope.APP_GROUP)
         if failure is not None:
             return failure
         if (
@@ -105,7 +156,8 @@ class AppGroupStore:
         updated: Final = await self.response(row)
         self.apps.customers.auth_cache_keys += (AuthObject.customer_app("app_group", app_group_id).key,)
         await self.apps.customers.delete_released_budget(current.budget_id, updated.budget_id)
-        return updated
+        assigned: Final = await self.replace_apps(app_group_id, data, actor)
+        return assigned if assigned is not None else updated
 
     async def organization_response(self, row: PrismaRecord) -> AppGroupOrganization:
         org: Final = AppGroupOrganization.model_validate(row.model_dump())
