@@ -3301,6 +3301,9 @@ async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_
     mock_db_client.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
 
+    mock_db_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(max_budget=100.0, budget_duration="30d", rollover_max_budget=None)
+    )
     mock_db_client.db.litellm_budgettable.update = AsyncMock(
         side_effect=lambda where, data: SimpleNamespace(**data)
     )
