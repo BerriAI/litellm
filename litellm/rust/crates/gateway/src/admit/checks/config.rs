@@ -103,6 +103,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         default_max_retries,
         default_allowed_fails,
         default_cooldown_time_seconds,
+        default_cooldown_redis_read_interval_seconds: _,
+        default_max_redis_batch_cache_size: _,
     } = environment;
     set!(
         "",
@@ -259,6 +261,7 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
         max_retries,
         weights,
         tag_routing_prefix,
+        redis: _,
         additional_fields,
     } = settings;
     set!(
@@ -421,8 +424,8 @@ mod tests {
         "litellm_settings.modify_params"
     )]
     #[case::a_key_the_config_types_do_not_name(
-        "router_settings:\n  redis_host: localhost\n",
-        "router_settings.redis_host"
+        "router_settings:\n  provider_budget_config: {}\n",
+        "router_settings.provider_budget_config"
     )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     fn a_setting_the_native_app_does_not_honor_is_named(#[case] yaml: &str, #[case] setting: &str) {

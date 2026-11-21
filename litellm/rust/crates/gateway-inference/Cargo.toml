@@ -24,6 +24,8 @@ litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-router-core.workspace = true
+litellm-redis-store.workspace = true
+litellm-cache.workspace = true
 litellm-core-utils.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
@@ -37,6 +39,8 @@ tower-http = { version = "0.6.11", features = ["set-header"] }
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-redis-client.workspace = true
+litellm-redis-testing.workspace = true
 parking_lot.workspace = true
 litellm-gateway.workspace = true
 litellm-cache-memory.workspace = true
