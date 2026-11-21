@@ -58,6 +58,23 @@ fn loads_and_redacts_the_master_key(#[case] key: &str) {
 }
 
 #[rstest]
+fn loads_and_redacts_the_litellm_license() {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  litellm_license: secret-license\n")
+            .unwrap();
+    assert_eq!(
+        config
+            .general_settings
+            .litellm_license
+            .as_ref()
+            .unwrap()
+            .expose(),
+        "secret-license"
+    );
+    assert!(!format!("{config:?}").contains("secret-license"));
+}
+
+#[rstest]
 fn missing_general_settings_has_no_master_key() {
     let config = Config::from_yaml("model_list: []").unwrap();
     assert!(config.general_settings.master_key.is_none());

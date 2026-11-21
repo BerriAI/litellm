@@ -258,6 +258,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_client_ids=previous_response_client_ids,
                 stored_turns=stored_turns,
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
+                request_input=request_input,
             )
 
         with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)):

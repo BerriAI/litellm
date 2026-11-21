@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
+from litellm.llms.azure.common_utils import AZURE_V1_API_VERSION, is_azure_openai_v1_base
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -395,7 +396,11 @@ def image_generation(
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+            api_version = (
+                api_version
+                or litellm.api_version
+                or (AZURE_V1_API_VERSION if is_azure_openai_v1_base(api_base) else get_secret_str("AZURE_API_VERSION"))
+            )
 
             api_key = (
                 api_key
@@ -834,12 +839,14 @@ def image_variation(
 
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
-_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
     try:
-        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+        return tuple(
+            item for item in _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params) if isinstance(item, str)
+        )
     except ValidationError:
         return ()
 

@@ -107,12 +107,11 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     is_admin_ui_disabled,
     show_missing_vars_in_env,
 )
-from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.native_client_consent import team_select_field
-from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
+from litellm.proxy.common_utils.state_cache import StateCache
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
@@ -1159,7 +1158,6 @@ async def google_login(
     """
     from litellm.proxy.proxy_server import (
         cli_sso_session_cache,
-        general_settings,
         saml_sso_cache,
         user_custom_ui_sso_sign_in_handler,
     )
@@ -1248,22 +1246,19 @@ async def google_login(
     if admin_ui_is_disabled:
         return admin_ui_disabled()
 
-    from fastapi.responses import HTMLResponse
+    # No SSO: sign in on the dashboard login page. return_to is kept in the same one-shot cookie the
+    # SSO branch uses and honoured by /login/resume, which a browser that is already signed in goes
+    # to directly, since the login page would send it to the dashboard and drop the return_to.
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import session_identity_from_cookie
 
-    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
-    form_response: Final = HTMLResponse(
-        content=build_ui_login_form(
-            show_deprecation_banner=True,
-            hide_default_credentials_hint=hide_default_credentials_hint,
-        ),
-        status_code=200,
+    base_url: Final = get_custom_url(str(request.base_url)).rstrip("/")
+    signed_in: Final = session_identity_from_cookie(request)[0] is not None
+    login_response: Final = RedirectResponse(
+        url=f"{base_url}/login/resume" if signed_in and return_to is not None else f"{base_url}/ui/login",
+        status_code=303,
     )
-    # Preserve return_to across the username/password sign-in too, via the SAME shared, never-raising
-    # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
-    # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
-    # renders, since the helper never raises on a bad return_to).
-    _persist_return_to_cookie(form_response, return_to, request)
-    return form_response
+    _persist_return_to_cookie(login_response, return_to, request)
+    return login_response
 
 
 def generic_response_convertor(
@@ -3158,7 +3153,7 @@ async def sso_return_to_redirect(
     return_to: str | None,
     jwt_token: str,
     redis_usage_cache: "RedisCache | None",
-    user_api_key_cache: UserApiKeyCache,
+    sso_flow_cache: StateCache,
     request: Request,
 ) -> RedirectResponse | None:
     """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
@@ -3189,7 +3184,7 @@ async def sso_return_to_redirect(
         if redis_usage_cache is not None:
             await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
         else:
-            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+            await sso_flow_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
 
         separator: Final = "&" if "?" in return_to else "?"
         redirect_url: Final = return_to + separator + urlencode({"login": "success", "code": code})
@@ -3495,7 +3490,7 @@ class SSOAuthenticationHandler:
         """
         from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+        from litellm.proxy.proxy_server import redis_usage_cache, sso_flow_cache
 
         with generic_sso:
             # State is bound to the caller's browser via a ``litellm_oauth_state``
@@ -3534,7 +3529,7 @@ class SSOAuthenticationHandler:
                         ttl=600,
                     )
                 else:
-                    await user_api_key_cache.async_set_cache(
+                    await sso_flow_cache.async_set_cache(
                         key=cache_key,
                         value={"code_verifier": code_verifier},
                         ttl=600,
@@ -3981,6 +3976,7 @@ class SSOAuthenticationHandler:
             premium_user,
             proxy_logging_obj,
             redis_usage_cache,
+            sso_flow_cache,
             user_api_key_cache,
         )
         from litellm.proxy.utils import get_prisma_client_or_throw
@@ -4162,7 +4158,7 @@ class SSOAuthenticationHandler:
             return_to=return_to,
             jwt_token=jwt_token,
             redis_usage_cache=redis_usage_cache,
-            user_api_key_cache=user_api_key_cache,
+            sso_flow_cache=sso_flow_cache,
             request=request,
         )
         if return_to_redirect is not None:
@@ -4209,13 +4205,13 @@ class SSOAuthenticationHandler:
             )
 
         if state and use_pkce:
-            from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+            from litellm.proxy.proxy_server import redis_usage_cache, sso_flow_cache
 
             cache_key: Final = f"pkce_verifier:{state}"
             if redis_usage_cache is not None:
                 cached_data = _DECODED_JSON.validate_python(await redis_usage_cache.async_get_cache(key=cache_key))
             else:
-                cached_data = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+                cached_data = _DECODED_JSON.validate_python(await sso_flow_cache.async_get_cache(key=cache_key))
 
             code_verifier = None
             # Track why code_verifier is absent for accurate strict-mode diagnostics.
@@ -4267,7 +4263,7 @@ class SSOAuthenticationHandler:
                     cached_data=cached_data,
                     empty_value_in_dict=_empty_value_in_dict,
                     redis_usage_cache=redis_usage_cache,
-                    user_api_key_cache=user_api_key_cache,
+                    sso_flow_cache=sso_flow_cache,
                 )
         return token_params
 
@@ -4278,14 +4274,14 @@ class SSOAuthenticationHandler:
         cached_data: object,
         empty_value_in_dict: bool,
         redis_usage_cache: object,
-        user_api_key_cache: object,
+        sso_flow_cache: object,
     ) -> None:
         """Handle the case where PKCE verifier could not be extracted from cache.
 
         In strict mode (PKCE_STRICT_CACHE_MISS=true) raises ProxyException.
         Otherwise logs a warning and returns (token exchange proceeds without verifier).
         """
-        active_cache: Final = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        active_cache: Final = redis_usage_cache if redis_usage_cache is not None else sso_flow_cache
         strict_cache_miss: Final = os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
         if strict_cache_miss:
             if empty_value_in_dict:
@@ -4361,13 +4357,13 @@ class SSOAuthenticationHandler:
         Failure is non-fatal: a leftover verifier is a minor security concern
         (unused key in cache) but not worth aborting an otherwise-successful login.
         """
-        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+        from litellm.proxy.proxy_server import redis_usage_cache, sso_flow_cache
 
         try:
             if redis_usage_cache is not None:
                 await redis_usage_cache.async_delete_cache(key=cache_key)
             else:
-                await user_api_key_cache.async_delete_cache(key=cache_key)
+                await sso_flow_cache.async_delete_cache(key=cache_key)
         except Exception as exc:
             verbose_proxy_logger.warning(
                 "PKCE: failed to delete verifier cache key '%s' (best-effort cleanup): %s",

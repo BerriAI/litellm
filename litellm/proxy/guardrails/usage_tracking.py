@@ -366,6 +366,25 @@ async def process_spend_logs_guardrail_usage(
     """
     if not logs_to_process:
         return
+    await _record_guardrail_usage(prisma_client, logs_to_process, sleep, pending)
+
+
+async def retry_pending_guardrail_usage(
+    prisma_client: PrismaClient,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    pending: PendingRollups = _PENDING_ROLLUPS,
+) -> None:
+    """Retry the daily metrics and usage units a failed rollup left pending, after a spend log pass
+    whose written logs carried no guardrail results."""
+    await _record_guardrail_usage(prisma_client, (), sleep, pending)
+
+
+async def _record_guardrail_usage(
+    prisma_client: PrismaClient,
+    logs_to_process: Sequence[Mapping[str, object]],
+    sleep: Callable[[float], Awaitable[None]],
+    pending: PendingRollups,
+) -> None:
     # Aggregate daily metrics by (guardrail_id, date). Latency/score metrics dropped.
     daily_guardrail: Final[dict[_MetricsKey, dict[str, int]]] = defaultdict(
         lambda: {

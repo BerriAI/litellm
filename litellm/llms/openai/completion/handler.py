@@ -299,10 +299,7 @@ class OpenAITextCompletion(BaseLLM):
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(
-                status_code=status_code,
-                message=error_text,
-                headers=error_headers,
-                body=upstream_error_body(e),
+                status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
             )
 
     async def async_streaming(
@@ -355,8 +352,5 @@ class OpenAITextCompletion(BaseLLM):
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(
-                status_code=status_code,
-                message=error_text,
-                headers=error_headers,
-                body=upstream_error_body(e),
+                status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
             )
