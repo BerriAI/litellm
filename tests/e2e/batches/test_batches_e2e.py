@@ -20,6 +20,7 @@ import json
 import os
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -930,6 +931,33 @@ class TestBatchEnqueuedTokenLimit:
         )
         resources.defer(lambda: client.proxy.delete_key(key))
         return key
+
+    @pytest.mark.parametrize(
+        "cap",
+        [
+            pytest.param(replace(cap, scenario=scenario), id=f"{cap.provider}-{scenario}", marks=lifecycle_meta(cap))
+            for cap in CAPABILITIES
+            if cap.provider in {"vertex_ai", "bedrock"} and cap.scenario == "unified"
+            for scenario in ("encoded", "unified")
+        ],
+    )
+    @pytest.mark.covers(
+        "quota_management.ratelimit.batch_enqueued_tokens.blocks_when_exhausted",
+        exercised_on=["batches"],
+    )
+    def test_native_file_counts_toward_enqueued_limit(
+        self, cap: Capability, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = self._generate_enqueued_key(client, resources, limit=1, marker=cap.id)
+        file = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key, provider=cap.file_provider))
+
+        result = create_for_scenario(client, cap, file.id, key)
+        if result.ok:
+            batch = BatchObject.model_validate_json(result.body)
+            resources.defer(lambda: cleanup_batch(client, batch.id, key=key, provider=op_provider(cap)))
+        assert result.status_code == 429
+        assert "batch enqueued token limit exceeded" in result.body.lower()
 
     @pytest.mark.covers(
         "quota_management.ratelimit.batch_enqueued_tokens.accepts_over_rpm",

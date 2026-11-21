@@ -3559,3 +3559,57 @@ async def test_gemini_native_output_rows_are_priced_from_usage_metadata(monkeypa
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (3, 62, 65)
     assert result.cost == pytest.approx((3 * 3.75e-7) + (62 * 1.875e-6))
     assert (result.successful_requests, result.failed_requests) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("entry", "body"),
+    [
+        (
+            {"request": {"contents": [{"parts": [{"text": "hello"}]}]}},
+            {"messages": [{"role": "user", "content": "hello"}]},
+        ),
+        (
+            {
+                "modelInput": {
+                    "system": [{"text": "brief"}],
+                    "messages": [{"role": "user", "content": [{"text": "hello"}]}],
+                }
+            },
+            {"messages": [{"role": "system", "content": "brief"}, {"role": "user", "content": "hello"}]},
+        ),
+        (
+            {"request": {"messages": [{"role": "user", "content": "hello"}]}},
+            {"messages": [{"role": "user", "content": "hello"}]},
+        ),
+        ({"request": {"content": {"parts": [{"text": "hello"}]}}}, {"input": "hello"}),
+        (
+            {"request": {"content": {"parts": [{"text": "hello"}]}, "embed_content_config": {"auto_truncate": True}}},
+            {"input": "hello"},
+        ),
+        (
+            {
+                "modelInput": {
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "max_completion_tokens": 5,
+                    "service_tier": "priority",
+                }
+            },
+            {"messages": [{"role": "user", "content": "hello"}]},
+        ),
+        (
+            {"request": {"content": {"parts": [{"text": "hello"}]}, "title": "greeting"}},
+            {"input": "greeting\nhello"},
+        ),
+        ({"modelInput": {"inputText": "hello"}}, {"input": "hello"}),
+        ({"modelInput": {"prompt": "hello"}}, {"prompt": "hello"}),
+    ],
+)
+def test_native_row_matches_canonical_input_count(entry, body):
+    canonical = bu.count_entry_tokens({"body": body})
+    assert canonical > 0
+    assert bu.count_entry_tokens(entry) == canonical
+
+
+def test_partially_supported_native_row_raises_for_whole_row_estimate():
+    with pytest.raises(ValueError, match="Unsupported batch content part"):
+        bu.count_entry_tokens({"request": {"contents": [{"parts": [{"text": "hello"}, {"fileData": {}}]}]}})

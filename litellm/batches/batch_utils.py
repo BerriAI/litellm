@@ -10,9 +10,10 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.batches.native_batch_input import bedrock_batch_input, vertex_batch_input
 from litellm.litellm_core_utils import batch_utils as core_batch_utils
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -740,14 +741,21 @@ def estimate_batch_entry_tokens(raw_line: bytes) -> int:
 _estimate_batch_entry_tokens = estimate_batch_entry_tokens
 
 
+def _batch_entry_body(entry: Mapping[str, object]) -> Mapping[str, object]:
+    if "body" not in entry:
+        if (request := as_str_mapping(entry.get("request"))) is not None:
+            return vertex_batch_input(request)
+        if (model_input := as_str_mapping(entry.get("modelInput"))) is not None:
+            return bedrock_batch_input(model_input)
+    return cast(Mapping[str, object], entry.get("body") or {})  # cast-ok: OpenAI batch bodies are JSON objects
+
+
 def count_entry_tokens(
     entry: Mapping[str, object],
     model_name: str | None = None,
 ) -> int:
     """Token-count a single batch input entry's body (chat / text / embedding)."""
-    body: Final = cast(  # cast-ok: batch payload bodies come from provider JSON
-        Mapping[str, object], entry.get("body", {}) or {}
-    )
+    body: Final = _batch_entry_body(entry)
     model: Final = cast(str, body.get("model", model_name or ""))  # cast-ok: provider batch model names are strings
 
     messages: Final = body.get("messages")
