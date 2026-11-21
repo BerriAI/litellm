@@ -519,6 +519,9 @@ def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
         ("pre_mcp_call", [], False, "output", {"raw": "restored"}, "masked", 1),
         ({"tags": {"team:mcp": "pre_mcp_call"}}, ["team:mcp"], False, "output", {}, "masked", 1),
         ({"tags": {"team:mcp": "pre_mcp_call"}}, [], False, "output", {}, "raw", 0),
+        ("logging_only", [], False, None, {}, "raw", 0),
+        ({"tags": {"team:logs": "logging_only"}, "default": "pre_call"}, ["team:logs"], False, None, {}, "raw", 0),
+        ({"tags": {"team:logs": "logging_only"}, "default": "pre_call"}, [], False, None, {}, "masked", 1),
     ],
 )
 async def test_presidio_initialized_output_dispatch(
@@ -563,6 +566,39 @@ async def test_presidio_initialized_output_dispatch(
         )
     assert response.choices[0].message.content == expected
     assert len(selected) == expected_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope,expected_logged_input",
+    [(None, "masked"), ("both", "masked"), ("output", "raw")],
+)
+async def test_presidio_logging_only_masks_the_logged_copy_per_scope(
+    scope: Literal["output", "both"] | None, expected_logged_input: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typing import Final
+
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode="logging_only",
+        default_on=True,
+        presidio_filter_scope=scope,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        mock_redacted_text={"text": "masked", "items": []},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "logging_only_scope"})
+    kwargs: Final = {"metadata": {}, "messages": [{"role": "user", "content": "raw"}]}
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="raw"), index=0)])
+    for callback in callbacks:
+        if callback.should_run_guardrail(kwargs, GuardrailEventHooks.logging_only):
+            await callback.async_logging_hook(kwargs, response, "acompletion")
+    assert (kwargs["messages"][0]["content"], response.choices[0].message.content) == (expected_logged_input, "masked")
 
 
 def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(

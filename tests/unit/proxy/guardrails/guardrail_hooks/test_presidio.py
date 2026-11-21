@@ -635,6 +635,51 @@ async def test_logging_hook_masks_the_response_too(presidio_guardrail):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["anthropic_messages", "aanthropic_messages"])
+async def test_logging_hook_masks_anthropic_messages_calls(presidio_guardrail, call_type):
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    test_kwargs = {"messages": [{"role": "user", "content": "my card is 4111-1111-1111-1111"}], "model": "claude"}
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "your card is 4111-1111-1111-1111"}],
+    }
+
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs, result=response, call_type=call_type
+    )
+
+    assert result_kwargs["messages"][0]["content"] == "my card is [CREDIT_CARD]"
+    assert result_response["content"][0]["text"] == "your card is [CREDIT_CARD]"
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_masks_the_response_in_the_standard_logging_payload(presidio_guardrail):
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    response = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content="card 4111-1111-1111-1111"), index=0)]
+    )
+    test_kwargs = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "standard_logging_object": {"response": response.model_dump()},
+    }
+
+    result_kwargs, _ = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs, result=response, call_type="acompletion"
+    )
+
+    logged_response = result_kwargs["standard_logging_object"]["response"]
+    assert logged_response["choices"][0]["message"]["content"] == "card [CREDIT_CARD]"
+
+
+@pytest.mark.asyncio
 async def test_logging_only_does_not_mask_pre_call_request(mock_user_api_key, mock_cache):
     """
     A guardrail configured with `logging_only` must only mask PII for logs/traces,
