@@ -1607,14 +1607,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             accessToken={accessToken}
           />
           {canEditAsProxyAdmin ? (
-            <Card className="p-6">
-              <MCPEventPermissionsEditor
-                key={info.team_id}
-                accessToken={accessToken}
-                value={info.object_permission?.mcp_event_permissions ?? {}}
-                onSave={saveTeamEventPermissions}
-              />
-            </Card>
+            <MCPEventPermissionsEditor
+              key={info.team_id}
+              className="rounded-xl bg-card p-6 text-card-foreground shadow-xs ring-1 ring-foreground/10"
+              accessToken={accessToken}
+              value={info.object_permission?.mcp_event_permissions ?? {}}
+              onSave={saveTeamEventPermissions}
+            />
           ) : null}
 
           <Card className="block p-6">

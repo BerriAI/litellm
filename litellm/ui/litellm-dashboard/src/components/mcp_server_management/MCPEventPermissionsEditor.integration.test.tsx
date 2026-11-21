@@ -48,12 +48,27 @@ describe("MCPEventPermissionsEditor", () => {
   it("saves a new restriction and keeps restrictions on servers it does not list", async () => {
     const user = userEvent.setup();
     const onSave = renderEditor({ "srv-gone": ["x"] });
-    const save = await screen.findByRole("button", { name: "Save event permissions" });
+    await screen.findByText("CI");
+    const save = screen.getByRole("button", { name: "Save event permissions" });
     expect(save).toBeDisabled();
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByText("deploy.done"));
     await user.click(save);
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ "srv-gone": ["x"], "srv-ci": ["deploy.done"] }));
+  });
+
+  it("shows a stored empty list as no event types, not all of them", async () => {
+    renderEditor({ "srv-ci": [] });
+    expect(await screen.findByPlaceholderText("No event types")).toBeInTheDocument();
+  });
+
+  it("offers a retry when event types fail to load", async () => {
+    const user = userEvent.setup();
+    mocks.fetchMCPEventTypes.mockRejectedValueOnce(new Error("offline"));
+    renderEditor({});
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("CI")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("renders nothing when no server publishes events", async () => {
