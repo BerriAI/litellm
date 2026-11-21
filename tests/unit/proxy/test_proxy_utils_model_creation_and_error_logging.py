@@ -2894,7 +2894,7 @@ def test_failed_fallback_attempts_that_arrive_as_a_list_are_billed_like_the_rout
 
     metadata: Final = _failed_fallback_metadata()
 
-    attempts = _billed_earlier_attempts(
+    attempts: Final = _billed_earlier_attempts(
         model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
         litellm_params={
             "metadata": {**metadata, "failed_fallback_attempts": list(metadata["failed_fallback_attempts"])}
