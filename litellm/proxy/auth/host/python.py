@@ -38,7 +38,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
-from litellm.proxy.agent_endpoints.okta_identity import OktaAgents, okta_issuers
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+from litellm.proxy.agent_endpoints.okta_identity import OktaAgents, okta_issuers, stamped_agent_context
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     TeamNotFoundError,
@@ -327,7 +328,20 @@ class PythonAuthHost:
         key: Final = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token)
         if key is None or not key.is_session_token or self.prisma_client is None:
             return key
-        return await self._with_current_grants(key)
+        return await self._with_stamped_agent(await self._with_current_grants(key))
+
+    async def _with_stamped_agent(self, key: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        if key.agent_id is None or key.agent_binding_revision is None:
+            return key
+        context: Final = await stamped_agent_context(
+            AgentIdentityStore.from_client(self.prisma_client).agent,
+            key.agent_id,
+            key.agent_binding_revision,
+            key.user_id,
+        )
+        if isinstance(context, AgentIdentityFailure):
+            raise_identity_failure(context)
+        return key.model_copy(update={"managed_agent_context": context})
 
     async def _with_current_grants(self, key: UserAPIKeyAuth) -> UserAPIKeyAuth:
         """A ``lite login`` key with the grants of its user's and team's current rows, so a `/team/update` or a

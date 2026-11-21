@@ -22,6 +22,7 @@ from litellm.proxy.mcp_server.gateway_dcr_flow import (
     ProxyCredentialMintFailure,
     ReloadUserFailure,
 )
+from litellm.types.proxy.agent_identity import AgentStamp
 
 
 async def lookup_consent_teams(user_id: str) -> tuple[ConsentTeam, ...] | ReloadUserFailure:
@@ -48,7 +49,7 @@ async def _consent_teams(user: LiteLLM_UserTable | ReloadUserFailure) -> tuple[C
 
 
 async def mint_proxy_credential(
-    user_id: str, team_id: str | None, *, allowed_routes: Sequence[str] | None = None
+    user_id: str, team_id: str | None, *, allowed_routes: Sequence[str] | None = None, agent: AgentStamp | None = None
 ) -> MintedProxyCredential | ProxyCredentialMintFailure:
     """Mint the ``lite login`` credential for a consented grant. Membership is checked
     live against the database row, so a team the user left between consent and redemption (or between refreshes)
@@ -87,6 +88,7 @@ async def mint_proxy_credential(
         team_models=selected.team_models,
         team_model_aliases=selected.team_model_aliases,
         allowed_routes=allowed_routes,
+        agent=agent,
     )
     return MintedProxyCredential(
         key=key,
