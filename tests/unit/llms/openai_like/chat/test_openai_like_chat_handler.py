@@ -166,6 +166,24 @@ async def test_async_stream_sends_the_resolved_timeout_to_the_upstream_request()
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _LINE_SEPARATED_TEXT
 
 
+@pytest.mark.parametrize("stream", [True, False])
+def test_sync_call_on_a_caller_client_sends_the_resolved_timeout_to_the_upstream_request(stream: bool) -> None:
+    read_timeouts: Final[list[object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        read_timeouts.append(request.extensions["timeout"]["read"])
+        return _streamed_reply(request) if stream else httpx.Response(200, json=_FAKE_STREAMED_REPLY)
+
+    _complete(
+        HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        acompletion=False,
+        stream=stream,
+        timeout=8.0,
+    )
+
+    assert read_timeouts == [8.0]
+
+
 class _StallsAfterFirstChunk(httpx.AsyncByteStream):
     async def __aiter__(self):
         chunk: Final = {"id": "chatcmpl-stall", "choices": [{"index": 0, "delta": {"content": "partial"}}]}

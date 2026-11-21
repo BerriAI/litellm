@@ -373,7 +373,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 if client is None or not isinstance(client, HTTPHandler):
                     client = HTTPHandler(timeout=timeout)
                 try:
-                    response: Final = client.post(url=api_base, headers=headers, data=json.dumps(data))
+                    response: Final = client.post(url=api_base, headers=headers, data=json.dumps(data), timeout=timeout)
                     response.raise_for_status()
 
                 except httpx.HTTPStatusError as e:
