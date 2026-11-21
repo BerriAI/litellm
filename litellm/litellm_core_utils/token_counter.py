@@ -232,6 +232,9 @@ def _unpack_ints(fmt: str, buffer: bytes) -> tuple[int, ...]:
     return struct.unpack(fmt, buffer)
 
 
+_HEIC_BRANDS: Final = frozenset({b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"})
+
+
 def get_image_type(image_data: bytes) -> str | None:
     """take an image (really only the first ~100 bytes max are needed)
     and return 'png' 'gif' 'jpeg' 'webp' 'heic' or None. method added to
@@ -246,7 +249,7 @@ def get_image_type(image_data: bytes) -> str | None:
     if image_data[0:3] == b"\xff\xd8\xff":
         return "jpeg"
 
-    if image_data[4:8] == b"ftyp":
+    if image_data[4:8] == b"ftyp" and image_data[8:12] in _HEIC_BRANDS:
         return "heic"
 
     if image_data[0:4] == b"RIFF" and image_data[8:12] == b"WEBP":
