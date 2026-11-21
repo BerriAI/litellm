@@ -560,16 +560,14 @@ def configured_flush_at() -> int:
     return parsed
 
 
+@dataclass(frozen=True, slots=True)
 class DiscardingSpanExporter(SpanExporter):
-    """Accept and drop every span, for mock mode.
+    """Drop spans locally for mock or unconfigured channels."""
 
-    The mock intercepts the httpx client behind the REST API, but observations
-    travel over OTLP, so without this the "no network calls" contract silently sends
-    real traces to the configured host.
-    """
+    result: SpanExportResult = SpanExportResult.SUCCESS
 
     def export(self, spans: object) -> SpanExportResult:
-        return SpanExportResult.SUCCESS
+        return self.result
 
     def shutdown(self) -> None:
         return None
@@ -671,6 +669,7 @@ class LangfuseSpanExporter(SpanExporter):
     headers: Mapping[str, str]
     timeout: float
     delays: Sequence[float] = (1.0, 2.0, 4.0)
+    credential_pair: Literal["environment", "other", "unspecified"] = "unspecified"
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         """Halving a batch of n spans settles every span within ``n.bit_length()`` rounds plus one per truncation
@@ -749,6 +748,14 @@ class LangfuseSpanExporter(SpanExporter):
                 return "retry"
             if status == 413:
                 return "too_large"
+            if status in (401, 403):
+                verbose_logger.error(
+                    "Langfuse rejected an export to %s with HTTP %d (credential_pair=%s)",
+                    self.endpoint,
+                    status,
+                    self.credential_pair,
+                )
+                return "rejected"
             verbose_logger.error(
                 "Langfuse rejected an export to %s with HTTP %d%s",
                 self.endpoint,
@@ -808,6 +815,9 @@ def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> 
         ),
         timeout=configured_timeout(),
         delays=tuple(2.0 ** min(attempt, _MAX_BACKOFF_EXPONENT) for attempt in range(configured_max_retries())),
+        credential_pair="environment"
+        if (public_key, secret_key) == (os.getenv("LANGFUSE_PUBLIC_KEY"), os.getenv("LANGFUSE_SECRET_KEY"))
+        else "other",
     )
 
 
@@ -866,8 +876,8 @@ class LangfuseTracing:
 
 @dataclass(frozen=True, slots=True)
 class _TracingKey:
-    public_key: str
-    secret_key: str
+    public_key: str | None
+    secret_key: str | None
     base_url: str
     environment: str | None
     release: str | None
@@ -888,10 +898,19 @@ _TRACING_LOCK: Final = threading.Lock()
 _TRACING: Final[dict[_TracingKey, _Lease]] = {}  # mutable-ok: process-wide channel cache, guarded by _TRACING_LOCK
 
 
+def _channel_exporter(key: _TracingKey) -> SpanExporter:
+    if key.mock_mode:
+        return DiscardingSpanExporter()
+    if not key.public_key or not key.secret_key:
+        verbose_logger.warning("Langfuse span export requires both a public key and a secret key")
+        return DiscardingSpanExporter(result=SpanExportResult.FAILURE)
+    return _build_span_exporter(public_key=key.public_key, secret_key=key.secret_key, base_url=key.base_url)
+
+
 def acquire_langfuse_tracing(
     *,
-    public_key: str,
-    secret_key: str,
+    public_key: str | None,
+    secret_key: str | None,
     base_url: str,
     environment: str | None,
     release: str | None,
@@ -924,9 +943,7 @@ def acquire_langfuse_tracing(
             _TRACING[key] = replace(cached, holders=cached.holders + 1, retire=None)
             return cached.tracing
         created: Final = build_langfuse_tracing(
-            exporter=DiscardingSpanExporter()
-            if mock_mode
-            else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url),
+            exporter=_channel_exporter(key),
             environment=environment,
             release=release,
             sample_rate=key.sample_rate,
