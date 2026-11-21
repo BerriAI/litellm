@@ -5,7 +5,7 @@ import json
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby, pairwise
-from typing import Final, Literal
+from typing import Annotated, Final, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -119,7 +119,7 @@ async def _run_canary(
 
 @router.post("/canaries/run")
 async def run_control_canaries(
-    body: CanaryRequest, request: Request, user: UserAPIKeyAuth = Depends(user_api_key_auth)
+    body: CanaryRequest, request: Request, user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 ) -> CanaryResponse:
     """Fire a real probe at every configured control on every LLM route, using a 5 minute shadow key
     that copies the control from the real key, and report whether the control actually fired."""
@@ -325,7 +325,9 @@ def _explain(previous: Mapping[str, object], row: Mapping[str, object]) -> Cache
 
 
 @router.get("/cache_miss")
-async def explain_cache_misses(hours: int = 24, user: UserAPIKeyAuth = Depends(user_api_key_auth)) -> CacheMissResponse:
+async def explain_cache_misses(
+    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)], hours: int = 24
+) -> CacheMissResponse:
     """For every turn of every session, say why the prompt cache was or was not read: the client changed
     the prefix, the gateway moved the session to another deployment, or the provider dropped it."""
     from litellm.proxy.proxy_server import prisma_client
@@ -413,7 +415,7 @@ def _replay_customer(customer: str, rows: Sequence[Mapping[str, object]], plan: 
 
 
 @router.post("/plan_lab/replay")
-async def replay_draft_plan(plan: DraftPlan, user: UserAPIKeyAuth = Depends(user_api_key_auth)) -> PlanReplay:
+async def replay_draft_plan(plan: DraftPlan, user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> PlanReplay:
     """Replay the real spend logs of the last ``days`` against a draft plan and report margin per customer."""
     from litellm.proxy.proxy_server import prisma_client
 
