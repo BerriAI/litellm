@@ -52,6 +52,7 @@ from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
     can_key_call_resolved_model,
     can_user_call_model,
+    deployment_access_groups,
     get_user_object,
     key_model_aliases_for_auth_check,
     model_matches_any_wildcard_pattern_in_list,
@@ -287,18 +288,6 @@ class _ModelGrants(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     models: tuple[object, ...] = ()
-
-
-class _ModelInfoAccessGroups(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    access_groups: tuple[object, ...]
-
-
-class _DeploymentAccessGroups(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    model_info: _ModelInfoAccessGroups
 
 
 services = (
@@ -1277,15 +1266,6 @@ def _ids_of(deployments: Iterable[object]) -> frozenset[str]:
     return frozenset(model_id for model_id in map(_deployment_id, deployments) if model_id is not None)
 
 
-def _access_groups_of(deployment: object) -> frozenset[str]:
-    match deployment:
-        case {"model_info": {"access_groups": list()}}:
-            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
-            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
-        case _:
-            return frozenset()
-
-
 @dataclass(frozen=True, slots=True)
 class _AccessGroupGrants:
     granted_names: frozenset[str]
@@ -1309,7 +1289,7 @@ class _AccessGroupGrants:
 def _access_group_grants(llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth) -> _AccessGroupGrants:
     granted: Final = _granted_names(user_api_key_dict)
     in_granted_groups: Final = (
-        deployment for deployment in llm_model_list if not granted.isdisjoint(_access_groups_of(deployment))
+        deployment for deployment in llm_model_list if not granted.isdisjoint(deployment_access_groups(deployment))
     )
     return _AccessGroupGrants(granted, _ids_of(in_granted_groups))
 

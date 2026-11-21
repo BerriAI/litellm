@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
@@ -4965,6 +4965,79 @@ def _owning_team_names_for_team_deployment(
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
+def _routes_to_deployments_by_litellm_model(model: str, llm_router: Router, team_id: str | None) -> bool:
+    registry: Final = llm_router.registry()
+    settings: Final = llm_router.settings()
+    return not (
+        settings.router_general_settings.pass_through_all_models
+        or settings.default_deployment is not None
+        or registry.patterns().patterns  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
+        or registry.resolve(model, kind="recognized")
+        or (team_id is not None and registry.resolve(model, kind="team_model", team_id=team_id) is not None)
+    )
+
+
+class _ModelInfoAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    access_groups: tuple[object, ...]
+
+
+class _DeploymentAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _ModelInfoAccessGroups
+
+
+def deployment_access_groups(deployment: object) -> frozenset[str]:
+    match deployment:
+        case {"model_info": {"access_groups": list()}}:
+            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
+            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
+        case _:
+            return frozenset()
+
+
+def _deployment_granted(
+    deployment: DeploymentTypedDict,
+    llm_router: Router,
+    models: Sequence[str],
+    team_model_aliases: Mapping[str, str] | None,
+    team_id: str | None,
+) -> bool:
+    if not deployment_access_groups(deployment).isdisjoint(models):
+        return True
+    owning_team_names: Final = _owning_team_names_for_team_deployment(
+        model=deployment["model_name"], llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
+    )
+    granted_models: Final = _resolve_all_team_model_sentinel_for_auth_check(
+        models=list(models), llm_router=llm_router, team_id=team_id
+    )
+    return any(
+        check_model_access_helper(model=name, llm_router=None, models=granted_models, team_id=team_id)
+        for name in (deployment["model_name"], *owning_team_names)
+    )
+
+
+def _every_deployment_with_litellm_model_granted(
+    model: str,
+    llm_router: RegistryReader | None,
+    models: Sequence[str],
+    team_model_aliases: Mapping[str, str] | None,
+    team_id: str | None,
+) -> bool:
+    if not isinstance(llm_router, Router) or not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
+        return False
+    namesakes: Final = tuple(
+        deployment
+        for deployment in llm_router.registry().deployments() or ()
+        if "model" in deployment["litellm_params"] and deployment["litellm_params"]["model"] == model
+    )
+    return bool(namesakes) and all(
+        _deployment_granted(deployment, llm_router, models, team_model_aliases, team_id) for deployment in namesakes
+    )
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: RegistryReader | None,
@@ -5057,6 +5130,10 @@ def _can_object_call_model(
     if any(
         check_model_access_helper(model=name, llm_router=llm_router, models=models, team_id=team_id)
         for name in owning_team_names
+    ):
+        return True
+    if not key_alias_applied and _every_deployment_with_litellm_model_granted(
+        model=model, llm_router=llm_router, models=models, team_model_aliases=team_model_aliases, team_id=team_id
     ):
         return True
 

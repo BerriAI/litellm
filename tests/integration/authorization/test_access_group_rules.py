@@ -219,3 +219,55 @@ def test_teamless_jwt_cannot_provision_credentials_without_native_team_access(
                 assert exchanged.json() == {"error": "invalid_request", "error_description": REJECTED_SUBJECT_TOKEN}, (
                     exchanged.text
                 )
+
+
+def test_restricted_callers_reach_a_deployment_by_its_litellm_model_only_when_every_namesake_is_granted(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        granted_group: Final = f"granted-{suffix}"
+        other_group: Final = f"other-{suffix}"
+        granted_raw: Final = f"openai/granted-{suffix}"
+        shared_raw: Final = f"openai/shared-{suffix}"
+        sibling_raw: Final = f"openai/sibling-{suffix}"
+        granted_name: Final = scenario.model(model=granted_raw, model_info={"access_groups": [granted_group]})
+        shared_granted_name: Final = scenario.model(model=shared_raw, model_info={"access_groups": [granted_group]})
+        scenario.model(model=shared_raw, model_info={"access_groups": [other_group]})
+        split_name: Final = f"integration-split-{suffix}"
+        scenario.model(name=split_name, model=f"openai/split-{suffix}", model_info={"access_groups": [granted_group]})
+        scenario.model(name=split_name, model=sibling_raw, model_info={"access_groups": [other_group]})
+        group_key: Final = scenario.key(models=[granted_group])
+        explicit_key: Final = scenario.key(models=[granted_name])
+        shared_explicit_key: Final = scenario.key(models=[shared_granted_name])
+        raw_key: Final = scenario.key(models=[granted_raw])
+        team_key: Final = scenario.key(team_id=scenario.team(models=[granted_name]))
+        rows: Final = (
+            ("access group key, granted raw name", group_key, granted_raw, 200),
+            ("explicit key, granted raw name", explicit_key, granted_raw, 200),
+            ("access group key, raw name shared with an ungranted deployment", group_key, shared_raw, 403),
+            ("explicit key, raw name shared with an ungranted deployment", shared_explicit_key, shared_raw, 403),
+            ("access group key, raw name of an ungranted sibling in a granted group", group_key, sibling_raw, 403),
+            ("team restricted key, granted raw name", team_key, granted_raw, 200),
+            ("key listing the raw name itself", raw_key, granted_raw, 200),
+        )
+        observed: Final = tuple(
+            (
+                label,
+                gateway.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": model, "messages": [{"role": "user", "content": "raw deployment name control"}]},
+                    key=key,
+                ),
+            )
+            for label, key, model, _ in rows
+        )
+        assert tuple((label, response.status_code) for label, response in observed) == tuple(
+            (label, status) for label, _, _, status in rows
+        ), [(label, response.status_code, response.text) for label, response in observed]
+        assert all(
+            "model_access_denied" in response.text
+            for (_, response), (*_, status) in zip(observed, rows)
+            if status == 403
+        ), [response.text for _, response in observed]
