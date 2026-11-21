@@ -1,4 +1,5 @@
-//! The router setting router-core does not read that reaches only the calls for some groups.
+//! The router settings router-core does not serve whole: the one it does not read that reaches
+//! only the calls for some groups, and the `optional_pre_call_checks` entries it leaves to the host.
 //! The settings it serves through a host step are not named here: `Router::reach` reports those
 //! steps for each group a request reaches, and `model` names the ones the native host does not
 //! answer.
@@ -6,6 +7,16 @@
 use std::collections::BTreeMap;
 
 use litellm_config::RouterSettings;
+use litellm_router_core::model_rate_limits;
+
+/// Whether `optional_pre_call_checks` names a check router-core asks the host to run. It runs
+/// `enforce_model_rate_limits` itself.
+pub(super) fn checked_by_the_host(checks: &Option<Vec<String>>) -> bool {
+    checks
+        .iter()
+        .flatten()
+        .any(|check| check != model_rate_limits::SETTING)
+}
 
 fn pins(affinity: &Option<BTreeMap<String, Vec<String>>>, group: &str) -> bool {
     affinity

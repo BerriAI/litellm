@@ -9,10 +9,10 @@ use std::{
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, Op, Outcomes, PreRoute,
-    PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost,
-    RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served,
-    SuccessReport, UsageCounts, UsageWindow,
+    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, LimitCounter, LimitKind, Op,
+    Outcomes, PreRoute, PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig,
+    RouterEvent, RouterHost, RouterRequest, RouterResponse, RoutingContext, SeededRandomness,
+    SelectStage, Served, SuccessReport, UsageCounts, UsageWindow,
     call::{StreamOrigin, Unanswered},
     fallback::Fallbacks,
     health::CooldownValue,
@@ -199,6 +199,30 @@ impl RouterCache for RecordingCache {
 
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
         self.inner.count_failure(id).await
+    }
+
+    async fn limit_usage(
+        &self,
+        counter: &LimitCounter,
+        limit: f64,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.limit_usage(counter, limit).await
+    }
+
+    async fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.add_limit_usage(counter, amount, ttl).await
+    }
+
+    async fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+        self.inner.add_limit_usages(increments).await
     }
 }
 
@@ -3686,4 +3710,190 @@ async fn a_queue_rejection_on_a_fallback_hop_ends_the_request_with_that_rejectio
         matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.queue_rejected())
     );
     assert_eq!(host.selected(), vec!["p1".to_owned(), "b1".to_owned()]);
+}
+
+/// `primary`'s one deployment with `limits`, checked by `enforce_model_rate_limits` at 10:00 UTC
+/// on 2026-01-01 when the core is `enforcing`.
+fn rate_limiting(limits: Value, enforcing: bool, host: Arc<ScriptedHost>) -> Hosted {
+    let params = json!({"model": "openai/p1"})
+        .as_object()
+        .into_iter()
+        .chain(limits.as_object())
+        .flatten()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": params, "model_info": {"id": "p1"}},
+        ],
+        "enforce_model_rate_limits": enforcing,
+    }))
+    .unwrap();
+    let dynamic: RouterDynamicConfig = serde_json::from_value(json!({"num_retries": 2})).unwrap();
+    let router = Router::builder(config, dynamic)
+        .randomness(Arc::new(SeededRandomness::new(7)))
+        .clock(Arc::new(StoppedClock(utc_hour(10))))
+        .build()
+        .unwrap();
+    Hosted { router, host }
+}
+
+fn limit_counter(kind: LimitKind, window: &str) -> LimitCounter {
+    LimitCounter {
+        deployment_id: "p1".to_owned(),
+        model: "openai/p1".to_owned(),
+        kind,
+        window: window.to_owned(),
+    }
+}
+
+/// What the router refused the call with: its status, `retry-after`, retries and text.
+fn refusal(
+    ended: Result<RouterResponse<String>, Error>,
+) -> (Option<u16>, u64, Option<u32>, String) {
+    match ended {
+        Err(Error::Attempt { failure, raised_at }) => {
+            assert_eq!(raised_at, None);
+            (
+                failure.status,
+                failure.retry_after.unwrap_or_default().as_secs(),
+                failure.num_retries,
+                failure.detail.as_deref().unwrap_or_default().to_owned(),
+            )
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// Each success is one request and 10 tokens, so the second call is past every limit here. A
+/// daily limit is tried again when its window starts over, an hour from the clock.
+#[rstest]
+#[case::rpm(json!({"rpm": 1}), 60, "RPM limit=1, current usage=2")]
+#[case::tpm(json!({"tpm": 10}), 60, "TPM limit=10, current usage=10")]
+#[case::rpd(json!({"rpd": 1, "daily_reset_time": "11:00"}), 3600, "RPD limit=1, current usage=2")]
+#[case::tpd(json!({"tpd": 10, "daily_reset_time": "11:00"}), 3600, "TPD limit=10, current usage=10")]
+#[case::rpm_as_text(json!({"rpm": "1"}), 60, "RPM limit=1, current usage=2")]
+#[case::tpd_as_text(json!({"tpd": "10"}), 50_400, "TPD limit=10, current usage=10")]
+#[tokio::test]
+async fn a_deployment_past_a_declared_limit_is_refused_without_an_attempt_or_a_retry(
+    #[case] limits: Value,
+    #[case] retry_after: u64,
+    #[case] over: &str,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(limits, true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let refused = refusal(router.call(Op::from("acompletion"), request()).await);
+
+    assert_eq!(
+        refused,
+        (
+            Some(429),
+            retry_after,
+            Some(0),
+            format!("Model rate limit exceeded. {over}"),
+        )
+    );
+    assert_eq!(host.cache.outcomes("p1").await.unwrap().successes, 1);
+    assert_eq!(host.retries(), 0);
+}
+
+#[tokio::test]
+async fn a_refused_request_is_refunded_from_both_request_windows() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(json!({"rpm": 1, "rpd": 5}), true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        (
+            host.cache
+                .limit_usage(&limit_counter(LimitKind::Rpm, "10-00"), 1.0)
+                .await
+                .unwrap(),
+            host.cache
+                .limit_usage(&limit_counter(LimitKind::Rpd, "2026-01-01"), 5.0)
+                .await
+                .unwrap(),
+        ),
+        (Some(1.0), Some(1.0))
+    );
+}
+
+/// `_refused` reports the refusal with `uncounted=True`, so the group's remaining requests do not
+/// run one low for each request the limit turned away.
+#[tokio::test]
+async fn a_refused_request_counts_against_no_usage_window() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(json!({"rpm": 1}), true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+
+    let deployment = router.registry().deployment("p1").unwrap();
+    assert_eq!(router.health().usage(&deployment).await.unwrap(), (10, 1));
+}
+
+#[tokio::test]
+async fn a_streams_tokens_count_once_the_host_reports_its_end() {
+    let host = Arc::new(ScriptedHost {
+        deferred: true,
+        ..ScriptedHost::default()
+    });
+    let router = rate_limiting(json!({"tpm": 10}), true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let before = router.call(Op::from("acompletion"), request()).await;
+    router
+        .report_success("p1", 10.0, 0.0, SuccessReport::default())
+        .await
+        .unwrap();
+    let after = router.call(Op::from("acompletion"), request()).await;
+
+    assert!(before.is_ok(), "{before:?}");
+    assert_eq!(
+        refusal(after).3,
+        "Model rate limit exceeded. TPM limit=10, current usage=10"
+    );
+}
+
+#[tokio::test]
+async fn a_router_not_told_to_enforce_the_limits_counts_nothing() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(json!({"rpm": 1}), false, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let second = router.call(Op::from("acompletion"), request()).await;
+
+    assert!(second.is_ok(), "{second:?}");
+    assert_eq!(
+        host.cache
+            .limit_usage(&limit_counter(LimitKind::Rpm, "10-00"), 1.0)
+            .await
+            .unwrap(),
+        None
+    );
 }

@@ -64,6 +64,14 @@ fn params(value: Value) -> LitellmParams {
         ..LitellmParams::default()
     },
 )]
+#[case::daily_reset_time(
+    json!({"model": "m", "daily_reset_time": "09:30"}),
+    LitellmParams {
+        model: "m".into(),
+        daily_reset_time: Some(jiff::civil::time(9, 30, 0, 0)),
+        ..LitellmParams::default()
+    },
+)]
 #[case::explicit_null_is_absent(
     json!({"model": "m", "aws_region_name": null, "vertex_project": null, "api_key": null, "tpm": null}),
     LitellmParams { model: "m".into(), ..LitellmParams::default() },
@@ -119,6 +127,13 @@ fn keys_no_field_names_land_in_extra_and_nothing_else_does() {
 #[case::vertex_credentials(json!({"model": "m", "vertex_credentials": 7}))]
 #[case::rate_limit(json!({"model": "m", "max_parallel_requests": "many"}))]
 #[case::tags(json!({"model": "m", "tags": "not-a-list"}))]
+#[case::reset_hour_out_of_range(json!({"model": "m", "daily_reset_time": "24:00"}))]
+#[case::reset_minute_out_of_range(json!({"model": "m", "daily_reset_time": "23:60"}))]
+#[case::reset_one_digit_hour(json!({"model": "m", "daily_reset_time": "9:00"}))]
+#[case::reset_with_seconds(json!({"model": "m", "daily_reset_time": "09:00:30"}))]
+#[case::reset_not_a_time(json!({"model": "m", "daily_reset_time": "noon"}))]
+#[case::reset_not_text(json!({"model": "m", "daily_reset_time": 630}))]
+#[case::reset_padded_hour(json!({"model": "m", "daily_reset_time": " 9:00"}))]
 fn a_param_of_the_wrong_type_is_rejected(#[case] value: Value) {
     assert!(serde_json::from_value::<LitellmParams>(value).is_err());
 }

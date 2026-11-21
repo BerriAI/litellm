@@ -8,7 +8,7 @@ use axum::http::Uri;
 use litellm_config::{LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_model_catalog::Catalog;
-use litellm_router_core::Reached;
+use litellm_router_core::{Reached, model_rate_limits};
 use serde_json::{Map, Value};
 
 use super::{
@@ -22,7 +22,10 @@ use super::{
 const MESSAGES_PROVIDERS: [LlmProviders; 2] = [LlmProviders::Anthropic, LlmProviders::AzureAi];
 
 /// The `litellm_params` beyond the typed ones that the router reads as Python's does.
-const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
+const HONORED_EXTRA_PARAMS: [&str; 3] = {
+    let [tpd, rpd] = model_rate_limits::DAILY_PARAMS;
+    ["weight", tpd, rpd]
+};
 
 /// The `model_info` keys the router reads as Python's does. `access_groups` only decides which
 /// models a caller other than the master key may call, and `max_input_tokens` is the context
@@ -136,6 +139,7 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         custom_llm_provider: _,
         tpm: _,
         rpm: _,
+        daily_reset_time: _,
         drop_params: _,
         aws_bedrock_project_id: _,
         claude_platform: _,

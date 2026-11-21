@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
+use jiff::civil::Time;
 use litellm_auth_types::{AwsParams, ClaudePlatformParams, ParamSpec, VertexParams};
 use litellm_secret_value::SecretValue;
 
@@ -37,6 +38,8 @@ pub struct LitellmParams {
     pub rpm: Option<Spelled<f64>>,
     pub itpm: Option<Spelled<f64>>,
     pub otpm: Option<Spelled<f64>>,
+    #[serde(default, deserialize_with = "crate::daily_reset_time::deserialize")]
+    pub daily_reset_time: Option<Time>,
     pub max_parallel_requests: Option<u64>,
     #[serde_as(as = "Option<OneOrMany<_, PreferMany>>")]
     pub organization: Option<Vec<String>>,

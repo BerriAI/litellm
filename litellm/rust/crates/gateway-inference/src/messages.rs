@@ -346,6 +346,11 @@ mod tests {
         Kind::Lifecycle,
         Some(7)
     )]
+    #[case::a_start_counts_the_cache_it_wrote_and_read(
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}}}"#,
+        Kind::Lifecycle,
+        Some(127)
+    )]
     #[case::a_closing_delta_counts_its_output(
         r#"{"type":"message_delta","delta":{},"usage":{"output_tokens":5}}"#,
         Kind::Lifecycle,

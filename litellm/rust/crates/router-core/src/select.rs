@@ -980,7 +980,8 @@ mod tests {
     use crate::{
         Router,
         cache::{
-            HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow,
+            HealthState, InMemoryRouterCache, LimitCounter, Outcomes, RouterCache, UsageCounts,
+            UsageWindow,
         },
         config::{RouterConfig, RouterDynamicConfig},
         error::{AttemptError, FailureKind},
@@ -1098,6 +1099,30 @@ mod tests {
 
         async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
             self.inner.count_failure(id).await
+        }
+
+        async fn limit_usage(
+            &self,
+            counter: &LimitCounter,
+            limit: f64,
+        ) -> Result<Option<f64>, litellm_cache::Error> {
+            self.inner.limit_usage(counter, limit).await
+        }
+
+        async fn add_limit_usage(
+            &self,
+            counter: &LimitCounter,
+            amount: i64,
+            ttl: Duration,
+        ) -> Result<Option<f64>, litellm_cache::Error> {
+            self.inner.add_limit_usage(counter, amount, ttl).await
+        }
+
+        async fn add_limit_usages(
+            &self,
+            increments: &[(LimitCounter, i64, Duration)],
+        ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+            self.inner.add_limit_usages(increments).await
         }
     }
 
