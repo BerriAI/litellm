@@ -373,12 +373,12 @@ class A2AGuardrailHandler(BaseTranslation):
         valid_parsed: list[tuple[int, dict[str, object]]],
     ) -> tuple[str, list[int]]:
         """Collect text from parsed chunks, returning combined text and indices."""
-        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response_for_guardrails
 
         text_parts: Final[list[str]] = []
         chunk_indices_with_text: Final[list[int]] = []
         for _idx, (orig_i, obj) in enumerate(valid_parsed):
-            t = extract_text_from_a2a_response(obj)
+            t = extract_text_from_a2a_response_for_guardrails(obj)
             if t:
                 text_parts.append(t)
                 chunk_indices_with_text.append(orig_i)
