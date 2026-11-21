@@ -722,8 +722,13 @@ describe("EditSSOSettingsModal", () => {
   describe("Seeding completeness", () => {
     it("seeds every field the provider forms can mount", () => {
       const allFields = Object.values(ssoProviderConfigs).flatMap((config) => config.fields);
+      const derivedFromEndpoints = new Set(["cognito_domain", "cognito_region"]);
       const textFieldNames = Array.from(
-        new Set(allFields.filter((field) => field.type !== "checkbox").map((field) => field.name)),
+        new Set(
+          allFields
+            .filter((field) => field.type !== "checkbox" && !derivedFromEndpoints.has(field.name))
+            .map((field) => field.name),
+        ),
       );
       const stored = Object.fromEntries(textFieldNames.map((name) => [name, `stored-${name}`]));
 
@@ -731,6 +736,20 @@ describe("EditSSOSettingsModal", () => {
 
       expect(textFieldNames.filter((name) => seeded[name] !== `stored-${name}`)).toEqual([]);
       expect(seeded.saml_allow_unsolicited).toBe(true);
+    });
+
+    it("seeds a stored Cognito hosted-domain config as Cognito with its domain prefix and region", () => {
+      const seeded = toSSOFormValues({
+        generic_client_id: "app-client",
+        generic_authorization_endpoint: "https://my-pool.auth.eu-west-1.amazoncognito.com/oauth2/authorize",
+      } as unknown as SSOSettingsValues);
+
+      expect(seeded).toMatchObject({
+        sso_provider: "cognito",
+        cognito_domain: "my-pool",
+        cognito_region: "eu-west-1",
+        generic_client_id: "app-client",
+      });
     });
   });
 });

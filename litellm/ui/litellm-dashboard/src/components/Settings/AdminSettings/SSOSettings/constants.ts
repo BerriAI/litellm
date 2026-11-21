@@ -1,12 +1,14 @@
 import type { ParseKeys } from "i18next";
 import googleLogo from "../../../../../public/assets/logos/google.svg";
 import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
+import awsLogo from "../../../../../public/assets/logos/aws.svg";
 
 // SSO Provider logos
 export const ssoProviderLogoMap: Record<string, string> = {
   google: googleLogo.src,
   microsoft: microsoftAzureLogo.src,
   okta: "https://www.okta.com/sites/default/files/Okta_Logo_BrightBlue_Medium.png",
+  cognito: awsLogo.src,
   generic: "",
   saml: "",
 };
@@ -16,6 +18,7 @@ export const ssoProviderDisplayNames: Record<string, ParseKeys> = {
   google: "adminPanel.ssoSettings.providers.google",
   microsoft: "adminPanel.ssoSettings.providers.microsoft",
   okta: "adminPanel.ssoSettings.providers.okta",
+  cognito: "adminPanel.ssoSettings.providers.cognito",
   generic: "adminPanel.ssoSettings.providers.generic",
   saml: "adminPanel.ssoSettings.providers.saml",
 };
