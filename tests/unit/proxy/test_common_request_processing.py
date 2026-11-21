@@ -16374,22 +16374,31 @@ async def test_openrouter_400_relays_the_unwrapped_message_and_the_error_metadat
     assert relayed.to_dict()["provider_specific_fields"] == {"metadata": {"provider_name": None}}
 
 
+_OPENROUTER_UPSTREAM_REASON: Final = "Invalid schema for response_format 'answer': Missing 'city'."
+_OPENROUTER_UPSTREAM_BODY: Final = json.dumps(
+    {"error": {"message": _OPENROUTER_UPSTREAM_REASON, "type": "invalid_request_error"}}, indent=2
+)
+
+
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(("route", "call"), _OPENROUTER_ROUTES)
-async def test_openrouter_upstream_provider_400_keeps_the_upstream_reason_in_the_message(
-    route: str, call: Callable[[], object]
+@pytest.mark.parametrize(
+    ("openrouter_message", "raw"),
+    [
+        pytest.param("Provider returned error", _OPENROUTER_UPSTREAM_BODY, id="generic-message-json-raw"),
+        pytest.param(_OPENROUTER_UPSTREAM_REASON, _OPENROUTER_UPSTREAM_BODY, id="upstream-message-json-raw"),
+        pytest.param("Provider returned error", _OPENROUTER_UPSTREAM_REASON, id="generic-message-text-raw"),
+    ],
+)
+async def test_openrouter_upstream_provider_400_states_the_upstream_reason_once(
+    route: str, call: Callable[[], object], openrouter_message: str, raw: str
 ) -> None:
-    upstream_reason: Final = "Invalid schema for response_format 'answer': Missing 'city'."
-    upstream_body: Final = json.dumps({"error": {"message": upstream_reason, "type": "invalid_request_error"}})
     body: Final = {
-        "error": {
-            "message": "Provider returned error",
-            "code": 400,
-            "metadata": {"raw": upstream_body, "provider_name": "OpenAI"},
-        }
+        "error": {"message": openrouter_message, "code": 400, "metadata": {"raw": raw, "provider_name": "OpenAI"}}
     }
     relayed: Final = await _relayed_openrouter_400(route, call, body)
-    assert upstream_reason in relayed.message
+    assert relayed.message.endswith(f" - {_OPENROUTER_UPSTREAM_REASON}")
+    assert relayed.message.count(_OPENROUTER_UPSTREAM_REASON) == 1
 
 
 @pytest.mark.usefixtures("httpx_transport")

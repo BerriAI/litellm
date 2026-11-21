@@ -331,16 +331,20 @@ def _github_copilot_custom_app_hint(custom_llm_provider: str, request_kwargs: Ma
     return github_copilot_sign_in_app_hint(request_kwargs).strip() or None
 
 
-def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | None:
-    message: Final = attribute_or_none(original_exception, "message")
-    if isinstance(attribute_or_none(original_exception, "body"), dict) or not isinstance(message, str):
-        return None
+def _decoded_openai_error(text: str) -> Mapping[str, object] | None:
     try:
-        decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(message)))
+        decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(text)))
     except ValueError:
         return None
     relayed: Final = None if decoded is None else as_str_mapping(decoded.get("error"))
     return relayed if relayed is not None and isinstance(relayed.get("message"), str) else None
+
+
+def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | None:
+    message: Final = attribute_or_none(original_exception, "message")
+    if isinstance(attribute_or_none(original_exception, "body"), dict) or not isinstance(message, str):
+        return None
+    return _decoded_openai_error(message)
 
 
 def _map_openai_exception(
@@ -2377,16 +2381,23 @@ def _openai_style_error_message_and_body(
     return get_error_message(error_obj=original_exception) or error_str, dict(carried_body)
 
 
+def _openrouter_upstream_reason(raw: object) -> str | None:
+    match raw:
+        case None | "":
+            return None
+        case str():
+            upstream_error: Final = _decoded_openai_error(raw)
+            return raw if upstream_error is None else str(upstream_error.get("message"))
+        case _:
+            return json.dumps(raw, default=str)
+
+
 def _openrouter_error_message(provider_message: str, body: Mapping[str, object] | None) -> str:
     metadata: Final = as_str_mapping(body.get("metadata")) if body is not None else None
-    upstream_error: Final = metadata.get("raw") if metadata is not None else None
-    match upstream_error:
-        case None | "":
-            return provider_message
-        case str():
-            return f"{provider_message} - {upstream_error}"
-        case _:
-            return f"{provider_message} - {json.dumps(upstream_error, default=str)}"
+    upstream_reason: Final = _openrouter_upstream_reason(metadata.get("raw") if metadata is not None else None)
+    if upstream_reason is None or upstream_reason == provider_message:
+        return provider_message
+    return f"{provider_message} - {upstream_reason}"
 
 
 def _map_openrouter_exception(
