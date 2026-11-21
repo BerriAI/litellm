@@ -98,7 +98,7 @@ async fn handle<H: Host>(
     let (ran, cache) = routed.output.response;
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    let ran = reported.stream(reported.complete(ran), message_start);
+    let ran = reported.answer(ran, message_start);
     let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
     Ok((Extension(routing), cache.apply(response)).into_response())
 }

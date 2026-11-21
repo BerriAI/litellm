@@ -106,23 +106,33 @@ pub struct SseBlock {
 
 impl SseBlock {
     /// This block carrying `data` in place of its event's data, every other byte as it was read:
-    /// the other fields, the comments, and the terminator each line ends with. `data` is written
-    /// where the event's first `data` line was, one line per `\n` of it. A block that carries
-    /// no event stays as it is.
+    /// the other fields, the comments, and the terminator each line ends with. A block that
+    /// carries no event stays as it is.
+    ///
+    /// Encoding the changed [`SseEvent`] again would be shorter, and a relay must not do it. An
+    /// `SseEvent` holds only what the block dispatches, so the comments, the fields the spec does
+    /// not name, the BOM, the order of the lines and their `\r\n` or `\r` endings would be lost,
+    /// and the client would stop getting the provider's bytes.
+    ///
+    /// `data` is written where the event's last `data` line was, one line per `\n` of it, each
+    /// ending as that line did. Written at the first one, a block that mixes line endings could
+    /// lose the blank line that closes it: dropping the later `data` lines can leave a kept `\r`
+    /// right ahead of the blank line's `\n`, and the two read as one `\r\n`.
     #[must_use]
     pub fn with_data(self, data: &str) -> Self {
         let Some(event) = self.event else {
             return self;
         };
         let (bom, fields) = self.bytes.split_at(fields_start(&self.bytes, &event));
+        let lines: Vec<(&[u8], &[u8])> = terminated(fields).collect();
+        let last_data = lines.iter().rposition(|(line, _)| is_data(line));
         let mut bytes = BytesMut::with_capacity(self.bytes.len() + data.len());
         bytes.put_slice(bom);
-        let mut written = false;
-        for (line, terminator) in terminated(fields) {
-            if split_field(line).0 != b"data" {
+        for (index, (line, terminator)) in lines.into_iter().enumerate() {
+            if !is_data(line) {
                 bytes.put_slice(line);
                 bytes.put_slice(terminator);
-            } else if !std::mem::replace(&mut written, true) {
+            } else if Some(index) == last_data {
                 for line in data.split('\n') {
                     bytes.put_slice(b"data: ");
                     bytes.put_slice(line.as_bytes());
@@ -291,6 +301,10 @@ impl Pending {
     }
 }
 
+fn is_data(line: &[u8]) -> bool {
+    split_field(line).0 == b"data"
+}
+
 fn split_field(line: &[u8]) -> (&[u8], &[u8]) {
     let Some(colon) = line.iter().position(|byte| *byte == b':') else {
         return (line, &[]);
@@ -414,9 +428,17 @@ mod tests {
         b": note\nvendor: 1\nevent: delta\nid: 7\ndata: old\n\n",
         vec![&b": note\nvendor: 1\nevent: delta\nid: 7\ndata: new\ndata: data\n\n"[..]]
     )]
-    #[case::every_data_line_gives_way_to_the_new_data_at_the_first(
+    #[case::every_data_line_gives_way_to_the_new_data_at_the_last(
         b"data: a\nretry: 5\ndata: b\n\n",
-        vec![&b"data: new\ndata: data\nretry: 5\n\n"[..]]
+        vec![&b"retry: 5\ndata: new\ndata: data\n\n"[..]]
+    )]
+    #[case::the_new_data_ends_its_lines_as_the_last_data_line_did(
+        b"data: a\rdata: b\n\n",
+        vec![&b"data: new\ndata: data\n\n"[..]]
+    )]
+    #[case::a_cr_kept_ahead_of_the_blank_line_does_not_join_its_lf(
+        b"data: a\nretry: 5\rdata: b\n\n",
+        vec![&b"retry: 5\rdata: new\ndata: data\n\n"[..]]
     )]
     #[case::each_line_keeps_its_own_terminator(
         b"event: delta\r\ndata: old\r\r\n",

@@ -40,15 +40,6 @@ impl NamesModel for MessagesBody {
     }
 }
 
-impl<A: NamesModel, H, C, E> NamesModel for CallOutput<A, H, C, E> {
-    fn naming(self, model: &str) -> Self {
-        match self {
-            Self::Complete(answer) => Self::Complete(answer.naming(model)),
-            stream @ Self::Stream { .. } => stream,
-        }
-    }
-}
-
 /// What one event of a stream says about the model the stream reports.
 pub(crate) enum Stamp {
     /// Not the event that names the model, and one may still come: a keepalive.
@@ -77,27 +68,20 @@ impl<'a> ReportedModel<'a> {
         }
     }
 
-    /// `answer` naming the model, unless a fallback served it.
-    pub(crate) fn complete<A: NamesModel>(&self, answer: A) -> A {
-        if self.fell_back {
-            return answer;
-        }
-        answer.naming(self.requested)
-    }
-
-    /// `answer` with the event `stamp` picks from its stream naming the model, whether or not a
-    /// fallback served it.
-    pub(crate) fn stream<A, H, E: Send + 'static>(
+    /// `answer` naming the model. A complete answer names it unless a fallback served it. A
+    /// stream names it in the event `stamp` picks, whether or not a fallback served it.
+    pub(crate) fn answer<A: NamesModel, H, E: Send + 'static>(
         &self,
         answer: CallOutput<A, H, SseBlock, E>,
         stamp: StampEvent,
     ) -> CallOutput<A, H, SseBlock, E> {
         match answer {
+            CallOutput::Complete(answer) if self.fell_back => CallOutput::Complete(answer),
+            CallOutput::Complete(answer) => CallOutput::Complete(answer.naming(self.requested)),
             CallOutput::Stream { head, chunks } => CallOutput::Stream {
                 head,
                 chunks: stamped(chunks, self.requested.to_owned(), stamp),
             },
-            complete @ CallOutput::Complete(_) => complete,
         }
     }
 }
@@ -194,10 +178,14 @@ mod tests {
         #[case] sent: Value,
         #[case] expected: Value,
     ) {
-        let answer = MessagesBody::Unchecked(sent.as_object().cloned().unwrap());
+        let answer: CallOutput<MessagesBody, (), SseBlock, Broke> =
+            CallOutput::Complete(MessagesBody::Unchecked(sent.as_object().cloned().unwrap()));
 
-        let answered = ReportedModel::of("public", &reported(fallbacks)).complete(answer);
+        let answered = ReportedModel::of("public", &reported(fallbacks)).answer(answer, stamp);
 
+        let CallOutput::Complete(answered) = answered else {
+            panic!("a complete answer came back as a stream");
+        };
         assert_eq!(serde_json::to_value(answered).unwrap(), expected);
     }
 
