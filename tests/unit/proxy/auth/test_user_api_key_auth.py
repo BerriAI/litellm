@@ -25,6 +25,7 @@ import litellm
 import litellm.proxy
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy._types import (
     LiteLLM_AccessGroupTable,
     LiteLLM_TeamTableCachedObj,
@@ -1992,6 +1993,36 @@ async def test_auth_custom_key_header_precedence_and_fallback(
 
     assert valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
     assert valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("master_key", "presented"),
+    [
+        pytest.param("BEARER example-admin-secret", "BEARER example-admin-secret", id="raw_uppercase_master_key"),
+        pytest.param("bEaReR example-admin-secret", "bEaReR example-admin-secret", id="raw_mixed_case_master_key"),
+        pytest.param("example-admin-secret", "BEARER example-admin-secret", id="uppercase_scheme_then_master_key"),
+    ],
+)
+async def test_litellm_key_header_authenticates_a_raw_master_key_that_starts_with_a_bearer_scheme(
+    master_key: str, presented: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    request: Final = FastAPIRequest(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/models",
+            "headers": [(b"x-litellm-api-key", presented.encode())],
+        },
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+
+    authorized: Final = await user_api_key_auth(request=request, api_key="", custom_litellm_key_header=presented)
+
+    assert authorized.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert authorized.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
 @pytest.mark.asyncio

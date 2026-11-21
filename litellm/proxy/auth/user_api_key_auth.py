@@ -1194,6 +1194,12 @@ async def check_key_model_budget_with_fallback(
             request.scope["path_params"]["model"] = fallback_model  # rebind-ok: route handlers use the fallback model
 
 
+def _is_master_key(api_key: str) -> bool:
+    from litellm.proxy.proxy_server import master_key  # noqa: PLC0415  # runtime globals
+
+    return master_key is not None and secrets.compare_digest(api_key.encode(), master_key.encode())
+
+
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
@@ -1201,7 +1207,7 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
-    elif (credential := bearer_credential(api_key)) is not None:
+    elif (credential := bearer_credential(api_key)) is not None and not _is_master_key(api_key):
         return credential
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
