@@ -18,7 +18,12 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    has_attributes,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
@@ -67,6 +72,7 @@ from ..common_utils import (
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    normalize_youtube_url,
     with_forced_bare_root_unions_on_parameters,
     with_integer_enums_that_fit,
     youtube_video_mime_type,
@@ -573,7 +579,7 @@ def process_gemini_media(
             # Vertex rejects a fileData without mimeType, so YouTube links default to video/mp4.
             uri_mime_type: Final = format or youtube_video_mime_type(image_url)
             if uri_mime_type:
-                file_data = FileDataType(mime_type=uri_mime_type, file_uri=image_url)
+                file_data = FileDataType(mime_type=uri_mime_type, file_uri=normalize_youtube_url(image_url))
             else:
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
@@ -750,7 +756,7 @@ def _gemini_history_media_part(
                     llm_provider="vertex_ai",
                 )
             raise ValueError(f"Invalid image received - {raw_url}")
-        if message_index is not None and content.get("type") == "video_url" and not drop_params:
+        if content.get("type") == "video_url" and not drop_params:
             raise litellm.BadRequestError(
                 message="Invalid message content: element type is 'video_url' but it has no 'url'",
                 model=model,
@@ -804,12 +810,12 @@ def gemini_convert_messages_with_history(
 
     msg_i = 0
     tool_call_responses = []
-    vertex_project = None
     vertex_credentials = None
     request_settings: Final = cast(Mapping[str, object], litellm_params or {})  # cast-ok: untyped shared signature
     drop_params: Final = drops_unsupported_params(request_settings.get("drop_params"))
+    project_setting: Final = request_settings.get("vertex_project") or request_settings.get("vertex_ai_project")
+    vertex_project: Final = project_setting if isinstance(project_setting, str) else None
     if litellm_params:
-        vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -888,7 +894,7 @@ def gemini_convert_messages_with_history(
                                 _parts.append(_part)
                             elif (
                                 media_part := _gemini_history_media_part(
-                                    element, model, vertex_project, vertex_credentials
+                                    element, model, vertex_project, vertex_credentials, drop_params=drop_params
                                 )
                             ) is not None:
                                 _parts.append(media_part)
@@ -1029,6 +1035,7 @@ def gemini_convert_messages_with_history(
                     model=model,
                     vertex_project=vertex_project,
                     vertex_credentials=vertex_credentials,
+                    drop_params=drop_params,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1176,10 +1183,13 @@ def transform_request_body(
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
+    request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
     # Separate system prompt from rest of message
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     system_instructions, messages = transform_system_message(
-        supports_system_message=supports_system_message, messages=messages
+        supports_system_message=supports_system_message,
+        messages=messages,
+        drop_params=drops_unsupported_params(request_params.get("drop_params")),
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
@@ -1220,7 +1230,6 @@ def transform_request_body(
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
-        request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
         labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
@@ -1520,8 +1529,13 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
+def _has_video_url_part(message: object) -> bool:
+    parts: Final = as_object_list((as_str_mapping(message) or {}).get("content")) or ()
+    return any((as_str_mapping(part) or {}).get("type") == "video_url" for part in parts)
+
+
 def transform_system_message(
-    supports_system_message: bool, messages: list[AllMessageValues]
+    supports_system_message: bool, messages: list[AllMessageValues], drop_params: bool = False
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
     Extracts the system message from the openai message list.
@@ -1542,6 +1556,15 @@ def transform_system_message(
                 if isinstance(message["content"], str):
                     _system_content_block = PartType(text=message["content"])
                 elif isinstance(message["content"], list):
+                    if not drop_params and _has_video_url_part(message):
+                        raise litellm.BadRequestError(
+                            message=(
+                                "Gemini system instructions take text only. "
+                                "Move the video to a user message or set drop_params=True."
+                            ),
+                            model="",
+                            llm_provider="gemini",
+                        )
                     system_text = ""
                     for content in message["content"]:
                         system_text += content.get("text") or ""

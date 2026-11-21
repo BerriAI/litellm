@@ -2785,6 +2785,55 @@ def test_gemini_tool_result_youtube_video_on_ai_studio_is_a_bad_request_instead_
         convert_to_gemini_tool_call_result(_YOUTUBE_TOOL_RESULT, None, custom_llm_provider="gemini")
 
 
+_CLIP_WITH_METADATA_RESULT: Final = {
+    "role": "tool",
+    "name": "find_clip",
+    "content": [
+        {"type": "text", "text": '{"ok":true}'},
+        {
+            "type": "video_url",
+            "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "video_metadata": {"fps": 2}},
+        },
+    ],
+}
+
+
+def test_gemini_tool_result_video_metadata_is_a_bad_request_instead_of_a_silent_drop() -> None:
+    with pytest.raises(litellm.BadRequestError, match="cannot carry video_metadata"):
+        convert_to_gemini_tool_call_result(_CLIP_WITH_METADATA_RESULT, None, custom_llm_provider="gemini")
+
+
+def test_drop_params_sends_a_tool_result_video_without_its_metadata() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_METADATA_RESULT, None, custom_llm_provider="gemini", drop_params=True
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_video_keeps_its_metadata_beside_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_METADATA_RESULT,
+        None,
+        supports_multimodal_function_responses=False,
+        custom_llm_provider="gemini",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered == [
+        {"function_response": {"name": "find_clip", "response": {"ok": True}}},
+        {"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}, "video_metadata": {"fps": 2}},
+    ]
+
+
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
     Test that Anthropic-native image blocks in tool_result list content are

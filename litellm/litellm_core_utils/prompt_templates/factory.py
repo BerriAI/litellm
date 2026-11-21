@@ -1649,13 +1649,27 @@ def _gemini_tool_media_part(
     nested: bool,
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    drop_params: bool = False,
 ) -> VertexPartType | None:
     from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
     from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_media_source
 
     source: Final = gemini_media_source(content)
     if source is None:
+        if content.get("type") == "video_url" and not drop_params:
+            raise litellm.BadRequestError(
+                message="Invalid message content: element type is 'video_url' but it has no 'url'",
+                model=model or "",
+                llm_provider=custom_llm_provider or "gemini",
+            )
         return None
+    drops_video_metadata: Final = nested and content.get("type") == "video_url" and bool(source.video_metadata)
+    if drops_video_metadata and not drop_params:
+        raise litellm.BadRequestError(
+            message="Gemini tool results cannot carry video_metadata. Remove it or set drop_params=True.",
+            model=model or "",
+            llm_provider=custom_llm_provider or "gemini",
+        )
     inline_only: Final = nested and custom_llm_provider not in ("vertex_ai", "vertex_ai_beta")
     if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
         raise litellm.BadRequestError(
@@ -1705,6 +1719,7 @@ def convert_to_gemini_tool_call_result(
     model: str | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    drop_params: bool = False,
 ) -> VertexPartType | list[VertexPartType]:
     """
     OpenAI message with a tool result looks like:
@@ -1767,6 +1782,7 @@ def convert_to_gemini_tool_call_result(
                         nested=supports_multimodal_function_responses,
                         vertex_project=vertex_project,
                         vertex_credentials=vertex_credentials,
+                        drop_params=drop_params,
                     )
                 ) is not None:
                     media_parts.append(media_part)
