@@ -122,8 +122,17 @@ class AnthropicPassthroughLoggingHandler:
         """
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
-        # Check if this is a batch creation request
         if "/v1/messages/batches" in url_route and httpx_response.status_code == 200:
+            if httpx_response.request.method != "POST" or not is_collection_route(url_route, ANTHROPIC_BATCHES_ROUTE):
+                body: Final = _JSON_OBJECT.validate_python(request_body or {})
+                return {
+                    "result": ModelResponse(
+                        model=optional_str(body.get("model")) or logging_obj.model,
+                        choices=[],
+                        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                    ),
+                    "kwargs": kwargs,
+                }
             # Get request body from parameter or kwargs
             request_body = request_body or kwargs.get("request_body", {})
             return AnthropicPassthroughLoggingHandler.batch_creation_handler(
