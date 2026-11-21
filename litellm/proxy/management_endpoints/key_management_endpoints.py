@@ -2007,10 +2007,10 @@ def _check_key_model_specific_limits(
     Generic function to check if a key is allocating model specific limits.
     Raises an error if we're overallocating.
     """
-    model_rpm_limit: Final = data.model_rpm_limit or (
+    model_rpm_limit: Final = attribute_or_none(data, "model_rpm_limit") or (
         _DECODED_JSON.validate_python(data.metadata.get("model_rpm_limit", None)) if data.metadata else None
     )
-    model_tpm_limit: Final = data.model_tpm_limit or (
+    model_tpm_limit: Final = attribute_or_none(data, "model_tpm_limit") or (
         _DECODED_JSON.validate_python(data.metadata.get("model_tpm_limit", None)) if data.metadata else None
     )
     if model_rpm_limit is None and model_tpm_limit is None:
