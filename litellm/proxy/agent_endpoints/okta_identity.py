@@ -37,6 +37,16 @@ def okta_issuers(litellm_jwtauth: "LiteLLM_JWTAuth") -> Mapping[str, OktaIssuer]
     )
 
 
+class PersonLookup(Protocol):
+    def __call__(self, claims: Mapping[str, object], /) -> Awaitable[str | AgentIdentityFailure | None]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OktaAgents:
+    issuers: Mapping[str, OktaIssuer]
+    person: PersonLookup
+
+
 class BindingLookup(Protocol):
     def __call__(
         self, org: str, client_id: str, /, *, check_retired: bool
@@ -48,7 +58,13 @@ class ClientCredentials:
     client: str
 
 
-OktaToken: TypeAlias = ClientCredentials
+@dataclass(frozen=True, slots=True)
+class Person:
+    client: str
+    uid: str
+
+
+OktaToken: TypeAlias = ClientCredentials | Person
 
 
 def _text(value: object) -> str | None:
@@ -57,7 +73,10 @@ def _text(value: object) -> str | None:
 
 def okta_token(claims: Mapping[str, object]) -> OktaToken | None:
     client: Final = _text(claims.get("cid"))
-    if client is not None and _text(claims.get("uid")) is None and claims.get("sub") == client:
+    uid: Final = _text(claims.get("uid"))
+    if client is not None and uid is not None and "act" not in claims:
+        return Person(client, uid)
+    if client is not None and uid is None and claims.get("sub") == client:
         return ClientCredentials(client)
     return None
 
@@ -95,8 +114,27 @@ def _autonomous(
     )
 
 
+async def _delegated(
+    agent: AgentResponse, claims: Mapping[str, object], client: str, uid: str, person: PersonLookup
+) -> ManagedAgentContext | AgentIdentityFailure | None:
+    binding: Final = _bound_identity(agent)
+    if binding is None:
+        return _DISABLED
+    if (claims.get("iss"), client) != (binding.issuer, binding.client_id):
+        return AgentIdentityFailure(message="Token does not match the registered Okta application")
+    scope_failure: Final = _scope_failure(binding, claims)
+    if scope_failure is not None:
+        return scope_failure
+    user_id: Final = await person(claims)
+    if user_id is None or isinstance(user_id, AgentIdentityFailure):
+        return user_id
+    return ManagedAgentContext(
+        agent_id=agent.agent_id, binding_revision=binding.revision, mode="delegated", user_id=user_id, subject_oid=uid
+    )
+
+
 async def resolve_okta_claims(
-    claims: Mapping[str, object], issuer: OktaIssuer, lookup: BindingLookup
+    claims: Mapping[str, object], issuer: OktaIssuer, lookup: BindingLookup, person: PersonLookup
 ) -> ManagedAgentContext | AgentIdentityFailure | None:
     if not issuer.accepts_access_tokens:
         return None
@@ -106,5 +144,10 @@ async def resolve_okta_claims(
             if agent is None or isinstance(agent, AgentIdentityFailure):
                 return agent
             return _autonomous(agent, claims, client)
+        case Person(client=client, uid=uid):
+            bound: Final = await lookup(issuer.org, client, check_retired=False)
+            if bound is None or isinstance(bound, AgentIdentityFailure) or bound.execution_mode == "autonomous":
+                return bound if isinstance(bound, AgentIdentityFailure) else None
+            return await _delegated(bound, claims, client, uid, person)
         case None:
             return None

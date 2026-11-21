@@ -106,6 +106,9 @@ class AgentIdentityFailure(LiteLLMBaseModel):
     message: str
 
 
+NO_PERSON: Final = AgentIdentityFailure(message="The delegated person has no LiteLLM user")
+
+
 class ManagedAgentContext(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 

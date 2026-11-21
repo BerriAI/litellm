@@ -11,7 +11,14 @@ from starlette.requests import Request
 
 import litellm
 from litellm.proxy import proxy_server
-from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyException, ScopeMapping, UserAPIKeyAuth
+from litellm.proxy._types import (
+    JWTIssuerConfig,
+    LiteLLM_JWTAuth,
+    LiteLLM_ObjectPermissionTable,
+    ProxyException,
+    ScopeMapping,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.jwt import claims
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -45,14 +52,17 @@ def _token(claims: Mapping[str, object]) -> str:
     )
 
 
-def _request(route: str = "/v1/chat/completions") -> Request:
+def _request(
+    route: str = "/v1/chat/completions", method: str = "POST", headers: Mapping[str, str] | None = None
+) -> Request:
     body: Final = {"model": "gpt-test", "messages": []}
+    extra: Final = tuple((name.encode(), value.encode()) for name, value in (headers or {}).items())
     request: Final = Request(
         {
             "type": "http",
-            "method": "POST",
+            "method": method,
             "path": route,
-            "headers": [(b"content-type", b"application/json")],
+            "headers": [(b"content-type", b"application/json"), *extra],
             "query_string": b"",
             "path_params": {},
             "parsed_body": (tuple(body), body),
@@ -130,9 +140,15 @@ class Gateway:
         self.client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
         self.stores.agent_identity.current.add((agent.agent_id, agent.identity.revision))
 
-    async def send(self, claims: Mapping[str, object], route: str = "/v1/chat/completions") -> UserAPIKeyAuth:
+    async def send(
+        self,
+        claims: Mapping[str, object],
+        route: str = "/v1/chat/completions",
+        method: str = "POST",
+        headers: Mapping[str, str] | None = None,
+    ) -> UserAPIKeyAuth:
         return await user_api_key_auth_builder(
-            request=_request(route),
+            request=_request(route, method, headers),
             api_key=f"Bearer {_token(claims)}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
@@ -146,9 +162,15 @@ class Gateway:
             await self.send(claims, route)
         return refused.value
 
-    async def outcome(self, claims: Mapping[str, object], route: str = "/v1/chat/completions") -> tuple[object, ...]:
+    async def outcome(
+        self,
+        claims: Mapping[str, object],
+        route: str = "/v1/chat/completions",
+        method: str = "POST",
+        headers: Mapping[str, str] | None = None,
+    ) -> tuple[object, ...]:
         try:
-            auth: Final = await self.send(claims, route)
+            auth: Final = await self.send(claims, route, method, headers)
         except ProxyException as refused:
             return ("refused", refused.code, refused.message)
         context: Final = auth.managed_agent_context
@@ -467,3 +489,272 @@ async def test_row_09_agent_deleted_while_its_binding_is_still_cached_on_this_po
 
     assert outcome[:2] == ("refused", "403")
     assert "Agent is disabled or no longer bound to an identity" in str(outcome[2])
+
+
+MARIA: Final = "maria@example.com"
+SIGN_IN: Final = {"sub": MARIA, "uid": "00u1maria", "cid": APP, "email": MARIA, "scp": ["invoices.read"]}
+
+
+def _person(gateway: Gateway, *, granted: bool = True, active: bool = True) -> None:
+    gateway.configure(user_email_jwt_field="email")
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="maria-grants", agents=["invoice-bot"] if granted else []
+    )
+    gateway.stores.object_permission.seed("maria-grants", permission.model_dump())
+    gateway.stores.user.rows[MARIA] = {
+        "user_id": MARIA,
+        "user_email": MARIA,
+        "user_role": "internal_user",
+        "teams": [],
+        "metadata": {} if active else {"scim_active": False},
+        "object_permission_id": "maria-grants",
+        "object_permission": permission,
+    }
+
+
+@pytest.mark.asyncio
+async def test_row_20_person_signed_in_to_a_delegated_agents_app_runs_as_that_agent_for_that_person(
+    gateway: Gateway,
+) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+
+    assert await gateway.outcome(SIGN_IN) == ("admitted", "invoice-bot", "delegated", MARIA)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "setup",
+    [
+        pytest.param(lambda gateway: None, id="row_08_no_binding"),
+        pytest.param(_bind(mode="autonomous"), id="row_08_autonomous_only"),
+        pytest.param(_bind(mode="autonomous", enabled=False), id="row_08_autonomous_only_disabled"),
+        pytest.param(_retired, id="row_08_retired"),
+    ],
+)
+async def test_row_08_person_token_without_a_delegated_binding_keeps_todays_plain_path(
+    gateway: Gateway, setup: Callable[[Gateway], None]
+) -> None:
+    setup(gateway)
+    _person(gateway)
+    today: Final = await _plain_today(gateway, SIGN_IN)
+
+    assert await gateway.outcome(SIGN_IN) == today
+    assert today[0] == "admitted" and today[1] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["delegated", "both"])
+async def test_row_20_person_token_runs_as_the_agent_in_delegated_or_both_mode(
+    gateway: Gateway, mode: AgentExecutionMode
+) -> None:
+    gateway.bind(okta_agent(mode=mode))
+    _person(gateway)
+
+    assert await gateway.outcome(SIGN_IN) == ("admitted", "invoice-bot", "delegated", MARIA)
+
+
+def _delegated(
+    *, enabled: bool = True, active: bool = True, scopes: tuple[str, ...] = (), granted: bool = True
+) -> Callable[[Gateway], None]:
+    def setup(gateway: Gateway) -> None:
+        gateway.bind(okta_agent(mode="delegated", enabled=enabled, active=active, scopes=scopes))
+        _person(gateway, granted=granted)
+
+    return setup
+
+
+def _delegated_other_issuer(gateway: Gateway) -> None:
+    _bind_other_issuer(gateway)
+    agent: Final = okta_agent(mode="delegated")
+    assert agent.identity is not None
+    moved: Final = agent.model_copy(
+        update={"identity": agent.identity.model_copy(update={"issuer": "https://acme.okta.example/oauth2/other"})}
+    )
+    gateway.bind(moved)
+    _person(gateway)
+
+
+def _delegated_without_user(gateway: Gateway) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    gateway.configure(user_email_jwt_field="email")
+
+
+def _delegated_without_user_fields(gateway: Gateway) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+    gateway.configure(user_email_jwt_field=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setup", "claims", "route", "code", "message"),
+    [
+        pytest.param(_delegated(enabled=False), SIGN_IN, None, "403", "Agent is disabled or no longer bound to an identity", id="row_09_person_disabled"),
+        pytest.param(_delegated(active=False), SIGN_IN, None, "403", "Agent is disabled or no longer bound to an identity", id="row_09_person_unbound"),
+        pytest.param(_delegated_other_issuer, SIGN_IN, None, "403", "Token does not match the registered Okta application", id="row_10_person"),
+        pytest.param(_delegated(scopes=("invoices.write",)), SIGN_IN, None, "403", "Token lacks the required scopes", id="row_15_person"),
+        pytest.param(_delegated_without_user, SIGN_IN, None, "403", "The delegated person has no LiteLLM user", id="row_16_no_user"),
+        pytest.param(_delegated_without_user_fields, SIGN_IN, None, "403", "The delegated person has no LiteLLM user", id="row_16_no_user_claim"),
+        pytest.param(_delegated(granted=False), SIGN_IN, None, "403", "Select a team that grants access to this agent using x-litellm-team-id", id="row_19"),
+        pytest.param(_delegated(), {**SIGN_IN, "scp": "invoices.read"}, None, "403", "Invalid scope claim", id="row_22_person"),
+        pytest.param(_delegated(), SIGN_IN, "/key/generate", "403", "Agent identities can only access inference and agent discovery routes", id="row_23_person"),
+    ],
+)
+async def test_person_token_refusals(
+    gateway: Gateway,
+    setup: Callable[[Gateway], None],
+    claims: Mapping[str, object],
+    route: str | None,
+    code: str,
+    message: str,
+) -> None:
+    setup(gateway)
+
+    outcome: Final = await gateway.outcome(claims, route or "/v1/chat/completions")
+
+    assert outcome[:2] == ("refused", code)
+    assert message in str(outcome[2])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configure", "person"),
+    [
+        pytest.param({"user_allowed_email_domain": "corp.example"}, {}, id="row_17_email_domain"),
+        pytest.param({}, {"active": False}, id="row_24_deactivated"),
+    ],
+)
+async def test_person_refusals_carry_mains_exact_plain_path_refusal(
+    gateway: Gateway, configure: Mapping[str, object], person: Mapping[str, bool]
+) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway, active=person.get("active", True))
+    gateway.configure(**configure)
+    plain: Final = await _plain_today(gateway, SIGN_IN)
+
+    outcome: Final = await gateway.outcome(SIGN_IN)
+
+    assert outcome[0] == "refused"
+    assert outcome == plain
+
+
+@pytest.mark.asyncio
+async def test_row_18_enforce_rbac_refuses_a_delegated_agent_as_it_does_for_entra(gateway: Gateway) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+    gateway.configure(enforce_rbac=True)
+
+    outcome: Final = await gateway.outcome(SIGN_IN)
+
+    assert outcome[:2] == ("refused", "403")
+    assert "Unmatched token passed in. enforce_rbac is set to True" in str(outcome[2])
+
+
+def _with_user_fields(
+    gateway: Gateway, issuer_fields: Mapping[str, str], global_email: str | None, okta: bool
+) -> None:
+    gateway.configure(
+        user_email_jwt_field=global_email,
+        issuers=[
+            issuer.model_copy(
+                update={**issuer_fields, **({} if okta else {"agent_identity_provider": None, "okta_org": None})}
+            )
+            for issuer in _issuers()
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("issuer_fields", "global_email", "user_id"),
+    [
+        pytest.param({"user_id_jwt_field": "uid"}, None, "00u1maria", id="issuer_user_id_field"),
+        pytest.param({}, "email", MARIA, id="global_email_fallback"),
+        pytest.param({"user_id_jwt_field": "uid"}, "email", "00u1maria", id="both"),
+        pytest.param({}, None, None, id="neither"),
+    ],
+)
+async def test_the_delegated_person_is_the_user_the_plain_path_names_for_the_same_claims(
+    gateway: Gateway, issuer_fields: Mapping[str, str], global_email: str | None, user_id: str | None
+) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+    if user_id is not None:
+        gateway.stores.user.rows[user_id] = {**gateway.stores.user.rows[MARIA], "user_id": user_id}
+    _with_user_fields(gateway, issuer_fields, global_email, okta=False)
+    plain: Final = await gateway.outcome(SIGN_IN)
+    _with_user_fields(gateway, issuer_fields, global_email, okta=True)
+
+    delegated: Final = await gateway.outcome(SIGN_IN)
+
+    assert plain == ("admitted", None, None, user_id)
+    if user_id is None:
+        assert delegated[0] == "refused"
+        assert "The delegated person has no LiteLLM user" in str(delegated[2])
+    else:
+        assert delegated == ("admitted", "invoice-bot", "delegated", user_id)
+
+
+@pytest.mark.asyncio
+async def test_row_29_scope_mappings_refuse_a_delegated_agent_with_mains_plain_path_refusal(gateway: Gateway) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+    gateway.configure(
+        enforce_scope_based_access=True,
+        scope_mappings=[ScopeMapping(scope="other.scope", models=["another-model"])],
+    )
+    plain: Final = await _plain_today(gateway, SIGN_IN)
+
+    outcome: Final = await gateway.outcome(SIGN_IN)
+
+    assert outcome[0] == "refused"
+    assert outcome == plain
+
+
+@pytest.mark.asyncio
+async def test_row_25_a_grant_from_a_team_the_token_did_not_name_is_refused_on_a_route_teams_cannot_call(
+    gateway: Gateway,
+) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway, granted=False)
+    team_grant: Final = LiteLLM_ObjectPermissionTable(object_permission_id="finance-grants", agents=["invoice-bot"])
+    gateway.stores.object_permission.seed("finance-grants", team_grant.model_dump())
+    gateway.stores.user.rows[MARIA] = {**gateway.stores.user.rows[MARIA], "teams": ["finance"]}
+    gateway.stores.team.rows["finance"] = {
+        "team_id": "finance",
+        "members_with_roles": [{"user_id": MARIA, "role": "user"}],
+        "object_permission_id": "finance-grants",
+        "object_permission": team_grant,
+    }
+    gateway.stores.team_membership.rows[(MARIA, "finance")] = {"user_id": MARIA, "team_id": "finance"}
+
+    outcome: Final = await gateway.outcome(SIGN_IN, "/v1/agents", "GET")
+
+    assert outcome[:2] == ("refused", "403")
+    assert "The granting team is not allowed to access this route" in str(outcome[2])
+
+
+@pytest.mark.asyncio
+async def test_row_19_a_team_header_naming_a_team_that_does_not_grant_the_agent_is_refused(gateway: Gateway) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway, granted=False)
+    team_grant: Final = LiteLLM_ObjectPermissionTable(object_permission_id="finance-grants", agents=["invoice-bot"])
+    gateway.stores.object_permission.seed("finance-grants", team_grant.model_dump())
+    gateway.stores.user.rows[MARIA] = {**gateway.stores.user.rows[MARIA], "teams": ["finance", "sales"]}
+    for team in ("finance", "sales"):
+        gateway.stores.team.rows[team] = {
+            "team_id": team,
+            "members_with_roles": [{"user_id": MARIA, "role": "user"}],
+            **({"object_permission_id": "finance-grants", "object_permission": team_grant} if team == "finance" else {}),
+        }
+        gateway.stores.team_membership.rows[(MARIA, team)] = {"user_id": MARIA, "team_id": team}
+
+    gateway.configure(team_ids_jwt_field="groups")
+
+    outcome: Final = await gateway.outcome(
+        {**SIGN_IN, "groups": ["finance", "sales"]}, headers={"x-litellm-team-id": "sales"}
+    )
+
+    assert outcome[:2] == ("refused", "403")
+    assert "Select a team that grants access to this agent using x-litellm-team-id" in str(outcome[2])
