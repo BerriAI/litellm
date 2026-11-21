@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -47,7 +47,7 @@ def _pass_through_key_limits() -> MagicMock:
 def _rerank_router(scores: Sequence[float] = (0.1, 0.9, 0.4)) -> MagicMock:
     router = MagicMock()
     router.arerank = AsyncMock(
-        side_effect=lambda model, query, documents, top_n, metadata: RerankResponse(
+        side_effect=lambda model, query, documents, top_n, metadata, **_: RerankResponse(
             id="rerank-1",
             results=[{"index": index, "relevance_score": score} for index, score in enumerate(scores)],
         )
@@ -169,6 +169,24 @@ async def test_router_reranker_asks_for_every_document_and_attributes_spend_to_t
     assert checked["data"]["model"] == "rerank-2.5"
     assert checked["data"]["query"] == QUERY
     assert checked["data"]["documents"] == list(DOCUMENTS)
+
+
+@pytest.mark.parametrize(
+    ("region", "forwarded"),
+    (("eu", {"allowed_model_region": "eu"}), (None, {})),
+    ids=("region-restricted-caller", "unrestricted-caller"),
+)
+@pytest.mark.asyncio
+async def test_the_callers_model_region_reaches_the_router_like_on_rerank(
+    region: Literal["eu"] | None, forwarded: Mapping[str, str]
+) -> None:
+    router = _rerank_router()
+    caller: Final = UserAPIKeyAuth(api_key="hashed-caller-key", allowed_model_region=region)
+
+    await rerank_order(QUERY, DOCUMENTS, router_reranker(router, "rerank-2.5", caller, _pass_through_key_limits()))
+
+    sent: Final = router.arerank.await_args.kwargs
+    assert {key: sent[key] for key in sent if key == "allowed_model_region"} == forwarded
 
 
 @pytest.mark.asyncio

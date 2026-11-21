@@ -87,12 +87,14 @@ def router_reranker(
                 user_api_key_dict=user_api_key_dict, data=request, call_type="arerank"
             )
         )
+        region: Final = user_api_key_dict.allowed_model_region
         response: Final = await router.arerank(
             model=processed.model,
             query=processed.query,
             documents=list(processed.documents),
             top_n=len(processed.documents),
             metadata=processed.metadata,
+            **({} if region is None else {"allowed_model_region": region}),
         )
         return tuple(
             RerankScore(index=result.index, score=result.relevance_score)

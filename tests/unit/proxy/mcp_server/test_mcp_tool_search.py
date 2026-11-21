@@ -1107,7 +1107,7 @@ class TestCallToolRestApiVirtualTools:
     def _rerank_router() -> MagicMock:
         router = MagicMock()
         router.arerank = AsyncMock(
-            side_effect=lambda model, query, documents, top_n, metadata: RerankResponse(
+            side_effect=lambda model, query, documents, top_n, metadata, **_: RerankResponse(
                 results=[
                     {"index": index, "relevance_score": _rerank_score(text)} for index, text in enumerate(documents)
                 ]
