@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Final
 
@@ -11,6 +12,7 @@ from litellm.proxy.mcp_server.events.access import EventGrant, principal_of
 from litellm.proxy.mcp_server.events.catalog import prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import CursorBinding, arguments_digest, open_cursor
+from litellm.proxy.mcp_server.events.guardrails import ScreenOutcome
 from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.push import PushRelay, granted_heartbeat, push
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
@@ -49,8 +51,12 @@ async def _revoked() -> OperationContext:
 
 
 async def _run(
-    frames: tuple[object, ...], authorize=_authorized, screen=None, settings: EventsSettings = SETTINGS, records=None
-):  # noqa: ANN001, ANN202  # test helper
+    frames: tuple[object, ...],
+    authorize: Callable[[], Awaitable[OperationContext]] = _authorized,
+    screen: Callable[..., Awaitable[ScreenOutcome]] | None = None,
+    settings: EventsSettings = SETTINGS,
+    records: list[EventActivity] | None = None,
+) -> tuple[list[tuple[str, JsonObject]], FakeUpstream]:
     sent: Final[list[tuple[str, JsonObject]]] = []  # mutable-ok: collects downstream notifications
 
     async def send(method: str, params: JsonObject) -> None:
@@ -153,14 +159,18 @@ async def _relay(heartbeat_ms: int) -> tuple[PushRelay, list[tuple[str, JsonObje
 
 @pytest.mark.asyncio
 async def test_the_gateway_sends_heartbeats_only_after_the_upstream_confirms() -> None:
-    relay, sent = await _relay(heartbeat_ms=10)
+    relay, sent = await _relay(heartbeat_ms=1)
     send_stream, receive_stream = anyio.create_memory_object_stream[StreamFrame | Overflow](4)
-    with anyio.move_on_after(0.08):
+    with anyio.move_on_after(0.02):  # idle ticks pass; with no upstream active none of them may heartbeat
         await relay.consume(receive_stream)
     assert sent == []
     send_stream.send_nowait(_active("3"))
-    with anyio.move_on_after(0.08):
-        await relay.consume(receive_stream)
+    with anyio.fail_after(5):
+        async with anyio.create_task_group() as group:
+            group.start_soon(relay.consume, receive_stream)
+            while not any(method == "notifications/events/heartbeat" for method, _ in sent):
+                await anyio.sleep(0)
+            group.cancel_scope.cancel()
     methods: Final = [method for method, _ in sent]
     assert methods[0] == "notifications/events/active"
     assert "notifications/events/heartbeat" in methods[1:]

@@ -31,19 +31,19 @@ class MemoryStore:
         self.rows[row.id] = row
 
     async def reserve(self, row: SubscriptionRow) -> bool:
-        current = self.rows.get(row.id)
+        current: Final = self.rows.get(row.id)
         if current is not None and current.status != "terminated":
             return False
         self.rows[row.id] = pending_row(row)
         return True
 
     async def discard_pending(self, subscription_id: str) -> None:
-        current = self.rows.get(subscription_id)
+        current: Final = self.rows.get(subscription_id)
         if current is not None and current.status == "pending":
             self.rows.pop(subscription_id)
 
     def _update_live(self, subscription_id: str, **fields: object) -> bool:  # noqa: ANN003  # test double mirrors a guarded UPDATE
-        current = self.rows.get(subscription_id)
+        current: Final = self.rows.get(subscription_id)
         if current is None or current.status == "terminated":
             return False
         self.rows[subscription_id] = current.model_copy(update=fields)
@@ -60,10 +60,10 @@ class MemoryStore:
     async def mark_failed(
         self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int
     ) -> None:
-        current = self.rows.get(subscription_id)
+        current: Final = self.rows.get(subscription_id)
         if current is None or current.status == "terminated":
             return
-        failures = current.consecutive_failures + 1
+        failures: Final = current.consecutive_failures + 1
         self._update_live(
             subscription_id,
             consecutive_failures=failures,
@@ -93,7 +93,7 @@ class MemoryStore:
             self.rows.pop(subscription_id)
 
     async def terminate(self, subscription_id: str) -> None:
-        current = self.rows.get(subscription_id)
+        current: Final = self.rows.get(subscription_id)
         if current is not None:
             self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
 

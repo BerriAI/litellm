@@ -17,10 +17,12 @@ SUBSCRIPTION_ID = "io.modelcontextprotocol/subscriptionId"
 
 
 class _Params(RequestParams):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class _Note(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     method: str
     params: dict[str, JsonValue]
 
