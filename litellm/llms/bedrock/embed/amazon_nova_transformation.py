@@ -419,9 +419,8 @@ class AmazonNovaEmbeddingConfig:
 
         requests: Final[Sequence[Mapping[str, object]]] = batch_data or ()
         prices: Final = _clip_prices(model)
-        estimate_costs: Final = tuple(
-            _estimated_input_tokens(response) * prices.input_cost_per_token for response in response_list
-        )
+        estimated_tokens: Final = tuple(_estimated_input_tokens(response) for response in response_list)
+        estimate_costs: Final = tuple(tokens * prices.input_cost_per_token for tokens in estimated_tokens)
         audio_seconds: Final = tuple(
             _seconds_costing_at_least(_audio_seconds(request_data), prices.input_cost_per_audio_per_second, estimate)
             for request_data, estimate in zip(requests, estimate_costs)
@@ -439,8 +438,8 @@ class AmazonNovaEmbeddingConfig:
             for request_data, metered, audio, video in zip(requests, metered_input_tokens, audio_seconds, video_seconds)
         )
         input_tokens: Final = tuple(
-            _estimated_input_tokens(response) if tokens is None else tokens
-            for response, tokens in zip_longest(response_list, billed_tokens)
+            (estimate or 0) if tokens is None else tokens
+            for estimate, tokens in zip_longest(estimated_tokens, billed_tokens)
         )
         is_image: Final = tuple(_is_image_request(request_data) for request_data in requests)
         image_count: Final = sum(is_image)
