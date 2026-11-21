@@ -43,6 +43,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, StreamEnd, StreamFailed
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.http_parsing_utils import get_form_data
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import _failure_fields_to_lift
@@ -429,6 +430,100 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+_SUBTITLES: Final = "1\n00:00:00,000 --> 00:00:02,000\nGrüße, 世界\n\n"
+
+
+@pytest.fixture
+def patched_transcription_formats(monkeypatch: pytest.MonkeyPatch, patched_transcription: None) -> None:
+    monkeypatch.setattr(proxy_server, "get_form_data", get_form_data)
+    proxy_server.proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+        return_value={"x-callback-trace": "callback-value"}
+    )
+
+    async def _transcribe(data: Mapping[str, object], **kwargs: object) -> TranscriptionResponse:
+        body: Final = {"text": "hello world\n", "srt": _SUBTITLES, "vtt": f"WEBVTT\n\n{_SUBTITLES}"}
+        response: Final = TranscriptionResponse(text=body.get(str(data.get("response_format")), "hello world"))
+        response.hidden_params = {"litellm_call_id": "transcription-call-id", "model_id": "transcription-model-id"}
+        return response
+
+    async def _route_request(data: Mapping[str, object], **kwargs: object) -> Awaitable[TranscriptionResponse]:
+        return _transcribe(data)
+
+    monkeypatch.setattr(proxy_server, "route_request", _route_request)
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
+@pytest.mark.parametrize(
+    ("response_format", "expected_body"),
+    [("text", "hello world\n"), ("srt", _SUBTITLES), ("vtt", f"WEBVTT\n\n{_SUBTITLES}")],
+)
+def test_audio_transcription_text_formats_return_the_bare_body_as_plain_text(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_transcription_formats: None,
+    path: str,
+    response_format: str,
+    expected_body: str,
+) -> None:
+    with auth_as():
+        response: Final = client.post(
+            path,
+            files={"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")},
+            data={"model": "whisper-1", "response_format": response_format},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+    assert response.content == expected_body.encode("utf-8")
+    assert response.headers["x-litellm-call-id"] == "transcription-call-id"
+    assert response.headers["x-litellm-model-id"] == "transcription-model-id"
+    assert response.headers["x-callback-trace"] == "callback-value"
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
+@pytest.mark.parametrize("response_format", [None, "json", "verbose_json"])
+def test_audio_transcription_json_formats_keep_the_json_body_and_headers(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_transcription_formats: None,
+    path: str,
+    response_format: str | None,
+) -> None:
+    with auth_as():
+        response: Final = client.post(
+            path,
+            files={"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")},
+            data={"model": "whisper-1"} | ({} if response_format is None else {"response_format": response_format}),
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.json()["text"] == "hello world"
+    assert response.headers["x-litellm-call-id"] == "transcription-call-id"
+    assert response.headers["x-callback-trace"] == "callback-value"
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
+def test_audio_transcription_text_format_failure_stays_a_json_error(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_transcription_formats: None,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    monkeypatch.setattr(proxy_server, "route_request", AsyncMock(side_effect=ValueError("transcription boom")))
+    with auth_as():
+        response: Final = client.post(
+            path,
+            files={"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")},
+            data={"model": "whisper-1", "response_format": "text"},
+        )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert response.json()["error"]["message"] == "transcription boom"
 
 
 class _RecordingAudioStream(httpx.AsyncByteStream):
