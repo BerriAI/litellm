@@ -489,12 +489,10 @@ def resolve_bridge_tool_choice(
     drop_params: bool,
 ) -> object:
     mapped: Final = str_keyed_mapping(tool_choice)
-    if (
-        mapped is None
-        or "allowed_tools" not in mapped
-        or bridges_to_interactions_api
-        or is_allowed_tools_tool_choice(tool_choice)
-    ):
+    is_plain_or_chat_shaped: Final = (
+        mapped is None or "allowed_tools" not in mapped or is_allowed_tools_tool_choice(tool_choice)
+    )
+    if bridges_to_interactions_api or is_plain_or_chat_shaped:
         return tool_choice
     if drop_params:
         return None

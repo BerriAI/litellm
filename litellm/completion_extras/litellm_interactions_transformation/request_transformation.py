@@ -217,9 +217,7 @@ def _validate_request_params(
         )
     freq_penalty: Final = params.get("frequency_penalty")
     pres_penalty: Final = params.get("presence_penalty")
-    if (isinstance(freq_penalty, (int, float)) and freq_penalty != 0) or (
-        isinstance(pres_penalty, (int, float)) and pres_penalty != 0
-    ):
+    if any(isinstance(penalty, (int, float)) and penalty != 0 for penalty in (freq_penalty, pres_penalty)):
         _reject_or_drop(
             model,
             "Frequency and presence penalties are not supported by the Gemini Interactions API.",

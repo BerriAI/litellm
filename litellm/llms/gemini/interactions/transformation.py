@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
     without,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.interactions import (

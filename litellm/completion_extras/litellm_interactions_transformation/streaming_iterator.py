@@ -49,7 +49,7 @@ from .response_transformation import (
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
 LineStreamSync: TypeAlias = Iterator[str | bytes]
 LineStreamAsync: TypeAlias = AsyncIterator[str | bytes]
-HopBody: TypeAlias = dict[str, object]  # mutable-ok: JSON request body passed to HTTPHandler.post
+HopBody: TypeAlias = dict[str, object]
 SyncHopOpener: TypeAlias = Callable[[HopBody], httpx.Response]
 AsyncHopOpener: TypeAlias = Callable[[HopBody], Awaitable[httpx.Response]]
 _HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError)
@@ -560,6 +560,24 @@ class InteractionsChatStreamingIterator:
         self.http_response = response
         self._async_lines = response.aiter_lines()
 
+    def _adopt_stream_id(self, event: JsonMapping) -> None:
+        raw_inter: Final = event.get("interaction")
+        created_id: Final = raw_inter.get("id") if isinstance(raw_inter, dict) else event.get("id")
+        if isinstance(created_id, str) and created_id:
+            self._stream_id = created_id
+
+    def _raise_on_failed_status_update(self, event: JsonMapping) -> None:
+        status_inter: Final = event.get("interaction")
+        status_map: Final = status_inter if isinstance(status_inter, dict) else _EMPTY_JSON_MAP
+        status_val: Final = status_map.get("status") or event.get("status")
+        has_error: Final = event.get("error") is not None or status_map.get("error") is not None
+        if status_val in ("failed", "cancelled") or has_error:
+            self._raise_stream_failure(
+                event,
+                status_map,
+                default_code=status_val if isinstance(status_val, str) else None,
+            )
+
     def feed_line(self, raw_line: str | bytes) -> None:
         payload_str: Final = _extract_sse_payload(raw_line)
         if payload_str is None:
@@ -575,10 +593,7 @@ class InteractionsChatStreamingIterator:
         event_type: Final = event.get("event_type") or event.get("type")
         match event_type:
             case "interaction.created" | "interaction.start":
-                raw_inter: Final = event.get("interaction")
-                created_id: Final = raw_inter.get("id") if isinstance(raw_inter, dict) else event.get("id")
-                if isinstance(created_id, str) and created_id:
-                    self._stream_id = created_id
+                self._adopt_stream_id(event)
             case "step.start" | "content.start":
                 self._buffer.extend(self._handle_step_start(event))
             case "step.delta" | "content.delta":
@@ -593,19 +608,7 @@ class InteractionsChatStreamingIterator:
                     default_code="cancelled" if event_type == "interaction.cancelled" else None,
                 )
             case "interaction.status_update":
-                status_inter: Final = event.get("interaction")
-                status_map: Final = status_inter if isinstance(status_inter, dict) else _EMPTY_JSON_MAP
-                status_val: Final = status_map.get("status") or event.get("status")
-                if (
-                    status_val in ("failed", "cancelled")
-                    or event.get("error") is not None
-                    or status_map.get("error") is not None
-                ):
-                    self._raise_stream_failure(
-                        event,
-                        status_map,
-                        default_code=status_val if isinstance(status_val, str) else None,
-                    )
+                self._raise_on_failed_status_update(event)
             case _:
                 pass
 

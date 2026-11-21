@@ -67,6 +67,14 @@ def _provider_default_api_base(
     return None
 
 
+def _as_litellm_params(model: str, optional_params: object) -> LiteLLM_Params:
+    if isinstance(optional_params, LiteLLM_Params):
+        return optional_params
+    if json_contains(optional_params, "model"):
+        return LiteLLM_Params.model_validate(_LiteLLMParamsFields(**keyword_arguments(optional_params, LiteLLM_Params)))
+    return LiteLLM_Params(model=model, **keyword_arguments(optional_params, LiteLLM_Params))
+
+
 def get_api_base(model: str, optional_params: object) -> str | None:
     """
     Returns the api base used for calling the model.
@@ -87,16 +95,7 @@ def get_api_base(model: str, optional_params: object) -> str | None:
     """
 
     try:
-        if isinstance(optional_params, LiteLLM_Params):
-            _optional_params = optional_params
-        elif json_contains(optional_params, "model"):
-            _optional_params = LiteLLM_Params.model_validate(
-                _LiteLLMParamsFields(**keyword_arguments(optional_params, LiteLLM_Params))
-            )
-        else:  # prevent needing to copy and pop the dict
-            _optional_params = LiteLLM_Params(
-                model=model, **keyword_arguments(optional_params, LiteLLM_Params)
-            )  # convert to pydantic object
+        _optional_params: Final = _as_litellm_params(model, optional_params)
     except Exception:
         return None
     # get llm provider

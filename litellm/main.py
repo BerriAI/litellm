@@ -243,7 +243,6 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
-    allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
     keyword_arguments,
