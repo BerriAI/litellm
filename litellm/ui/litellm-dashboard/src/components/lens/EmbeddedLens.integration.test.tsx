@@ -49,19 +49,17 @@ it("gives the gateway session only to the frame it loaded, once that frame asks"
   say(target, { type: "lens:ready", protocol: 2 });
   expect(post).not.toHaveBeenCalled();
   say(target, { type: "lens:ready", protocol: 1 });
-  expect(post).toHaveBeenCalledExactlyOnceWith(
-    {
-      type: "lens:host",
-      protocol: 1,
-      apiBaseUrl: window.location.origin,
-      authToken: "gateway-session",
-      authHeaderName: "X-Gateway-Key",
-      serverRootPath: "/",
-      userRole: "Admin",
-      readOnly: true,
-    },
-    window.location.origin,
-  );
+  const session = {
+    type: "lens:host",
+    protocol: 1,
+    apiBaseUrl: window.location.origin,
+    authToken: "gateway-session",
+    authHeaderName: "X-Gateway-Key",
+    serverRootPath: "/",
+    userRole: "Admin",
+    readOnly: true,
+  };
+  expect(post).toHaveBeenCalledExactlyOnceWith(session, window.location.origin);
 });
 
 it("keeps the dashboard URL on the view the framed workspace moved to", async () => {
