@@ -2066,7 +2066,7 @@ async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_l
     finish_reason: str,
 ) -> None:
     respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
-        return_value=_gemini_sse(*events)
+        return_value=_gemini_sse(*({**event, "responseId": "gemini-response"} for event in events))
     )
 
     response: Final = await litellm.acompletion(
@@ -2078,6 +2078,7 @@ async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_l
     )
     chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
 
+    assert {chunk.id for chunk in chunks} == {"gemini-response"}
     assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [finish_reason]
     assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
         [GEMINI_LAST_THOUGHT_IMAGE]

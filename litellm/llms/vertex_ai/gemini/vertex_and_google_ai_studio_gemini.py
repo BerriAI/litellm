@@ -3706,7 +3706,8 @@ class ModelResponseIterator:
             processed_chunk: Final = self._with_answer_offset(
                 self._with_usage_offset(GenerateContentResponseBody(**chunk))
             )
-            response_id: Final = self._first_response_id or processed_chunk.get("responseId")
+            self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
+            response_id: Final = self._first_response_id
             served: Final = _served_model_name(processed_chunk.get("modelVersion"))
             model_response = ModelResponseStream(
                 choices=[],
@@ -3857,7 +3858,6 @@ class ModelResponseIterator:
         if token is None:
             return
         self._pending_hop_token = token
-        self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
         for choice in model_response.choices:
             delta_fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
             choice.finish_reason = None
