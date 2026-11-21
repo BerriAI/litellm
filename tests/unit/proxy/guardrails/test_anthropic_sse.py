@@ -429,3 +429,328 @@ def test_healthy_stream_with_a_tool_input_that_is_not_json_still_raises():
 
     with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
         anthropic_sse_chunks_from_response(assembled, upstream)
+
+
+def _events_frames(events: tuple[dict[str, object], ...]) -> tuple[bytes, ...]:
+    return tuple(_frame(str(event["type"]), event) for event in events)
+
+
+def _streamed_block(index: int, content_block: dict[str, object], *deltas: dict[str, object]) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": content_block},
+        *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def _client_tool_use(index: int, tool_use_id: str, name: str) -> tuple[dict[str, object], ...]:
+    return _streamed_block(
+        index,
+        {"type": "tool_use", "id": tool_use_id, "name": name, "input": {}, "caller": {"type": "direct"}},
+        {"type": "input_json_delta", "partial_json": ""},
+        {"type": "input_json_delta", "partial_json": '{"city": "Tokyo"}'},
+    )
+
+
+_FULL_USAGE: Final = {
+    "input_tokens": 638,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    "output_tokens": 32,
+    "service_tier": "standard",
+    "inference_geo": "global",
+    "speed": "standard",
+}
+_MESSAGE_START: Final = {
+    "type": "message_start",
+    "message": {
+        "model": "claude-sonnet-5-5",
+        "id": "msg_011ChFEWZLP16nZ4aHN6oeRZ",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "container": None,
+        "stop_reason": None,
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": _FULL_USAGE,
+        "diagnostics": None,
+    },
+}
+_FINAL_USAGE: Final = {
+    "input_tokens": 2063,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 164,
+    "output_tokens_details": {"thinking_tokens": 0},
+    "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
+}
+
+
+def _message_end(stop_reason: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": None, "container": None},
+            "usage": _FINAL_USAGE,
+        },
+        {"type": "message_stop"},
+    )
+
+
+_MCP_CALL: Final = _streamed_block(
+    0,
+    {"type": "mcp_tool_use", "id": "mcptoolu_1", "name": "read_wiki_structure", "input": {}, "server_name": "deepwiki"},
+    {"type": "input_json_delta", "partial_json": '{"repoName": "facebook/react"}'},
+)
+_MCP_RESULT: Final = _streamed_block(
+    1,
+    {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcptoolu_1",
+        "is_error": False,
+        "content": [{"type": "text", "text": "Available pages for facebook/react"}],
+    },
+)
+_MCP_STREAM_EVENTS: Final = (
+    _MESSAGE_START,
+    _MCP_CALL[0],
+    {"type": "ping"},
+    *_MCP_CALL[1:],
+    *_MCP_RESULT,
+    *_client_tool_use(2, "toolu_time", "get_time"),
+    *_client_tool_use(3, "toolu_weather", "get_weather"),
+    *_message_end("tool_use"),
+)
+_DENIAL: Final = "Permission denied: Tool 'get_weather' denied"
+
+
+def _deny(*denied_tool_use_ids: str) -> Callable[[ModelResponse], None]:
+    def rewrite(assembled: ModelResponse) -> None:
+        choice: Final = assembled.choices[0]
+        assert isinstance(choice, Choices)
+        kept_calls: Final = [call for call in choice.message.tool_calls or [] if call.id not in denied_tool_use_ids]
+        choice.message.tool_calls = kept_calls or None
+        choice.message.content = _DENIAL
+        if not kept_calls:
+            choice.finish_reason = "stop"
+
+    return rewrite
+
+
+def _rewritten_events(
+    events: tuple[dict[str, object], ...], rewrite: Callable[[ModelResponse], None]
+) -> tuple[dict[str, object], ...]:
+    upstream: Final = _events_frames(events)
+    assembled: Final = assemble_anthropic_sse_stream(upstream, through_upstream_error=True)
+    assert assembled is not None
+    rewrite(assembled)
+    return tuple(payload for _, payload in _decode(anthropic_sse_chunks_from_response(assembled, upstream)))
+
+
+def _without_block(events: tuple[dict[str, object], ...], index: int) -> tuple[dict[str, object], ...]:
+    return tuple(event for event in events if event.get("index") != index)
+
+
+def _without_pings(events: tuple[dict[str, object], ...]) -> tuple[dict[str, object], ...]:
+    return tuple(event for event in events if event["type"] != "ping")
+
+
+def test_denied_tool_call_leaves_every_other_upstream_event_as_the_upstream_sent_it():
+    """The rewrite used to rebuild the whole stream from the OpenAI-shaped response, which dropped the
+    MCP blocks, each tool's ``caller``, the null keys and most usage fields, and replaced the message id."""
+    rewritten: Final = _rewritten_events(_MCP_STREAM_EVENTS, _deny("toolu_weather"))
+
+    kept: Final = _without_pings(_without_block(_MCP_STREAM_EVENTS, 3))
+    denial_text: Final = _streamed_block(
+        3, {"type": "text", "text": ""}, {"type": "text_delta", "text": _DENIAL}
+    )
+    assert _without_pings(rewritten) == (*kept[:-2], *denial_text, *kept[-2:])
+    assert {"type": "ping"} in rewritten
+
+
+def test_stream_whose_only_tool_call_is_denied_ends_the_turn_with_the_upstream_usage():
+    upstream: Final = (_MESSAGE_START, *_client_tool_use(0, "toolu_weather", "get_weather"), *_message_end("tool_use"))
+
+    rewritten: Final = _rewritten_events(upstream, _deny("toolu_weather"))
+
+    expected_end: Final = _message_end("end_turn")
+    assert rewritten == (
+        _MESSAGE_START,
+        *_streamed_block(0, {"type": "text", "text": ""}, {"type": "text_delta", "text": _DENIAL}),
+        *expected_end,
+    )
+
+
+def test_denied_tool_call_replaces_the_upstream_text_where_it_was():
+    thinking: Final = _streamed_block(
+        0,
+        {"type": "thinking", "thinking": "", "signature": ""},
+        {"type": "thinking_delta", "thinking": "Both calls are needed."},
+        {"type": "signature_delta", "signature": "sig-1"},
+    )
+    redacted: Final = _streamed_block(1, {"type": "redacted_thinking", "data": "EmwKAhgB"})
+    text: Final = _streamed_block(
+        2, {"type": "text", "text": ""}, {"type": "text_delta", "text": "I'll check both."}
+    )
+    upstream: Final = (
+        _MESSAGE_START,
+        *thinking,
+        *redacted,
+        *text,
+        *_client_tool_use(3, "toolu_time", "get_time"),
+        *_client_tool_use(4, "toolu_weather", "get_weather"),
+        *_message_end("tool_use"),
+    )
+
+    rewritten: Final = _rewritten_events(upstream, _deny("toolu_weather"))
+
+    kept: Final = _without_block(upstream, 4)
+    rewritten_text: Final = _streamed_block(
+        2, {"type": "text", "text": ""}, {"type": "text_delta", "text": _DENIAL}
+    )
+    assert rewritten == tuple(
+        chain.from_iterable(rewritten_text if event in text else (event,) for event in kept if event not in text[1:])
+    )
+
+
+def test_masked_tool_input_keeps_the_fields_the_masking_did_not_touch():
+    upstream: Final = (_MESSAGE_START, *_client_tool_use(0, "toolu_time", "get_time"), *_message_end("tool_use"))
+
+    def mask_input(assembled: ModelResponse) -> None:
+        choice: Final = assembled.choices[0]
+        assert isinstance(choice, Choices)
+        (tool_call,) = choice.message.tool_calls or []
+        tool_call.function.arguments = '{"city": "<LOCATION>"}'
+
+    rewritten: Final = _rewritten_events(upstream, mask_input)
+
+    assert rewritten == (
+        _MESSAGE_START,
+        *_streamed_block(
+            0,
+            {"type": "tool_use", "id": "toolu_time", "name": "get_time", "input": {}, "caller": {"type": "direct"}},
+            {"type": "input_json_delta", "partial_json": '{"city": "<LOCATION>"}'},
+        ),
+        *_message_end("tool_use"),
+    )
+
+
+_HIDDEN_CALL: Final = {"type": "tool_use", "id": "toolu_hidden", "name": "Bash", "input": {"command": "rm -rf /"}}
+
+
+def test_rewrite_sends_message_start_with_the_empty_content_anthropic_sends():
+    message: Final = _MESSAGE_START["message"]
+    assert isinstance(message, dict)
+    message_start_with_a_call: Final = {**_MESSAGE_START, "message": {**message, "content": [_HIDDEN_CALL]}}
+    upstream: Final = (
+        message_start_with_a_call,
+        *_client_tool_use(0, "toolu_weather", "get_weather"),
+        *_message_end("tool_use"),
+    )
+
+    rewritten: Final = _rewritten_events(upstream, _deny("toolu_weather"))
+
+    assert rewritten[0] == _MESSAGE_START
+    assert "toolu_hidden" not in json.dumps(rewritten)
+
+
+@pytest.mark.parametrize(
+    "undefined_event",
+    [
+        {"type": "tool_call", "content_block": _HIDDEN_CALL},
+        {"type": "content_block_start", "content_block": _HIDDEN_CALL},
+    ],
+    ids=["unknown-type", "block-start-without-index"],
+)
+def test_rewrite_leaves_out_an_event_the_messages_stream_does_not_define(undefined_event: dict[str, object]):
+    upstream: Final = (
+        _MESSAGE_START,
+        undefined_event,
+        *_client_tool_use(0, "toolu_weather", "get_weather"),
+        *_message_end("tool_use"),
+    )
+
+    rewritten: Final = _rewritten_events(upstream, _deny("toolu_weather"))
+
+    assert "toolu_hidden" not in json.dumps(rewritten)
+    assert _DENIAL in json.dumps(rewritten)
+
+
+def _text_block(index: int, text: str) -> tuple[dict[str, object], ...]:
+    return _streamed_block(index, {"type": "text", "text": ""}, {"type": "text_delta", "text": text})
+
+
+def test_masked_text_of_several_text_blocks_is_sent_once_where_the_first_text_block_was():
+    search_call: Final = _streamed_block(
+        1,
+        {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+        {"type": "input_json_delta", "partial_json": '{"query": "support line"}'},
+    )
+    search_result: Final = _streamed_block(
+        2,
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_1",
+            "content": [{"type": "web_search_result", "url": "https://a.test", "title": "A", "encrypted_content": "e"}],
+        },
+    )
+    upstream: Final = (
+        _MESSAGE_START,
+        *_text_block(0, "I'll look up a@b.test."),
+        *search_call,
+        *search_result,
+        *_text_block(3, " Call 555-0100."),
+        *_message_end("end_turn"),
+    )
+    masked: Final = "I'll look up [EMAIL]. Call [PHONE]."
+
+    rewritten: Final = _rewritten_events(upstream, _set_text(masked))
+
+    assert rewritten == (_MESSAGE_START, *_text_block(0, masked), *search_call, *search_result, *_message_end("end_turn"))
+
+
+def test_rewrite_that_removes_a_server_tool_call_also_removes_the_result_that_answers_it():
+    upstream: Final = (
+        _MESSAGE_START,
+        *_streamed_block(
+            0,
+            {"type": "server_tool_use", "id": "srvtoolu_2", "name": "bash_code_execution", "input": {}},
+            {"type": "input_json_delta", "partial_json": '{"command": "cat .env"}'},
+        ),
+        *_streamed_block(
+            1,
+            {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_2",
+                "content": {"type": "bash_code_execution_result", "stdout": "KEY=1", "stderr": "", "return_code": 0},
+            },
+        ),
+        *_text_block(2, "Here is the file."),
+        *_message_end("end_turn"),
+    )
+
+    def block_the_server_call(assembled: ModelResponse) -> None:
+        choice: Final = assembled.choices[0]
+        assert isinstance(choice, Choices)
+        fields: Final = choice.message.provider_specific_fields or {}
+        choice.message.provider_specific_fields = {
+            key: value for key, value in fields.items() if key != "server_tool_calls"
+        }
+        choice.message.content = "Blocked"
+
+    rewritten: Final = _rewritten_events(upstream, block_the_server_call)
+
+    assert rewritten == (_MESSAGE_START, *_text_block(0, "Blocked"), *_message_end("end_turn"))
+
+
+def test_stream_that_failed_before_its_message_start_is_sent_as_its_error_alone():
+    upstream: Final = _events_frames((_MESSAGE_START, *_text_block(0, "call 555-0100"), *_message_end("end_turn")))
+    assembled: Final = assemble_anthropic_sse_stream(upstream)
+    assert assembled is not None
+    _set_text("call [PHONE]")(assembled)
+
+    rewritten: Final = anthropic_sse_chunks_from_response(assembled, _events_frames(({"type": "ping"}, _UPSTREAM_ERROR)))
+
+    assert _decode(rewritten) == (("error", _UPSTREAM_ERROR),)

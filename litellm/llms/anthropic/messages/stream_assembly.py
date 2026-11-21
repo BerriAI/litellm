@@ -590,12 +590,6 @@ def anthropic_sse_event_type(event: str) -> object:
     return next((event_data.get("type") for event_data in _parsed_sse_events(event)), None)
 
 
-def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[str]:
-    """The string ``type`` of every event the stream sent."""
-    event_types: Final = (event.get("type") for event in _parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
-    return frozenset(event_type for event_type in event_types if isinstance(event_type, str))
-
-
 def _is_named_error_event(event: str) -> bool:
     names: Final = tuple(value for name, value in _sse_fields(event) if name == "event")
     return names[-1:] == ("error",)
@@ -634,17 +628,6 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     return tuple(_plain_error_event(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
 
 
-def anthropic_sse_stopped_block_index(event: str) -> object:
-    return next(
-        (
-            event_data.get("index")
-            for event_data in _parsed_sse_events(event)
-            if event_data.get("type") == "content_block_stop"
-        ),
-        None,
-    )
-
-
 def _block_index(event_data: Mapping[str, object]) -> int | None:
     index: Final = event_data.get("index")
     return index if isinstance(index, int) else None
@@ -662,19 +645,9 @@ def _started_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, Mapp
     )
 
 
-def anthropic_sse_started_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
-    """The ``content_block`` each ``content_block_start`` of the stream opened, by block index."""
-    return _started_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
-
-
 def _unfinished_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, Mapping[str, object]]:
     stopped: Final = frozenset(_block_index(event) for event in events if event.get("type") == "content_block_stop")
     return MappingProxyType({index: block for index, block in _started_blocks(events).items() if index not in stopped})
-
-
-def anthropic_sse_unfinished_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
-    """The blocks the stream opened and never stopped, which only a failed upstream leaves."""
-    return _unfinished_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
 
 
 def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, object]], ...]:
@@ -682,6 +655,15 @@ def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, obje
         (event, event_data)
         for event in split_sse_chunk_into_events(sse_stream)
         if (event_data := _sse_event_data(event)) is not None
+    )
+
+
+def anthropic_sse_content_events(all_chunks: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    """The data of every event the stream sent, in order, other than an upstream ``error`` event."""
+    return tuple(
+        event_data
+        for event, event_data in _sse_events_with_data(_joined_sse_stream(all_chunks) or "")
+        if not _is_error_event(event)
     )
 
 

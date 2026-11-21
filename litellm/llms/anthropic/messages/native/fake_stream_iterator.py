@@ -27,6 +27,83 @@ def _citations_of(block: Mapping[str, object]) -> tuple[object, ...]:
     return _CITATIONS.validate_python(citations) if isinstance(citations, list) else ()
 
 
+def anthropic_sse_event_chunk(event: Mapping[str, object]) -> bytes:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+def _text_block_events(block: Mapping[str, object], index: int) -> tuple[Mapping[str, object], ...]:
+    citations: Final = _citations_of(block)
+    return (
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "text", "text": "", "citations": ()}
+            if citations
+            else {"type": "text", "text": ""},
+        },
+        *(
+            {"type": "content_block_delta", "index": index, "delta": {"type": "citations_delta", "citation": citation}}
+            for citation in citations
+        ),
+        {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": block.get("text", "")}},
+    )
+
+
+def _thinking_block_events(block: Mapping[str, object], index: int) -> tuple[Mapping[str, object], ...]:
+    thinking: Final = block.get("thinking", "")
+    return (
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+        },
+        *(
+            (
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "thinking_delta", "thinking": thinking},
+                },
+            )
+            if thinking
+            else ()
+        ),
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "signature_delta", "signature": block.get("signature") or ""},
+        },
+    )
+
+
+def _tool_use_block_events(block: Mapping[str, object], index: int) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": {**block, "input": {}}},
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": json.dumps(block.get("input", {}))},
+        },
+    )
+
+
+def _content_block_body_events(block: Mapping[str, object], index: int) -> tuple[Mapping[str, object], ...]:
+    match block.get("type"):
+        case "text":
+            return _text_block_events(block, index)
+        case "thinking":
+            return _thinking_block_events(block, index)
+        case "tool_use" | "server_tool_use":
+            return _tool_use_block_events(block, index)
+        case _:
+            return ({"type": "content_block_start", "index": index, "content_block": block},)
+
+
+def anthropic_content_block_events(block: Mapping[str, object], index: int) -> tuple[Mapping[str, object], ...]:
+    """The start, delta and stop events that stream one complete content block at ``index``."""
+    return (*_content_block_body_events(block, index), {"type": "content_block_stop", "index": index})
+
+
 class FakeAnthropicMessagesStreamIterator:
     """
     Fake streaming iterator for Anthropic Messages responses.
@@ -54,95 +131,9 @@ class FakeAnthropicMessagesStreamIterator:
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
-    def _create_content_block_chunks(self, block_dict: Mapping[str, object], index: int) -> list[bytes]:
-        """Build SSE chunks for a single content block."""
-        chunks: Final = list[bytes]()
-        block_type: Final = block_dict.get("type")
-
-        if block_type == "text":
-            citations: Final = _citations_of(block_dict)
-            content_block_start = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {"type": "text", "text": "", "citations": ()}
-                if citations
-                else {"type": "text", "text": ""},
-            }
-            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
-            citation_deltas: Final = (
-                {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "citations_delta", "citation": citation},
-                }
-                for citation in citations
-            )
-            chunks.extend(
-                f"event: content_block_delta\ndata: {json.dumps(delta)}\n\n".encode() for delta in citation_deltas
-            )
-            text: Final = block_dict.get("text", "")
-            content_block_delta = {
-                "type": "content_block_delta",
-                "index": index,
-                "delta": {"type": "text_delta", "text": text},
-            }
-            chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
-
-        elif block_type == "thinking":
-            content_block_start = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
-            }
-            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
-            thinking_text: Final = block_dict.get("thinking", "")
-            if thinking_text:
-                content_block_delta = {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "thinking_delta", "thinking": thinking_text},
-                }
-                chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
-            signature_delta: Final = {
-                "type": "content_block_delta",
-                "index": index,
-                "delta": {"type": "signature_delta", "signature": block_dict.get("signature") or ""},
-            }
-            chunks.append(f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode())
-
-        elif block_type in ("tool_use", "server_tool_use"):
-            empty_input: Final[Mapping[str, object]] = {}
-            tool_use_start: Final = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {**block_dict, "input": empty_input},
-            }
-            chunks.append(f"event: content_block_start\ndata: {json.dumps(tool_use_start)}\n\n".encode())
-            tool_use_delta: Final = {
-                "type": "content_block_delta",
-                "index": index,
-                "delta": {
-                    "type": "input_json_delta",
-                    "partial_json": json.dumps(block_dict.get("input", {})),
-                },
-            }
-            chunks.append(f"event: content_block_delta\ndata: {json.dumps(tool_use_delta)}\n\n".encode())
-
-        else:
-            passthrough_start: Final = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": block_dict,
-            }
-            chunks.append(f"event: content_block_start\ndata: {json.dumps(passthrough_start)}\n\n".encode())
-
-        content_block_stop: Final = {"type": "content_block_stop", "index": index}
-        chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
-        return chunks
-
     def _create_streaming_chunks(self) -> list[bytes]:
         """Convert the non-streaming response to streaming chunks"""
-        chunks: Final = []
+        chunks: Final[list[bytes]] = []
 
         response_dict: Final[Mapping[str, object]] = self.response
 
@@ -169,7 +160,9 @@ class FakeAnthropicMessagesStreamIterator:
         # 2-4. For each content block, send start/delta/stop events
         content_blocks: Final = cast(Sequence[Mapping[str, object]], response_dict.get("content", []))
         for index, block_dict in enumerate(content_blocks):
-            chunks.extend(self._create_content_block_chunks(block_dict, index))
+            chunks.extend(
+                anthropic_sse_event_chunk(event) for event in anthropic_content_block_events(block_dict, index)
+            )
 
         # 5. message_delta event (with final usage and stop_reason)
         # Include cache usage fields so clients that only read message_delta
