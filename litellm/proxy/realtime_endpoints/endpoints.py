@@ -540,7 +540,7 @@ async def create_realtime_client_secret(
     raw_value: Final[str] = upstream_json.get("value", "")
     expires_at: Final = upstream_json.get("expires_at")
     token_payload: Final = _encode_realtime_token_payload(
-        ephemeral_key=raw_value,
+        ephemeral_key=raw_value if isinstance(raw_value, str) else "",
         model_id=model,
         user_id=getattr(user_api_key_dict, "user_id", None),
         team_id=getattr(user_api_key_dict, "team_id", None),
@@ -892,7 +892,7 @@ async def create_realtime_transcription_session(
         raw_value: Final[str] = client_secret.get("value", "")
         expires_at: Final = client_secret.get("expires_at")
         token_payload: Final = _encode_realtime_token_payload(
-            ephemeral_key=raw_value,
+            ephemeral_key=raw_value if isinstance(raw_value, str) else "",
             model_id=model,
             user_id=getattr(user_api_key_dict, "user_id", None),
             team_id=getattr(user_api_key_dict, "team_id", None),
