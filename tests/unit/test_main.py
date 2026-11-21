@@ -2278,6 +2278,12 @@ def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_res
         pytest.param("gpt-6-astra", "https://myproject.models.ai.azure.com", None, id="serverless-host-stays-chat"),
         pytest.param("Mistral-large-2411", _FOUNDRY_API_BASE, None, id="non-gpt-5-model-stays-chat"),
         pytest.param("claude-opus-4-1", _FOUNDRY_API_BASE, None, id="claude-on-foundry-stays-chat"),
+        pytest.param(
+            "model_router/gpt-6-astra",
+            f"{_FOUNDRY_API_BASE}/api/projects/proj/openai/v1",
+            None,
+            id="model-router-on-a-project-stays-chat",
+        ),
     ],
 )
 def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_stays_chat(
@@ -6965,6 +6971,19 @@ def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(
     )
 
     assert route.calls.last.request.headers["authorization"] == "Bearer caller-supplied-key"
+
+
+def test_speech_keyless_json_configured_provider_sends_no_openai_key(monkeypatch: pytest.MonkeyPatch):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(monkeypatch, {"PARASAIL_API_KEY": None, "OPENAI_API_KEY": "openai-env-canary"})
+    monkeypatch.setattr(litellm, "openai_key", "openai-module-canary")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route().respond(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+        with pytest.raises(litellm.AuthenticationError, match="PARASAIL_API_KEY"):
+            litellm.speech(model="parasail/tts-1", input="which key goes out", voice="alloy")
+
+    assert route.call_count == 0
 
 
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"

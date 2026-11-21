@@ -7,4 +7,5 @@
 
 # references
 
+- No Python counterpart: Python's `ProviderConfigManager.get_provider_anthropic_messages_config` has no config for `openrouter`
 - https://openrouter.ai/docs/api/api-reference/anthropic-messages/create-messages

@@ -32,6 +32,7 @@ from litellm.utils import CustomStreamWrapper
 _INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(
     object, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+_OPAQUE_LITELLM_PARAMS: Final = TypeAdapter(object)
 
 
 class _SupportsGet(Protocol):
@@ -69,7 +70,9 @@ class BaseInteractionsAPIStreamingIterator:
         # set hidden params for response headers
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=_OPAQUE_LITELLM_PARAMS.validate_python(
+                self.logging_obj.model_call_details.get("litellm_params", {})
+            ),
         )
         _model_info: Final[object] = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {

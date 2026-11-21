@@ -73,12 +73,14 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
+from litellm.llms.bedrock.chat.converse_to_openai import as_json_object
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_opts_into_native_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_converse_rejects_assistant_prefill,
+    bedrock_model_is_in_catalog,
     bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
@@ -134,6 +136,7 @@ from litellm.utils import (
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
+    thinking_param_needs_replayed_thinking_blocks,
     token_counter,
 )
 
@@ -247,6 +250,11 @@ def _has_native_text_format(output_config: object) -> bool:
         return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
     except ValidationError:
         return False
+
+
+def _text_with_strict_format(caller_text: object) -> Mapping[str, object]:
+    text: Final = as_json_object(caller_text) or {}
+    return {**text, "format": {**(as_json_object(text.get("format")) or {}), "strict": True}}
 
 
 def _guard_content_as_system_text(block: SystemContentBlock) -> SystemContentBlock | None:
@@ -650,6 +658,16 @@ class AmazonConverseConfig(BaseConfig):
     @staticmethod
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
         return re.search(r"openai\.gpt-\d", model) is not None
+
+    @classmethod
+    def _deployment_is_openai_gpt(cls, model: str, base_model: str | None) -> bool:
+        if cls._is_openai_gpt_reasoning_model(model):
+            return True
+        return (
+            base_model is not None
+            and not bedrock_model_is_in_catalog(model)
+            and cls._is_openai_gpt_reasoning_model(base_model)
+        )
 
     @staticmethod
     def _requires_min_max_tokens(model: str) -> bool:
@@ -1606,8 +1624,8 @@ class AmazonConverseConfig(BaseConfig):
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
                 json_schema=dict(native_schema),
-                name=name,
-                description=description,
+                name=name if isinstance(name, str) else None,
+                description=description if isinstance(description, str) else None,
             )
             optional_params["outputConfig"] = output_config
         elif json_schema is not None:
@@ -2147,6 +2165,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         drop_params: bool = False,
         model_info: Mapping[str, object] | None = None,
+        deployment_base_model: str | None = None,
     ) -> tuple[dict, dict, dict, OutputConfigBlock | None]:
         """Prepare and separate request parameters."""
         # Consume the internal ``_output_config_normalized`` marker set by
@@ -2155,7 +2174,7 @@ class AmazonConverseConfig(BaseConfig):
         anthropic_output_config_already_normalized = bool(optional_params.pop("_output_config_normalized", False))
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
-        cleaned_params: Final = filter_exceptions_from_params(optional_params)
+        cleaned_params: Final = _JSON_VALUE.validate_python(filter_exceptions_from_params(optional_params))
         inference_params = safe_deep_copy(cleaned_params)
         supported_converse_params: Final = list(AmazonConverseConfig.__annotations__.keys()) + ["top_k"]
         supported_tool_call_params: Final = ["tools", "tool_choice"]
@@ -2225,14 +2244,16 @@ class AmazonConverseConfig(BaseConfig):
         # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
         # from additional_request_params to prevent JSON serialization errors
         # This filters: Exception objects, callable objects (functions), Logging objects, etc.
-        additional_request_params = filter_exceptions_from_params(additional_request_params)
+        serializable_request_params: Final = dict(
+            as_str_mapping(_JSON_VALUE.validate_python(filter_exceptions_from_params(additional_request_params))) or {}
+        )
 
         if anthropic_output_config is not None and isinstance(anthropic_output_config, dict):
             # Application inference profile ARNs hide the underlying model, so the
             # effort ceiling and capability gates below cannot run; forward
             # verbatim (like ``thinking``) and let Bedrock enforce.
             if is_bedrock_application_inference_profile_arn(model):
-                additional_request_params["output_config"] = anthropic_output_config
+                serializable_request_params["output_config"] = anthropic_output_config
             elif base_model.startswith("anthropic"):
                 if litellm.drop_params is True and not AnthropicConfig.model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
@@ -2248,11 +2269,14 @@ class AmazonConverseConfig(BaseConfig):
                     effort: Final = anthropic_output_config.get("effort")
                     if effort is not None:
                         self._validate_anthropic_adaptive_effort(model=model, effort=effort)
-                    additional_request_params["output_config"] = anthropic_output_config
+                    serializable_request_params["output_config"] = anthropic_output_config
+
+        if _has_native_text_format(output_config) and self._deployment_is_openai_gpt(model, deployment_base_model):
+            serializable_request_params["text"] = _text_with_strict_format(serializable_request_params.get("text"))
 
         return (
             inference_params,
-            additional_request_params,
+            serializable_request_params,
             request_metadata,
             output_config,
         )
@@ -2482,7 +2506,9 @@ class AmazonConverseConfig(BaseConfig):
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
         # Related issues: https://github.com/BerriAI/litellm/issues/14194
         if (
-            optional_params.get("thinking") is not None
+            thinking_param_needs_replayed_thinking_blocks(
+                optional_params.get("thinking")  # pyright: ignore[reportUnknownArgumentType]  # optional_params is a bare dict
+            )
             and messages is not None
             and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
             and not any_assistant_message_has_thinking_blocks(messages)
@@ -2506,7 +2532,13 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
-        ) = self._prepare_request_params(optional_params, model, drop_params, deployment_model_info(litellm_params))
+        ) = self._prepare_request_params(
+            optional_params,
+            model,
+            drop_params,
+            deployment_model_info(litellm_params),
+            self._deployment_base_model(litellm_params or {}),
+        )
 
         original_tools: Final = inference_params.pop("tools", [])
 
@@ -3322,7 +3354,8 @@ class AmazonConverseConfig(BaseConfig):
         )
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = ConverseResponseBlock(**response.json())
+            decoded_response: Final[ConverseResponseBlock] = response.json()
+            completion_response: Final = ConverseResponseBlock(**decoded_response)
         except Exception as e:
             raise BedrockError(
                 message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
