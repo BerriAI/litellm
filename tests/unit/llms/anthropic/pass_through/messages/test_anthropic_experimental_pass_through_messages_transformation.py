@@ -231,6 +231,12 @@ def test_sampling_params_reach_an_upstream_whose_api_version_still_takes_them(
         ),
         pytest.param(AnthropicMessagesConfig, "MiniMax-M3", "https://api.minimax.io/anthropic", id="anthropic-minimax"),
         pytest.param(
+            AnthropicMessagesConfig,
+            "claude-sonnet-4-6",
+            "https://notservices.ai.azure.com.example/anthropic",
+            id="anthropic-foundry-lookalike",
+        ),
+        pytest.param(
             OpenAILikeAnthropicMessagesConfig,
             "qwen3-coder",
             "http://vllm.internal:8000/v1",
@@ -269,9 +275,12 @@ def test_a_third_party_env_base_url_keeps_sampling_params_under_anthropic_versio
         pytest.param("https://api.anthropic.com/v1/messages", None, id="api_base-full-url"),
         pytest.param(None, "https://api.anthropic.com/", id="env-base-url"),
         pytest.param("https://api.anthropic.com", "https://api.deepseek.com/anthropic", id="api_base-over-env"),
+        pytest.param("https://team.services.ai.azure.com/anthropic", None, id="foundry"),
+        pytest.param("https://team.cognitiveservices.azure.com/anthropic", None, id="foundry-cognitive-services"),
+        pytest.param("team.openai.azure.com/anthropic", None, id="foundry-openai-host-without-scheme"),
     ],
 )
-def test_anthropics_own_api_base_still_gates_sampling_params_under_anthropic_version_2026_10_21(
+def test_anthropic_and_foundry_api_bases_gate_sampling_params_under_anthropic_version_2026_10_21(
     monkeypatch: pytest.MonkeyPatch, api_base: str | None, base_url_env: str | None
 ) -> None:
     if base_url_env is not None:

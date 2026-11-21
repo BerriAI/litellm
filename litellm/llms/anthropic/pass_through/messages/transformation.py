@@ -34,7 +34,7 @@ from ...common_utils import (
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
     strip_unsignable_thinking_blocks_for_claude,
 )
-from .api_versions import is_anthropic_api_base, requested_api_version, sampling_params_to_drop
+from .api_versions import requested_api_version, sampling_params_to_drop, serves_anthropic_api_versions
 from .mid_conversation_system import (
     as_system_content_blocks,
     convert_mid_conversation_system_turns,
@@ -575,7 +575,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params.pop("temperature", None)
 
     def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
-        serves_anthropic_api: Final = self._resolved_provider == "anthropic" and is_anthropic_api_base(
+        serves_anthropic_api: Final = self._resolved_provider == "anthropic" and serves_anthropic_api_versions(
             AnthropicModelInfo.get_api_base(api_base)
         )
         return requested_api_version(headers) if serves_anthropic_api else None

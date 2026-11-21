@@ -31,6 +31,11 @@ use crate::{
 
 const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
+    "services.ai.azure.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+];
 
 pub struct AnthropicMessagesConfig;
 
@@ -128,14 +133,10 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: &Headers,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
-        if !is_anthropic_api(url) {
+        if !serves_anthropic_api_versions(url) {
             return Ok(request);
         }
-        drop_sampling_params_removed_by_version(
-            request,
-            requested_api_version(headers),
-            drop_params,
-        )
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
     }
 }
 
@@ -349,12 +350,29 @@ fn drop_unsupported_params(
     })
 }
 
-fn is_anthropic_api(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|url| url.host_str() == Some(ANTHROPIC_API_HOST))
+fn is_foundry_host(host: &str) -> bool {
+    FOUNDRY_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn serves_anthropic_api_versions(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        url.host_str()
+            .is_some_and(|host| host == ANTHROPIC_API_HOST || is_foundry_host(host))
+    })
 }
 
 fn requested_api_version(headers: &Headers) -> &str {
     header_value(headers, VERSION_HEADER).map_or(API_VERSION, str::trim)
+}
+
+pub(crate) fn drop_sampling_params_removed_by_requested_version(
+    request: MessagesRequest,
+    headers: &Headers,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    drop_sampling_params_removed_by_version(request, requested_api_version(headers), drop_params)
 }
 
 fn drop_sampling_params_removed_by_version(
@@ -642,6 +660,9 @@ mod tests {
     #[case::deepseek("https://api.deepseek.com/anthropic/v1/messages")]
     #[case::minimax("https://api.minimax.io/anthropic/v1/messages")]
     #[case::anthropic_lookalike_host("https://api.anthropic.com.gateway.test/v1/messages")]
+    #[case::foundry_lookalike_host(
+        "https://notservices.ai.azure.com.example/anthropic/v1/messages"
+    )]
     fn sampling_params_reach_a_third_party_messages_api_under_any_api_version(
         #[case] url: &str,
         #[values(false, true)] drop_params: bool,
@@ -656,6 +677,30 @@ mod tests {
             ),
             Ok(body(fields))
         );
+    }
+
+    #[rstest]
+    #[case::services_host("https://team.services.ai.azure.com/anthropic/v1/messages")]
+    #[case::cognitive_services_host(
+        "https://team.cognitiveservices.azure.com/anthropic/v1/messages"
+    )]
+    #[case::openai_host("https://team.openai.azure.com/anthropic/v1/messages")]
+    fn foundry_gates_sampling_params_like_anthropic_under_anthropic_version_2026_10_21(
+        #[case] url: &str,
+    ) {
+        let version = &[("anthropic-version", "2026-10-21")];
+        let fields = json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40, "stream": true});
+        assert_eq!(
+            upstream_body(url, version, fields.clone(), true),
+            Ok(body(json!({"stream": true})))
+        );
+        let Error::InvalidRequest(detail) = upstream_body(url, version, fields, false).unwrap_err()
+        else {
+            panic!("expected an invalid request");
+        };
+        assert!(detail.to_string().starts_with(
+            "claude does not support temperature=0.2. anthropic-version 2026-10-21 removed"
+        ));
     }
 
     fn advisor_history() -> Value {

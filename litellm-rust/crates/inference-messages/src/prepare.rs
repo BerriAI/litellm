@@ -664,4 +664,84 @@ mod tests {
             versioned_body(Some("2026-10-21"), (api_base, env), drop_params, shaping).unwrap();
         assert_eq!(prepared.get("temperature"), Some(&json!(0.2)));
     }
+
+    fn aws_route_body(
+        (model, base): (&str, &str),
+        version: &str,
+        drop_params: bool,
+        shaping: MessagesShaping,
+    ) -> Result<Value, Error> {
+        prepare_with_secrets(
+            MessagesCall {
+                body: body(json!({
+                    "model": model,
+                    "max_tokens": 16,
+                    "temperature": 0.2,
+                    "messages": [{"role": "user", "content": "hi"}]
+                })),
+                api_key: None,
+                api_base: Some(base.into()),
+                custom_llm_provider: None,
+                litellm_params: Default::default(),
+                extra_headers: Some(Map::from_iter([(
+                    "anthropic-version".into(),
+                    json!(version),
+                )])),
+                provider_specific_header: None,
+                timeout: None,
+                shaping: MessagesShaping {
+                    settings: MessagesSettings {
+                        drop_params,
+                        ..shaping.settings
+                    },
+                    ..shaping
+                },
+            },
+            &|name: &str| match name {
+                "AWS_REGION_NAME" => Some("us-west-2".into()),
+                "ANTHROPIC_AWS_WORKSPACE_ID" => Some("workspace".into()),
+                _ => None,
+            },
+        )
+        .map(|prepared| serde_json::to_value(prepared.body).unwrap())
+    }
+
+    const MANTLE: (&str, &str) = (
+        "bedrock_mantle/claude-test",
+        "https://bedrock-mantle.us-west-2.api.aws",
+    );
+    const CLAUDE_PLATFORM: (&str, &str) = (
+        "bedrock/claude_platform/claude-test",
+        "https://aws-external-anthropic.us-west-2.api.aws",
+    );
+
+    #[rstest]
+    #[case::caller_on_2023_06_01("2023-06-01", false, Some(json!(0.2)))]
+    #[case::caller_on_2026_10_21_under_drop_params("2026-10-21", true, None)]
+    fn temperature_reaches_anthropic_on_aws_only_under_an_api_version_that_has_it(
+        shaping: MessagesShaping,
+        #[case] version: &str,
+        #[case] drop_params: bool,
+        #[case] expected: Option<Value>,
+        #[values(MANTLE, CLAUDE_PLATFORM)] route: (&str, &str),
+    ) {
+        let prepared = aws_route_body(route, version, drop_params, shaping).unwrap();
+        assert_eq!(prepared.get("temperature").cloned(), expected);
+    }
+
+    #[rstest]
+    fn anthropic_on_aws_refuses_sampling_params_under_anthropic_version_2026_10_21(
+        shaping: MessagesShaping,
+        #[values(MANTLE, CLAUDE_PLATFORM)] route: (&str, &str),
+    ) {
+        let Err(Error::InvalidRequest(detail)) =
+            aws_route_body(route, "2026-10-21", false, shaping)
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-test does not support temperature=0.2. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        );
+    }
 }
