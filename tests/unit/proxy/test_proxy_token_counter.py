@@ -3369,3 +3369,43 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         local.total_tokens,
         local.tokenizer_type,
     )
+
+
+# usage.input_tokens that POST /v1/messages billed for the user turn "What is the weather in Paris?" through xAI
+# grok-4.3-latest, Azure AI Foundry grok-4-1-fast-non-reasoning, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3,
+# and that POST /v1/responses billed for the same input through Perplexity xai/grok-4.3, on 2026-11-17
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "billed_prompt_tokens"),
+    [
+        ("xai/grok-4.3-latest", 199),
+        ("azure_ai/grok-4-1-fast-non-reasoning", 175),
+        ("vertex_ai/xai/grok-4.3", 342),
+        ("bedrock_mantle/xai.grok-4.3", 37),
+        ("perplexity/xai/grok-4.3", 218),
+    ],
+)
+async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
+    monkeypatch: pytest.MonkeyPatch, model: str, billed_prompt_tokens: int
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "billed",
+                    "litellm_params": {"model": model, "api_key": "unused", "api_base": "https://unused.invalid"},
+                }
+            ]
+        ),
+    )
+
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="billed", messages=[{"role": "user", "content": "What is the weather in Paris?"}]
+        )
+    )
+
+    assert counted.count_source == "local_estimate"
+    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
