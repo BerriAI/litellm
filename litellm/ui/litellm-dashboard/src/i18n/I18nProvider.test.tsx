@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import i18next, { type InitOptions } from "i18next";
 import { useState } from "react";
 import { I18nextProvider, initReactI18next, useTranslation } from "react-i18next";
@@ -78,5 +78,54 @@ describe("LanguageGate", () => {
 
     expect(await screen.findByTestId("logout")).toHaveTextContent(en.shell.sidebarAccountMenu.logout);
     expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("renders English when the stored language flips to English after another bundle settled", async () => {
+    let stored = "ja";
+    const instance = createI18n();
+    const tree = () => (
+      <I18nextProvider i18n={instance}>
+        <LanguageGate
+          i18n={instance}
+          locales={new Map([["ja", async () => japanese]])}
+          store={{ read: () => stored, write: vi.fn() }}
+        >
+          <AccountMenuLabels />
+        </LanguageGate>
+      </I18nextProvider>
+    );
+    const { rerender } = render(tree());
+    expect(await screen.findByTestId("logout")).toHaveTextContent(JAPANESE_LOGOUT);
+
+    stored = "en";
+    rerender(tree());
+
+    expect(await screen.findByTestId("logout")).toHaveTextContent(en.shell.sidebarAccountMenu.logout);
+    expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("ignores a bundle that resolves after the stored language flipped away from it", async () => {
+    let resolveLoad: (messages: Messages) => void = () => undefined;
+    let stored = "ja";
+    const instance = createI18n();
+    const tree = () => (
+      <I18nextProvider i18n={instance}>
+        <LanguageGate
+          i18n={instance}
+          locales={new Map([["ja", () => new Promise<Messages>((resolve) => (resolveLoad = resolve))]])}
+          store={{ read: () => stored, write: vi.fn() }}
+        >
+          <AccountMenuLabels />
+        </LanguageGate>
+      </I18nextProvider>
+    );
+    const { rerender } = render(tree());
+    stored = "en";
+    rerender(tree());
+
+    await act(async () => resolveLoad(japanese));
+
+    expect(screen.getByTestId("logout")).toHaveTextContent(en.shell.sidebarAccountMenu.logout);
+    await waitFor(() => expect(document.documentElement.lang).toBe("en"));
   });
 });
