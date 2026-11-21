@@ -393,6 +393,46 @@ def test_completion_posts_runtime_chat_completions(local_cost_map, fake_aws_env)
     assert "inferenceConfig" not in body
 
 
+@pytest.mark.parametrize(
+    "model, keep_breakpoint",
+    [
+        ("global.openai.gpt-6.1-sol", True),
+        ("global.openai.gpt-6.2-sol", True),
+        ("chat_completions/openai.gpt-oss-20b-1:0", False),
+    ],
+)
+def test_native_chat_serializes_cache_breakpoint_for_supported_models(
+    local_cost_map, fake_aws_env, model, keep_breakpoint
+):
+    upstream_model: Final = model.removeprefix("chat_completions/")
+    requests, client = _recording_client(json=_chat_completion_json("ok", upstream_model))
+    breakpoint: Final = {"mode": "explicit"}
+    options: Final = {"mode": "explicit", "ttl": "30m"}
+
+    litellm.completion(
+        model=f"bedrock/{model}",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "stable prefix", "prompt_cache_breakpoint": breakpoint},
+                    {"type": "text", "text": "variable suffix"},
+                ],
+            }
+        ],
+        extra_body={"prompt_cache_options": options},
+        drop_params=True,
+        client=client,
+    )
+
+    (request,) = requests
+    assert request.url.path == "/openai/v1/chat/completions"
+    body = json.loads(request.content)
+    assert body["prompt_cache_options"] == options
+    assert body["messages"][0]["content"][0].get("prompt_cache_breakpoint") == (breakpoint if keep_breakpoint else None)
+    assert body["messages"][0]["content"][1] == {"type": "text", "text": "variable suffix"}
+
+
 def test_completion_keeps_the_aws_request_id_as_a_provider_header(local_cost_map, fake_aws_env):
     _, client = _recording_client(
         json=_chat_completion_json("ok", "us.xai.grok-4.6"), headers={"x-amzn-requestid": "req-native-1"}
