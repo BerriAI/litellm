@@ -613,7 +613,8 @@ class TestManagedWebSocketHandlerIntegration:
             {
                 "type": "mcp_call",
                 "id": "mcp_1",
-                "server_label": "deepwiki",
+                "approval_request_id": "mcpr_nobody_approved",
+                "server_label": "litellm",
                 "name": "read_wiki_structure",
                 "arguments": "{}",
                 "output": "1 Overview",

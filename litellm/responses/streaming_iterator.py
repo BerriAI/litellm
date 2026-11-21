@@ -1825,11 +1825,18 @@ _CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
 )
 
 
-def _is_replayed_call_item(item: Mapping[str, object]) -> bool:
+def _answered_approval_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    approval_ids: Final = (
+        item.get("approval_request_id") for item in items if item.get("type") == "mcp_approval_response"
+    )
+    return frozenset(approval_id for approval_id in approval_ids if isinstance(approval_id, str))
+
+
+def _is_replayed_call_item(item: Mapping[str, object], answered_approval_ids: frozenset[str]) -> bool:
     item_type: Final = item.get("type")
     if item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES or isinstance(item.get("call_id"), str):
         return True
-    return item_type == "mcp_call" and isinstance(item.get("approval_request_id"), str)
+    return item_type == "mcp_call" and item.get("approval_request_id") in answered_approval_ids
 
 
 _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
@@ -3273,6 +3280,7 @@ class ManagedResponsesWebSocketHandler:
     @staticmethod
     def _extract_output_messages(
         completed_event: _MutableJsonObject,
+        answered_approval_ids: frozenset[str] = frozenset(),
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
@@ -3304,7 +3312,7 @@ class ManagedResponsesWebSocketHandler:
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
-            elif _is_replayed_call_item(item):
+            elif _is_replayed_call_item(item, answered_approval_ids):
                 messages.append(item)
         return messages
 
@@ -3584,8 +3592,9 @@ class ManagedResponsesWebSocketHandler:
         new_response_id: Final = self._extract_response_id(terminal_event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(terminal_event)
-        all_messages: Final = prior_history + current_messages + output_msgs
+        earlier_messages: Final = prior_history + current_messages
+        output_msgs: Final = self._extract_output_messages(terminal_event, _answered_approval_ids(earlier_messages))
+        all_messages: Final = earlier_messages + output_msgs
         self._store_history(new_response_id, all_messages)
         verbose_logger.debug(
             "ManagedResponsesWS: stored %d messages for response_id=%s",
