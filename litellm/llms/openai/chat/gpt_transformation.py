@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
-from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     map_finish_reason,
@@ -195,6 +195,52 @@ def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | Non
     except ValidationError:
         return None
     return extra_body.get("prompt_cache_options")
+
+
+def _models_url(api_base: str | None) -> str:
+    base_url: Final = httpx.URL((api_base.strip() if api_base else None) or "https://api.openai.com/v1")
+    path: Final = base_url.path.rstrip("/").removesuffix("/chat/completions")
+    models_path: Final = path if path.endswith("/models") else f"{path}/models" if path else "/v1/models"
+    return str(base_url.copy_with(path=models_path))
+
+
+def _litellm_params_mapping(litellm_params: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:
+    if litellm_params is None:
+        return None
+    value: Final = litellm_params.get(key)
+    if value is None:
+        return None
+    try:
+        return _OBJECT_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _litellm_params_ssl_verify(litellm_params: Mapping[str, object] | None) -> bool | str | None:
+    value: Final = litellm_params.get("ssl_verify") if litellm_params is not None else None
+    return value if isinstance(value, (bool, str)) else None
+
+
+def _discovery_headers(
+    bearer_token: str | None, extra_headers: Mapping[str, object] | None = None
+) -> MappingProxyType[str, str]:
+    custom: Final = (
+        {key: value for key, value in extra_headers.items() if isinstance(value, str)}
+        if extra_headers is not None
+        else {}
+    )
+    if bearer_token is not None or not any(key.lower() == "authorization" for key in custom):
+        return MappingProxyType({**custom, "Authorization": f"Bearer {bearer_token}"})
+    return MappingProxyType(custom)
+
+
+def _http_get_with_ssl_verify(url: str, headers: Mapping[str, str], ssl_verify: bool | str) -> httpx.Response:
+    from litellm.llms.custom_httpx.http_handler import (
+        get_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # legacy dict param lacks type args
+    )
+
+    client: Final = get_httpx_client(params={"ssl_verify": ssl_verify})
+    return client.client.get(url=url, headers=headers, timeout=NON_LLM_CONNECTION_TIMEOUT)
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -984,24 +1030,42 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             return super().discover_models(litellm_params)
         api_key: Final = _litellm_params_str(litellm_params, "api_key")
         api_base: Final = _litellm_params_str(litellm_params, "api_base")
+        extra_headers: Final = _litellm_params_mapping(litellm_params, "extra_headers") or _litellm_params_mapping(
+            litellm_params, "headers"
+        )
+        ssl_verify: Final = _litellm_params_ssl_verify(litellm_params)
         workload_identity_config: Final = resolve_openai_workload_identity_config(
             api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
-        if workload_identity_config is None:
+        if workload_identity_config is not None:
+            return self._fetch_model_ids(
+                api_base=api_base,
+                bearer_token=get_workload_identity_bearer_token(workload_identity_config),
+                extra_headers=extra_headers,
+                ssl_verify=ssl_verify,
+            )
+        if extra_headers is None and ssl_verify is None:
             return self.get_models(api_key=api_key, api_base=api_base)
         return self._fetch_model_ids(
-            api_base=api_base, bearer_token=get_workload_identity_bearer_token(workload_identity_config)
+            api_base=self.get_api_base(api_base),
+            bearer_token=self.get_api_key(api_key),
+            extra_headers=extra_headers,
+            ssl_verify=ssl_verify,
         )
 
     @staticmethod
     def _fetch_model_ids(
-        api_base: str | None, bearer_token: str | None
+        api_base: str | None,
+        bearer_token: str | None,
+        extra_headers: Mapping[str, object] | None = None,
+        ssl_verify: bool | str | None = None,
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        parsed_url: Final = httpx.URL(api_base or "https://api.openai.com")
-        port_suffix: Final = f":{parsed_url.port}" if parsed_url.port else ""
-        response: Final = litellm.module_level_client.get(
-            url=f"{parsed_url.scheme}://{parsed_url.host}{port_suffix}/v1/models",
-            headers={"Authorization": f"Bearer {bearer_token}"},
+        headers: Final = _discovery_headers(bearer_token=bearer_token, extra_headers=extra_headers)
+        url: Final = _models_url(api_base)
+        response: Final = (
+            _http_get_with_ssl_verify(url=url, headers=headers, ssl_verify=ssl_verify)
+            if ssl_verify is not None
+            else litellm.module_level_client.get(url=url, headers=headers, timeout=NON_LLM_CONNECTION_TIMEOUT)
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")

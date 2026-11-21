@@ -38696,6 +38696,8 @@ export interface components {
              * @description Path to a ChatGPT OAuth auth.json for this deployment.
              */
             chatgpt_auth_file?: string | null;
+            /** Check Provider Endpoint */
+            check_provider_endpoint?: boolean | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */
@@ -56064,6 +56066,8 @@ export interface components {
              * @description Path to a ChatGPT OAuth auth.json for this deployment.
              */
             chatgpt_auth_file?: string | null;
+            /** Check Provider Endpoint */
+            check_provider_endpoint?: boolean | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */
