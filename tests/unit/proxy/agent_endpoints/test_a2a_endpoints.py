@@ -3366,7 +3366,7 @@ async def test_invoke_agent_a2a_rejects_unregistered_agent_guardrail_before_pre_
             patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": True})
         )
         backend_auth = stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints._resolve_backend_auth"))
-        with pytest.raises(HTTPException, match="Unknown guardrail.*missing-agent-guardrail") as exc:
+        with pytest.raises(HTTPException, match=r"Unknown guardrail.*missing-agent-guardrail") as exc:
             await invoke_agent_a2a(
                 agent_id="test-agent",
                 request=_make_request_mock(method, {}),

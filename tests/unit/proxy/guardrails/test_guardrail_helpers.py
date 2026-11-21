@@ -330,7 +330,7 @@ async def test_pre_call_accepts_legacy_metadata_toggles() -> None:
             await _pre_call(_request({"guardrails": {"legacy": True, "disabled": False}}), reject_unregistered=True)
             is not None
         )
-        with pytest.raises(HTTPException, match="Unknown guardrail.*legacy"):
+        with pytest.raises(HTTPException, match=r"Unknown guardrail.*legacy"):
             await _pre_call(_request({"guardrails": ["legacy"]}), reject_unregistered=True)
 
 
@@ -348,7 +348,7 @@ async def test_pre_call_rejects_missing_policy_pipeline_step(mode: str, guardrai
     )
     data: Final = _request({"user_id": "caller-metadata"})
     data["litellm_metadata"] = {"_guardrail_pipelines": [("policy", pipeline)]}
-    with pytest.raises(HTTPException, match="Unknown guardrail.*missing-pipeline-step") as exc:
+    with pytest.raises(HTTPException, match=r"Unknown guardrail.*missing-pipeline-step") as exc:
         await _pre_call(data, reject_unregistered=True)
     assert exc.value.status_code == 400
     assert guardrail_loaded_here not in str(exc.value.detail)
