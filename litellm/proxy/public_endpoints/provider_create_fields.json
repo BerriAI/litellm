@@ -851,6 +851,34 @@
     "default_model_placeholder": "bespoke/nimble"
   },
   {
+    "provider": "BUTLER",
+    "provider_display_name": "Butler",
+    "litellm_provider": "butler",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.butlercompute.com",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "butler/cicero"
+  },
+  {
     "provider": "BYTEZ",
     "provider_display_name": "Bytez",
     "litellm_provider": "bytez",
