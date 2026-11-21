@@ -2952,6 +2952,43 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert guardrail.seen_tool_calls == [("web_search", '{"query": "persimmon"}')]
 
     @pytest.mark.asyncio
+    async def test_streaming_output_item_done_function_call_reaches_generic_guardrail_api(self):
+        guardrail: Final = GenericGuardrailAPI(
+            api_base="https://guardrail.test", guardrail_name="generic", event_hook="post_call", default_on=True
+        )
+        sent: Final[list[dict]] = []
+
+        def post(url: str, json: dict, headers: dict, timeout=None) -> MagicMock:
+            sent.append(json)
+            response = MagicMock()
+            response.json.return_value = {"action": "NONE"}
+            return response
+
+        done: Final = {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "save_note",
+                "arguments": '{"note": "rain"}',
+                "status": "completed",
+            },
+        }
+
+        with patch.object(guardrail.async_handler, "post", side_effect=post):
+            await OpenAIResponsesHandler().process_output_streaming_response(
+                responses_so_far=[done],
+                guardrail_to_apply=guardrail,
+                litellm_logging_obj=None,
+            )
+
+        assert [(call["function"]["name"], call["function"]["arguments"]) for call in sent[0]["tool_calls"]] == [
+            ("save_note", '{"note": "rain"}')
+        ]
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_a_native_tool_search_call_that_has_no_call_id(self):
         def search_call(arguments: dict, status: str) -> dict:
             return {
