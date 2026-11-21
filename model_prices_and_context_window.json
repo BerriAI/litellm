@@ -124419,7 +124419,6 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "audio",
-            "file",
             "image",
             "text",
             "video"
@@ -124447,7 +124446,6 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "audio",
-            "file",
             "image",
             "text",
             "video"
@@ -124478,7 +124476,6 @@
         "output_cost_per_token_above_272k_tokens": 6e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -124506,7 +124503,6 @@
         "output_cost_per_token_above_272k_tokens": 3e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -124534,7 +124530,6 @@
         "output_cost_per_token_above_272k_tokens": 3e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -124562,7 +124557,6 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -124590,7 +124584,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -124618,7 +124611,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -124711,7 +124703,6 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "audio",
-            "file",
             "image",
             "text",
             "video"
@@ -124778,7 +124769,6 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "audio",
-            "file",
             "image",
             "text",
             "video"
@@ -124806,7 +124796,6 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "audio",
-            "file",
             "image",
             "text",
             "video"
@@ -124879,8 +124868,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -124905,7 +124893,6 @@
             "text",
             "image",
             "video",
-            "file",
             "audio"
         ],
         "supported_output_modalities": [
@@ -125122,7 +125109,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125150,7 +125136,6 @@
         "output_cost_per_token_above_272k_tokens": 3.75e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125178,7 +125163,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125206,7 +125190,6 @@
         "output_cost_per_token_above_272k_tokens": 3.75e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125421,7 +125404,6 @@
             "text",
             "image",
             "video",
-            "file",
             "audio"
         ],
         "supported_output_modalities": [
@@ -125574,7 +125556,6 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "audio",
-            "file",
             "image",
             "text",
             "video"
@@ -125602,7 +125583,6 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "audio",
-            "file",
             "image",
             "text",
             "video"
@@ -125628,8 +125608,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -125646,8 +125625,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -125667,7 +125645,6 @@
             "text",
             "image",
             "video",
-            "file",
             "audio"
         ],
         "supported_output_modalities": [
@@ -125723,8 +125700,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -125753,8 +125729,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -125841,7 +125816,6 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125869,7 +125843,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125897,7 +125870,6 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125925,7 +125897,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -125951,8 +125922,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -125976,8 +125946,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -126173,7 +126142,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126201,7 +126169,6 @@
         "output_cost_per_token_above_272k_tokens": 3.75e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126229,7 +126196,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126257,7 +126223,6 @@
         "output_cost_per_token_above_272k_tokens": 3.75e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126285,7 +126250,6 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126313,7 +126277,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126341,7 +126304,6 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126369,7 +126331,6 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
-            "file",
             "image",
             "text"
         ],
@@ -126395,8 +126356,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -126420,8 +126380,7 @@
         "source": "https://openrouter.ai/api/v1/models",
         "supported_modalities": [
             "text",
-            "image",
-            "file"
+            "image"
         ],
         "supported_output_modalities": [
             "text"
