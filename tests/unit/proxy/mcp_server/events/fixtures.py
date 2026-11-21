@@ -7,7 +7,16 @@ from litellm.types.mcp_server.events import EventOccurrence, EventType, JsonObje
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
 SETTINGS: Final = EventsSettings(enabled=True, public_base_url="https://gateway.example")
-CALLER: Final = UserAPIKeyAuth(api_key="sk-caller-one", user_id="user-1")
+
+
+def virtual_key(api_key: str, **fields: str | None) -> UserAPIKeyAuth:  # noqa: ANN003  # test builder mirrors the auth path's marker
+    """A caller authenticated by a virtual key, carrying the server-only marker the key auth path sets."""
+    caller: Final = UserAPIKeyAuth(api_key=api_key, **fields)
+    caller.via_virtual_key = True
+    return caller
+
+
+CALLER: Final = virtual_key("sk-caller-one", user_id="user-1")
 BUILD_FAILED: Final = EventType(
     name="build.failed",
     delivery=("poll", "push", "webhook"),

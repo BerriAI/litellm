@@ -22,12 +22,13 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEven
 DEPLOY_DONE: Final = EventType(name="deploy.done", delivery=("poll",))
 
 from .fakes import BUILD_FAILED, runtime, server
+from .fixtures import virtual_key
 from .webhooks.memory_store import MemoryStore
 
-ALICE: Final = UserAPIKeyAuth(api_key="sk-alice", user_id="alice")
-BOB: Final = UserAPIKeyAuth(api_key="sk-bob", user_id="bob")
-ADMIN: Final = UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
-VIEWER: Final = UserAPIKeyAuth(api_key="sk-viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+ALICE: Final = virtual_key("sk-alice", user_id="alice")
+BOB: Final = virtual_key("sk-bob", user_id="bob")
+ADMIN: Final = virtual_key("sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+VIEWER: Final = virtual_key("sk-viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 SECRET: Final = new_secret()
 
 

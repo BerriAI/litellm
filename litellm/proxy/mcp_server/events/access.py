@@ -25,7 +25,7 @@ def _master_key_hash() -> str | None:
 def stored_key_hash(
     caller: UserAPIKeyAuth | None, master_key_hash: Callable[[], str | None] = _master_key_hash
 ) -> str | None:
-    token: Final = caller.token if caller is not None else None
+    token: Final = caller.token if caller is not None and caller.via_virtual_key else None
     if token is None:
         return None
     if (

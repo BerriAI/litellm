@@ -16,7 +16,7 @@ from litellm.proxy.mcp_server.events.access import (
 )
 from litellm.types.proxy.auth.user_api_key_auth import hash_token
 
-from .fixtures import JWT, admitted_subject
+from .fixtures import JWT, admitted_subject, virtual_key
 
 
 def _identity(permissions: Mapping[str, Sequence[str]]) -> Mapping[str, Sequence[str]]:
@@ -30,12 +30,12 @@ def _level(permissions: Mapping[str, Sequence[str]] | None) -> LiteLLM_ObjectPer
 def test_a_raw_key_and_its_hash_are_the_same_principal() -> None:
     raw: Final = "sk-example"
     hashed: Final = hashlib.sha256(raw.encode()).hexdigest()
-    assert principal_of(UserAPIKeyAuth(api_key=raw)) == principal_of(UserAPIKeyAuth(api_key=hashed))
+    assert principal_of(virtual_key(raw)) == principal_of(virtual_key(hashed))
 
 
 @pytest.mark.parametrize(
     ("caller", "expected_prefix"),
-    ((UserAPIKeyAuth(api_key="sk-a", user_id="u"), "key:"), (UserAPIKeyAuth(user_id="u"), "user:"), (None, None)),
+    ((virtual_key("sk-a", user_id="u"), "key:"), (UserAPIKeyAuth(user_id="u"), "user:"), (None, None)),
 )
 def test_principal_prefers_the_key_then_the_user(caller: UserAPIKeyAuth | None, expected_prefix: str | None) -> None:
     principal: Final = principal_of(caller)
@@ -89,10 +89,10 @@ _JWT_B: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiaWF0IjoyfQ.c2lnbmF0dXJlLWI
 @pytest.mark.parametrize(
     ("first", "second", "same"),
     (
-        (UserAPIKeyAuth(api_key="sk-a"), UserAPIKeyAuth(api_key="sk-a", user_id="u"), True),
+        (virtual_key("sk-a"), virtual_key("sk-a", user_id="u"), True),
         (UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), UserAPIKeyAuth(api_key=_JWT_B, user_id="u"), True),
         (UserAPIKeyAuth(user_id="u"), UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), True),
-        (UserAPIKeyAuth(api_key="sk-a"), UserAPIKeyAuth(api_key="sk-b"), False),
+        (virtual_key("sk-a"), virtual_key("sk-b"), False),
         (UserAPIKeyAuth(user_id="u1"), UserAPIKeyAuth(user_id="u2"), False),
         (UserAPIKeyAuth(api_key=_JWT_A, team_id="t1"), UserAPIKeyAuth(api_key=_JWT_B, team_id="t1"), True),
         (UserAPIKeyAuth(api_key=_JWT_A, team_id="t1"), UserAPIKeyAuth(api_key=_JWT_A, team_id="t2"), False),
@@ -109,7 +109,7 @@ def test_the_principal_survives_token_refresh_and_tracks_the_database_key(
 @pytest.mark.parametrize(
     ("caller", "key_hash"),
     (
-        (UserAPIKeyAuth(api_key="sk-a", user_id="u"), hash_token("sk-a")),
+        (virtual_key("sk-a", user_id="u"), hash_token("sk-a")),
         (UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), None),
         (UserAPIKeyAuth(api_key="custom-raw-secret", user_id="u"), None),
         (UserAPIKeyAuth(user_id="u"), None),
@@ -132,7 +132,7 @@ def test_callers_without_a_database_key_never_share_the_anonymous_principal(call
 @pytest.mark.parametrize(
     ("caller", "holds"),
     (
-        (UserAPIKeyAuth(api_key="sk-a"), True),
+        (virtual_key("sk-a"), True),
         (admitted_subject("u"), True),
         (UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), False),
         (UserAPIKeyAuth(api_key="custom-a", user_id="u"), False),
@@ -156,12 +156,19 @@ def _master_hash() -> str:
 @pytest.mark.parametrize(
     ("caller", "key_hash"),
     (
-        (UserAPIKeyAuth(api_key="litellm_proxy_master_key", user_role=LitellmUserRoles.PROXY_ADMIN), _MASTER_HASH),
-        (UserAPIKeyAuth(api_key="litellm_proxy_master_key", user_role=LitellmUserRoles.INTERNAL_USER), None),
-        (UserAPIKeyAuth(api_key="sk-a", user_role=LitellmUserRoles.PROXY_ADMIN), hash_token("sk-a")),
+        (virtual_key("litellm_proxy_master_key", user_role=LitellmUserRoles.PROXY_ADMIN), _MASTER_HASH),
+        (virtual_key("litellm_proxy_master_key", user_role=LitellmUserRoles.INTERNAL_USER), None),
+        (virtual_key("sk-a", user_role=LitellmUserRoles.PROXY_ADMIN), hash_token("sk-a")),
     ),
 )
 def test_the_master_key_is_stored_as_its_own_hash_only_for_the_proxy_admin(
     caller: UserAPIKeyAuth, key_hash: str | None
 ) -> None:
     assert stored_key_hash(caller, _master_hash) == key_hash
+
+
+def test_a_custom_auth_token_shaped_like_a_key_hash_is_not_a_database_key() -> None:
+    hash_shaped: Final = UserAPIKeyAuth(api_key="a" * 64, user_id="u")
+    assert stored_key_hash(hash_shaped) is None
+    assert holds_webhooks(hash_shaped) is False
+    assert principal_of(hash_shaped) == principal_of(UserAPIKeyAuth(user_id="u"))
