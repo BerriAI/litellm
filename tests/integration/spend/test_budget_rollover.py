@@ -216,6 +216,27 @@ def test_members_get_a_full_midcycle_allowance_and_roll_over_their_own_spend(
             assert (reenabled["rollover_credit"], reenabled["effective_max_budget"]) == (0.0, 100.0)
 
 
+def test_member_keeps_rollover_when_a_rate_limit_edit_creates_a_private_budget(rollover_proxy: Gateway) -> None:
+    proxy: Final = rollover_proxy
+    with proxy.scenario() as scenario:
+        team: Final = scenario.team(
+            team_member_budget=100.0,
+            team_member_budget_duration="monthly",
+            team_member_rollover_max_budget=250.0,
+        )
+        member: Final = scenario.member(team)
+        shared_id: Final = string_value(_member_budget(proxy, team, member)["budget_id"])
+        _member_close_period(proxy, shared_id)
+        proxy.post("/team/member_update", {"team_id": team, "user_id": member, "rpm_limit": 20})
+        private: Final = _member_budget(proxy, team, member)
+        private_id: Final = string_value(private["budget_id"])
+        assert private_id != shared_id, private
+        assert (private.get("rollover_credit"), private.get("effective_max_budget")) == (100.0, 200.0), private
+        _member_close_period(proxy, private_id)
+        renewed: Final = _member_budget(proxy, team, member)
+        assert (renewed["rollover_credit"], renewed["effective_max_budget"]) == (150.0, 250.0), renewed
+
+
 @pytest.mark.parametrize(
     ("path", "payload"),
     (

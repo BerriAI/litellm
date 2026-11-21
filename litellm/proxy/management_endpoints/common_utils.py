@@ -729,7 +729,7 @@ async def upsert_budget_and_membership(
         **MappingProxyType(
             {
                 f: source[f]
-                for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS
+                for f in (*_TEAM_MEMBER_BUDGET_LIMIT_FIELDS, "rollover_max_budget")
                 if (
                     f != "model_max_budget"
                     or team_default_budget_id is None
