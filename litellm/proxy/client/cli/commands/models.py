@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 import click
 import rich
 import yaml
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from requests import RequestException
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.core_helpers import (
@@ -25,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
 
 # local imports
 from ... import Client
+from ...exceptions import UnauthorizedError
 from ._cli_context import cli_context_values
 from .auth import joined_names
 
@@ -477,11 +479,15 @@ def import_models(
                     model_params=model_info_obj.model_params,
                     model_info=model_info_obj.model_info,
                 )
-            except Exception:
-                pass  # For summary, ignore errors
+            except (RequestException, UnauthorizedError, ValidationError):
+                click.echo(f"Failed to import {model_info_obj.model_name}", err=True)
+                continue
         added_models.append(model_info_obj)
         provider_counts[model_info_obj.provider] += 1
 
     table_title: Final = _import_models_get_table_title(dry_run)
     _print_models_table(added_models, table_title)
     _print_summary_table(provider_counts)
+    failed_count: Final = len(filtered_model_list) - len(added_models)
+    if failed_count:
+        raise click.ClickException(f"Failed to import {failed_count} of {len(filtered_model_list)} models.")

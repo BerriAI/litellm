@@ -2,9 +2,12 @@
 import json
 import os
 import time
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
+from requests_mock import Mocker
 
 # third party imports
 from click.testing import CliRunner
@@ -298,6 +301,38 @@ def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_run
     assert "other" not in calls
     # Output summary should mention the correct providers
     assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output
+
+
+def test_models_import_reports_rejections_without_counting_them_as_imported(
+    tmp_path: Path, cli_runner: CliRunner, requests_mock: Mocker
+) -> None:
+    config: Final = tmp_path / "models.yaml"
+    config.write_text(
+        "model_list:\n"
+        "  - model_name: rejected-model\n"
+        "    litellm_params: {model: openai/test-model}\n"
+        "  - model_name: accepted-model\n"
+        "    litellm_params: {model: openai/test-model}\n",
+        encoding="utf-8",
+    )
+    requests_mock.post(
+        "http://localhost:4000/model/new",
+        [
+            {"status_code": 403, "json": {"error": "rejected"}},
+            {"status_code": 200, "json": {"model_name": "accepted-model"}},
+        ],
+    )
+
+    result: Final = cli_runner.invoke(cli, ("models", "import", str(config)))
+
+    assert [request.json()["model_name"] for request in requests_mock.request_history] == [
+        "rejected-model",
+        "accepted-model",
+    ]
+    assert result.exit_code == 1, result.output
+    assert "accepted-model" in result.stdout
+    assert "rejected-model" not in result.stdout
+    assert "Failed to import rejected-model" in result.stderr
 
 
 def test_models_import_only_access_groups_matching_regex(
