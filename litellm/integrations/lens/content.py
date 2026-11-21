@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -46,7 +46,7 @@ class Stored:
     sha256: str
 
 
-ContentState = Stored | Unavailable
+ContentState: TypeAlias = Stored | Unavailable
 
 
 @dataclass(frozen=True, slots=True)

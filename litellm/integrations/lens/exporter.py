@@ -236,12 +236,22 @@ def lens_export_counters() -> ExportCounters:
     )
 
 
+_DEFAULT_LIMITS: Final = ContentLimits()
+
+
+def _confirmed(native: "asyncio.Future[bool]") -> bool:
+    if not native.done() or native.cancelled():
+        return False
+    if native.exception() is not None:
+        return False
+    return native.result() is True
+
+
 class _RawReservation:
-    def __init__(self, exporter: "LensExporter", raw: int) -> None:
-        self.exporter: Final = exporter
+    def __init__(self, raw: int, released: Callable[[int], None]) -> None:
         self.raw: Final = raw
+        self.released: Final = released
         self.holders = 1
-        exporter.pending_content_bytes += raw
 
     def hold(self) -> None:
         self.holders += 1
@@ -249,7 +259,7 @@ class _RawReservation:
     def release(self) -> None:
         self.holders -= 1
         if self.holders == 0:
-            self.exporter.pending_content_bytes -= self.raw
+            self.released(self.raw)
 
 
 class LensExporter(CustomLogger):
@@ -260,7 +270,7 @@ class LensExporter(CustomLogger):
         counters: ExportCounters | None = None,
         content_store: ContentStore | None = None,
         signing_key: bytes = b"",
-        limits: ContentLimits = ContentLimits(),
+        limits: ContentLimits = _DEFAULT_LIMITS,
         upload_timeout: float = UPLOAD_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__()
@@ -385,15 +395,11 @@ class LensExporter(CustomLogger):
             self._finish(bare, too_large if measured is ExportFailure.TOO_LARGE else Unavailable.UNSERIALIZABLE)
             return
         raw: Final = limit - measured
-        if (
-            self.closing
-            or len(self.content_tasks) >= MAX_CONTENT_JOBS
-            or (spill and self.native_uploads >= MAX_NATIVE_UPLOADS)
-            or self.pending_content_bytes + raw > MAX_PENDING_CONTENT_BYTES
-        ):
+        if self._saturated(spill, raw):
             self._finish(bare, Unavailable.OVERLOADED)
             return
-        ticket: Final = _RawReservation(self, raw)
+        self.pending_content_bytes += raw
+        ticket: Final = _RawReservation(raw, self._release_raw)
         task: Final = asyncio.create_task(self._content_outcome(bare, messages, response, ticket))
         self.content_tasks.add(task)
         task.add_done_callback(partial(self._content_done, bare, ticket))
@@ -467,10 +473,20 @@ class LensExporter(CustomLogger):
             self.pending_content_bytes -= spill.size
             return Unavailable.UPLOAD_FAILED
         native.add_done_callback(partial(self._uploaded, spill.size))
-        done, _ = await asyncio.wait((native,), timeout=self.upload_timeout)
-        if native not in done or native.cancelled() or native.exception() is not None or native.result() is not True:
+        await asyncio.wait((native,), timeout=self.upload_timeout)
+        if not _confirmed(native):
             return Unavailable.UPLOAD_FAILED
         return Stored(object_key=key, size=spill.size, sha256=spill.sha256)
+
+    def _saturated(self, spill: bool, raw: int) -> bool:
+        if self.closing or len(self.content_tasks) >= MAX_CONTENT_JOBS:
+            return True
+        if spill and self.native_uploads >= MAX_NATIVE_UPLOADS:
+            return True
+        return self.pending_content_bytes + raw > MAX_PENDING_CONTENT_BYTES
+
+    def _release_raw(self, raw: int) -> None:
+        self.pending_content_bytes -= raw
 
     def _uploaded(self, size: int, native: "asyncio.Future[bool]") -> None:
         self.native_uploads -= 1
