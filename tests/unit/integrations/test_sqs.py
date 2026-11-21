@@ -313,6 +313,34 @@ async def test_async_send_message_logs_the_reason_sqs_rejected_the_message(
     assert "\n" not in errors[0], "a line-based log pipeline would split the SQS reason from the call id"
 
 
+@pytest.mark.asyncio
+async def test_async_send_message_masks_and_bounds_the_logged_sqs_rejection(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
+    sqs_error: Final = (
+        "<ErrorResponse><Message>rejected key=unit-echoed-secret " + "x" * 5000 + "</Message></ErrorResponse>"
+    )
+    respx_mock.post(_QUEUE_URL).mock(return_value=httpx.Response(400, text=sqs_error))
+    monkeypatch.setattr("botocore.auth.get_current_datetime", _fixed_signing_time)
+    monkeypatch.setattr(asyncio, "create_task", MagicMock())
+    logger: Final = SQSLogger(
+        sqs_queue_url=_QUEUE_URL,
+        sqs_region_name="us-east-1",
+        sqs_aws_access_key_id="unit-access-key",
+        sqs_aws_secret_access_key="unit-secret-key",
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await logger.async_send_message(_chat_payload())
+
+    errors: Final = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "unit-echoed-secret" not in errors[0]
+    assert "key=[REDACTED_API_KEY]" in errors[0]
+    assert len(errors[0]) < 1300
+
+
 @pytest.mark.parametrize(
     ("logged_response", "response", "model_parameters", "model_map_information"),
     [

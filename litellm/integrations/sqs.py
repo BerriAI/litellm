@@ -34,6 +34,7 @@ from litellm.llms.bedrock.web_identity_session_policy import SQS_LOGGING_SESSION
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
+    mask_sensitive_info,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.utils import StandardLoggingPayload
@@ -52,6 +53,7 @@ _JSON_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str
 _MAX_MESSAGE_BYTES: Final[TypeAdapter[int]] = TypeAdapter(
     Annotated[PositiveInt, BeforeValidator(_reject_bool)], config=ConfigDict(title="sqs_max_message_bytes")
 )
+_MAX_LOGGED_REJECTION_CHARS: Final = 1024
 _BASE64_INLINE_PATTERN: Final = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
     re.MULTILINE,
@@ -438,7 +440,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 "SQS rejected the message for litellm_call_id=%s with status_code=%s: %s",
                 call_id,
                 e.response.status_code,
-                " ".join(e.response.text.split()),
+                " ".join(mask_sensitive_info(e.response.text).split())[:_MAX_LOGGED_REJECTION_CHARS],
             )
         except Exception as e:
             verbose_logger.exception("Error sending to SQS: %s", e)
