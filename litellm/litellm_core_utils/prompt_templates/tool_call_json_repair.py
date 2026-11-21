@@ -260,3 +260,21 @@ def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ..
     if exceeded:
         return ()
     return kept
+
+
+def tool_call_argument_count(arguments: str) -> int:
+    """How many tool calls one raw argument string stands for, decided the way
+    ``get_tool_calls_from_response`` decides it: valid or repairable JSON is one
+    call, a concatenation of JSON objects is one call per salvaged object, and
+    anything else is one call with empty arguments. Unlike that path it never
+    logs any part of the argument text, so usage counters can call it on every
+    response."""
+    if not arguments.strip():
+        return 1
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        if _attempt_json_repair(arguments) is not None:
+            return 1
+        return len(salvage_concatenated_tool_arguments(arguments)) or 1
+    return 1

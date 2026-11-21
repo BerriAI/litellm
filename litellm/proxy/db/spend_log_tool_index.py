@@ -48,20 +48,17 @@ class ToolUsageTransaction:
 
 def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
-    surface get_tool_calls_from_response understands (chat completions, Responses
+    surface get_tool_call_names_from_response understands (chat completions, Responses
     API output items, Anthropic Messages tool_use blocks), plus the MCP tools an
     auto-executed Responses API call ran. Reads every choice of an ``n>1`` chat
     response: each choice cost money and its tool calls ran."""
     if completion_response is None or isinstance(completion_response, Exception):
         return ()
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        get_tool_calls_from_response,
+        get_tool_call_names_from_response,
     )
 
-    called_names: Final = (
-        tool_call.get("name")
-        for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
-    )
+    called_names: Final = get_tool_call_names_from_response(completion_response, include_all_choices=True)
     return tuple(
         stripped
         for name in chain(
