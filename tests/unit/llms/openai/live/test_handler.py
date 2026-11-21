@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Callable, Coroutine, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Final, NoReturn, cast
 
 import pytest
@@ -1384,20 +1384,43 @@ async def test_attached_live_session_joins_without_starting_or_closing_it_and_bi
     )
 
 
+_STARTED: Final = '{"type":"session.started","session":{"model":"gpt-live-1"}}'
+
+
 @pytest.mark.parametrize(
-    ("metered_seconds", "billed_seconds"),
-    [(0.0, 7), (3.0, 4.0), (9.0, 0.0)],
-    ids=["first-sideband", "rejoined-sideband", "earlier-sidebands-billed-more-than-the-total"],
+    ("upstream_frames", "metered_seconds", "billed_event"),
+    [
+        ((_STARTED, '{"type":"session.closed","usage":{"seconds":7}}'), 0.0, ("session.closed", 7.0)),
+        ((_STARTED, '{"type":"session.closed","usage":{"seconds":7}}'), 3.0, ("session.closed", 4.0)),
+        ((_STARTED, '{"type":"session.closed","usage":{"seconds":7}}'), 9.0, ("session.closed", 0.0)),
+        ((_STARTED, '{"type":"session.usage.updated","usage":{"seconds":12}}'), 3.0, ("session.usage.updated", 9.0)),
+        ((_STARTED,), 3.0, ("session.usage.updated", 5.0)),
+    ],
+    ids=[
+        "first-sideband",
+        "rejoined-sideband",
+        "earlier-sidebands-billed-more-than-the-total",
+        "dropped-after-the-provider-reported-a-total",
+        "dropped-before-the-provider-reported-a-total",
+    ],
 )
 @pytest.mark.asyncio
-async def test_a_rejoined_sideband_bills_the_session_total_less_what_earlier_sidebands_billed(
-    metered_seconds: float, billed_seconds: float
+async def test_a_metering_sideband_bills_the_session_total_less_what_earlier_sidebands_billed(
+    upstream_frames: tuple[str, ...], metered_seconds: float, billed_event: tuple[str, float]
 ) -> None:
     logger: Final = _FakeLogging()
     worker: Final = _FakeLoggingWorker()
+    upstream: Final = _FakeUpstream(client_frames=(), upstream_frames=upstream_frames)
+    upstream.client_frames_sent.set()
+    reported: Final[list[float]] = []
+    connected_for_five_seconds: Final = iter(
+        (datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc), datetime(2026, 1, 1, 12, 0, 5, tzinfo=timezone.utc))
+    )
 
     await OpenAILiveSessions(
-        logging_worker=worker, websocket_connector=_FakeConnector(_attached_upstream())
+        logging_worker=worker,
+        websocket_connector=_FakeConnector(upstream),
+        clock=lambda: next(connected_for_five_seconds),
     ).async_live_session(
         model="gpt-live-1",
         websocket=_FakeClientWebSocket(messages=(), disconnect_after_send_type="session.started"),
@@ -1405,12 +1428,17 @@ async def test_a_rejoined_sideband_bills_the_session_total_less_what_earlier_sid
         session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
         api_base="https://api.openai.com/",
         api_key="live-test-key",
-        attach=LiveAttach(session_id="live_abc", metered=True, metered_seconds=metered_seconds),
+        attach=LiveAttach(
+            session_id="live_abc", metered=True, metered_seconds=metered_seconds, on_metered=reported.append
+        ),
     )
     assert worker.coroutine is not None
     await worker.coroutine
 
     logged: Final = cast(LiteLLMRealtimeStreamLoggingObject, logger.dispatched_result)
-    assert [event["usage"] for event in logged.results if event["type"] == "session.closed"] == [
-        {"seconds": billed_seconds}
-    ]
+    assert [
+        (event["type"], event["usage"]["seconds"])
+        for event in logged.results
+        if event["type"] in ("session.closed", "session.usage.updated")
+    ] == [billed_event], "the logged events must bill what the sideband reports it billed, once"
+    assert reported == [billed_event[1]]

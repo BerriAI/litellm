@@ -136,20 +136,38 @@ async def test_a_joined_sideband_is_reopened_when_it_drops_while_the_call_still_
 
 
 @pytest.mark.asyncio
-async def test_a_rejoined_session_is_told_the_seconds_earlier_sessions_metered() -> None:
-    clock: Final = iter((100.0, 106.5, 200.0, 201.0, 300.0))
-    remaining: Final = iter((_DROPPED, _DROPPED, _CLOSED_BY_PROVIDER))
-    metered: Final[list[float]] = []
+async def test_a_rejoined_session_is_told_the_seconds_the_sessions_before_it_billed() -> None:
+    remaining: Final = iter(((_DROPPED, 6.5), (_DROPPED, 0.0), (_DROPPED, 9.25), (_CLOSED_BY_PROVIDER, 4.0)))
+    told: Final[list[float]] = []
     idle: Final = asyncio.Event()
 
     async def _session(client: SidebandClientWebSocket, metered_seconds: float) -> None:
-        metered.append(metered_seconds)
-        for frame in next(remaining):
+        frames, billed_seconds = next(remaining)
+        told.append(metered_seconds)
+        for frame in frames:
             await client.send_text(frame)
+        client.bill_seconds(billed_seconds)
         if client.session_ended:
             idle.set()
 
-    assert await join_sideband("/v1/live/sessions", _session, rejoin_delay=0, clock=lambda: next(clock)) is True
+    assert await join_sideband("/v1/live/sessions", _session, rejoin_delay=0) is True
     await asyncio.wait_for(idle.wait(), 1)
 
-    assert metered == [0.0, 6.5, 7.5], "the seconds between a rejoin and the next session are metered by neither"
+    assert told == [0.0, 6.5, 6.5, 15.75]
+
+
+@pytest.mark.asyncio
+async def test_a_sideband_given_up_on_while_it_connects_is_stopped_before_it_can_join_and_bill() -> None:
+    outcome: Final[asyncio.Future[str]] = asyncio.get_running_loop().create_future()
+
+    async def _session(client: SidebandClientWebSocket, _metered_seconds: float) -> None:
+        try:
+            await asyncio.sleep(0.05)
+            await client.send_text('{"type":"session.started"}')
+            outcome.set_result("joined late")
+        except asyncio.CancelledError:
+            outcome.set_result("stopped")
+            raise
+
+    assert await join_sideband("/v1/live/sessions", _session, timeout=0) is False
+    assert await asyncio.wait_for(outcome, 1) == "stopped"

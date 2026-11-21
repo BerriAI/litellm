@@ -2,7 +2,7 @@ import asyncio
 import json
 import math
 import ssl as ssl_module
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -92,6 +92,8 @@ class LiveAttach:
     metered: bool
     metered_seconds: float = 0.0
     """Seconds of this session that earlier sidebands already billed, which the provider's running total repeats."""
+    on_metered: Callable[[float], None] | None = None
+    """Told the seconds this sideband billed, so the sideband that follows it can leave them out."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,13 +177,47 @@ def _usage_event(event: Mapping[str, object], event_type: str) -> _LiveUsageEven
     return usage_without_seconds
 
 
-def _less_metered_seconds(event: Mapping[str, object], metered_seconds: float) -> Mapping[str, object]:
-    """A usage event with the seconds an earlier sideband already billed taken off the provider's running total."""
-    usage: Final = as_str_mapping(event.get("usage"))
-    seconds: Final = usage.get("seconds") if usage is not None else None
-    if usage is None or isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
-        return event
-    return {**event, "usage": {**usage, "seconds": max(0.0, seconds - metered_seconds)}}
+def _usage_seconds(event: Mapping[str, object] | None) -> float | None:
+    usage: Final = None if event is None else as_str_mapping(event.get("usage"))
+    seconds: Final = None if usage is None else usage.get("seconds")
+    return None if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) else float(seconds)
+
+
+def _billing_start(logging_obj: LiteLLMLogging, connected_at: datetime) -> datetime:
+    """When the session's wall clock starts, which is the logged start the cost calculation also measures from."""
+    start_time: Final = logging_obj.model_call_details.get("start_time")
+    if isinstance(start_time, datetime) and (start_time.tzinfo is None) == (connected_at.tzinfo is None):
+        return start_time
+    return connected_at
+
+
+def _sideband_billing(
+    events: Sequence[Mapping[str, object]], metered_seconds: float, connected_seconds: float
+) -> tuple[float, tuple[Mapping[str, object], ...]]:
+    """The seconds one metering sideband bills, and its events restated so that they bill exactly those.
+
+    The provider reports a running total for the session. A sideband bills that total, or its estimate of it
+    when the sideband dropped before the provider sent one, less what earlier sidebands billed.
+    """
+    closed: Final = next((event for event in events if event.get("type") == "session.closed"), None)
+    reported: Final = (
+        _usage_seconds(event) for event in reversed(events) if event.get("type") == "session.usage.updated"
+    )
+    closed_seconds: Final = _usage_seconds(closed)
+    session_seconds: Final = (
+        closed_seconds
+        if closed_seconds is not None
+        else max(next(reported, None) or 0.0, metered_seconds + connected_seconds)
+    )
+    billed_seconds: Final = max(0.0, session_seconds - metered_seconds)
+    billed_usage: Final = {"seconds": billed_seconds}
+    others: Final = tuple(event for event in events if event.get("type") not in _LIVE_USAGE_EVENT_TYPES)
+    final_event: Final[Mapping[str, object]] = (
+        {"type": "session.usage.updated", "usage": billed_usage}
+        if closed is None
+        else {**closed, "usage": billed_usage}
+    )
+    return billed_seconds, (*others, final_event)
 
 
 def _terminal_response_event(event: Mapping[str, object]) -> _LiveResponseEvent | None:
@@ -483,6 +519,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_websocket:
+                connected_at: Final = self._clock()
                 if attach is None:
                     await backend_websocket.send(upstream_start)
                 try:
@@ -498,10 +535,17 @@ class OpenAILiveSessions(OpenAIRealtime):
                     raise
                 finally:
                     session_end_time: Final = self._clock()
-                    retained_events: Final = tuple(
-                        _less_metered_seconds(event, 0.0 if attach is None else attach.metered_seconds)
-                        for event in event_retention.results()
+                    billed_seconds, retained_events = (
+                        (0.0, event_retention.results())
+                        if attach is None or not attach.metered
+                        else _sideband_billing(
+                            event_retention.results(),
+                            attach.metered_seconds,
+                            (session_end_time - _billing_start(logging_obj, connected_at)).total_seconds(),
+                        )
                     )
+                    if attach is not None and attach.on_metered is not None:
+                        attach.on_metered(billed_seconds)
                     logging_result: Final = LiteLLMRealtimeStreamLoggingObject.model_validate(
                         {"usage": Usage(), "results": list(retained_events)}
                     )

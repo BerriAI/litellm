@@ -7,7 +7,6 @@ WebSocket session route, with a client that never speaks.
 
 import asyncio
 import json
-import time
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import Final, TypeAlias
@@ -50,6 +49,21 @@ class SidebandClientWebSocket:
         self._settled: Final = asyncio.Event()
         self._joined: Final[list[bool]] = []  # mutable-ok: written once, when the first frame or the close arrives
         self._ended: Final = asyncio.Event()
+
+        self._billed: Final[list[float]] = []  # mutable-ok: written once, when the session reports what it billed
+
+    @property
+    def refused(self) -> bool:
+        """Whether the session ended or was turned away before its relay to the provider ran."""
+        return self._joined == [False]
+
+    @property
+    def billed_seconds(self) -> float:
+        """The seconds of the call this session billed, for a provider that bills by the second."""
+        return sum(self._billed)
+
+    def bill_seconds(self, seconds: float) -> None:
+        self._billed.append(seconds)
 
     @property
     def session_ended(self) -> bool:
@@ -100,7 +114,6 @@ def realtime_call_id(location: str | None) -> str | None:
 class _JoinedSession:
     client: SidebandClientWebSocket
     task: asyncio.Task[None]
-    started_at: float
 
 
 async def _joined_session(
@@ -109,22 +122,22 @@ async def _joined_session(
     metered_seconds: float,
     timeout: float,
     wind_down: float,
-    clock: Callable[[], float],
 ) -> _JoinedSession | None:
     """Run one metering session in the background and hand it back once it joined the call.
 
     A refused session gets `wind_down` seconds to release its budget hold and parallel slot before it is stopped.
+    One that is still on its way to the provider is stopped at once, so it cannot join and bill a call given up on.
     """
     client: Final = SidebandClientWebSocket(path)
-    started_at: Final = clock()
     task: Final = asyncio.create_task(start(client, metered_seconds))
     _SIDEBAND_TASKS.add(task)
     task.add_done_callback(_SIDEBAND_TASKS.discard)
     task.add_done_callback(lambda _finished: client.settle(False))
     if await client.joined(timeout):
-        return _JoinedSession(client=client, task=task, started_at=started_at)
+        return _JoinedSession(client=client, task=task)
+    refused: Final = client.refused
     await client.close()
-    finished, _ = await asyncio.wait({task}, timeout=wind_down)
+    finished, _ = await asyncio.wait({task}, timeout=wind_down if refused else 0)
     if not finished:
         _ = task.cancel()
     return None
@@ -137,23 +150,25 @@ async def _stay_joined(
     metered_seconds: float,
     rejoins_left: int,
     rejoin_delay: float,
-    clock: Callable[[], float],
 ) -> None:
     """Rejoin the call each time its metering session drops, until the provider says the call is over.
 
     The call runs between the caller and the provider, so a dropped sideband does not end it. A provider
     that refuses the rejoin no longer has the call.
+
+    A session is told the seconds the sessions before it billed, since a provider that bills by the second
+    reports a running total for the whole call.
     """
     _ = await asyncio.wait({joined.task})
     if joined.client.session_ended or rejoins_left <= 0:
         return
-    now_metered_seconds: Final = metered_seconds + clock() - joined.started_at
+    now_metered_seconds: Final = metered_seconds + joined.client.billed_seconds
     await asyncio.sleep(rejoin_delay)
     rejoined: Final = await _joined_session(
-        path, start, now_metered_seconds, SIDEBAND_ATTACH_TIMEOUT_SECONDS, _SIDEBAND_WIND_DOWN_SECONDS, clock
+        path, start, now_metered_seconds, SIDEBAND_ATTACH_TIMEOUT_SECONDS, _SIDEBAND_WIND_DOWN_SECONDS
     )
     if rejoined is not None:
-        await _stay_joined(path, start, rejoined, now_metered_seconds, rejoins_left - 1, rejoin_delay, clock)
+        await _stay_joined(path, start, rejoined, now_metered_seconds, rejoins_left - 1, rejoin_delay)
 
 
 async def join_sideband(
@@ -162,22 +177,19 @@ async def join_sideband(
     timeout: float = SIDEBAND_ATTACH_TIMEOUT_SECONDS,
     wind_down: float = _SIDEBAND_WIND_DOWN_SECONDS,
     rejoin_delay: float = _SIDEBAND_REJOIN_DELAY_SECONDS,
-    clock: Callable[[], float] = time.monotonic,
 ) -> bool:
     """Meter a call from a session `start` opens on a sideband client, and say whether it joined the call.
 
-    `start` also gets the seconds of the call earlier sessions already metered, for a provider whose
-    usage is a running total.
+    `start` also gets the seconds of the call earlier sessions billed, for a provider whose usage is a
+    running total. A session reports its own on the client with `bill_seconds`.
 
     A call whose sideband did not join would run unmetered, so its creator refuses it. Once joined, the
     sideband is reopened when it drops while the call is still running.
     """
-    joined: Final = await _joined_session(path, start, 0.0, timeout, wind_down, clock)
+    joined: Final = await _joined_session(path, start, 0.0, timeout, wind_down)
     if joined is None:
         return False
-    supervisor: Final = asyncio.create_task(
-        _stay_joined(path, start, joined, 0.0, _SIDEBAND_MAX_REJOINS, rejoin_delay, clock)
-    )
+    supervisor: Final = asyncio.create_task(_stay_joined(path, start, joined, 0.0, _SIDEBAND_MAX_REJOINS, rejoin_delay))
     _SIDEBAND_SUPERVISORS.add(supervisor)
     supervisor.add_done_callback(_SIDEBAND_SUPERVISORS.discard)
     return True

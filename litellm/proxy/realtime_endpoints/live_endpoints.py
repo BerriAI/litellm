@@ -101,7 +101,12 @@ async def _start_live_billing_sideband(session: _LiveSession, user_api_key_dict:
             guardrails=None,
             request_path=_LIVE_SESSIONS_PATH,
             live_session_start={"type": "session.start", "session": {"model": session.model}},
-            live_attach=LiveAttach(session_id=session.session_id, metered=True, metered_seconds=metered_seconds),
+            live_attach=LiveAttach(
+                session_id=session.session_id,
+                metered=True,
+                metered_seconds=metered_seconds,
+                on_metered=client.bill_seconds,
+            ),
             pinned_deployment_id=session.deployment_id,
         ),
     )
