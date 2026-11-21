@@ -15,7 +15,7 @@ import { StackedUsageChart } from "@/components/shared/charts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
 import CustomerCacheCost from "./CustomerCacheCost";
-import { customerTokenBreakdownSeries, customerUsageSeries } from "./customerUsageChartData";
+import { customerTokenBreakdownSeries, customerUsageSeriesWith } from "./customerUsageChartData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
 import { ModelMark } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
 import type { CustomerUsageMetric } from "./useCustomerHierarchyUsage";
@@ -53,16 +53,19 @@ export default function CustomerUsageTrend({
   onBucketChange,
   appFilter,
 }: CustomerUsageTrendProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const tokenBreakdown = metric === "cache";
   const displayMetric = tokenBreakdown ? "tokens" : metric;
   const dailySeries = useMemo(() => {
     if (!data) return { data: [], keys: [], labels: [], colors: [] };
     return tokenBreakdown
-      ? customerTokenBreakdownSeries(data.results)
-      : customerUsageSeries(data, dimension, displayMetric, colorByModel);
-  }, [data, dimension, tokenBreakdown, displayMetric, colorByModel]);
-  const series = useMemo(() => bucketSeries(dailySeries, bucket), [dailySeries, bucket]);
+      ? customerTokenBreakdownSeries(data.results, t, i18n.language)
+      : customerUsageSeriesWith(t, i18n.language)(data, dimension, displayMetric, colorByModel);
+  }, [data, dimension, tokenBreakdown, displayMetric, colorByModel, t, i18n.language]);
+  const series = useMemo(
+    () => bucketSeries(dailySeries, bucket, i18n.language, t),
+    [dailySeries, bucket, i18n.language, t],
+  );
   const bucketValues = useMemo(() => bucketTotals(series), [series]);
   const empty = totals.requests === 0 && totals.tokens === 0 && totals.spend === 0;
   return (

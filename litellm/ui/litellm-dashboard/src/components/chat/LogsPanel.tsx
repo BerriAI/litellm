@@ -5,6 +5,7 @@ import moment from "moment";
 import { AlertCircle, ScrollText } from "lucide-react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 import { uiSpendLogDetailsCall, uiSpendLogsCall } from "../networking";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -148,8 +149,17 @@ function LogsError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+const logTimestampOptions: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+};
+
 function LogsTable({ rows, onRowClick }: { rows: LogRow[]; onRowClick: (row: LogRow) => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <div className="overflow-hidden rounded-lg border">
       <Table>
@@ -179,7 +189,12 @@ function LogsTable({ rows, onRowClick }: { rows: LogRow[]; onRowClick: (row: Log
           {rows.map((row) => (
             <TableRow key={row.request_id} className="cursor-pointer" onClick={() => onRowClick(row)}>
               <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                {moment(row.startTime).format("MMM D, HH:mm:ss")}
+                {formatDateWithEnglishPattern(
+                  moment(row.startTime).toDate(),
+                  i18n.language,
+                  moment(row.startTime).format("MMM D, HH:mm:ss"),
+                  logTimestampOptions,
+                )}
               </TableCell>
               <TableCell className="text-sm">{row.model || "-"}</TableCell>
               <TableCell>

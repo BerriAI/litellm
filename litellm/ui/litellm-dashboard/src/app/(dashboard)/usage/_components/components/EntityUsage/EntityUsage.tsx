@@ -153,7 +153,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   selectedEntities: selectedTags,
   onSelectedEntitiesChange: setSelectedTags,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { teams } = useTeams();
   const teamList = useMemo(() => teams ?? [], [teams]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
@@ -381,12 +381,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [selectedTags, teams],
   );
   const providerSpend = useMemo(() => getProviderSpend(spendData.results), [spendData.results]);
-  const dailyTrend = useMemo(() => dailyTotals(spendData.results), [spendData.results]);
+  const dailyTrend = useMemo(() => dailyTotals(spendData.results, i18n.language), [spendData.results, i18n.language]);
   const stackFlatCost = showFlatCost && breakdown.metric === "spend";
   const chartSeries = useMemo(() => {
     const series = stackFlatCost ? withFlatCost(dailySeries, spendData.results, t) : dailySeries;
-    return bucketSeries(series, granularity);
-  }, [stackFlatCost, dailySeries, spendData.results, granularity, t]);
+    return bucketSeries(series, granularity, i18n.language, t);
+  }, [stackFlatCost, dailySeries, spendData.results, granularity, i18n.language, t]);
   const chartTotals = useMemo(() => bucketTotals(chartSeries), [chartSeries]);
 
   const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(

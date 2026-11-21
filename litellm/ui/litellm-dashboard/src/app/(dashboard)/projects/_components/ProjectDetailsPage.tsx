@@ -184,6 +184,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
                 data={modelSpendData}
                 index="model"
                 categories={["spend"]}
+                categoryLabels={{ spend: t("activityMetrics.series.spend") }}
                 colors={["cyan"]}
                 layout="vertical"
                 valueFormatter={(value) => `$${value.toFixed(4)}`}
