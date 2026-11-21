@@ -8,7 +8,13 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { fetchMCPEventTypes } from "@/components/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
-import { type EventPermissions, eventServers, sameEventPermissions, withServerEvents } from "./eventPermissions";
+import {
+  type EventPermissions,
+  eventServers,
+  sameEventPermissions,
+  withServerBlocked,
+  withServerEvents,
+} from "./eventPermissions";
 
 const eventTypeKeys = createQueryKeys("mcpEventTypes");
 
@@ -41,8 +47,21 @@ export function MCPEventPermissionsEditor({
     })),
   });
   const servers = candidates
-    .map((candidate, index) => ({ ...candidate, types: queries[index]?.data ?? [] }))
-    .filter((server) => server.types.length > 0);
+    .map((candidate, index) => ({
+      ...candidate,
+      names: [
+        ...new Set([
+          ...(queries[index]?.data ?? []).map((eventType) => eventType.name),
+          ...(draft[candidate.serverId] ?? []),
+        ]),
+      ],
+    }))
+    .filter((server) => server.names.length > 0 || server.serverId in draft)
+    .concat(
+      Object.keys(value)
+        .filter((serverId) => !candidates.some((candidate) => candidate.serverId === serverId))
+        .map((serverId) => ({ serverId, label: serverId, names: [...(draft[serverId] ?? [])] })),
+    );
   const loading = queries.some((query) => query.isLoading);
   const failed = queries.filter((query) => query.isError);
   if (servers.length === 0 && !loading && failed.length === 0) return null;
@@ -72,13 +91,34 @@ export function MCPEventPermissionsEditor({
           </Button>
         </div>
       ) : null}
-      {servers.map(({ serverId, label, types }) => (
+      {servers.map(({ serverId, label, names }) => (
         <div key={serverId} className="space-y-1">
-          <span className="text-xs font-medium text-foreground">{label}</span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-foreground">{label}</span>
+            {draft[serverId]?.length === 0 ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setDraft(withServerEvents(draft, serverId, []))}
+                disabled={disabled}
+              >
+                {t("mcpServerManagement.eventPermissions.allowAll")}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setDraft(withServerBlocked(draft, serverId))}
+                disabled={disabled}
+              >
+                {t("mcpServerManagement.eventPermissions.blockAll")}
+              </Button>
+            )}
+          </div>
           <MultiSelect
             value={[...(draft[serverId] ?? [])]}
             onValueChange={(selected) => setDraft(withServerEvents(draft, serverId, selected))}
-            options={types.map((eventType) => ({ label: eventType.name, value: eventType.name }))}
+            options={names.map((name) => ({ label: name, value: name }))}
             placeholder={t(
               serverId in draft
                 ? "mcpServerManagement.eventPermissions.noEvents"

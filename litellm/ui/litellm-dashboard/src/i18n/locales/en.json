@@ -14790,6 +14790,8 @@
       "description": "Pick the event types this credential may subscribe to on each events-enabled server. Leave a server empty to allow every event type the server publishes.",
       "allEvents": "All event types",
       "noEvents": "No event types",
+      "blockAll": "Block all",
+      "allowAll": "Allow all",
       "loading": "Loading event types…",
       "loadError": "Could not load event types.",
       "retry": "Retry",

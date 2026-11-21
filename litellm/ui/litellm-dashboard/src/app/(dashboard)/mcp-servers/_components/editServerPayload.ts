@@ -388,6 +388,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     server_id: mcpServer.server_id,
     mcp_info: {
       ...(mcpServer.mcp_info ?? {}),
+      ...eventsProtocol(mcpServer.mcp_info?.protocol_version, eventsEnabledRaw ?? mcpServer.events?.enabled),
       server_name: mcpInfoServerName,
       description: restValues.description,
       logo_url: logoUrl || undefined,
@@ -446,8 +447,8 @@ export function eventsEntry(
   allowed: readonly string[] | undefined,
 ): { readonly events?: MCPServerEventsConfig } {
   const nextEnabled = enabled ?? current?.enabled ?? false;
-  if (!nextEnabled && !current) return {};
   const allowedEvents = allowed ?? current?.allowed_events ?? [];
+  if (!nextEnabled && !current && allowedEvents.length === 0) return {};
   return {
     events: {
       ...(current ?? {}),
@@ -455,4 +456,16 @@ export function eventsEntry(
       allowed_events: allowedEvents.length > 0 ? [...allowedEvents] : null,
     },
   };
+}
+
+export const EVENTS_PROTOCOL_VERSION = "2026-07-28";
+
+/** Events need the 2026-07-28 protocol; a server left on auto negotiation is pinned to it when events turn on. */
+export function eventsProtocol(
+  current: string | undefined,
+  eventsEnabled: boolean | undefined,
+): { readonly protocol_version?: string } {
+  return eventsEnabled === true && (current === undefined || current === "auto")
+    ? { protocol_version: EVENTS_PROTOCOL_VERSION }
+    : {};
 }

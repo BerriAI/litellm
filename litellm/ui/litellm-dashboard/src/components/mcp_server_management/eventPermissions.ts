@@ -13,6 +13,10 @@ export function withServerEvents(
   return selected.length === 0 ? others : { ...others, [serverId]: [...selected] };
 }
 
+export function withServerBlocked(current: EventPermissions, serverId: string): Record<string, string[]> {
+  return { ...withServerEvents(current, serverId, []), [serverId]: [] };
+}
+
 export function sameEventPermissions(left: EventPermissions, right: EventPermissions): boolean {
   const normalize = (value: EventPermissions) =>
     JSON.stringify(

@@ -344,6 +344,7 @@ export interface MCPInfo {
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
   tool_allowlist_enforced?: boolean;
+  protocol_version?: string;
 }
 
 // Define the structure for a single MCP tool
@@ -648,6 +649,7 @@ export interface MCPEventSubscription {
 
 export interface MCPEventSubscriptionsResponse {
   subscriptions: MCPEventSubscription[];
+  next_offset?: number | null;
 }
 
 export interface MCPEventTestDeliveryResult {

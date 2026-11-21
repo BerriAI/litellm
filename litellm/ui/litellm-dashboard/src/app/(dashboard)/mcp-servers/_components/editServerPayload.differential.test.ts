@@ -15,6 +15,7 @@ import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
 import {
   buildEditServerPayload,
   eventsEntry,
+  eventsProtocol,
   type EditServerFormValues,
   type EditServerUiState,
 } from "./editServerPayload";
@@ -473,6 +474,20 @@ describe("events in the edit payload", () => {
       events: { enabled: true, allowed_events: ["build.*"] },
     });
     expect(eventsEntry(undefined, true, [])).toEqual({ events: { enabled: true, allowed_events: null } });
+  });
+
+  it("keeps an allowlist entered while events stay off", () => {
+    expect(eventsEntry(undefined, false, ["build.*"])).toEqual({
+      events: { enabled: false, allowed_events: ["build.*"] },
+    });
+  });
+
+  it("pins a server on auto negotiation to the events protocol only when events turn on", () => {
+    expect(eventsProtocol(undefined, true)).toEqual({ protocol_version: "2026-07-28" });
+    expect(eventsProtocol("auto", true)).toEqual({ protocol_version: "2026-07-28" });
+    expect(eventsProtocol("2025-06-18", true)).toEqual({});
+    expect(eventsProtocol("auto", false)).toEqual({});
+    expect(eventsProtocol(undefined, undefined)).toEqual({});
   });
 
   it("keeps the other stored settings when an admin turns events off", () => {

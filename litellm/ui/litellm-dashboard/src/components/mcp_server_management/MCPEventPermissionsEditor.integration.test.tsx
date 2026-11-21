@@ -45,13 +45,13 @@ describe("MCPEventPermissionsEditor", () => {
     expect(mocks.fetchMCPEventTypes).not.toHaveBeenCalledWith("sk-admin", "srv-off");
   });
 
-  it("saves a new restriction and keeps restrictions on servers it does not list", async () => {
+  it("saves a new restriction and keeps the restrictions on other servers", async () => {
     const user = userEvent.setup();
     const onSave = renderEditor({ "srv-gone": ["x"] });
     await screen.findByText("CI");
     const save = screen.getByRole("button", { name: "Save event permissions" });
     expect(save).toBeDisabled();
-    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getAllByRole("combobox")[0]);
     await user.click(await screen.findByText("deploy.done"));
     await user.click(save);
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ "srv-gone": ["x"], "srv-ci": ["deploy.done"] }));
@@ -69,6 +69,35 @@ describe("MCPEventPermissionsEditor", () => {
     await user.click(await screen.findByRole("button", { name: "Retry" }));
     expect(await screen.findByText("CI")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps a stored restriction editable when its server lists no event types", async () => {
+    mocks.fetchMCPEventTypes.mockResolvedValue([]);
+    renderEditor({ "srv-ci": ["build.failed"] });
+    expect(await screen.findByText("CI")).toBeInTheDocument();
+    expect(screen.getByText("build.failed")).toBeInTheDocument();
+  });
+
+  it("keeps a restriction on a server that no longer publishes events so it can be cleared", async () => {
+    const user = userEvent.setup();
+    const onSave = renderEditor({ "srv-off": ["x"] });
+    await screen.findByText("CI");
+    expect(screen.getByText("srv-off")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Block all" })[1]);
+    await user.click(screen.getByRole("button", { name: "Save event permissions" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ "srv-off": [] }));
+  });
+
+  it("blocks every event type on a server explicitly and allows them again", async () => {
+    const user = userEvent.setup();
+    const onSave = renderEditor({});
+    await screen.findByText("CI");
+    await user.click(screen.getByRole("button", { name: "Block all" }));
+    expect(screen.getByPlaceholderText("No event types")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save event permissions" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ "srv-ci": [] }));
+    await user.click(screen.getByRole("button", { name: "Allow all" }));
+    expect(screen.getByPlaceholderText("All event types")).toBeInTheDocument();
   });
 
   it("renders nothing when no server publishes events", async () => {
