@@ -15,11 +15,10 @@ pub type CommitObserver = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 /// the delivery as an `unreportable` marker so it can count it.
 pub const MAX_FIELD_BYTES: usize = 512;
 
-/// The accounting payload fields that decide cost, usage and identity. A field the payload
+/// The accounting payload fields Lens takes cost, usage and ownership from. A field the payload
 /// lacks is reported as null, never filled from anywhere else.
-const ACCOUNTING_FIELDS: [&str; 16] = [
+const ACCOUNTING_FIELDS: [&str; 9] = [
     "request_id",
-    "call_type",
     "api_key",
     "user",
     "team_id",
@@ -28,12 +27,6 @@ const ACCOUNTING_FIELDS: [&str; 16] = [
     "spend",
     "prompt_tokens",
     "completion_tokens",
-    "startTime",
-    "model",
-    "model_group",
-    "custom_llm_provider",
-    "status",
-    "request_duration_ms",
 ];
 
 fn fits(value: &Value) -> bool {

@@ -15,7 +15,7 @@ from typing_extensions import TypeIs
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
-from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload, SpendLogRecord
+from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.lens.ledger import LedgerHandoff, Release
 
@@ -207,13 +207,16 @@ class LensExporter(CustomLogger):
             payload: Final = _PAYLOAD.validate_python(raw)
             if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
                 return
+            key: Final = self._ledger_request_id(kwargs, response_obj)
+            if key is None or self.ledger is None:
+                return
             row: Final = spend_log_row_from_payload(payload, kwargs)
             record: Final = encode_record(row)
             if isinstance(record, ExportFailure):
                 self._drop(1)
                 self._log_failure(record.value)
                 return
-            self._deliver(kwargs, response_obj, row, record)
+            self._release(self.ledger.hold(key, row, len(record)))
         except ValidationError as error:
             self._drop(1)
             fields: Final = tuple(
@@ -225,19 +228,19 @@ class LensExporter(CustomLogger):
             self._drop(1)
             self._log_failure(type(error).__name__)
 
-    def _deliver(self, kwargs: Mapping[str, object], response_obj: object, row: SpendLogRecord, record: bytes) -> None:
+    def _ledger_request_id(self, kwargs: Mapping[str, object], response_obj: object) -> str | None:
+        """The request id a ledger commit will confirm, or None after counting a record no commit confirms."""
         if self.ledger is None or self.ledger_key is None:
             self._unconfirmed("the spend logs ledger is not connected")
-            return
+            return None
         try:
             key: Final = self.ledger_key(kwargs, response_obj)
         except Exception as error:  # noqa: BLE001  # an unknown ledger state never exports a record early
             self._unconfirmed(f"ledger state unknown: {type(error).__name__}")
-            return
+            return None
         if key is None:
             self._unconfirmed("no ledger commit will confirm the request")
-            return
-        self._release(self.ledger.hold(key, row, len(record)))
+        return key
 
     def _unconfirmed(self, reason: str) -> None:
         """Lens only receives requests a committed ledger delivery confirms; others are counted, never sent."""

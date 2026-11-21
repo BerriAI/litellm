@@ -21,7 +21,6 @@ MAX_FIELD_BYTES: Final = 512
 MAX_PENDING_NATIVE_SUMMARIES: Final = 10_000
 ACCOUNTING_FIELDS: Final = (
     "request_id",
-    "call_type",
     "api_key",
     "user",
     "team_id",
@@ -30,12 +29,6 @@ ACCOUNTING_FIELDS: Final = (
     "spend",
     "prompt_tokens",
     "completion_tokens",
-    "startTime",
-    "model",
-    "model_group",
-    "custom_llm_provider",
-    "status",
-    "request_duration_ms",
 )
 _SUMMARY: Final = TypeAdapter(dict[str, object])
 
