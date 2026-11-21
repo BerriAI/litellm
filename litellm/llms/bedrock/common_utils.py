@@ -1306,11 +1306,13 @@ def _openai_gpt_version(model: str) -> tuple[int, int] | None:
     return int(match.group(2)), int(match.group(3) or 0)
 
 
-def _bedrock_runtime_chat_completions_default_family(model: str) -> bool:
-    if _XAI_GROK_MODEL_RE.search(model) is not None:
-        return True
+def bedrock_model_is_gpt_5_6_or_newer(model: str) -> bool:
     gpt_version: Final = _openai_gpt_version(model)
     return gpt_version is not None and gpt_version >= _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE
+
+
+def _bedrock_runtime_chat_completions_default_family(model: str) -> bool:
+    return _XAI_GROK_MODEL_RE.search(model) is not None or bedrock_model_is_gpt_5_6_or_newer(model)
 
 
 def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
