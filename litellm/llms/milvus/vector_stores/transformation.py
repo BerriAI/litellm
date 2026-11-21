@@ -188,12 +188,13 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             )
             if value
         }
+        anns_field: Final = litellm_params.get("milvus_vector_field") or "book_intro_vector"
         litellm_logging_obj.model_call_details["input"] = query_text
         litellm_logging_obj.model_call_details["embedding_model"] = litellm_params.get("litellm_embedding_model")
         return join_api_base(api_base, "v2/vectordb/entities/search"), {
             "collectionName": vector_store_id,
             "data": [query_vector],
-            "annsField": "book_intro_vector",
+            "annsField": anns_field,
             **vector_store_search_optional_params,
             **scope,
         }
