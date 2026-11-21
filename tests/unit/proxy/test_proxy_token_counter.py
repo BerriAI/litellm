@@ -45,6 +45,11 @@ from starlette.types import Message
 import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    install_model_cost_map,
+)
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -3003,6 +3008,7 @@ _NATIVE_RESPONSES_BASE: Final = {
     _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
     _XAI_GROK_4_3: "https://unused.invalid",
     _PERPLEXITY_GROK_4_3: "https://unused.invalid",
+    _VERTEX_GROK_4_3: "https://unused.invalid",
 }
 
 
@@ -3020,11 +3026,19 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
     return tuple({**_GET_WEATHER, "name": f"get_weather_{index}"} for index in range(count))
 
 
+@pytest.fixture
+def checked_in_cost_map() -> None:
+    assert isinstance(
+        install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes()), ModelCostMapReloaded
+    )
+
+
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
 # xAI grok-4.3 on 2026-10-29, usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
 # 2026-10-30, and usage.input_tokens that POST /v1/messages billed through xAI grok-4.3-latest, Kyma grok-4.3, Azure AI
 # Foundry grok-4-1-fast-non-reasoning and grok-4.3, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3 on 2026-11-17
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3114,7 +3128,8 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
 
 # usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
 # through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29, and
-# through Azure AI Foundry grok-4-1-fast-non-reasoning and Perplexity xai/grok-4.3 on 2026-11-17
+# through Azure AI Foundry grok-4-1-fast-non-reasoning, Perplexity xai/grok-4.3 and Vertex AI xai/grok-4.3 on 2026-11-17
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3128,6 +3143,9 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
         (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
         (_AZURE_GROK_4_1_NON_REASONING, None, (), 181),
         (_PERPLEXITY_GROK_4_3, None, (), 218),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
     ],
 )
 async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_shipped_framing(
@@ -3254,28 +3272,31 @@ async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_
 
 # usage.input_tokens that POST /v1/messages billed through Bedrock Mantle xai.grok-4.3, and POST /v1/responses through
 # Perplexity xai/grok-4.3 and Azure AI Foundry grok-4-1-fast-non-reasoning, on 2026-11-17 for the input "What is the
-# weather in Paris?" with these tools. Each host bills more hidden tokens per tool as the schema grows
+# weather in Paris?" with these tools. Each host bills more hidden tokens per tool as the schema grows, so one flat
+# tool framing per host lands from 0 to 175 tokens over these bills on Mantle, 102 on Perplexity and 74 on Azure
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "responses", "tools", "billed_prompt_tokens"),
+    ("model", "responses", "tools", "billed_prompt_tokens", "most_over"),
     [
-        (_MANTLE_GROK_4_3, False, (_GET_WEATHER,), 114),
-        (_MANTLE_GROK_4_3, False, _THREE_TOOLS, 256),
-        (_MANTLE_GROK_4_3, False, (_FILL_FORM,), 424),
-        (_PERPLEXITY_GROK_4_3, True, (_GET_WEATHER,), 308),
-        (_PERPLEXITY_GROK_4_3, True, _THREE_TOOLS, 442),
-        (_PERPLEXITY_GROK_4_3, True, (_FILL_FORM,), 555),
-        (_AZURE_GROK_4_1_NON_REASONING, True, (_GET_WEATHER,), 178),
-        (_AZURE_GROK_4_1_NON_REASONING, True, _THREE_TOOLS, 276),
-        (_AZURE_GROK_4_1_NON_REASONING, True, (_FILL_FORM,), 371),
+        (_MANTLE_GROK_4_3, False, (_GET_WEATHER,), 114, 180),
+        (_MANTLE_GROK_4_3, False, _THREE_TOOLS, 256, 180),
+        (_MANTLE_GROK_4_3, False, (_FILL_FORM,), 424, 180),
+        (_PERPLEXITY_GROK_4_3, True, (_GET_WEATHER,), 308, 110),
+        (_PERPLEXITY_GROK_4_3, True, _THREE_TOOLS, 442, 110),
+        (_PERPLEXITY_GROK_4_3, True, (_FILL_FORM,), 555, 110),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_GET_WEATHER,), 178, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _THREE_TOOLS, 276, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_FILL_FORM,), 371, 80),
     ],
 )
-async def test_a_host_whose_tool_prompt_grows_with_the_schema_never_counts_under_the_bill(
+async def test_a_host_whose_tool_prompt_grows_with_the_schema_counts_at_or_a_bounded_amount_over_the_bill(
     monkeypatch: pytest.MonkeyPatch,
     model: str,
     responses: bool,
     tools: tuple[dict[str, object], ...],
     billed_prompt_tokens: int,
+    most_over: int,
 ):
     router: Final = _single_deployment_router(
         {"model": model, "api_base": _NATIVE_RESPONSES_BASE.get(model, "https://unused.invalid")}, {}
@@ -3284,7 +3305,25 @@ async def test_a_host_whose_tool_prompt_grows_with_the_schema_never_counts_under
 
     counted: Final = await _count_with_router(monkeypatch, router, sent_tools, responses)
 
-    assert counted >= billed_prompt_tokens, f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
+    assert (
+        billed_prompt_tokens <= counted <= billed_prompt_tokens + most_over
+    ), f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
+
+
+@pytest.mark.usefixtures("checked_in_cost_map")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS])
+async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...]
+):
+    govcloud: Final = _single_deployment_router(
+        {"model": "bedrock_mantle/us-gov-west-1/xai.grok-4.3", "api_base": "https://unused.invalid"}, {}
+    )
+    commercial: Final = _single_deployment_router({"model": _MANTLE_GROK_4_3, "api_base": "https://unused.invalid"}, {})
+
+    assert await _count_with_router(monkeypatch, govcloud, tools, False) == await _count_with_router(
+        monkeypatch, commercial, tools, False
+    )
 
 
 # POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
