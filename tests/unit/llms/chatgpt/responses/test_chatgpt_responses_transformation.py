@@ -129,6 +129,65 @@ class TestChatGPTResponsesAPITransformation:
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
 
+    def test_sign_request_rewraps_string_input_reintroduced_after_transform(self):
+        """extra_body merges after transform_responses_api_request, so a string
+        input merged there re-introduces the shorthand the entry wrap removed."""
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input="Reply with exactly the word: pong",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request["input"] == [{"role": "user", "content": "Reply with exactly the word: pong"}]
+
+        # llm_http_handler merges extra_body after the transform:
+        # data.update(config.transform_extra_body(extra_body=..., request=data, ...))
+        request.update({"input": "Reply with exactly the word: pong"})
+
+        config.sign_request(
+            headers={},
+            optional_params={},
+            request_data=request,
+            api_base="https://chatgpt.com/backend-api/codex/responses",
+            api_key=None,
+            model="chatgpt/gpt-6.1-sol",
+        )
+        assert request["input"] == [{"role": "user", "content": "Reply with exactly the word: pong"}]
+
+    def test_sign_request_wraps_string_input_without_entry_wrap(self):
+        """The final signing hook also covers payload paths that never ran the
+        entry wrap (list input fully replaced by a string via extra_body)."""
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = {
+            "model": "chatgpt/gpt-6.1-sol",
+            "input": "standalone shorthand",
+        }
+        config.sign_request(
+            headers={},
+            optional_params={},
+            request_data=request,
+            api_base="https://chatgpt.com/backend-api/codex/responses",
+            api_key=None,
+            model="chatgpt/gpt-6.1-sol",
+        )
+        assert request["input"] == [{"role": "user", "content": "standalone shorthand"}]
+
+    def test_sign_request_leaves_list_input_unchanged(self):
+        config: Final = ChatGPTResponsesAPIConfig()
+        list_input: Final = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        request: Final = {"model": "chatgpt/gpt-6.1-sol", "input": list_input}
+        config.sign_request(
+            headers={},
+            optional_params={},
+            request_data=request,
+            api_base="https://chatgpt.com/backend-api/codex/responses",
+            api_key=None,
+            model="chatgpt/gpt-6.1-sol",
+        )
+        assert request["input"] == list_input
+
     @pytest.mark.parametrize(
         "model_name",
         [
