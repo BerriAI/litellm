@@ -20,6 +20,7 @@ from litellm import verbose_logger
 from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
@@ -357,6 +358,18 @@ _TRANSCRIPTION_SECOND_RATE_KEYS: Final[tuple[_TranscriptionRateKey, ...]] = (
     "input_cost_per_second",
     "output_cost_per_second",
 )
+
+
+def _transcription_pricing_provider(model: str, custom_llm_provider: str | None) -> str | None:
+    if custom_llm_provider not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS:
+        return custom_llm_provider
+    provider_info: Final = _cost_map_model_info(model, custom_llm_provider)
+    if (
+        _declared_transcription_rate(provider_info, _TRANSCRIPTION_TOKEN_RATE_KEYS + _TRANSCRIPTION_SECOND_RATE_KEYS)
+        is not None
+    ):
+        return custom_llm_provider
+    return "openai"
 
 
 def _transcription_uses_token_pricing(
@@ -778,11 +791,12 @@ def cost_per_token(
             vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
-        if _transcription_uses_token_pricing(model_without_prefix, custom_llm_provider, usage_block):
+        transcription_provider: Final = _transcription_pricing_provider(model_without_prefix, custom_llm_provider)
+        if _transcription_uses_token_pricing(model_without_prefix, transcription_provider, usage_block):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=transcription_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
@@ -798,7 +812,7 @@ def cost_per_token(
         )
         return openai_cost_per_second(
             model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=transcription_provider,
             duration=billed_duration,
         )
     elif call_type == "search" or call_type == "asearch":

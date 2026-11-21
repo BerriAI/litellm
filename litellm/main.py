@@ -72,7 +72,7 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
-from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.exceptions import AuthenticationError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
@@ -163,6 +163,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
 )
 from litellm.llms.openai.common_utils import get_openai_credentials
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -2050,6 +2051,8 @@ def _complete_text_completion_openai(
         or get_secret("OPENAI_API_BASE")
         or "https://api.openai.com/v1"
     )
+    if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
+        raise missing_key_error
 
     openai.api_version = None
     # set API KEY
@@ -2058,7 +2061,7 @@ def _complete_text_completion_openai(
 
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
 
-    headers = headers or litellm.headers
+    headers = with_canonical_authorization(custom_llm_provider, headers or litellm.headers)
 
     ## LOAD CONFIG - if set
     config: Final = litellm.OpenAITextCompletionConfig.get_config()
@@ -2897,6 +2900,26 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _openai_key_fallback(custom_llm_provider: str | None) -> str | None:
+    if JSONProviderRegistry.exists(custom_llm_provider or ""):
+        return None
+    return litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+
+
+def _missing_provider_key_error(ctx: CompletionDispatchContext) -> AuthenticationError | None:
+    if ctx.custom_llm_provider == "bigmodel" and not ctx.api_key:
+        return AuthenticationError(
+            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=ctx.model
+        )
+    return missing_json_provider_key_error(
+        ctx.custom_llm_provider,
+        ctx.model,
+        ctx.api_key,
+        isinstance(_dispatch_client_openai(ctx), openai.OpenAI | openai.AsyncOpenAI),
+        _FORWARDED_HEADERS_ADAPTER.validate_python(ctx.headers or litellm.headers),
+    )
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2906,7 +2929,7 @@ def _complete_custom_openai(
     client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict: Final = ctx.custom_prompt_dict
-    extra_headers = ctx.extra_headers
+    extra_headers = with_canonical_authorization(custom_llm_provider, ctx.extra_headers)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
@@ -2924,6 +2947,8 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
+    if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
+        raise missing_key_error
     _validate_vispark_api_key(
         custom_llm_provider,
         api_key,
@@ -2931,11 +2956,6 @@ def _complete_custom_openai(
         has_client=isinstance(client, (openai.OpenAI, openai.AsyncOpenAI))
         and not get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"),
     )
-
-    if custom_llm_provider == "bigmodel" and not api_key:
-        raise litellm.AuthenticationError(
-            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
-        )
     organization = (
         organization
         or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
@@ -2946,11 +2966,10 @@ def _complete_custom_openai(
     api_key = (
         api_key
         or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-        or litellm.openai_key
-        or get_secret("OPENAI_API_KEY")
+        or _openai_key_fallback(custom_llm_provider)
     )
 
-    headers = headers or litellm.headers
+    headers = with_canonical_authorization(custom_llm_provider, headers or litellm.headers)
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
@@ -2983,7 +3002,7 @@ def _complete_custom_openai(
             headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
-    request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
+    request_headers: Final = headers
     attribution_source: Final = (
         provider_config if provider_config is not None else JSONProviderRegistry.get(custom_llm_provider)
     )
@@ -4514,6 +4533,7 @@ _OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_FORWARDED_HEADERS_ADAPTER: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None)
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
@@ -8637,6 +8657,20 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
     )
 
 
+def _moderation_provider_route(
+    model: str | None, custom_llm_provider: str | None, optional_params: GenericLiteLLMParams
+) -> tuple[str | None, str | None, str | None, str | None]:
+    try:
+        return litellm.get_llm_provider(
+            model=model or "",
+            custom_llm_provider=custom_llm_provider,
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
+        )
+    except litellm.BadRequestError:
+        return model, custom_llm_provider, None, None
+
+
 @client
 async def amoderation(
     input: str,
@@ -8647,27 +8681,22 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
-    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
-    _dynamic_api_base = None
-    try:
-        (
-            model,
-            custom_llm_provider,
-            _dynamic_api_key,
-            _dynamic_api_base,
-        ) = litellm.get_llm_provider(
-            model=model or "",
-            custom_llm_provider=custom_llm_provider,
-            api_base=optional_params.api_base,
-            api_key=optional_params.api_key,
-        )
-    except litellm.BadRequestError:
-        # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
-        pass
-
+    (model, custom_llm_provider, _dynamic_api_key, _dynamic_api_base) = _moderation_provider_route(
+        model, custom_llm_provider, optional_params
+    )
     openai_client: Final = kwargs.get("client", None)
+    provider_api_key: Final = (
+        (api_key or _dynamic_api_key) if JSONProviderRegistry.exists(custom_llm_provider or "") else api_key
+    )
+    if missing_key_error := missing_json_provider_key_error(
+        custom_llm_provider, model or "", provider_api_key, isinstance(openai_client, AsyncOpenAI)
+    ):
+        raise missing_key_error
+    static_api_key: Final = (
+        provider_api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    )
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
@@ -8996,6 +9025,12 @@ def transcription(
             custom_llm_provider=custom_llm_provider,
         )
     elif uses_openai_transport:
+        if (
+            missing_key_error := missing_json_provider_key_error(
+                custom_llm_provider, model, api_key, isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            )
+        ) is not None:
+            raise missing_key_error
         api_base = (
             api_base
             or litellm.api_base
@@ -9311,9 +9346,18 @@ def speech(
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
+        provider_api_key: Final = (
+            (api_key or dynamic_api_key) if JSONProviderRegistry.exists(custom_llm_provider) else api_key
+        )
+        if (
+            missing_key_error := missing_json_provider_key_error(
+                custom_llm_provider, model, provider_api_key, isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            )
+        ) is not None:
+            raise missing_key_error
         # set API KEY
         api_key = (
-            api_key
+            provider_api_key
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
