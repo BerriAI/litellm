@@ -55,6 +55,12 @@ _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
 _BATCH_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
 
 
+def _billed_failure_cost(kwargs: Mapping[str, object]) -> float:
+    payload: Final = kwargs.get("standard_logging_object")
+    cost: Final = _CALLBACK_FIELDS.validate_python(payload).get("response_cost") if isinstance(payload, dict) else None
+    return float(cost) if isinstance(cost, int | float) else 0.0
+
+
 class _LiteLLMParamsDictView:
     """
     Lightweight attribute view over `litellm_params` dict.
@@ -568,6 +574,12 @@ class RouterBudgetLimiting(CustomLogger):
                         response_cost=response_cost,
                         batch_id=batch_id,
                     )
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if _billed_failure_cost(kwargs) > 0:
+            await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     async def _increment_spend_for_key(
         self,

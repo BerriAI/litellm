@@ -8,7 +8,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     model_budget_spend_cache_key,
@@ -130,6 +130,23 @@ async def test_team_member_budget_is_charged_and_enforced_after_success():
             team_id=TEAM_ID,
             team_member_model_max_budget=budget,
             model=MODEL_GROUP,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_uses_up_the_key_model_budget():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await limiter.async_log_failure_event(
+        _event("anthropic_messages", CHAT_COST), response_obj=None, start_time=None, end_time=None
+    )
+
+    with pytest.raises(litellm.BudgetExceededError, match=f"exceeded budget for model={MODEL_GROUP}"):
+        await limiter.is_key_within_model_budget(
+            UserAPIKeyAuth(
+                token=KEY_HASH, model_max_budget={MODEL_GROUP: {"max_budget": 0.0001, "budget_duration": "1d"}}
+            ),
+            MODEL_GROUP,
         )
 
 
