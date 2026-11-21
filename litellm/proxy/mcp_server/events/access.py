@@ -1,4 +1,5 @@
 import hashlib
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
 
@@ -8,11 +9,18 @@ from litellm.proxy._types import UserAPIKeyAuth
 EventGrant = frozenset[str] | None
 
 
+_TOKEN_HASH: Final = re.compile(r"[0-9a-f]{64}")
+
+
+def token_hash(api_key: str) -> str:
+    return api_key if _TOKEN_HASH.fullmatch(api_key) else hashlib.sha256(api_key.encode()).hexdigest()
+
+
 def principal_of(caller: UserAPIKeyAuth | None) -> str | None:
     if caller is None:
         return None
     if caller.api_key:
-        return "key:" + hashlib.sha256(caller.api_key.encode()).hexdigest()
+        return "key:" + token_hash(caller.api_key)
     if caller.user_id:
         return "user:" + hashlib.sha256(caller.user_id.encode()).hexdigest()
     return None

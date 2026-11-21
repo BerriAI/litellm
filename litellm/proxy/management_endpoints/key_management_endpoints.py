@@ -8258,6 +8258,7 @@ async def block_key(
         where={"token": hashed_token},
         data=with_settings_updated_at({"blocked": True}),
     )
+    await KeyManagementEventHooks._terminate_mcp_event_subscriptions((hashed_token,))  # pyright: ignore[reportPrivateUsage]  # blocking a key ends its MCP event subscriptions like delete does
 
     if is_audit_logging_enabled():
         asyncio.create_task(

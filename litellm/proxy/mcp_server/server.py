@@ -622,6 +622,8 @@ if MCP_AVAILABLE:
         is_legacy_upstream_delegate,
     )
     from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
+    from litellm.proxy.mcp_server.events.webhooks.receiver import receive_webhook
+    from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -900,6 +902,7 @@ if MCP_AVAILABLE:
             await _session_manager_cm.__aenter__()
             await _session_manager_stateful_cm.__aenter__()
             _stateful_auth_context_cleanup_task = asyncio.create_task(_cleanup_expired_stateful_session_auth_contexts())
+            start_delivery_worker()
 
             _SESSION_MANAGERS_INITIALIZED = True
             verbose_logger.info("MCP Server started with StreamableHTTP and SSE session managers!")
@@ -3114,6 +3117,14 @@ if MCP_AVAILABLE:
         ("/sse/messages/", "POST"),
     ):
         app.router.routes.append(Route(sse_path, endpoint=_LegacySseEndpoint(), methods=[sse_method]))
+
+    async def _receive_event_webhook(subscription_id: str, request: StarletteRequest) -> Response:
+        start_delivery_worker()
+        return await receive_webhook(subscription_id, request)
+
+    app.add_api_route(
+        "/events/webhooks/{subscription_id}", _receive_event_webhook, methods=["POST"], include_in_schema=False
+    )
 
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
