@@ -275,54 +275,45 @@ async def test_process_guardrail_callback_enriches_and_reraises_http_exception(
 # ---------------------------------------------------------------------------
 
 
-def test_process_guardrail_metadata_calls_header_helper(proxy_logging, monkeypatch):
-    calls: List[Dict[str, Any]] = []
-
-    def fake_add(request_data, guardrail_name):
-        calls.append({"data": request_data, "name": guardrail_name})
-
-    from litellm.proxy.common_utils import callback_utils
-
-    monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
-    data = {"metadata": {"guardrails": ["g1", "g2"]}}
+def test_process_guardrail_metadata_adds_each_guardrail_once_in_order(proxy_logging):
+    data = {"metadata": {"guardrails": ["g1", "g2", "g1"]}}
     proxy_logging._process_guardrail_metadata(data)
-    snapshot = {
-        "call_count": len(calls),
-        "first_name": calls[0]["name"],
-        "second_name": calls[1]["name"],
-        "data_passed_is_input": all(c["data"] is data for c in calls),
-    }
-    assert snapshot == {
-        "call_count": 2,
-        "first_name": "g1",
-        "second_name": "g2",
-        "data_passed_is_input": True,
-    }
+    assert data["metadata"]["applied_guardrails"] == ["g1", "g2"]
 
 
-def test_process_guardrail_metadata_skips_already_applied(proxy_logging, monkeypatch):
-    calls: List[str] = []
-
-    def fake_add(request_data, guardrail_name):
-        calls.append(guardrail_name)
-
-    from litellm.proxy.common_utils import callback_utils
-
-    monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
+def test_process_guardrail_metadata_skips_already_applied(proxy_logging):
     data = {"metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g1"]}}
     proxy_logging._process_guardrail_metadata(data)
-    assert calls == ["g2"]
+    assert data["metadata"]["applied_guardrails"] == ["g1", "g2"]
 
 
-def test_process_guardrail_metadata_no_metadata_is_noop(proxy_logging, monkeypatch):
-    from litellm.proxy.common_utils import callback_utils
+def test_process_guardrail_metadata_records_in_the_litellm_metadata_bucket(proxy_logging):
+    data = {"litellm_metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g2"]}}
+    proxy_logging._process_guardrail_metadata(data)
+    assert data == {"litellm_metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g2", "g1"]}}
 
-    monkeypatch.setattr(
-        callback_utils,
-        "add_guardrail_to_applied_guardrails_header",
-        MagicMock(side_effect=AssertionError("should not be called")),
-    )
-    proxy_logging._process_guardrail_metadata({})
+
+def test_process_guardrail_metadata_does_not_search_the_applied_list_per_name(proxy_logging):
+    class _NoMembershipChecks(list):
+        def __contains__(self, item):
+            raise AssertionError("searched the applied list")
+
+    names = [f"guard-{i}" for i in range(100)]
+    data = {"metadata": {"guardrails": names, "applied_guardrails": _NoMembershipChecks()}}
+    proxy_logging._process_guardrail_metadata(data)
+    assert data["metadata"]["applied_guardrails"] == names
+
+
+def test_process_guardrail_metadata_no_metadata_is_noop(proxy_logging):
+    data: Dict[str, Any] = {}
+    proxy_logging._process_guardrail_metadata(data)
+    assert data == {}
+
+
+def test_process_guardrail_metadata_with_only_settings_entries_leaves_data_unchanged(proxy_logging):
+    data = {"metadata": {"guardrails": [{"g1": {"extra_body": {}}}]}}
+    proxy_logging._process_guardrail_metadata(data)
+    assert data == {"metadata": {"guardrails": [{"g1": {"extra_body": {}}}]}}
 
 
 def test_process_guardrail_metadata_invalid_data_raises(proxy_logging):

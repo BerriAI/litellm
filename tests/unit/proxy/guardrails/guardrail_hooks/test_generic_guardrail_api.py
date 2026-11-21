@@ -2956,3 +2956,63 @@ class TestToolCallsInResponse:
         guardrailed: Final = await _tool_calls_after(guardrail)
 
         assert guardrailed["tool_calls"] == [_run_shell_call('{"cmd": "echo SECRET-123"}')]
+
+
+@pytest.mark.parametrize("value", (None, 0, False, "", [], "text", 7))
+def test_extract_user_api_key_metadata_reads_past_a_litellm_metadata_that_is_not_an_object(value: object) -> None:
+    guardrail: Final = GenericGuardrailAPI(api_base="http://vendor.invalid", guardrail_name="generic")
+
+    metadata: Final = guardrail._extract_user_api_key_metadata(
+        {"metadata": {"user_api_key_hash": "hash"}, "litellm_metadata": value}
+    )
+
+    assert metadata["user_api_key_hash"] == "hash"
+
+
+def test_extract_user_api_key_metadata_leaves_out_a_value_that_isnt_a_string() -> None:
+    guardrail: Final = GenericGuardrailAPI(api_base="http://vendor.invalid", guardrail_name="generic")
+
+    metadata: Final = guardrail._extract_user_api_key_metadata(
+        {"metadata": {"user_api_key_alias": 5, "user_api_key_token": 7, "user_api_key_team_id": "team"}}
+    )
+
+    assert metadata == {"user_api_key_team_id": "team"}
+
+
+async def _vendor_payload(request_data: dict[str, object], inputs: dict[str, object]) -> dict[str, object]:
+    guardrail: Final = GenericGuardrailAPI(api_base="http://vendor.invalid", guardrail_name="generic")
+    vendor_reply: Final = MagicMock(json=MagicMock(return_value={"action": "NONE"}))
+
+    with patch.object(guardrail.async_handler, "post", return_value=vendor_reply) as post:
+        await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    return post.call_args.kwargs["json"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data",
+    (
+        {"body": "Hello there"},
+        {"body": {"guardrails": [{"generic": 7}]}},
+        {"guardrails": 7},
+        {"guardrails": "generic"},
+        {"guardrails": [{"generic": 7}]},
+        {"metadata": {"guardrails": 7}},
+        {"metadata": {"guardrails": [{"generic": 7}]}},
+    ),
+)
+async def test_a_guardrails_field_of_another_shape_asks_the_vendor_for_nothing(request_data: dict[str, object]) -> None:
+    payload: Final = await _vendor_payload(request_data, {"texts": ["reply"]})
+
+    assert payload["texts"] == ["reply"]
+    assert not payload.get("additional_provider_specific_params")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ({"id": 1}, ["gpt"], 7))
+async def test_a_reply_model_that_isnt_a_string_is_left_out_of_the_vendor_request(model: object) -> None:
+    payload: Final = await _vendor_payload({}, {"texts": ["reply"], "model": model})
+
+    assert payload["texts"] == ["reply"]
+    assert payload.get("model") is None

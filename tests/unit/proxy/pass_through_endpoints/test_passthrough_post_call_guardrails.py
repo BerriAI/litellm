@@ -18,6 +18,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.proxy._types import ProxyException
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _run_post_call_guardrails_keeping_the_charge
 
 _PT_MOD = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 _COLLECT = "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails"
@@ -130,6 +131,29 @@ class TestPassthroughPostCallGuardrails:
         call_kwargs = mock_proxy_logging.post_call_success_hook.call_args
         assert call_kwargs.kwargs["response"] == _GEMINI_RESPONSE
 
+    @patch(_COLLECT, return_value=["rubrik"])
+    async def test_configured_endpoint_keeps_every_post_call_hook_and_reads_no_key_opt_outs(
+        self,
+        mock_collect,
+    ):
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=_GEMINI_RESPONSE)
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        with _common_patches(mock_proxy_logging, _make_httpx_response(_GEMINI_RESPONSE)):
+            await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/generateContent",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_user_api_key_dict(),
+                stream=False,
+            )
+
+        call_kwargs = mock_proxy_logging.post_call_success_hook.call_args.kwargs
+        assert call_kwargs["guardrails_only"] is False
+        assert call_kwargs["data"]["metadata"].keys() == {"guardrails"}
+
     @patch(_COLLECT, return_value=[])
     async def test_post_call_success_hook_skipped_when_no_guardrails(
         self,
@@ -205,6 +229,54 @@ class TestPassthroughPostCallGuardrails:
         assert body["error"]["model"] == "gemini-2.0-flash"
 
     @patch(_COLLECT, return_value=["rubrik"])
+    async def test_configured_endpoint_writes_no_charge_for_a_failed_post_call_hook(self, mock_collect):
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=HTTPException(status_code=418, detail="no"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        with (
+            _common_patches(mock_proxy_logging, _make_httpx_response(_GEMINI_RESPONSE)),
+            patch(f"{_PT_MOD}._blocked_response_cost_logging") as settlement,
+            pytest.raises(ProxyException),
+        ):
+            await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/generateContent",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_user_api_key_dict(),
+                stream=False,
+            )
+
+        settlement.pass_through_async_success_handler.assert_not_called()
+
+    @patch(_COLLECT, return_value=["rubrik"])
+    async def test_a_hook_result_that_is_not_a_dict_leaves_the_body_the_logs_read(self, mock_collect):
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=MagicMock(id="rebuilt"))
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+        success_handler = AsyncMock()
+
+        with (
+            _common_patches(mock_proxy_logging, _make_httpx_response(_GEMINI_RESPONSE)),
+            patch(
+                f"{_PT_MOD}.pass_through_endpoint_logging",
+                MagicMock(pass_through_async_success_handler=success_handler),
+            ),
+        ):
+            result = await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/generateContent",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_user_api_key_dict(),
+                stream=False,
+            )
+
+        assert success_handler.await_args.kwargs["response_body"] == _GEMINI_RESPONSE
+        assert json.loads(result.body) == _GEMINI_RESPONSE
+
+    @patch(_COLLECT, return_value=["rubrik"])
     async def test_deny_forwards_guardrail_logging_info_to_failure_hook(
         self,
         mock_collect,
@@ -216,7 +288,7 @@ class TestPassthroughPostCallGuardrails:
         block path dropping it."""
         mock_response = _make_httpx_response(_GEMINI_RESPONSE)
 
-        def _block(*, data, user_api_key_dict, response):
+        def _block(*, data, user_api_key_dict, response, guardrails_only):
             metadata = data.setdefault("metadata", {})
             metadata.setdefault("standard_logging_guardrail_information", []).append(
                 {"guardrail_name": "rubrik", "guardrail_status": "guardrail_intervened"}
@@ -312,3 +384,37 @@ def test_modify_response_exception_importable_from_both_paths():
     )
 
     assert FromExceptions is FromGuardrail
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_response_settles_the_provider_charge_and_keeps_the_block():
+    blocked = HTTPException(status_code=400, detail="blocked")
+    settle = AsyncMock()
+
+    with pytest.raises(HTTPException) as caught:
+        await _run_post_call_guardrails_keeping_the_charge(AsyncMock(side_effect=blocked), settle)
+
+    assert caught.value is blocked
+    settle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_settlement_does_not_replace_the_block():
+    blocked = HTTPException(status_code=400, detail="blocked")
+
+    with pytest.raises(HTTPException) as caught:
+        await _run_post_call_guardrails_keeping_the_charge(
+            AsyncMock(side_effect=blocked), AsyncMock(side_effect=ValueError("no price"))
+        )
+
+    assert caught.value is blocked
+
+
+@pytest.mark.asyncio
+async def test_an_allowed_response_leaves_the_charge_to_the_success_path():
+    settle = AsyncMock()
+
+    response = await _run_post_call_guardrails_keeping_the_charge(AsyncMock(return_value={"id": "kept"}), settle)
+
+    assert response == {"id": "kept"}
+    settle.assert_not_awaited()

@@ -347,6 +347,7 @@ class TestVertexAIPassThroughHandler:
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
                 upstream_request_filter=mock.ANY,
+                inherit_auth_guardrails=True,
             )
 
     @pytest.mark.asyncio
@@ -440,6 +441,7 @@ class TestVertexAIPassThroughHandler:
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
                 upstream_request_filter=mock.ANY,
+                inherit_auth_guardrails=True,
             )
 
     @pytest.mark.parametrize(
@@ -533,6 +535,7 @@ class TestVertexAIPassThroughHandler:
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
                 upstream_request_filter=mock.ANY,
+                inherit_auth_guardrails=True,
             )
 
     @pytest.mark.asyncio

@@ -3,7 +3,7 @@ import functools
 import json
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, ParamSpec
 from urllib.parse import urlparse
@@ -120,6 +120,22 @@ def _websocket_frames(
     return tuple(
         message for message in (response_body if isinstance(response_body, list) else ()) if isinstance(message, dict)
     )
+
+
+async def finalize_cost_without_success_logs(
+    *,
+    logging_obj: LiteLLMLoggingObj,
+    standard_logging_response_object: object,
+    **_success_log_fields: object,  # kwargs-ok: accepts every field a log dispatch receives; none are needed here
+) -> None:
+    """Settles the provider's charge on the logging object for a response that won't be logged as a success. A response
+    with no cost result settles at 0, the spend its success row would carry, so the failure row keeps its usage."""
+    from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
+
+    prepare_response_cost(
+        logging_obj, standard_logging_response_object, datetime.now(timezone.utc), settle_unknown_cost_at_zero=True
+    )
+    await finalize_proxy_response_cost(logging_obj, standard_logging_response_object)
 
 
 def _adopt_handler_usage(logging_obj: LiteLLMLoggingObj, handler_kwargs: Mapping[str, object]) -> None:

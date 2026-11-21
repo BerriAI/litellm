@@ -34,9 +34,11 @@ def _customer_attribution(logging_obj: Logging, payload: StandardLoggingPayload)
     )
 
 
-def prepare_response_cost(logging_obj: Logging, response: object, now: datetime) -> PreparedCost | None:
+def prepare_response_cost(
+    logging_obj: Logging, response: object, now: datetime, settle_unknown_cost_at_zero: bool = False
+) -> PreparedCost | None:
     try:
-        return logging_obj.prepare_response_cost(response, now)
+        return logging_obj.prepare_response_cost(response, now, settle_unknown_cost_at_zero)
     except Exception:  # noqa: BLE001  # preparation must not prevent serving an already completed response
         verbose_proxy_logger.exception("Unable to prepare completed response cost for %s", logging_obj.litellm_call_id)
         return None

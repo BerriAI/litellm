@@ -60,6 +60,47 @@ async def test_post_call_success_hook_runs_other_callback_and_replaces_response(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrails_only", "guardrails_seen"), [(False, ["key-guard", "model-guard"]), (True, ["key-guard"])]
+)
+async def test_post_call_success_hook_merges_model_level_guardrails_unless_guardrails_only(
+    proxy_logging, make_user_api_key_auth, monkeypatch, guardrails_only, guardrails_seen
+):
+    router = MagicMock()
+    router.registry.return_value.deployments.return_value = [{"litellm_params": {"guardrails": ["model-guard"]}}]
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    g = _make_guardrail(should_run=False)
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "alias", "metadata": {"guardrails": ["key-guard"]}},
+        response=MagicMock(),
+        user_api_key_dict=make_user_api_key_auth(),
+        guardrails_only=guardrails_only,
+    )
+
+    assert g.should_run_guardrail.call_args.kwargs["data"]["metadata"]["guardrails"] == guardrails_seen
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_guardrails_only_leaves_other_callbacks_out(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    other = MagicMock(spec=CustomLogger)
+    other.async_post_call_success_hook = AsyncMock(return_value={"replaced": True})
+    g = _make_guardrail(override={"guarded": True})
+    monkeypatch.setattr(litellm, "callbacks", [other, g])
+
+    out = await proxy_logging.post_call_success_hook(
+        data={}, response={"original": True}, user_api_key_dict=make_user_api_key_auth(), guardrails_only=True
+    )
+
+    other.async_post_call_success_hook.assert_not_called()
+    g.async_post_call_success_hook.assert_awaited_once()
+    assert out == {"guarded": True}
+
+
+@pytest.mark.asyncio
 async def test_post_call_success_hook_guardrail_should_not_run_skipped(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):

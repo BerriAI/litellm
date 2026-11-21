@@ -120,6 +120,24 @@ async def test_the_proxy_starts_with_a_hook_that_keeps_each_thread_with_its_key(
 
 
 @pytest.mark.asyncio
+async def test_a_relayed_reply_that_only_guardrails_check_still_keeps_its_thread_with_its_key() -> None:
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging._add_proxy_hooks()
+    await proxy_logging.post_call_success_hook(
+        data={"thread": CREATE},
+        response=anthropic_message("msg_relayed"),
+        user_api_key_dict=OWNER,
+        guardrails_only=True,
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=INTRUDER, data=continue_from("msg_relayed"), call_type="pass_through_endpoint"
+        )
+    assert rejected.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_only_the_key_that_created_a_thread_can_continue_it() -> None:
     ownership: Final = hook()
     await ownership.async_post_call_success_hook(

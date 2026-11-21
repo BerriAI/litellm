@@ -380,7 +380,10 @@ class GenericGuardrailAPI(CustomGuardrail):
         top_level_metadata: Final = request_data.get("metadata", {})
 
         # Merge both sources, preferring litellm_metadata if both exist
-        metadata_dict: Final = {**top_level_metadata, **litellm_metadata}
+        metadata_dict: Final = {
+            **(top_level_metadata if isinstance(top_level_metadata, dict) else {}),
+            **(litellm_metadata if isinstance(litellm_metadata, dict) else {}),
+        }
 
         if not metadata_dict:
             return result_metadata
@@ -390,12 +393,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Fields in metadata are already prefixed with 'user_api_key_'
         for field_name in GenericGuardrailAPIMetadata.__annotations__:
             value = metadata_dict.get(field_name)
-            if value is not None:
+            if isinstance(value, str):
                 result_metadata[field_name] = value
 
         # handle user_api_key_token = user_api_key_hash
-        if metadata_dict.get("user_api_key_token") is not None:
-            result_metadata["user_api_key_hash"] = metadata_dict.get("user_api_key_token")
+        token: Final = metadata_dict.get("user_api_key_token")
+        if isinstance(token, str):
+            result_metadata["user_api_key_hash"] = token
 
         verbose_proxy_logger.debug(
             "Generic Guardrail API: Extracted user metadata: %s",
@@ -403,6 +407,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
 
         return result_metadata
+
+    def _dynamic_request_body_params(self, request_data: object) -> Mapping[str, object]:
+        """The ``extra_body`` a request asks this guardrail to send. A pass-through client can send a ``guardrails``
+        field of any shape, which asks for nothing unless it names this guardrail's params in the usual form."""
+        try:
+            return as_str_mapping(self.get_guardrail_dynamic_request_body_params(request_data)) or {}  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # a client's JSON, validated by the call
+        except (TypeError, ValidationError):
+            return {}
 
     def _fail_open_passthrough(
         self,
@@ -577,14 +589,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools: Final = inputs.get("tools")
         structured_messages: Final = inputs.get("structured_messages")
         tool_calls: Final = inputs.get("tool_calls")
-        model: Final = inputs.get("model")
+        model: Final[object] = inputs.get("model")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
             request_data = {}
 
         # Merge additional provider specific params from config and dynamic params
-        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data) or {}
+        dynamic_params: Final = self._dynamic_request_body_params(request_data)
         additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata
@@ -611,7 +623,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 tool_calls=tool_calls,
                 additional_provider_specific_params=additional_params,
                 input_type=input_type,
-                model=model,
+                model=model if isinstance(model, str) else None,
             )
 
             headers: Final = self._build_request_headers()

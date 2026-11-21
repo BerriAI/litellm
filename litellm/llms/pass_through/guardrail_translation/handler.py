@@ -6,14 +6,15 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -27,6 +28,95 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+# The fields of a provider's JSON reply that name or encode something rather than carry its text, by the field they sit
+# under, and the fields that hold what the model wrote, which are read whole.
+_REPLY_TOP_LEVEL_FIELDS: Final = frozenset(
+    (
+        "finish_reason",
+        "id",
+        "model",
+        "modelVersion",
+        "object",
+        "responseId",
+        "role",
+        "service_tier",
+        "status",
+        "stop_reason",
+        "stop_sequence",
+        "system_fingerprint",
+        "type",
+    )
+)
+_REPLY_NESTED_FIELDS: Final = MappingProxyType(
+    {
+        "candidates": frozenset(("finishReason",)),
+        "choices": frozenset(("finish_reason",)),
+        "content": frozenset(("id", "role", "type")),
+        "data": frozenset(("b64_json", "embedding", "object")),
+        "message": frozenset(("role",)),
+        "output": frozenset(("id", "role", "status", "type")),
+        "parts": frozenset(("thoughtSignature",)),
+        "predictions": frozenset(("bytesBase64Encoded",)),
+        "tool_calls": frozenset(("id", "type")),
+    }
+)
+_REPLY_MODEL_OUTPUT_FIELDS: Final = frozenset(("args", "arguments", "input", "parameters"))
+_REPLY_LIST_FIELDS: Final = ("candidates", "choices", "output", "predictions")
+_IMAGE_REPLY_FIELDS: Final = frozenset(("created", "data"))
+_NO_FIELDS: Final[frozenset[str]] = frozenset()
+
+
+def _is_provider_reply(response: Mapping[str, object]) -> bool:
+    """Whether a JSON response has the shape of a provider's reply, by the type of the field that names it, since a
+    custom API's JSON can use the same field names."""
+    return (
+        any(isinstance(response.get(field), list) for field in _REPLY_LIST_FIELDS)
+        or isinstance(response.get("object"), str)
+        or (response.get("type") == "message" and "stop_reason" in response)
+        or ("finish_reason" in response and "message" in response)
+        or _IMAGE_REPLY_FIELDS.issubset(response)
+    )
+
+
+def _reply_field_position(name: str, skipped: frozenset[str] | None) -> frozenset[str] | None:
+    if skipped is None or name in _REPLY_MODEL_OUTPUT_FIELDS:
+        return None
+    return _REPLY_NESTED_FIELDS.get(name, _NO_FIELDS)
+
+
+def _reply_entries(
+    fields: Mapping[str, object], skipped: frozenset[str] | None
+) -> Iterator[tuple[object, frozenset[str] | None]]:
+    for name, item in fields.items():
+        if skipped is None:
+            yield name, None
+        if skipped is None or name not in skipped:
+            yield item, _reply_field_position(name, skipped)
+
+
+def _response_text(response: Mapping[str, object]) -> str:
+    """The text a guardrail reads from a JSON response. In a provider's reply that is its strings without the ids and
+    encoded data around them, so a timestamp or a usage count doesn't read as a phone or card number. What the model
+    wrote into a tool call, and any other API's JSON, is read whole, field names and integers included. Floats are
+    scores and vectors."""
+    top_level: Final = _REPLY_TOP_LEVEL_FIELDS if _is_provider_reply(response) else None
+    pending: Final[list[tuple[object, frozenset[str] | None]]] = [(response, top_level)]  # mutable-ok: stack
+    texts: Final[list[str]] = []  # mutable-ok: local to this walk
+    while pending:
+        value, skipped = pending.pop()
+        fields = as_str_mapping(value)
+        items = as_object_list(value)
+        if isinstance(value, str):
+            texts.append(value)
+        elif skipped is None and isinstance(value, int) and not isinstance(value, bool):
+            texts.append(str(value))
+        elif fields is not None:
+            pending.extend(reversed(tuple(_reply_entries(fields, skipped))))
+        elif items is not None:
+            pending.extend((item, skipped) for item in reversed(items))
+    return "\n".join(text for text in texts if text)
 
 
 class PassThroughEndpointHandler(BaseTranslation):
@@ -143,6 +233,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
+        read_whole_response: bool = False,
     ) -> object:
         """
         Process output response by applying guardrails to targeted fields.
@@ -152,7 +243,10 @@ class PassThroughEndpointHandler(BaseTranslation):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
+            read_whole_response: Without targeted fields, read the response as JSON, ids and usage included, as a call
+                with no logging object does, such as a logging_only scan
         """
+        response_fields: Final = as_str_mapping(response)
         if not isinstance(response, dict):
             verbose_proxy_logger.debug("PassThroughEndpointHandler: Response is not a dict, skipping")
             return response
@@ -168,7 +262,11 @@ class PassThroughEndpointHandler(BaseTranslation):
         field_expressions: Final = settings.response_fields if settings else None
 
         # Extract text to check
-        text_to_check: Final = self._extract_text_for_guardrail(response, field_expressions)
+        text_to_check: Final = (
+            self._extract_text_for_guardrail(response, field_expressions)
+            if field_expressions or read_whole_response or litellm_logging_obj is None
+            else _response_text(response_fields or {})
+        )
 
         if not text_to_check:
             return response

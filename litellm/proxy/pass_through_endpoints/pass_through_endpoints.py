@@ -10,6 +10,7 @@ from base64 import b64encode
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Iterable,
@@ -20,7 +21,7 @@ from collections.abc import (
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import datetime
-from functools import reduce
+from functools import partial, reduce
 from itertools import chain, count, groupby, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
@@ -68,7 +69,9 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    guardrail_entry_names,
     guardrail_request_data_with_streaming,
+    merged_guardrail_entries,
     without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -162,6 +165,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     check_customer_request_model_access,
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    move_guardrails_to_metadata,  # pyright: ignore[reportUnknownVariableType]  # untyped data param; the same merge the native routes run
     redact_credential_headers,
     resolve_customer_request_usage,
     strip_client_guardrail_information,
@@ -179,10 +183,11 @@ from litellm.proxy.route_priority import (
     shadowed_by_builtin_claim,
 )
 from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
-from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.proxy.utils import normalize_route_for_root_path, pipeline_managed_guardrail_names
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.litellm_params import ProxyRequestState, wire_names
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -207,7 +212,7 @@ from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import VertexPassthroughLoggingHandler
 from .streaming_handler import PassThroughStreamingHandler
-from .success_handler import PassThroughEndpointLogging
+from .success_handler import PassThroughEndpointLogging, finalize_cost_without_success_logs
 from .upstream_usage_headers import (
     UpstreamReportedUsage,
     apply_upstream_reported_model,
@@ -218,12 +223,34 @@ from .upstream_usage_headers import (
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig
 
+_GuardedResponse = TypeVar("_GuardedResponse")
+
 router: Final = APIRouter()
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
+_blocked_response_cost_logging: Final = PassThroughEndpointLogging(log_dispatch=finalize_cost_without_success_logs)
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
+_GUARDRAIL_ENTRIES: Final = TypeAdapter(list[object])
+_FIELDS_GUARDRAILS_READ_BY_SHAPE: Final = (
+    ("guardrails", (list, dict)),
+    ("guardrail_config", (dict,)),
+    ("proxy_server_request", (dict,)),
+)
+_PROXY_FILLED_FIELD_SHAPES: Final = (
+    ("litellm_call_id", (str,)),
+    ("litellm_trace_id", (str,)),
+    ("custom_llm_provider", (str,)),
+    ("api_base", (str,)),
+    ("api_key", (str,)),
+)
+_POST_CALL_SELECTION_FIELDS: Final = (
+    "_guardrail_pipelines",
+    "_pipeline_managed_guardrails",
+    "spend_logs_metadata",
+    "tags",
+)
 _RELAY_HEADERS: Final = TypeAdapter(dict[str, str])
 _RELAY_METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
@@ -245,6 +272,19 @@ def _request_body_fields(parsed: object) -> Mapping[str, object]:
     if fields is None:
         raise TypeError(f"unsupported operand type(s) for |: '{type(parsed).__name__}' and 'dict'")
     return fields
+
+
+def _holds_string_headers(value: object) -> bool:
+    headers: Final = as_str_mapping(value)
+    return headers is not None and all(isinstance(header, str) for header in headers.values())
+
+
+def _is_guardrail_readable_client_metadata(key: str, value: object) -> bool:
+    if key == "headers":
+        return _holds_string_headers(value)
+    if key == "requester_metadata":
+        return isinstance(value, Mapping)
+    return _is_mergeable_client_metadata(key, value)
 
 
 class _RegisteredPassThroughRoute(TypedDict):
@@ -994,7 +1034,270 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
-def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
+def _drop_unmergeable_guardrail_fields(
+    parsed_body: dict[str, object],  # mutable-ok: strips the request body in place before the guardrail merge
+) -> None:
+    """Drop a ``guardrails`` that isn't a list or an object, and a ``guardrail_config`` or ``proxy_server_request`` that
+    isn't an object, which the merge and the guardrails can't read. The provider receives none of these fields."""
+    for field, shape in _FIELDS_GUARDRAILS_READ_BY_SHAPE:
+        if field in parsed_body and not isinstance(parsed_body[field], shape):
+            parsed_body.pop(field)
+
+
+async def _inherit_auth_guardrails(
+    parsed_body: dict[str, object] | None,  # mutable-ok: merges the guardrails into the live request body
+    user_api_key_dict: UserAPIKeyAuth,
+    configured_guardrails: Sequence[object] | None,
+    inherit: bool,
+) -> Sequence[object] | None:
+    """Return the guardrails a pass-through request runs after the provider responds.
+
+    The endpoint's configured guardrails win. Without any, and with ``inherit`` and a JSON body, the key, team,
+    project, policy and request-body guardrails are merged into ``parsed_body["metadata"]`` for the pre-call hook,
+    with the ones the client named in ``metadata.guardrails`` kept after them, and returned only when at least one
+    of them runs post_call.
+    """
+    if configured_guardrails or not inherit or not parsed_body:
+        return configured_guardrails
+    _drop_unmergeable_guardrail_fields(parsed_body)
+    client_sent_metadata: Final = "metadata" in parsed_body
+    if not isinstance(parsed_body.get("metadata"), dict):
+        parsed_body["metadata"] = {}  # rebind-ok: the merge below writes into the live request body's metadata
+    client_metadata: Final = as_str_mapping(parsed_body["metadata"]) or {}
+    client_body_guardrails: Final = {"guardrails": parsed_body["guardrails"]} if "guardrails" in parsed_body else {}
+    client_metadata_guardrails: Final = (
+        {"guardrails": client_metadata["guardrails"]} if "guardrails" in client_metadata else {}
+    )
+    client_named: Final = client_metadata.get("guardrails")
+    await move_guardrails_to_metadata(
+        data=parsed_body,
+        _metadata_variable_name="metadata",
+        user_api_key_dict=user_api_key_dict,
+    )
+    metadata: Final = parsed_body["metadata"]
+    merged: Final = (as_str_mapping(metadata) or {}).get("guardrails")
+    entries: Final = (
+        merged_guardrail_entries(
+            _GUARDRAIL_ENTRIES.validate_python(merged), _client_named_guardrail_entries(client_named)
+        )
+        if isinstance(merged, list)
+        else ()
+    )
+    runs_guardrails: Final = bool(entries) or bool((as_str_mapping(metadata) or {}).get("_guardrail_pipelines"))
+    if entries and isinstance(metadata, dict):
+        metadata["guardrails"] = entries
+    elif isinstance(merged, (list, dict)) and isinstance(metadata, dict):
+        _restore_unmerged_guardrail_fields(
+            parsed_body,
+            cast("dict[str, object]", metadata),  # cast-ok: the request body's JSON metadata object
+            client_body_guardrails,
+            client_metadata_guardrails,
+        )
+    if runs_guardrails:
+        _drop_client_values_guardrails_cannot_read(parsed_body)
+    if not metadata and not client_sent_metadata:
+        parsed_body.pop("metadata")
+        return None
+    if not entries:
+        return None
+    admin_metadata: Final = _admin_guardrail_metadata(user_api_key_dict)
+    admin_scoped_body: Final = {
+        **parsed_body,
+        **{key: {**(as_str_mapping(parsed_body.get(key)) or {}), **admin_metadata} for key in sorted(_METADATA_KEYS)},
+    }
+    return entries if entries and _named_guardrail_runs_post_call(admin_scoped_body, entries) else None
+
+
+def _drop_client_values_guardrails_cannot_read(
+    parsed_body: dict[str, object],  # mutable-ok: strips the request body in place before its guardrails run
+) -> None:
+    """Drop what a client sent in a field the proxy fills on the native routes when the guardrails can't read it there:
+    a ``litellm_call_id``, ``litellm_trace_id``, ``custom_llm_provider``, ``api_base`` or ``api_key`` that isn't a
+    string, a ``proxy_server_request`` or ``metadata.headers`` whose headers aren't strings, a ``requester_metadata``
+    that isn't an object, and any ``user_api_key_*`` metadata field, which only the proxy sets. The provider receives
+    none of these fields."""
+    for field, shape in _PROXY_FILLED_FIELD_SHAPES:
+        if field in parsed_body and not isinstance(parsed_body[field], shape):
+            parsed_body.pop(field)
+    server_request: Final = as_str_mapping(parsed_body.get("proxy_server_request")) or {}
+    if "headers" in server_request and not _holds_string_headers(server_request["headers"]):
+        parsed_body.pop("proxy_server_request")
+    for bucket in (parsed_body.get(key) for key in sorted(_METADATA_KEYS)):
+        if isinstance(bucket, dict):
+            _drop_metadata_guardrails_cannot_read(cast("dict[str, object]", bucket))  # cast-ok: a JSON object
+
+
+def _drop_metadata_guardrails_cannot_read(
+    metadata: dict[str, object],  # mutable-ok: strips the request body's metadata in place
+) -> None:
+    unreadable: Final = tuple(
+        field for field, value in metadata.items() if not _is_guardrail_readable_client_metadata(field, value)
+    )
+    for field in unreadable:
+        metadata.pop(field)
+
+
+def _restore_unmerged_guardrail_fields(
+    parsed_body: dict[str, object],  # mutable-ok: puts the client's own fields back on the live request body
+    metadata: dict[str, object],  # mutable-ok: the live request body's metadata
+    client_body_guardrails: Mapping[str, object],
+    client_metadata_guardrails: Mapping[str, object],
+) -> None:
+    """Put back the client's ``guardrails`` and ``metadata.guardrails`` when the merge produced no list of guardrails,
+    such as an empty list or the client's object form on a plain key, so the body keeps main's shape"""
+    metadata.pop("guardrails", None)
+    metadata.update(client_metadata_guardrails)
+    parsed_body.update(client_body_guardrails)
+
+
+def _client_named_guardrail_entries(client_named: object) -> Sequence[object]:
+    """The guardrails ``metadata.guardrails`` names: its entries, or the keys of the dict form the guardrails read that
+    it doesn't turn off with ``false``"""
+    if isinstance(client_named, list):
+        return _GUARDRAIL_ENTRIES.validate_python(client_named)
+    return tuple(name for name, run in (as_str_mapping(client_named) or {}).items() if run is not False)
+
+
+def _admin_guardrail_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+    """The key and team metadata ``should_run_guardrail`` reads a global guardrail opt-out from, as the native routes set it"""
+    return MappingProxyType(
+        {
+            "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
+            "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+        }
+    )
+
+
+def _holds_resolved_pipelines(pipelines: object) -> bool:
+    """Whether a pipeline slot holds the policy engine's (name, pipeline) tuples, which a JSON body can't"""
+    entries: Final = as_object_list(pipelines)
+    return entries is not None and all(isinstance(entry, tuple) for entry in entries)
+
+
+def _post_call_selection_metadata(kwargs: Mapping[str, object], inherited: bool) -> Mapping[str, object]:
+    """The policy pipelines resolved for a request that inherits auth guardrails, the tags a tag-scoped guardrail mode
+    reads and the spend_logs_metadata a blocked response's row keeps, from the logging metadata that request setup moved
+    the body's ``metadata`` into"""
+    if not inherited:
+        return MappingProxyType({})
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
+    selection: Final = {field: metadata[field] for field in _POST_CALL_SELECTION_FIELDS if field in metadata}
+    if "_guardrail_pipelines" in selection and not _holds_resolved_pipelines(selection["_guardrail_pipelines"]):
+        selection.pop("_guardrail_pipelines")
+    return selection
+
+
+def _starts_post_call_pass(guardrails: Sequence[object] | None, policy_pipelines: Mapping[str, object]) -> bool:
+    return bool(guardrails) or bool(pipeline_managed_guardrail_names({"metadata": dict(policy_pipelines)}, "post_call"))
+
+
+def _post_call_hook_data(
+    parsed_body: Mapping[str, object] | None,
+    guardrails: Sequence[object] | None,
+    logging_obj: LiteLLMLoggingObj,
+    user_api_key_dict: UserAPIKeyAuth,
+    policy_pipelines: Mapping[str, object],
+    inherited: bool,
+) -> dict[str, object]:  # mutable-ok: the guardrails record their results in this request payload
+    """The body with what the post-call guardrails read and the kwargs split stripped: ``metadata`` naming the guardrails,
+    which ``should_run_guardrail`` checks, the policy pipelines to run, and the logging object, which unified
+    (apply_guardrail) guardrails resolve a pass-through response's call type from when the route has no
+    API_ROUTE_TO_CALL_TYPES entry. A custom endpoint whose guardrails don't run post_call gets no logging object, so a
+    global unified guardrail still can't resolve its response."""
+    body: Final = parsed_body or {}
+    admin_metadata: Final = _admin_guardrail_metadata(user_api_key_dict) if inherited else MappingProxyType({})
+    data: Final = {
+        **body,
+        "metadata": {
+            **(as_str_mapping(body.get("metadata")) or {}),
+            **policy_pipelines,
+            "guardrails": guardrails or (),
+            **admin_metadata,
+        },
+    }
+    if not inherited and not _named_guardrail_runs_post_call(data, guardrails or ()):
+        return data
+    return {**data, "litellm_logging_obj": logging_obj}
+
+
+def _provider_charge_settlement(
+    response: httpx.Response,
+    response_body: Mapping[str, object] | None,
+    url_route: str,
+    start_time: datetime,
+    logging_obj: LiteLLMLoggingObj,
+    parsed_body: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
+    handler_kwargs: Mapping[str, object],
+) -> Callable[[], Awaitable[None]]:
+    return partial(
+        _blocked_response_cost_logging.pass_through_async_success_handler,
+        finalize_before_dispatch=True,
+        httpx_response=response,
+        response_body=response_body,
+        url_route=url_route,
+        result="",
+        start_time=start_time,
+        end_time=datetime.now(start_time.tzinfo),
+        logging_obj=logging_obj,
+        cache_hit=False,
+        request_body=parsed_body or {},
+        custom_llm_provider=custom_llm_provider,
+        **handler_kwargs,
+    )
+
+
+async def _run_post_call_guardrails_keeping_the_charge(
+    run_guardrails: Callable[[], Awaitable[_GuardedResponse]],
+    settle_provider_charge: Callable[[], Awaitable[None]],
+    settles_the_charge: bool = True,
+) -> _GuardedResponse:
+    """A guardrail that blocks the response, or fails, does so after the provider answered and billed the call, so the
+    charge is settled before the failure path writes its row, as on the native routes. A custom endpoint runs every
+    hook here, not only guardrails, and doesn't settle, so its failure row stays uncharged."""
+    try:
+        return await run_guardrails()
+    except Exception:
+        if not settles_the_charge:
+            raise
+        try:
+            await settle_provider_charge()
+        except Exception:  # noqa: BLE001 - the guardrail's outcome still reaches the client
+            verbose_proxy_logger.exception("pass_through_endpoint: could not settle a blocked response's cost")
+        raise
+
+
+def _response_after_post_call_guardrails(
+    guarded_body: object,
+    response_body: dict[str, object] | None,  # mutable-ok: pass_through_request's own response dict, returned as is
+    content: bytes,
+) -> tuple[dict[str, object] | None, bytes, bool]:  # mutable-ok: pass_through_request keeps a dict for the id rewrite
+    """The response body, its bytes and whether they changed, once the guardrails returned ``guarded_body``. A hook that
+    returns anything but a JSON object leaves the response as the provider sent it."""
+    if isinstance(guarded_body, dict):
+        guarded: Final = cast("dict[str, object]", guarded_body)  # cast-ok: the hook's JSON response
+        return guarded, json.dumps(guarded).encode("utf-8"), True
+    verbose_proxy_logger.debug(
+        "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
+        type(guarded_body).__name__,
+    )
+    return response_body, content, False
+
+
+def _named_guardrail_runs_post_call(data: Mapping[str, object], entries: Sequence[object]) -> bool:
+    names: Final = frozenset(chain.from_iterable(map(guardrail_entry_names, entries)))
+    return any(
+        guardrail.guardrail_name in names
+        and guardrail.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+            data=data, event_type=GuardrailEventHooks.post_call
+        )
+        for guardrail in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
+        if isinstance(guardrail, CustomGuardrail)
+    )
+
+
+def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict[str, object] | None) -> None:
     """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
 
     Post-call guardrails run against a throwaway ``hook_data`` dict (its
@@ -1003,18 +1306,30 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | Non
     ``standard_logging_guardrail_information`` there and not on the dict the
     failure handler forwards to ``post_call_failure_hook``. Without this the
     otel guardrail span is emitted on allow but missing on block. Carry the
-    entries over so the failure path matches the unified path.
+    entries over so the failure path matches the unified path. The failure row
+    reads its ``metadata`` here too, so it keeps the ``spend_logs_metadata`` a
+    built-in route's post-call pass was given, as its success row would.
     """
     if guardrail_data is None:
         return
+    spend_logs_metadata: Final = (as_str_mapping(guardrail_data.get("metadata")) or {}).get("spend_logs_metadata")
+    if spend_logs_metadata is not None:
+        request_fields: Final = cast("Mapping[str, object]", request_data)  # cast-ok: the JSON body plus logging kwargs
+        request_data["metadata"] = {  # rebind-ok: the failure path hands this dict to post_call_failure_hook
+            **(as_str_mapping(request_fields.get("metadata")) or {}),
+            "spend_logs_metadata": spend_logs_metadata,
+        }
     source_key: Final = get_metadata_variable_name_from_kwargs(guardrail_data)
-    source_metadata: Final = guardrail_data.get(source_key) or {}
+    source_metadata: Final = as_str_mapping(guardrail_data.get(source_key)) or {}
     entries: Final = source_metadata.get("standard_logging_guardrail_information")
     if not entries:
         return
 
     _, metadata = get_or_create_metadata_bucket(request_data)
-    metadata.setdefault("standard_logging_guardrail_information", list(entries))
+    metadata.setdefault(
+        "standard_logging_guardrail_information",
+        list(cast("Iterable[object]", entries)),  # cast-ok: guardrails record a list of entries here
+    )
 
 
 _GOOGLE_PASSTHROUGH_PROVIDERS: Final = frozenset(
@@ -1632,6 +1947,7 @@ async def pass_through_request(
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
+    inherit_auth_guardrails: bool = False,
     keep_target_query: bool = False,
     raw_response: bool = False,
     response_owner: AsyncExitStack | None = None,
@@ -1659,6 +1975,8 @@ async def pass_through_request(
         upstream_request_filter: Optional last rewrite of the headers and JSON body sent upstream, given the
             litellm_params the request is logged with
         operation: Optional GenAI operation the route reports, unless the upstream names its own
+        inherit_auth_guardrails: Run the key, team, project and policy guardrails on a JSON body, as the
+            native routes do, when the pass-through guardrails config resolves to none
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
         raw_response: Relay opaque response bytes without parsing, buffering or following redirects
         response_owner: Request-scoped owner that closes the upstream even if streaming never starts
@@ -1754,6 +2072,13 @@ async def pass_through_request(
             _parsed_body["metadata"]["guardrails"] = guardrails_to_run
             verbose_proxy_logger.debug("Added guardrails to passthrough request metadata: %s", guardrails_to_run)
 
+        post_call_guardrails: Final = await _inherit_auth_guardrails(
+            parsed_body=cast(dict[str, object] | None, _parsed_body),  # cast-ok: json
+            user_api_key_dict=user_api_key_dict,
+            configured_guardrails=guardrails_to_run,
+            inherit=inherit_auth_guardrails,
+        )
+
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
@@ -1840,7 +2165,7 @@ async def pass_through_request(
         )
         hooked_body: Final = _json_object(_parsed_body)
         client_user_id: Final = _anthropic_user_id_to_forward(
-            hooked_body, str(url), proxy_logging_obj.request_has_pre_call_guardrails
+            hooked_body, str(url), proxy_logging_obj.request_is_scanned_before_the_provider
         )
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
@@ -2324,33 +2649,48 @@ async def pass_through_request(
             logging_obj=logging_obj,
         )
 
-        if response.status_code < 400 and response_body is not None and guardrails_to_run:
-            # Build an enriched data dict: _parsed_body has been stripped of
-            # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
-            # so we re-attach the configured guardrails here so should_run_guardrail
-            # sees them.
-            hook_data: Final = dict(_parsed_body or {})
-            existing_metadata = hook_data.get("metadata")
-            if not isinstance(existing_metadata, dict):
-                existing_metadata = {}
-            hook_data["metadata"] = {
-                **existing_metadata,
-                "guardrails": guardrails_to_run,
-            }
-            post_call_guardrail_data = hook_data
-            response_body = await proxy_logging_obj.post_call_success_hook(
-                data=hook_data,
-                user_api_key_dict=user_api_key_dict,
-                response=response_body,
+        policy_pipelines: Final = _post_call_selection_metadata(
+            cast(dict[str, object], kwargs),  # cast-ok: the logging fields init_kwargs built above
+            inherit_auth_guardrails,
+        )
+        if (
+            response.status_code < 400
+            and response_body is not None
+            and _starts_post_call_pass(post_call_guardrails, policy_pipelines)
+        ):
+            json_body: Final = cast(dict[str, object] | None, _parsed_body)  # cast-ok: json
+            hook_data: Final = _post_call_hook_data(
+                json_body,
+                post_call_guardrails,
+                logging_obj,
+                user_api_key_dict,
+                policy_pipelines,
+                inherit_auth_guardrails,
             )
-            if isinstance(response_body, dict):
-                content = json.dumps(response_body).encode("utf-8")
-                _content_modified = True
-            else:
-                verbose_proxy_logger.debug(
-                    "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
-                    type(response_body).__name__,
-                )
+            post_call_guardrail_data = hook_data
+            guarded_body: Final = await _run_post_call_guardrails_keeping_the_charge(
+                partial(
+                    proxy_logging_obj.post_call_success_hook,
+                    data=hook_data,
+                    user_api_key_dict=user_api_key_dict,
+                    response=response_body,
+                    guardrails_only=inherit_auth_guardrails,
+                ),
+                _provider_charge_settlement(
+                    response,
+                    cast(dict[str, object] | None, response_body),  # cast-ok: json
+                    str(url),
+                    start_time,
+                    logging_obj,
+                    json_body,
+                    custom_llm_provider,
+                    cast(dict[str, object], kwargs),  # cast-ok: the logging fields init_kwargs built above
+                ),
+                settles_the_charge=inherit_auth_guardrails,
+            )
+            response_body, content, _content_modified = _response_after_post_call_guardrails(
+                guarded_body, response_body, content
+            )
         elif response_body is None:
             verbose_proxy_logger.debug(
                 "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
@@ -2724,6 +3064,7 @@ def create_pass_through_route(
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
+    inherit_auth_guardrails: bool = False,
     keep_target_query: bool = False,
 ):
     # check if target is an adapter.py or a url
@@ -2878,6 +3219,7 @@ def create_pass_through_route(
                         upstream_headers_filter=upstream_headers_filter,
                         upstream_request_filter=upstream_request_filter,
                         operation=operation,
+                        inherit_auth_guardrails=inherit_auth_guardrails,
                         keep_target_query=keep_target_query,
                     )
                 finally:

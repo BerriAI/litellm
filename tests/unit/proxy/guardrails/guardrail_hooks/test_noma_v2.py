@@ -1,7 +1,9 @@
 import asyncio
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.noma import NomaV2Guardrail
@@ -747,3 +749,21 @@ class TestNomaV2ApplicationIdResolution:
 
         payload = call_mock.call_args.kwargs["payload"]
         assert "application_id" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", (None, 0, False, "", [], "text", 7))
+async def test_noma_v2_scans_a_request_whose_litellm_metadata_is_not_an_object(value: object) -> None:
+    guardrail: Final = NomaV2Guardrail(api_key="key", api_base="http://vendor.invalid", guardrail_name="noma")
+    verdict: Final = httpx.Response(
+        200, json={"action": "NONE"}, request=httpx.Request("POST", "http://vendor.invalid")
+    )
+
+    with patch.object(guardrail.async_handler, "post", new=AsyncMock(return_value=verdict)):
+        result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"metadata": {}, "litellm_metadata": value},
+            input_type="request",
+        )
+
+    assert result["texts"] == ["hello"]

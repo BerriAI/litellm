@@ -62,6 +62,11 @@ class _Action(str, enum.Enum):
     GUARDRAIL_INTERVENED = "GUARDRAIL_INTERVENED"
 
 
+def _user_api_key_alias(request_data: Mapping[str, object], metadata_key: str) -> object:
+    """The key alias recorded under ``metadata_key``, which a pass-through client can set to anything."""
+    return (as_str_mapping(request_data.get(metadata_key)) or {}).get("user_api_key_alias")
+
+
 class NomaV2Guardrail(CustomGuardrail):
     reads_stream_marks: ClassVar[bool] = True
     """Noma keeps one record per streamed reply when every scan carries ``stream`` and only the last one carries the
@@ -336,8 +341,8 @@ class NomaV2Guardrail(CustomGuardrail):
         # (ports v1 fallback from PR #16832).
         if application_id is None:
             application_id = self._get_non_empty_str(
-                request_data.get("litellm_metadata", {}).get("user_api_key_alias")
-            ) or self._get_non_empty_str(request_data.get("metadata", {}).get("user_api_key_alias"))
+                _user_api_key_alias(request_data, "litellm_metadata")
+            ) or self._get_non_empty_str(_user_api_key_alias(request_data, "metadata"))
 
         try:
             payload: Final = self._build_scan_payload(
