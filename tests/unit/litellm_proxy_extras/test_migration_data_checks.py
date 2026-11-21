@@ -1,7 +1,8 @@
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
+from psycopg import Connection
 from litellm_proxy_extras.migration_data_checks import (
     DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS,
     MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR,
@@ -12,6 +13,7 @@ from litellm_proxy_extras.migration_data_checks import (
     _count_query,
     btree_max_entry_bytes,
     checks_for_index,
+    find_blockers,
     migration_data_check_timeout_seconds,
     report,
 )
@@ -91,3 +93,34 @@ def test_the_scan_timeout_comes_from_the_environment_and_falls_back_on_garbage(
     else:
         monkeypatch.setenv(MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR, raw)
     assert migration_data_check_timeout_seconds() == expected
+
+
+class _Cursor:
+    def __init__(self, row: tuple[object, ...]) -> None:
+        self._row: Final = row
+
+    def fetchone(self) -> tuple[object, ...]:
+        return self._row
+
+
+class _SqlAsciiConnection:
+    _SHOWN: Final = {
+        "SHOW statement_timeout": b"0",
+        "SHOW default_transaction_read_only": b"off",
+        "SHOW block_size": b"8192",
+    }
+
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    def execute(self, query: object) -> _Cursor:
+        text: Final = query if isinstance(query, str) else query.as_string(None)  # pyright: ignore[reportAttributeAccessIssue]  # psycopg Composable
+        self.executed.append(text)
+        return _Cursor((self._SHOWN.get(text, b""),))
+
+
+def test_find_blockers_reads_the_server_settings_on_a_sql_ascii_database_where_psycopg_returns_bytes() -> None:
+    connection: Final = _SqlAsciiConnection()
+    assert find_blockers(cast("Connection[tuple[object, ...]]", connection), "public", ()) == ()
+    assert "SET statement_timeout = '0'" in connection.executed
+    assert "SET default_transaction_read_only = 'off'" in connection.executed
