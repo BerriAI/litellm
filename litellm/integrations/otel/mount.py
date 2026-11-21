@@ -39,6 +39,7 @@ _DEFAULT_EXCLUDED_ROUTES: Final = (
     "/swagger",  # static Swagger UI assets
     "/scalar",
     "/docs",  # FastAPI Swagger docs page
+    "/redoc",  # FastAPI ReDoc docs page
     "/openapi.json",  # OpenAPI schema
     "favicon",  # /favicon.ico + /get_favicon
     "/.well-known",  # UI config discovery

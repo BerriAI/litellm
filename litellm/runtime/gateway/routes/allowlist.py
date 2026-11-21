@@ -138,6 +138,7 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",
+        "/redoc",
         "/test",
         "/debug/memory/summary",
         "/api/event_logging/batch",

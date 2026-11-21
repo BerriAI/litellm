@@ -15761,7 +15761,7 @@ def test_scalar_swagger_and_openapi_are_reachable_by_default():
     assert 'src="/swagger/swagger-ui-bundle.js"' in swagger.text
     assert "url: '/openapi.json'" in swagger.text
     assert client.get("/docs/oauth2-redirect").status_code == 200
-    assert client.get("/redoc").status_code == 404
+    assert client.get("/redoc").status_code == 200
     openapi_response = client.get("/openapi.json")
     assert openapi_response.status_code == 200
     assert "paths" in openapi_response.json()
@@ -15773,6 +15773,7 @@ def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
     routes = {route.name: route.path for route in app.routes}
     assert routes.get("scalar_reference") == proxy_utils._get_docs_url()
     assert routes.get("swagger_ui_html") == proxy_utils.get_swagger_url()
+    assert app.redoc_url == proxy_utils._get_redoc_url()
     assert app.openapi_url == proxy_utils._get_openapi_url()
 
 
@@ -15782,9 +15783,9 @@ def _build_app_with_docs_env(monkeypatch, *, disabled: bool, overrides=None) -> 
     from litellm.proxy.scalar_reference import mount_scalar_reference
     from litellm.proxy.swagger_reference import mount_swagger_ui
 
-    for flag in ("DOCS_URL", "SWAGGER_URL", "OPENAPI_URL"):
+    for flag in ("DOCS_URL", "SWAGGER_URL", "REDOC_URL", "OPENAPI_URL"):
         monkeypatch.delenv(flag, raising=False)
-    for flag in ("NO_DOCS", "NO_SWAGGER", "NO_OPENAPI"):
+    for flag in ("NO_DOCS", "NO_SWAGGER", "NO_REDOC", "NO_OPENAPI"):
         if disabled:
             monkeypatch.setenv(flag, "True")
         else:
@@ -15794,7 +15795,7 @@ def _build_app_with_docs_env(monkeypatch, *, disabled: bool, overrides=None) -> 
         monkeypatch.setenv(key, value)
     app_under_test = FastAPI(
         docs_url=None,
-        redoc_url=None,
+        redoc_url=proxy_utils._get_redoc_url(),
         openapi_url=proxy_utils._get_openapi_url(),
     )
     mount_scalar_reference(app_under_test, proxy_utils._get_docs_url())
@@ -15805,22 +15806,25 @@ def _build_app_with_docs_env(monkeypatch, *, disabled: bool, overrides=None) -> 
 
 def test_docs_endpoints_enabled_when_env_unset(monkeypatch):
     app_under_test = _build_app_with_docs_env(monkeypatch, disabled=False)
+    assert app_under_test.redoc_url == "/redoc"
     assert app_under_test.openapi_url == "/openapi.json"
 
     client = TestClient(app_under_test)
     assert client.get("/").status_code == 200
     assert client.get("/swagger").status_code == 200
+    assert client.get(app_under_test.redoc_url).status_code == 200
     assert client.get(app_under_test.openapi_url).status_code == 200
 
 
 def test_doc_flags_disable_every_documentation_surface(monkeypatch):
     """
-    LIT-6745: NO_DOCS, NO_SWAGGER and NO_OPENAPI must each 404 their surface
+    LIT-6745: NO_DOCS, NO_SWAGGER, NO_REDOC and NO_OPENAPI must each 404 their surface
     with no schema in the body, so a production/air-gapped deployment can
     restrict every doc route consistently.
     """
     app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
     assert app_under_test.docs_url is None
+    assert app_under_test.redoc_url is None
     assert app_under_test.openapi_url is None
 
     client = TestClient(app_under_test)
@@ -15850,6 +15854,7 @@ def test_documentation_uses_custom_urls_under_proxy_prefix(monkeypatch):
         overrides={
             "DOCS_URL": "/reference",
             "SWAGGER_URL": "/interactive",
+            "REDOC_URL": "/read",
             "OPENAPI_URL": "/schema.json",
         },
     )
@@ -15866,6 +15871,7 @@ def test_documentation_uses_custom_urls_under_proxy_prefix(monkeypatch):
     assert "url: '/gateway/schema.json'" in swagger.text
     assert '"/gateway/lazy/warm/"' in swagger.text
     assert "/gateway/docs/oauth2-redirect" in swagger.text
+    assert 'spec-url="/gateway/schema.json"' in client.get("/gateway/read").text
     assert client.get("/gateway/schema.json").status_code == 200
     assert client.get("/gateway/scalar/scalar-1.81.0.js").status_code == 200
     assert client.get("/gateway/swagger/swagger-ui-bundle.js").status_code == 200
@@ -15875,11 +15881,11 @@ def test_documentation_uses_custom_urls_under_proxy_prefix(monkeypatch):
 @pytest.mark.parametrize(
     ("flags", "available"),
     (
-        ({"NO_DOCS": "True"}, {"/openapi.json"}),
-        ({"NO_SWAGGER": "True"}, {"/", "/openapi.json"}),
+        ({"NO_DOCS": "True"}, {"/redoc", "/openapi.json"}),
+        ({"NO_SWAGGER": "True"}, {"/", "/redoc", "/openapi.json"}),
         ({"NO_OPENAPI": "True"}, set()),
-        ({"NO_SWAGGER": "True", "SWAGGER_URL": "/interactive"}, {"/", "/interactive", "/openapi.json"}),
-        ({"DOCS_URL": "/swagger"}, {"/swagger", "/swagger/ui", "/openapi.json"}),
+        ({"NO_SWAGGER": "True", "SWAGGER_URL": "/interactive"}, {"/", "/interactive", "/redoc", "/openapi.json"}),
+        ({"DOCS_URL": "/swagger"}, {"/swagger", "/swagger/ui", "/redoc", "/openapi.json"}),
     ),
 )
 def test_documentation_respects_enable_flags_and_path_overrides(monkeypatch, flags, available):

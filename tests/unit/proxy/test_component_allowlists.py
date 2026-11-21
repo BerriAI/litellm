@@ -326,11 +326,11 @@ def test_component_keeps_custom_documentation_paths(keep_route):
     from litellm.proxy.scalar_reference import mount_scalar_reference
     from litellm.proxy.swagger_reference import mount_swagger_ui
 
-    docs_app = FastAPI(docs_url=None, redoc_url=None, openapi_url="/custom-schema.json")
+    docs_app = FastAPI(docs_url=None, redoc_url="/custom-redoc", openapi_url="/custom-schema.json")
     mount_scalar_reference(docs_app, "/custom-scalar")
     mount_swagger_ui(docs_app, "/custom-swagger")
     kept_paths = {route.path for route in docs_app.routes if keep_route(route)}
-    assert {"/custom-schema.json", "/custom-scalar", "/custom-swagger"} <= kept_paths
+    assert {"/custom-schema.json", "/custom-redoc", "/custom-scalar", "/custom-swagger"} <= kept_paths
 
 
 def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():

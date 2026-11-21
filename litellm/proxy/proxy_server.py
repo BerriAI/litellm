@@ -1089,6 +1089,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     _get_docs_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_openapi_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _get_redoc_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_valid_team_configs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     cache_user_row,
@@ -1099,6 +1100,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     get_error_message_str,
     get_openapi_url,
     get_projected_spend_over_limit,
+    get_redoc_url,
     get_server_root_path,
     get_swagger_url,
     handle_exception_on_proxy,
@@ -2250,7 +2252,7 @@ def ensure_unique_openapi_operation_ids(
 docs_url: Final = get_docs_url()
 app = FastAPI(
     docs_url=None,
-    redoc_url=None,
+    redoc_url=get_redoc_url(),
     openapi_url=get_openapi_url(),
     title=title,
     description=_description,

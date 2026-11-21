@@ -120,7 +120,6 @@ def create_app(container: Container, license_check: License) -> FastAPI:
         version="1",
         lifespan=_Lifespan(container),
         docs_url=None,
-        redoc_url=None,
         openapi_url=f"{api_prefix}/openapi.json",
     )
     mount_scalar_reference(app, docs_url)

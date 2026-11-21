@@ -104,7 +104,7 @@ def test_control_plane_viewers_use_local_assets_and_their_own_schema(root_path: 
     assert schema.status_code == 200
     operation: Final = schema.json()["paths"][f"{api_prefix}/auth/me"]["get"]
     assert operation["security"] == [{"ControlPlaneBearer": []}]
-    assert client.get(f"{root_path}/redoc").status_code == 404
+    assert client.get(f"{root_path}/redoc").status_code == 200
 
 
 def test_unknown_path_returns_an_rfc9457_not_found_body() -> None:
