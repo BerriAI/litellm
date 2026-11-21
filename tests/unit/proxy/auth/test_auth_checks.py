@@ -2860,3 +2860,46 @@ async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
         assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
     else:
         assert await run() is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dashboard_session", (False, True))
+@pytest.mark.parametrize("route", ("/compliance/gdpr", "/compliance/eu-ai-act", "/chat/completions"))
+async def test_compliance_log_models_do_not_require_inference_access(
+    route: str, dashboard_session: bool
+) -> None:
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+
+    user: Final = LiteLLM_UserTable(
+        user_id="compliance-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["allowed-model"],
+    )
+    token: Final = UserAPIKeyAuth(
+        user_id=user.user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="litellm_dashboard" if dashboard_session else None,
+        models=[],
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}
+    )
+    check: Final = common_checks(
+        request_body={"request_id": "historical-log", "model": "historical-model"},
+        team_object=None,
+        user_object=user,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        valid_token=token,
+        request=request,
+        skip_budget_checks=True,
+    )
+    if route == "/chat/completions":
+        with pytest.raises(ModelAccessDeniedProxyException):
+            await check
+        return
+    assert await check is True

@@ -6848,3 +6848,26 @@ def test_chatgpt_model_configuration_reaches_role_authorization(
                 model="",
                 route=inference_route,
             )
+
+
+@pytest.mark.parametrize("route", ("/compliance/gdpr", "/compliance/eu-ai-act"))
+def test_get_model_from_request_ignores_models_in_compliance_log_data(route: str) -> None:
+    assert get_model_from_request(
+        request_data={"request_id": "historical-log", "model": "historical-model"},
+        route=route,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/chat/completions",
+        "/v1/chat/completions",
+        "/responses",
+        "/v1/messages",
+        "/compliance/gdpr-extra",
+        "/compliance/eu-ai-act-extra",
+    ),
+)
+def test_get_model_from_request_retains_models_outside_compliance_checks(route: str) -> None:
+    assert get_model_from_request(request_data={"model": "requested-model"}, route=route) == "requested-model"

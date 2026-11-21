@@ -2840,7 +2840,7 @@ def get_model_from_request(
     ``LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST`` is set. Built-in provider passthrough
     routes (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
-    if request_dispatched_to_pass_through_endpoint(request):
+    if route in LiteLLMRoutes.compliance_check_routes.value or request_dispatched_to_pass_through_endpoint(request):
         return None
     if route in LiteLLMRoutes.compliance_check_routes.value:
         return None
