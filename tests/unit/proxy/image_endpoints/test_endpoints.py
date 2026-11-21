@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import logging
+import time
 from collections.abc import Callable, Iterator, Mapping
 from types import SimpleNamespace
 from typing import Any, Dict, Final
@@ -17,6 +18,7 @@ from starlette.responses import Response
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -25,7 +27,7 @@ from litellm.proxy.image_endpoints import endpoints
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import custom_llm_setup
 
 
@@ -461,6 +463,93 @@ class _BilledThenFailingImageHandler(litellm.CustomLLM):
         )
 
 
+class _ParamRecordingImageHandler(litellm.CustomLLM):
+    received_params: Mapping[str, object] | None = None
+
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        self.received_params = dict(optional_params)
+        return ImageResponse(data=[ImageObject(url="https://example.com/tree.png")])
+
+
+class _UnbilledFailingImageHandler(litellm.CustomLLM):
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        raise litellm.ServiceUnavailableError(message="fallback down", llm_provider="image-regression", model=model)
+
+
+class _SuccessUsageCapture(CustomLogger):
+    logged_usage: tuple[object, object] | None = None
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, dict)
+        self.logged_usage = (payload.get("prompt_tokens"), payload.get("completion_tokens"))
+
+
+def _image_regression_app(
+    monkeypatch: pytest.MonkeyPatch,
+    user_api_key_dict: UserAPIKeyAuth,
+    handlers: Mapping[str, litellm.CustomLLM],
+    fallbacks: tuple[Mapping[str, list[str]], ...] = (),
+) -> FastAPI:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [{"provider": f"image-regression-{group}", "custom_handler": handler} for group, handler in handlers.items()],
+    )
+    custom_llm_setup()
+    monkeypatch.setattr(litellm, "model_alias_map", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {"model_name": group, "litellm_params": {"model": f"image-regression-{group}/image-model"}}
+                for group in handlers
+            ],
+            fallbacks=[dict(fallback) for fallback in fallbacks],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_config", ProxyConfig())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "version", "test-version")
+    app: Final = FastAPI()
+    app.include_router(endpoints.router)
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: user_api_key_dict
+    return app
+
+
 def _send_generation(client: TestClient) -> httpx.Response:
     return client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
 
@@ -480,36 +569,11 @@ def _send_edit(client: TestClient) -> httpx.Response:
 def test_failed_image_request_bills_what_the_provider_charged_in_its_spend_row_and_cost_header(
     monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
 ) -> None:
-    from litellm.proxy import proxy_server
-
-    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
-    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
-    monkeypatch.setattr(
-        litellm,
-        "custom_provider_map",
-        [{"provider": "image-regression", "custom_handler": _BilledThenFailingImageHandler()}],
-    )
-    custom_llm_setup()
     spend_writer: Final = MagicMock(update_database=AsyncMock())
     monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
-    monkeypatch.setattr(litellm, "model_alias_map", {})
-    monkeypatch.setattr(proxy_server, "general_settings", {})
-    monkeypatch.setattr(
-        proxy_server,
-        "llm_router",
-        litellm.Router(
-            model_list=[{"model_name": "A", "litellm_params": {"model": "image-regression/refusing"}}],
-            num_retries=0,
-        ),
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _BilledThenFailingImageHandler()}
     )
-    monkeypatch.setattr(proxy_server, "proxy_config", ProxyConfig())
-    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
-    monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server, "version", "test-version")
-    app: Final = FastAPI()
-    app.include_router(endpoints.router)
-    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test")
 
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -533,3 +597,79 @@ def test_failed_image_request_bills_what_the_provider_charged_in_its_spend_row_a
         2240,
         2256,
     )
+
+
+def test_image_generation_keeps_a_keys_logging_callbacks_out_of_the_provider_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    handler: Final = _ParamRecordingImageHandler()
+    key_with_failure_logging: Final = UserAPIKeyAuth(
+        api_key="sk-test",
+        metadata={"logging": [{"callback_name": "langfuse", "callback_type": "failure", "callback_vars": {}}]},
+    )
+    app: Final = _image_regression_app(monkeypatch, key_with_failure_logging, {"A": handler})
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = client.post(
+                "/v1/images/generations", json={"model": "A", "prompt": "draw a tree", "size": "1024x1024"}
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert handler.received_params == {"size": "1024x1024"}
+
+
+
+def test_a_fallback_after_a_billed_failure_logs_only_its_own_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    capture: Final = _SuccessUsageCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    app: Final = _image_regression_app(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-test"),
+        {"A": _BilledThenFailingImageHandler(), "B": _ParamRecordingImageHandler()},
+        fallbacks=({"A": ["B"]},),
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+            deadline: Final = time.monotonic() + 10
+            while capture.logged_usage is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert capture.logged_usage == (0, 0)
+
+
+def test_a_failure_spend_row_keeps_the_billed_attempt_when_every_fallback_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    app: Final = _image_regression_app(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-test"),
+        {"A": _BilledThenFailingImageHandler(), "B": _UnbilledFailingImageHandler()},
+        fallbacks=({"A": ["B"]},),
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 429, response.text
+    db_call: Final = spend_writer.update_database.call_args.kwargs
+    payload: Final = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert (db_call["response_cost"], payload["prompt_tokens"], payload["completion_tokens"]) == (0.25, 16, 2240)

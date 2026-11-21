@@ -155,7 +155,7 @@ async def image_generation(
         data.pop("messages", None)
 
         if "prompt" in data:
-            logging_obj, _ = litellm.utils.function_setup(
+            logging_obj, data = litellm.utils.function_setup(  # rebind-ok: the hooks and except block read data
                 original_function="aimage_generation",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
