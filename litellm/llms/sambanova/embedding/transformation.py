@@ -69,11 +69,7 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
         return {**default_headers, **headers}
 
     def get_supported_openai_params(self, model: str):
-        """
-        Non additional params supported, placeholder method for future supported params
-        https://docs.sambanova.ai/cloud/api-reference/endpoints/embeddings-api
-        """
-        return []
+        return ["encoding_format"]
 
     def map_openai_params(
         self,
