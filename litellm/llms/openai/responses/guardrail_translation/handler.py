@@ -84,7 +84,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
-    decode_compaction_item,
+    output_compaction_summary,
     with_compaction_summary,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
@@ -180,13 +180,6 @@ _OutputItemPosition: TypeAlias = _AnswerPosition | _ReasoningPosition
 _ReasoningTextPosition: TypeAlias = _ReasoningPosition | _ProviderThinkingBlockPosition
 _OutputPosition: TypeAlias = _OutputItemPosition | _ProviderThinkingBlockPosition
 _REASONING_POSITION_TYPES: Final = (_ReasoningSummaryPosition, _ReasoningContentPosition, _ThinkingBlockPosition)
-
-
-def _output_compaction_summary(item: object) -> str | None:
-    if stream_item_field(item, "type") != "compaction":
-        return None
-    block: Final = decode_compaction_item(stream_item_field(item, "encrypted_content"))
-    return None if block is None else block.summary
 
 
 def _reasoning_output_texts(item: object, output_index: int) -> tuple[tuple[_ReasoningPosition, str], ...]:
@@ -1919,7 +1912,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
             finished_item: Final = stream_item_field(final_chunk, "item")
-            finished_summary: Final = _output_compaction_summary(finished_item)
+            finished_summary: Final = output_compaction_summary(finished_item)
             model_response_stream: Final = (
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
             )
@@ -2507,7 +2500,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         part_texts: Final = tuple(
             text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
         )
-        summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
+        summaries: Final = tuple(summary for item in output_items if (summary := output_compaction_summary(item)))
         reasoning_texts: Final = chain.from_iterable(
             _reasoning_output_texts(item, output_index) for output_index, item in enumerate(output_items)
         )
@@ -2612,7 +2605,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 tool_calls_to_check.append(_scanned_tool_call(tool_call_item, output_idx))
             return
 
-        summary: Final = _output_compaction_summary(output_item)
+        summary: Final = output_compaction_summary(output_item)
         if summary is not None:
             texts_to_check.append(summary)
             task_mappings.append(_CompactionSummaryPosition(output_idx))

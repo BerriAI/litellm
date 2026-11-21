@@ -103,21 +103,29 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
   if (!premiumUser) {
     return (
       <Page>
-        <p className="text-sm text-muted-foreground">
-          <Trans
-            i18nKey="organizations.panel.enterpriseNotice"
-            components={{
-              pricing: (
-                <a
-                  href="https://www.litellm.ai/#pricing"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary underline-offset-4 hover:underline"
-                />
-              ),
-            }}
-          />
-        </p>
+        <PageContent>
+          <PageHeader>
+            <PageHeaderTitle>
+              <Building2 />
+              {t("shell.nav.items.organizations")}
+            </PageHeaderTitle>
+            <PageHeaderDescription>
+              <Trans
+                i18nKey="organizations.panel.enterpriseNotice"
+                components={{
+                  pricing: (
+                    <a
+                      href="https://www.litellm.ai/#pricing"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary underline-offset-4 hover:underline"
+                    />
+                  ),
+                }}
+              />
+            </PageHeaderDescription>
+          </PageHeader>
+        </PageContent>
       </Page>
     );
   }
