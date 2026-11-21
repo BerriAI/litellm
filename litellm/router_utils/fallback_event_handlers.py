@@ -59,8 +59,12 @@ class _FailedAttemptSpend:
     response_cost: float
 
 
+def _failure_logged_in_background(logging_obj: Logging) -> bool:
+    return logging_obj.model_call_details.get("stream") is True
+
+
 def _set_aside_failed_attempt_spend(logging_obj: object) -> _FailedAttemptSpend | None:
-    if not isinstance(logging_obj, Logging):
+    if not isinstance(logging_obj, Logging) or _failure_logged_in_background(logging_obj):
         return None
     usage: Final = logging_obj.model_call_details.get("combined_usage_object")
     if not isinstance(usage, Usage):

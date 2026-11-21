@@ -2573,3 +2573,123 @@ def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_
 ) -> None:
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=False) is stops_fallbacks
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=True) is False
+
+
+class _FailureBillingCapture(CustomLogger):
+    billed: tuple[object, object] | None = None
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, dict)
+        self.billed = (payload.get("response_cost"), payload.get("prompt_tokens"))
+
+
+class _StreamCutAfterFirstEvent(httpx.AsyncByteStream):
+    def __init__(self, first_event: bytes) -> None:
+        self._first_event: Final = first_event
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._first_event
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+_OPENAI_ROLE_CHUNK: Final = (
+    b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-5.4-mini",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n'
+)
+_ANTHROPIC_MESSAGE_START: Final = (
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
+    b'"role":"assistant","model":"claude-sonnet-5-5","content":[],"stop_reason":null,"stop_sequence":null,'
+    b'"usage":{"input_tokens":1000,"output_tokens":1}}}\n\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("broken_model", "broken_api_base", "broken_path", "first_event"),
+    [
+        pytest.param(
+            "openai/gpt-5.4-mini",
+            "https://broken.example/v1",
+            "/chat/completions",
+            _OPENAI_ROLE_CHUNK,
+            id="cut-after-the-first-chunk",
+        ),
+        pytest.param(
+            "anthropic/claude-sonnet-5-5",
+            "https://broken.example",
+            "/v1/messages",
+            _ANTHROPIC_MESSAGE_START,
+            id="cut-before-the-first-chunk",
+        ),
+    ],
+)
+async def test_a_stream_fallback_still_bills_the_broken_stream_on_its_failure_log(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    broken_model: str,
+    broken_api_base: str,
+    broken_path: str,
+    first_event: bytes,
+) -> None:
+    capture: Final = _FailureBillingCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    sse_headers: Final = {"content-type": "text/event-stream"}
+    respx_mock.post(f"{broken_api_base}{broken_path}").mock(
+        return_value=httpx.Response(200, headers=sse_headers, stream=_StreamCutAfterFirstEvent(first_event))
+    )
+    respx_mock.post("https://backup.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            headers=sse_headers,
+            content=(
+                b'data: {"id":"c2","object":"chat.completion.chunk","created":1,"model":"gpt-5.4-mini",'
+                b'"choices":[{"index":0,"delta":{"role":"assistant","content":"ready"},"finish_reason":"stop"}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": broken_model, "api_key": "sk-test", "api_base": broken_api_base},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "api_base": "https://backup.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    messages: Final = [{"role": "user", "content": "Reply with the single word: ready"}]
+    request_logging, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        messages=messages,
+        stream=True,
+        litellm_call_id="stream-fallback",
+    )
+
+    response: Final = await router.acompletion(**request, litellm_logging_obj=request_logging)
+    content: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None])
+    for _ in range(200):
+        if capture.billed is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert content == "ready"
+    assert capture.billed is not None
+    billed_cost, billed_prompt_tokens = capture.billed
+    assert isinstance(billed_cost, float) and billed_cost > 0
+    assert isinstance(billed_prompt_tokens, int) and billed_prompt_tokens > 0
