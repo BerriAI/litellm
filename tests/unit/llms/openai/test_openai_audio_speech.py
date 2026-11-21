@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from functools import reduce
 from typing import Final
 from unittest.mock import Mock
 
@@ -367,13 +368,16 @@ _FLAC_HEAD: Final = (
 )
 
 
+def _crc16_shift(crc: int, _bit: int) -> int:
+    return (crc << 1 ^ 0x8005 if crc >> 15 else crc << 1) & 0xFFFF
+
+
+def _crc16_step(crc: int, byte: int) -> int:
+    return reduce(_crc16_shift, range(8), crc ^ byte << 8)
+
+
 def _crc16(data: bytes) -> int:
-    crc = 0
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = (crc << 1 ^ 0x8005 if crc >> 15 else crc << 1) & 0xFFFF
-    return crc
+    return reduce(_crc16_step, data, 0)
 
 
 def _flac_frame(header: bytes, samples: bytes = bytes(30)) -> bytes:
