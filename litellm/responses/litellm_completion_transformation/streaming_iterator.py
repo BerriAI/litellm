@@ -16,6 +16,7 @@ from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, an
 from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
+from litellm.responses.litellm_completion_transformation.compaction_trigger import CompactionSummaryStream
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
     extract_custom_tool_names,
@@ -181,6 +182,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         custom_llm_provider: str | None = None,
         litellm_metadata: dict | None = None,
         tool_call_provider_fields: bool = False,
+        compaction_summary: CompactionSummaryStream | None = None,
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
@@ -189,6 +191,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.custom_llm_provider: str | None = custom_llm_provider
         self.litellm_metadata: dict[str, object] | None = litellm_metadata or {}
         self.tool_call_provider_fields: Final = tool_call_provider_fields
+        self._compaction_summary: Final = compaction_summary
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
@@ -770,7 +773,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
 
     def _ordered_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
-        ordered: Final = self._reasoning_part_first(chunk)
+        answered: Final = chunk if self._compaction_summary is None else self._compaction_summary.take(chunk)
+        ordered: Final = self._reasoning_part_first(answered)
         if not _streams_compaction(ordered):
             self._queue_compaction_item_added()
         return ordered
@@ -1213,9 +1217,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return True
         return False
 
+    def _with_compaction_summary(self, response: ModelResponse | None) -> ModelResponse | None:
+        if self._compaction_summary is None or response is None:
+            return response
+        reply: Final = self._compaction_summary.reply(response)
+        self._merge_provider_specific_fields(dict(self._compaction_summary.provider_specific_fields(reply.model)))
+        return reply
+
     def common_done_event_logic(self, sync_mode: bool = True) -> BaseLiteLLMOpenAIResponseObject:
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
-            self.litellm_model_response = self.create_litellm_model_response()
+            self.litellm_model_response = self._with_compaction_summary(self.create_litellm_model_response())
         if self.litellm_model_response:
             self._queue_compaction_item_added()
             self._queue_compaction_item_done()
@@ -1257,7 +1268,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not chunk.choices:
             return
         delta: Final = chunk.choices[0].delta
-        if chunk.choices[0].finish_reason is None and not _delta_carries_output(delta):
+        opens_on_finish: Final = chunk.choices[0].finish_reason is not None and self._compaction_summary is None
+        if not opens_on_finish and not _delta_carries_output(delta):
             return
 
         self.sent_output_item_added_event = True
