@@ -16,7 +16,9 @@ DB_ROWS: Final = MappingProxyType({"valid": "active", "also-valid": "active", "s
 
 def _filter(where: Mapping[str, object]) -> Mapping[str, object]:
     clauses: Final = where.get("AND", (where,))
-    return {key: value for clause in clauses for key, value in clause.items()}  # comprehension-ok: flattens prisma AND clauses
+    return {
+        key: value for clause in clauses for key, value in clause.items()
+    }  # comprehension-ok: flattens prisma AND clauses
 
 
 def _prisma(rows: Mapping[str, str] = DB_ROWS) -> MagicMock:
@@ -237,9 +239,7 @@ async def _pre_call(
     from litellm.proxy.utils import ProxyLogging
 
     ProxyLogging._callback_capabilities_cache.clear()
-    with patch(
-        "litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": reject_unregistered}
-    ):
+    with patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": reject_unregistered}):
         return await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             data=data,
@@ -318,3 +318,37 @@ async def test_pre_call_serves_unregistered_guardrails_without_the_flag_or_when_
 
     with patch("litellm.callbacks", []):
         assert await _pre_call(data, reject_unregistered, skip_guardrails) is not None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_accepts_legacy_metadata_toggles() -> None:
+    from litellm.types.guardrails import GuardrailItem
+
+    legacy: Final = GuardrailItem(callbacks=["legacy_callback"], guardrail_name="legacy")
+    with patch.dict(litellm.guardrail_name_config_map, {"legacy": legacy}, clear=True):
+        assert (
+            await _pre_call(_request({"guardrails": {"legacy": True, "disabled": False}}), reject_unregistered=True)
+            is not None
+        )
+        with pytest.raises(HTTPException, match="Unknown guardrail.*legacy"):
+            await _pre_call(_request({"guardrails": ["legacy"]}), reject_unregistered=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("pre_call", "post_call"))
+async def test_pre_call_rejects_missing_policy_pipeline_step(mode: str, guardrail_loaded_here: str) -> None:
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+
+    pipeline: Final = GuardrailPipeline(
+        mode=mode,
+        steps=[
+            PipelineStep(guardrail=guardrail_loaded_here, on_pass="next"),
+            PipelineStep(guardrail="missing-pipeline-step", on_error="allow"),
+        ],
+    )
+    data: Final = _request({"user_id": "caller-metadata"})
+    data["litellm_metadata"] = {"_guardrail_pipelines": [("policy", pipeline)]}
+    with pytest.raises(HTTPException, match="Unknown guardrail.*missing-pipeline-step") as exc:
+        await _pre_call(data, reject_unregistered=True)
+    assert exc.value.status_code == 400
+    assert guardrail_loaded_here not in str(exc.value.detail)

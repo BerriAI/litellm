@@ -3578,8 +3578,10 @@ class ProxyLogging:
         from litellm.proxy.proxy_server import current_general_settings
 
         if not skip_guardrails and reject_unregistered_guardrails_enabled(current_general_settings()):
+            guardrail_data: Final = cast("Mapping[str, object]", data)  # cast-ok: untyped request body, read with .get
             reject_unregistered_request_guardrails(
-                cast("Mapping[str, object]", data)  # cast-ok: untyped request body, read with .get
+                guardrail_data,
+                pipeline_names=_pipeline_step_guardrail_names(_policy_pipelines(guardrail_data)),
             )
 
         if not guardrails_only:

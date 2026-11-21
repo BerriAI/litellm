@@ -812,6 +812,7 @@ async def invoke_agent_a2a(
         AgentRequestHandler,
     )
     from litellm.proxy.proxy_server import (
+        current_general_settings,
         general_settings,
         proxy_config,
         proxy_logging_obj,
@@ -961,6 +962,16 @@ async def invoke_agent_a2a(
         )
         request_data = data
 
+        _agent_guardrails = litellm_params.get("guardrails")
+        if _agent_guardrails:
+            from litellm.proxy.guardrails.guardrail_helpers import (
+                reject_unregistered_guardrails_enabled,
+                reject_unregistered_request_guardrails,
+            )
+
+            if reject_unregistered_guardrails_enabled(current_general_settings()):
+                reject_unregistered_request_guardrails({"guardrails": _agent_guardrails})
+
         # Build merged headers for the backend agent
         static_headers: Final[Mapping[str, str]] = dict(agent.static_headers or {})
 
@@ -1004,7 +1015,6 @@ async def invoke_agent_a2a(
         # _handle_stream_message both pick them up.  A2A agents use model
         # a2a_agent/*, which is not an llm_router deployment, so
         # _check_and_merge_model_level_guardrails() skips them.
-        _agent_guardrails = litellm_params.get("guardrails")
         if _agent_guardrails:
             if not isinstance(_agent_guardrails, list):
                 _agent_guardrails = [_agent_guardrails]

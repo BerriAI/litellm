@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.utils import premium_user_check
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import *
@@ -188,13 +189,28 @@ def _listed_guardrail_names(bucket: object) -> frozenset[str]:
     return frozenset(chain.from_iterable(_entry_guardrail_names(entry) for entry in listed))
 
 
-def reject_unregistered_request_guardrails(data: Mapping[str, object]) -> None:
-    requested: Final = frozenset(
-        chain.from_iterable(
-            _listed_guardrail_names(bucket) for bucket in (data, data.get("metadata"), data.get("litellm_metadata"))
-        )
+def _unregistered_metadata_guardrails(metadata: object, loaded: frozenset[str]) -> frozenset[str]:
+    try:
+        entries: Final = _STRING_KEYED.validate_python(metadata).get("guardrails")
+        toggles: Final = _STRING_KEYED.validate_python(entries, strict=True)
+    except ValidationError:
+        return _listed_guardrail_names(metadata) - loaded
+    return frozenset(
+        name
+        for name in toggles.keys() - loaded
+        if toggles[name] is not False and name not in litellm.guardrail_name_config_map
     )
-    unregistered: Final = requested - loaded_guardrail_names()
+
+
+def reject_unregistered_request_guardrails(
+    data: Mapping[str, object], *, pipeline_names: frozenset[str] = frozenset()
+) -> None:
+    loaded: Final = loaded_guardrail_names()
+    unregistered: Final = (
+        ((_listed_guardrail_names(data) | _listed_guardrail_names(data.get("litellm_metadata"))) - loaded)
+        | _unregistered_metadata_guardrails(data.get("metadata"), loaded)
+        | frozenset(name for name in pipeline_names if PipelineExecutor.find_guardrail_callback(name) is None)
+    )
     if not unregistered:
         return
     raise HTTPException(
