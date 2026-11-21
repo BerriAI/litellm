@@ -79,6 +79,10 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 inference: litellm_gateway::build_inference(
                     &config,
                     &litellm_gateway::Resources::build(&config).unwrap(),
+                    litellm_gateway_inference::RoutingCache::new(
+                        None,
+                        litellm_gateway_inference::RouterTiers::default(),
+                    ),
                 )
                 .await
                 .unwrap(),
