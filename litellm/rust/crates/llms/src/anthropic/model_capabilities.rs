@@ -187,10 +187,11 @@ pub fn bedrock_model_capabilities(
     let model = bedrock_model(model);
     let probe = Probe::new(catalog, model, bedrock_model(model), BEDROCK, &|_| None);
     let mapped = probe.factory(NATIVE_OUTPUT);
-    let opted_out = declared(BEDROCK_NATIVE_OUTPUT).map_or_else(
-        || mapped_native_output_flag(catalog, model) == Some(false),
-        |opted_in| !opted_in,
-    );
+    let opted_out = declared(NATIVE_OUTPUT) == Some(false)
+        || declared(BEDROCK_NATIVE_OUTPUT).map_or_else(
+            || mapped_native_output_flag(catalog, model) == Some(false),
+            |opted_in| !opted_in,
+        );
     BedrockCapabilities {
         output_config_effort_ceiling: probe
             .info
@@ -754,20 +755,20 @@ mod tests {
     #[case::eu("bedrock/eu.anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, true, true, true, false]))]
     #[case::global("bedrock/global.anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, true, true, true, false]))]
     #[case::invoke_prefix("bedrock/invoke/us.anthropic.claude-opus-4-8", (XHIGH, [false, true, true, true, true, true, true, false]))]
-    #[case::region_path("bedrock/us-east-1/anthropic.claude-opus-4-8", (XHIGH, [false, true, true, true, false, true, false, false]))]
+    #[case::region_path("bedrock/us-east-1/anthropic.claude-opus-4-8", (XHIGH, [false, true, true, true, true, true, true, false]))]
     #[case::inference_profile_arn(PROFILE, (XHIGH, [false, true, true, true, true, true, true, false]))]
-    #[case::invoke_foundation_arn(FOUNDATION, (XHIGH, [false, true, true, true, false, true, false, false]))]
-    #[case::unprefixed("anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, false, true, false, false]))]
-    #[case::other_casing("bedrock/ANTHROPIC.CLAUDE-OPUS-4-8", (XHIGH, [true, false, true, true, false, true, false, false]))]
+    #[case::invoke_foundation_arn(FOUNDATION, (XHIGH, [false, true, true, true, true, true, true, false]))]
+    #[case::unprefixed("anthropic.claude-opus-4-8", (XHIGH, [true, true, true, true, true, true, true, false]))]
+    #[case::other_casing("bedrock/ANTHROPIC.CLAUDE-OPUS-4-8", (XHIGH, [true, false, true, true, true, true, true, false]))]
     #[case::sonnet_4_5("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", (None, [false, true, true, true, true, false, true, false]))]
     #[case::converse_prefix("bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0", (None, [false, true, true, true, true, false, true, false]))]
     #[case::throughput_suffix("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0:1000k", (None, [false, true, true, true, true, false, true, false]))]
     #[case::claude_3_5("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", (None, [false; 8]))]
-    #[case::opus_4_7_without_version("bedrock/global.anthropic.claude-opus-4-7", (XHIGH, [true, true, true, true, false, false, false, false]))]
+    #[case::opus_4_7_without_version("bedrock/global.anthropic.claude-opus-4-7", (XHIGH, [true, true, true, true, true, false, true, false]))]
     #[case::opus_4_7_invoke("bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0", (None, [false, false, true, true, false, false, false, false]))]
     #[case::unforceable_tool("bedrock/anthropic.claude-fable-5-1", (XHIGH, [true, true, true, true, false, false, false, true]))]
     #[case::native_by_default("bedrock/us.anthropic.claude-mythos-5-2", (XHIGH, [true, true, true, true, true, false, true, false]))]
-    #[case::opt_in_only("bedrock/anthropic.claude-sonnet-5", (XHIGH, [true, true, true, true, false, true, false, false]))]
+    #[case::opt_in_only("bedrock/anthropic.claude-sonnet-5", (XHIGH, [true, true, true, true, true, true, true, false]))]
     #[case::unmapped_claude_version("bedrock/anthropic.claude-opus-9-9-v1:0", (None, [false, false, true, true, false, false, false, false]))]
     #[case::unmapped_claude("bedrock/anthropic.claude-newthing", (None, [false; 8]))]
     #[case::application_profile(APPLICATION, (None, [false; 8]))]
@@ -797,6 +798,7 @@ mod tests {
     #[case::unforceable_native_on("bedrock/anthropic.claude-fable-5-1", &[("supports_native_structured_output", true)], (XHIGH, [true, true, true, true, true, false, false, true]))]
     #[case::unforceable_opt_in("bedrock/anthropic.claude-fable-5-1", &[("supports_bedrock_native_structured_output", true)], (XHIGH, [true, true, true, true, false, true, false, true]))]
     #[case::unforceable_opted_out("bedrock/anthropic.claude-fable-5-1", &[("supports_bedrock_native_structured_output", false)], (XHIGH, [true, true, true, true, false, false, false, false]))]
+    #[case::unforceable_native_declared_opted_out("bedrock/anthropic.claude-fable-5-1", &[("supports_native_structured_output", false)], (XHIGH, [true, true, true, true, false, false, false, false]))]
     #[case::bedrock_native_on("bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", &[("supports_bedrock_native_structured_output", true)], (None, [false, true, true, true, true, true, true, false]))]
     #[case::per_turn_off_haiku("bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", &[("supports_per_turn_control", false)], (None, [false, true, true, false, true, false, true, false]))]
     fn deployment_model_info_overrides_the_catalog_as_python_does(

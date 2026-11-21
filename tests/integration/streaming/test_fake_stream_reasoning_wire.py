@@ -210,9 +210,10 @@ def _converse_targets(wire: Wire) -> list[str]:
     return [unquote(request.target).rsplit("/", 1)[-1] for request in wire.drain()]
 
 
-def _claude_model(scenario: Scenario, wire: Wire) -> str:
+def _claude_model(scenario: Scenario, wire: Wire, *, force_json_tool: bool = False) -> str:
     return scenario.model(
         model=f"bedrock/converse/{_claude_without_native_structured_output()}",
+        model_info={"supports_native_structured_output": False} if force_json_tool else None,
         api_key=_TOKEN,
         aws_region_name="us-east-1",
         aws_bedrock_runtime_endpoint=wire.url,
@@ -305,7 +306,7 @@ def test_fake_streamed_json_schema_chat_answer_matches_the_non_streamed_answer(g
     marker: Final = uuid.uuid4().hex
     reasoning: Final = f"Tokyo proper has about 14 million people, marker {marker}."
     with wire_server(_converse_peer(reasoning)) as wire, gateway.scenario() as scenario:
-        model: Final = _claude_model(scenario, wire)
+        model: Final = _claude_model(scenario, wire, force_json_tool=True)
         question: Final = _json_question(model, marker)
 
         answer: Final = _chat(gateway, question)
@@ -366,7 +367,7 @@ def _spend_rows(model: str, count: int) -> list[dict[str, JsonValue]]:
 def test_fake_streamed_cached_prompt_is_billed_like_the_non_streamed_answer(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_converse_peer(f"Billing check {marker}.")) as wire, gateway.scenario() as scenario:
-        model: Final = _claude_model(scenario, wire)
+        model: Final = _claude_model(scenario, wire, force_json_tool=True)
         question: Final = _json_question(model, marker)
         _chat(gateway, question)
         _chat_stream(gateway, question)
@@ -396,7 +397,7 @@ def test_cached_fake_stream_replays_the_answer_without_reaching_bedrock(gateway:
     marker: Final = uuid.uuid4().hex
     reasoning: Final = f"Cached reasoning {marker}."
     with wire_server(_converse_peer(reasoning)) as wire, gateway.scenario() as scenario:
-        model: Final = _claude_model(scenario, wire)
+        model: Final = _claude_model(scenario, wire, force_json_tool=True)
         question: Final = _json_question(model, marker, cache={})
 
         first: Final = _chat_stream(gateway, question)
@@ -459,7 +460,7 @@ def test_fake_streamed_json_schema_responses_stream_closes_the_reasoning_before_
     marker: Final = uuid.uuid4().hex
     reasoning: Final = f"Responses reasoning {marker}."
     with wire_server(_converse_peer(reasoning)) as wire, gateway.scenario() as scenario:
-        model: Final = _claude_model(scenario, wire)
+        model: Final = _claude_model(scenario, wire, force_json_tool=True)
         events: Final = _raw_responses_events(
             gateway,
             {
@@ -505,7 +506,7 @@ def test_fake_streamed_json_schema_messages_stream_opens_one_block_per_thinking_
     marker: Final = uuid.uuid4().hex
     reasoning: Final = f"Messages reasoning {marker}."
     with wire_server(_converse_peer(reasoning)) as wire, gateway.scenario() as scenario:
-        model: Final = _claude_model(scenario, wire)
+        model: Final = _claude_model(scenario, wire, force_json_tool=True)
         with _anthropic_client(gateway).messages.stream(
             model=model,
             max_tokens=2048,
