@@ -222,6 +222,7 @@ from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
+    CLAUDE_CODE_GATEWAY_PREFIX,
     AlertType,
     CallInfo,
     Litellm_EntityType,
@@ -819,7 +820,7 @@ async def _without_token_id_only_chunks(response: AsyncIterable[object]) -> Asyn
 
 def _is_messages_route(user_api_key_dict: UserAPIKeyAuth) -> bool:
     route: Final = user_api_key_dict.request_route
-    call_types: Final = get_call_types_for_route(route) if route else None
+    call_types: Final = get_call_types_for_route(route.removeprefix(CLAUDE_CODE_GATEWAY_PREFIX)) if route else None
     return bool(call_types) and call_types[0] == CallTypes.anthropic_messages
 
 
@@ -5774,8 +5775,9 @@ class ProxyLogging:
         pricing_request: Final[Mapping[str, object]] = (
             {"speed": request_data["speed"]} if "speed" in request_data else {}
         )
+        read_text: Final = b"".join(read).decode("utf-8", errors="replace")
         await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
-            litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=read
+            litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=(read_text,) if read_text else ()
         )
         return True
 
