@@ -1037,17 +1037,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return flag
         return True
 
-    def _supports_function_calling(self, model: str) -> bool:
+    def _supports_search_tools_with_functions(self, model: str) -> bool:
         rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
         bare: Final = model.split("/")[-1]
         flags: Final = (
-            rows.get(candidate, {}).get("supports_function_calling") for candidate in (f"{self._route}/{bare}", bare)
+            rows.get(candidate, {}).get("supports_search_tools_with_functions")
+            for candidate in (f"{self._route}/{bare}", bare)
         )
-        return next((flag for flag in flags if isinstance(flag, bool)), True)
+        return next((flag for flag in flags if isinstance(flag, bool)), False)
 
     def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
         opted_out: Final = any(params.get("include_server_side_tool_invocations") is False for params in param_sources)
-        return not opted_out and self._is_gemini_3_or_newer(model) and self._supports_function_calling(model)
+        return not opted_out and self._supports_search_tools_with_functions(model)
 
     @staticmethod
     def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
@@ -3368,13 +3369,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         reasoning_content = "\n".join(reasoning_content_parts)
                         chat_completion_message["reasoning_content"] = reasoning_content
 
-            web_search_calls = gemini_web_search_calls(model_response.id, _candidate_web_search_queries(candidate))
             message_provider_fields = {
                 key: value
                 for key, value in (
                     ("thought_signatures", thought_signatures),
                     ("server_side_tool_invocations", server_side_tool_invocations),
-                    ("web_search_calls", list(web_search_calls) or None),
+                    (
+                        "web_search_calls",
+                        list(gemini_web_search_calls(model_response.id, _candidate_web_search_queries(candidate)))
+                        or None,
+                    ),
                     ("continuation_token", client_continuation_token(candidate)),
                 )
                 if value is not None
@@ -4660,21 +4664,34 @@ class ModelResponseIterator:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     def _report_web_search_calls_so_far(self, model_response: "ModelResponseStream") -> None:
+        searched: Final = frozenset(
+            call.id for call in gemini_web_search_calls(model_response.id, self._search_tool_call_queries)
+        )
         for choice in model_response.choices:
-            fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
-            arrived = as_object_list(fields.get("web_search_calls"))
-            if not arrived:
-                continue
-            reported = MappingProxyType(
-                {
-                    **self._web_search_calls_by_choice.get(choice.index, {}),
-                    **{call.id: call for call in arrived if isinstance(call, ResponseFunctionWebSearch)},
-                }
-            )
-            self._web_search_calls_by_choice = MappingProxyType(
-                {**self._web_search_calls_by_choice, choice.index: reported}
-            )
-            choice.delta.provider_specific_fields = {**fields, "web_search_calls": list(reported.values())}
+            if (fields := self._fields_with_web_search_calls_so_far(choice, searched)) is not None:
+                choice.delta.provider_specific_fields = fields
+
+    def _fields_with_web_search_calls_so_far(
+        self, choice: "StreamingChoices", searched: frozenset[str]
+    ) -> dict[str, object] | None:
+        fields: Final[Mapping[str, object]] = choice.delta.provider_specific_fields or {}
+        arrived: Final = as_object_list(fields.get("web_search_calls"))
+        if not arrived:
+            return None
+        reported: Final = MappingProxyType(
+            {
+                **self._web_search_calls_by_choice.get(choice.index, {}),
+                **{
+                    call.id: call
+                    for call in arrived
+                    if isinstance(call, ResponseFunctionWebSearch) and (not searched or call.id in searched)
+                },
+            }
+        )
+        self._web_search_calls_by_choice = MappingProxyType(
+            {**self._web_search_calls_by_choice, choice.index: reported}
+        )
+        return {**fields, "web_search_calls": list(reported.values())}
 
     def _with_usage_offset(self, chunk: GenerateContentResponseBody) -> GenerateContentResponseBody:
         if "usageMetadata" not in chunk:
