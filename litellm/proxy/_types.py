@@ -3984,6 +3984,7 @@ class SpendLogsMetadata(TypedDict):
     billing_agent_id: ReadOnly[NotRequired[str | None]]
     agent_execution_mode: ReadOnly[NotRequired[str | None]]
     verified_human_user_id: ReadOnly[NotRequired[str | None]]
+    agent_actor_chain: ReadOnly[NotRequired[str | None]]
     autorouter_baseline_observation: ReadOnly[str | None]
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking

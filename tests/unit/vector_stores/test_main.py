@@ -290,6 +290,7 @@ PROXY_STAMPED_METADATA: Final = {
     "billing_agent_id": "agent-4",
     "agent_execution_mode": "autonomous",
     "verified_human_user_id": "user-1",
+    "agent_actor_chain": "agent-2,agent-5",
     "litellm_caller_session_id": "session-1",
     "user_api_keyboard": "qwerty",
     1: "a",
