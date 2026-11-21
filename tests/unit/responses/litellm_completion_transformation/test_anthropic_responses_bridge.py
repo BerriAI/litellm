@@ -586,7 +586,16 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert completed.response.output[0].content[0].text == "Argentina won."
 
 
-@pytest.mark.parametrize("non_object_frame", [b"data: 5\n\n", b"event: ping\ndata: []\n\n", b'data: "x"\n\n'])
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        b"data: 5\n\n",
+        b"event: ping\ndata: []\n\n",
+        b'data: "x"\n\n',
+        b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+    ],
+    ids=["number", "array", "string", "deep-object"],
+)
 def test_streamed_responses_over_anthropic_skip_a_data_line_that_is_not_an_object(
     respx_mock: respx.MockRouter, non_object_frame: bytes
 ) -> None:

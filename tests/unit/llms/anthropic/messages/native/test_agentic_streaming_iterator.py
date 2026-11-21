@@ -663,9 +663,16 @@ class TestAgenticStreamingIteratorPhase1:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "non_object_frame", [b"data: 5\n\n", b"event: content_block_delta\ndata: [1]\n\n", b"data: null\n\n"]
+        "non_object_frame",
+        [
+            b"data: 5\n\n",
+            b"event: content_block_delta\ndata: [1]\n\n",
+            b"data: null\n\n",
+            b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+        ],
+        ids=["number", "array", "null", "deep-object"],
     )
-    async def test_should_skip_a_data_line_that_is_not_an_object(self, non_object_frame: bytes):
+    async def test_should_skip_a_data_line_it_cannot_read_as_an_object(self, non_object_frame: bytes):
         text_stream = _build_simple_text_stream()
         chunks = [*text_stream[:2], non_object_frame, *text_stream[2:]]
         hooks = AsyncMock(return_value=None)
@@ -694,8 +701,12 @@ class TestAgenticStreamingIteratorPhase1:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "skipped_frame",
-        [b"event: ping\ndata: null\n\n", b"event: ping\ndata: 5\n\n", b"event: ping\ndata: not json\n\n"],
-        ids=["null", "number", "not-json"],
+        [
+            b"event: ping\ndata: not json\n\n",
+            b"event: ping\ndata: " + b"9" * 5000 + b"\n\n",
+            b'event: ping\ndata: {"a": ' + b'{"a": ' * 100_000 + b"1" + b"}" * 100_001 + b"\n\n",
+        ],
+        ids=["not-json", "huge-number", "deep-object"],
     )
     async def test_should_not_carry_a_skipped_line_event_name_to_the_next_data_line(self, skipped_frame: bytes):
         text_stream = _build_simple_text_stream()

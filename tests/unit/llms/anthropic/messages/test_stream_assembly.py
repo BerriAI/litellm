@@ -248,8 +248,20 @@ TOOL_USE_STREAM: Final = (
         b"data: some words\n\n",
         b"data: " + b"9" * 5000 + b"\n\n",
         b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+        b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+        b'event: ping\ndata: {"type": "ping", "n": ' + b"9" * 5000 + b"}\n\n",
     ],
-    ids=["number", "null", "string", "array", "not-json", "huge-number", "deep-array"],
+    ids=[
+        "number",
+        "null",
+        "string",
+        "array",
+        "not-json",
+        "huge-number",
+        "deep-array",
+        "deep-object",
+        "huge-number-in-object",
+    ],
 )
 def test_assembling_a_tool_use_stream_skips_a_data_line_that_is_not_a_json_object(non_object_frame: bytes):
     assembled: Final = assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], non_object_frame, *TOOL_USE_STREAM[3:]))
@@ -360,6 +372,20 @@ def test_line_separators_inside_a_json_string_do_not_make_frames():
 
     assert not has_unreadable_json_event((frame,))
     assert anthropic_sse_error_events((frame,)) == ()
+
+
+@pytest.mark.parametrize(
+    "payload, unreadable",
+    [
+        (b"[" * 100_000 + b"]" * 100_000, True),
+        (b'{"a": ' * 100_000 + b"1" + b"}" * 100_000, True),
+        (b'{"type": "ping", "n": ' + b"9" * 5000 + b"}", True),
+        (b"not json", False),
+    ],
+    ids=["deep-array", "deep-object", "huge-number-in-object", "not-json"],
+)
+def test_json_too_deep_or_too_long_to_decode_counts_as_unreadable(payload: bytes, unreadable: bool):
+    assert has_unreadable_json_event((b"event: ping\ndata: " + payload + b"\n\n",)) is unreadable
 
 
 @pytest.mark.parametrize("name", ["error\u2028", "error\u0085", "error\x0b", "error\x0c", "error\x1c", " error"])

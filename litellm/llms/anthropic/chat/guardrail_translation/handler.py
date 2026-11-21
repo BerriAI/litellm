@@ -24,7 +24,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, loads_json_object
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.adapters.transformation import (
@@ -430,7 +430,6 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
 
 
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
-_DECODED_SSE_DATA: Final = TypeAdapter(object)
 _REBUILT_TOOL_CALL_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use"})
 _RELEASED_TOOL_USE_STOP: Final = (
     b"event: message_delta\n"
@@ -591,10 +590,12 @@ _SSEEventT = TypeVar("_SSEEventT")
 
 
 def _parse_sse_event(adapter: TypeAdapter[_SSEEventT], event_type: str, data_line: str) -> _SSEEventT | None:
+    event: Final = loads_json_object(data_line)
+    if event is None:
+        verbose_proxy_logger.warning("Skipping a %s SSE event that is not a JSON object", event_type)
+        return None
     try:
-        return adapter.validate_python(json.loads(data_line))
-    except json.JSONDecodeError:
-        verbose_proxy_logger.warning("Skipping a %s SSE event that is not valid JSON", event_type)
+        return adapter.validate_python(event)
     except ValidationError:
         verbose_proxy_logger.warning("Skipping a %s SSE event with an unexpected shape", event_type)
     return None
@@ -816,14 +817,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         line: Final = raw_line.strip()
         if not line.startswith("data:"):
             return ()
-        try:
-            parsed: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
-        except json.JSONDecodeError:
-            return ()
-        event: Final = as_str_mapping(parsed)
-        if event is None:
-            return ()
-        return (event,)
+        event: Final = loads_json_object(line[len("data:") :])
+        return () if event is None else (event,)
 
     @staticmethod
     def _iter_sse_events(item: object) -> Sequence[Mapping[str, object]]:
@@ -2140,15 +2135,11 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _rewrite_sse_line(line: str, rewrite_event: _SSEEventRewriter) -> str:
         if not line.startswith("data:"):
             return line
-        try:
-            data: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
-        except json.JSONDecodeError:
-            return line
-        event: Final = as_str_mapping(data)
+        event: Final = loads_json_object(line[len("data:") :])
         if not isinstance(event, dict):
             return line
         rewritten: Final = _rewritten_event(event, rewrite_event)
-        return line if rewritten is data else "data: " + json.dumps(rewritten)
+        return line if rewritten is event else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)

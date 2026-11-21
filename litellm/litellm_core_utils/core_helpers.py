@@ -118,6 +118,21 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, (dict, Mapping)) else None
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def loads_json_object(payload: str | bytes) -> Mapping[str, object] | None:
+    opens_object: Final = (
+        payload.lstrip().startswith(b"{") if isinstance(payload, bytes) else payload.lstrip().startswith("{")
+    )
+    if not opens_object:
+        return None
+    try:
+        return as_str_mapping(_DECODED_JSON.validate_python(json.loads(payload)))
+    except (ValueError, RecursionError):
+        return None
+
+
 def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 

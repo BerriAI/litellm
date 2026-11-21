@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import anyio
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 from litellm.constants import (
@@ -19,7 +19,7 @@ from litellm.constants import (
     ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS,
     ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE,
 )
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import loads_json_object, process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -139,19 +139,10 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     return False
 
 
-_DECODED_SSE_DATA: Final = TypeAdapter(object)
-
-
 def _decoded_sse_data_line(line: bytes) -> object | None:
     if not line.startswith(b"data:"):
         return None
-    payload: Final = line[len(b"data:") :].strip()
-    if not payload.startswith(b"{"):
-        return None
-    try:
-        return _DECODED_SSE_DATA.validate_python(json.loads(payload))
-    except (ValueError, TypeError):
-        return None
+    return loads_json_object(line[len(b"data:") :])
 
 
 def _anthropic_event_payload(chunk: object, event_type: str) -> Mapping[str, object] | None:
@@ -463,7 +454,6 @@ class AnthropicMessagesStreamingResponse:
 _SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
 _SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
 _SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
-_SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
 def _sse_data_payload(line: bytes) -> bytes | None:
@@ -472,11 +462,7 @@ def _sse_data_payload(line: bytes) -> bytes | None:
 
 def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
     payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
-    data: Final = b"\n".join(payload for payload in payloads if payload is not None)
-    try:
-        return _SSE_EVENT.validate_python(json.loads(data))
-    except (ValueError, ValidationError):
-        return None
+    return loads_json_object(b"\n".join(payload for payload in payloads if payload is not None))
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:

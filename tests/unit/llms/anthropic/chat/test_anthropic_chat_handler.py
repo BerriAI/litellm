@@ -1478,8 +1478,18 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("non_object_frame", ["data: 5\n\n", "event: ping\ndata: null\n\n", "data: [1]\n\n"])
-async def test_anthropic_chat_stream_skips_a_data_line_that_is_not_an_object(
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        "data: 5\n\n",
+        "event: ping\ndata: null\n\n",
+        "data: [1]\n\n",
+        "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
+        'event: ping\ndata: {"type": "ping", "n": ' + "9" * 5000 + "}\n\n",
+    ],
+    ids=["number", "null", "array", "deep-object", "huge-number-in-object"],
+)
+async def test_anthropic_chat_stream_skips_a_data_line_it_cannot_read_as_an_object(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, non_object_frame: str
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

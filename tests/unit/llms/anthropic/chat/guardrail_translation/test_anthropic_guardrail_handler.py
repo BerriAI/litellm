@@ -376,6 +376,28 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert "event: message_start" in raw and "event: message_stop" in raw
         assert '"stop_reason": "end_turn"' in raw
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "undecodable_payload",
+        [b"[" * 100_000 + b"]" * 100_000, b'{"a": ' * 100_000 + b"1" + b"}" * 100_000],
+        ids=["deep-array", "deep-object"],
+    )
+    async def test_deliver_ended_stream_rewrites_skip_a_data_line_it_cannot_decode(self, undecodable_payload):
+        undecodable_chunk = b"event: ping\ndata: " + undecodable_payload + b"\n\n"
+        ended_chunks = self._ended_sse_chunks()
+        chunks = [*ended_chunks[:2], undecodable_chunk, *ended_chunks[2:]]
+
+        result = await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks[2] == undecodable_chunk
+        assert self._delta_texts([*chunks[:2], *chunks[3:]]) == ["hello [MASKED]", ""]
+
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:
         events = [
