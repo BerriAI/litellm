@@ -4971,6 +4971,7 @@ class SearchProviders(str, Enum):
     TINYFISH = "tinyfish"
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
+    SCAVIO = "scavio"
     BING_GROUNDING = "bing_grounding"
     WEBIQ = "webiq"
     DEEPSEEK = "deepseek"
