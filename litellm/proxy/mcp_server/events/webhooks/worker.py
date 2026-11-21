@@ -80,16 +80,25 @@ class DeliveryWorker:
     async def run_forever(self) -> None:
         next_housekeeping = 0.0  # rebind-ok: monotonic deadline of the next expiry sweep
         while True:
-            handled = 0
-            try:
-                handled = await self.run_once()
-                if time.monotonic() >= next_housekeeping:
-                    await self.expire()
-                    next_housekeeping = time.monotonic() + _HOUSEKEEPING_SECONDS
-            except Exception as error:  # noqa: BLE001  # the worker must survive a failed batch and retry it
-                verbose_logger.warning("MCP event delivery batch failed: %s", error)
+            handled: Final = await self._run_guarded()
+            if time.monotonic() >= next_housekeeping:
+                await self._expire_guarded()
+                next_housekeeping = time.monotonic() + _HOUSEKEEPING_SECONDS
             if not handled:
                 await asyncio.sleep(_IDLE_SECONDS)
+
+    async def _run_guarded(self) -> int:
+        try:
+            return await self.run_once()
+        except Exception as error:  # noqa: BLE001  # the worker must survive a failed batch and retry it
+            verbose_logger.warning("MCP event delivery batch failed: %s", error)
+            return 0
+
+    async def _expire_guarded(self) -> None:
+        try:
+            await self.expire()
+        except Exception as error:  # noqa: BLE001  # a failed sweep is retried on the next one
+            verbose_logger.warning("MCP event subscription sweep failed: %s", error)
 
     async def run_once(self) -> int:
         if not self._settings().enabled:
@@ -220,6 +229,10 @@ class DeliveryWorker:
         if outgoing.event_id is not None:
             await self._report_abandoned(row, outgoing)
         await self._store.finish(delivery, self._clock())
+        if outgoing.terminal:
+            await self._store.terminate(row.id)
+            await self._store.drop_deliveries(row.id)
+            return
         await self._store.mark_failed(row.id, failure, self._clock(), SUSPEND_AFTER_FAILURES)
 
     async def _report_abandoned(self, row: SubscriptionRow, outgoing: Outgoing) -> None:

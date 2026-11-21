@@ -387,3 +387,11 @@ async def test_a_worker_whose_claim_was_taken_over_cannot_change_the_delivery() 
     assert ("d1" in store.queue, store.queue["d1"].attempt, store.queue["d1"].claim_id) == (True, 0, current.claim_id)
     await store.finish(current, NOW)
     assert "d1" not in store.queue
+
+
+@pytest.mark.asyncio
+async def test_a_terminated_notice_that_exhausts_its_retries_still_ends_the_subscription() -> None:
+    terminated: Final = {"type": "terminated", "error": {"code": -32024, "message": "Forbidden"}}
+    store: Final = _store(body=terminated, attempt=len(RETRY_DELAYS_SECONDS))
+    await _worker(store, _Client("timeout")).run_once()
+    assert (store.rows["sub_1"].status, store.queue) == ("terminated", {})
