@@ -8,7 +8,7 @@ from litellm.proxy.mcp_server.events.guardrails import Blocked, Screened, screen
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-from .fakes import CALLER, occurrence
+from .fixtures import CALLER, occurrence
 
 
 class _Masker(CustomGuardrail):

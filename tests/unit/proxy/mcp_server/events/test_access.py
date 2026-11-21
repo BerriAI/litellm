@@ -16,7 +16,7 @@ from litellm.proxy.mcp_server.events.access import (
 )
 from litellm.types.proxy.auth.user_api_key_auth import hash_token
 
-from .fakes import JWT, admitted_subject
+from .fixtures import JWT, admitted_subject
 
 
 def _identity(permissions: Mapping[str, Sequence[str]]) -> Mapping[str, Sequence[str]]:

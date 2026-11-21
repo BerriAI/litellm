@@ -6,7 +6,7 @@ import pytest
 from litellm.proxy.mcp_server.events.config import EventsSettings, events_settings, server_allows_event, server_events
 from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
 
-from .fakes import server
+from .fixtures import server
 
 
 def test_settings_default_to_off_with_documented_limits() -> None:
