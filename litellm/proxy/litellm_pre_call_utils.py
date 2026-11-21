@@ -471,18 +471,27 @@ else:
     PolicyMatchContext = Any
 
 
-def parse_cache_control(cache_control):
-    cache_dict: Final = {}
-    directives: Final = cache_control.split(", ")
+def parse_cache_control(cache_control: str) -> Mapping[str, str | bool]:
+    directives: Final = (directive.partition("=") for directive in cache_control.split(","))
+    return MappingProxyType(
+        {
+            key.strip().lower(): value.strip() if separator else True
+            for key, separator, value in directives
+            if key.strip()
+        }
+    )
 
-    for directive in directives:
-        if "=" in directive:
-            key, value = directive.split("=")
-            cache_dict[key] = value
-        else:
-            cache_dict[directive] = True
 
-    return cache_dict
+def _header_cache_controls(
+    cache_dict: Mapping[str, str | bool], allowed_cache_controls: Sequence[object] | None
+) -> Mapping[str, bool]:
+    return MappingProxyType(
+        {
+            directive: True
+            for directive in ("no-cache", "no-store")
+            if cache_dict.get(directive) and (not allowed_cache_controls or directive in allowed_cache_controls)
+        }
+    )
 
 
 LITELLM_METADATA_ROUTES: Final = (
@@ -3105,10 +3114,16 @@ async def add_litellm_data_to_request(
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
-    cache_control_header: Final = _headers.get("Cache-Control", None)
+    cache_control_header: Final[str | None] = _headers.get("cache-control")
     if cache_control_header:
         cache_dict: Final = parse_cache_control(cache_control_header)
-        data["ttl"] = cache_dict.get("s-maxage")
+        header_cache_controls: Final = _header_cache_controls(cache_dict, user_api_key_dict.allowed_cache_controls)
+        if header_cache_controls:
+            request_cache: Final = data.get("cache")
+            data["cache"] = {  # rebind-ok: data is an out-param
+                **header_cache_controls,
+                **(request_cache if isinstance(request_cache, dict) else {}),
+            }
 
     # requester_metadata is snapshotted AFTER the strip below so
     # downstream consumers (e.g. PANW guardrail reading user_ip /
