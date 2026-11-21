@@ -127,10 +127,9 @@ async def test_a_keyless_subscription_follows_the_live_user(
     assert await admitted_user("u-1", reload) == expected
 
 
-async def _team(team_id: str) -> TeamFacts:
-    return {"team-1": TeamFacts("org-1", False), "team-blocked": TeamFacts(None, True)}.get(
-        team_id, TeamFacts(None, False)
-    )
+async def _team(team_id: str) -> TeamFacts | None:
+    known: Final = {"team-1": TeamFacts("org-1", False), "team-blocked": TeamFacts(None, True)}
+    return None if team_id == "team-deleted" else known.get(team_id, TeamFacts(None, False))
 
 
 @pytest.mark.parametrize(
@@ -150,5 +149,6 @@ async def test_a_stored_key_gets_the_org_ceiling_and_fresh_policy_its_requests_g
     assert (outcome.caller.org_id, outcome.caller.requires_fresh_policy) == (org, True)
 
 
-async def test_a_key_on_a_blocked_team_stops_receiving() -> None:
-    assert await with_team(UserAPIKeyAuth(api_key="sk-a", team_id="team-blocked"), _team) == Revoked("team")
+@pytest.mark.parametrize("team_id", ("team-blocked", "team-deleted"))
+async def test_a_key_on_a_blocked_or_deleted_team_stops_receiving(team_id: str) -> None:
+    assert await with_team(UserAPIKeyAuth(api_key="sk-a", team_id=team_id), _team) == Revoked("team")

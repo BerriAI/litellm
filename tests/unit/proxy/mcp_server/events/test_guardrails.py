@@ -104,3 +104,28 @@ async def test_an_assignment_that_cannot_be_resolved_blocks_the_event() -> None:
         assign=broken,
     )
     assert outcome == Blocked("guardrail-assignment")
+
+
+@pytest.mark.asyncio
+async def test_a_policy_attached_to_the_key_assigns_its_guardrail_to_events() -> None:
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    assigned: Final = _Masker(guardrail_name="assigned", event_hook=GuardrailEventHooks.mcp_event, default_on=False)
+    policies: Final = get_policy_registry()
+    attachments: Final = get_attachment_registry()
+    policies.load_policies({"event-policy": {"guardrails": {"add": ["assigned"]}}})
+    attachments.load_attachments([{"policy": "event-policy", "keys": ["events-key"]}])
+    try:
+        outcome: Final = await screen_event(
+            occurrence(data={"title": "the secret plan", "count": 3}),
+            server_name="ci",
+            gateway_name="ci-build.failed",
+            subscription_id="sub_1",
+            caller=UserAPIKeyAuth(api_key="sk-a", key_alias="events-key"),
+            callbacks=lambda: (assigned,),
+        )
+    finally:
+        attachments.clear()
+        policies.clear()
+    assert outcome == Screened({"title": "the [REDACTED] plan", "count": 3})

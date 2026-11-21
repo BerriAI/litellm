@@ -92,25 +92,29 @@ class TeamFacts:
     blocked: bool
 
 
-async def _team_facts(team_id: str) -> TeamFacts:
-    from litellm.proxy.auth.auth_checks import get_team_object
+async def _team_facts(team_id: str) -> TeamFacts | None:
+    """The team's org and blocked state; None when the team provably no longer exists."""
+    from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_object
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
-    team: Final = await get_team_object(
-        team_id=team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        check_db_only=True,
-    )
+    try:
+        team: Final = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=True,
+        )
+    except TeamNotFoundError:
+        return None
     return TeamFacts(org_id=team.organization_id, blocked=bool(team.blocked))
 
 
-async def with_team(key: UserAPIKeyAuth, team_facts: Callable[[str], Awaitable[TeamFacts]]) -> Reauthorization:
-    """Authorize a stored key the way a request would: refused while its team is blocked, under the team's org
-    when the key has none, and with permissions read fresh rather than from the cache."""
+async def with_team(key: UserAPIKeyAuth, team_facts: Callable[[str], Awaitable[TeamFacts | None]]) -> Reauthorization:
+    """Authorize a stored key the way a request would: refused while its team is blocked or deleted, under the
+    team's org when the key has none, and with permissions read fresh rather than from the cache."""
     facts: Final = await team_facts(key.team_id) if key.team_id is not None else None
-    if facts is not None and facts.blocked:
+    if key.team_id is not None and (facts is None or facts.blocked):
         return Revoked("team")
     org_id: Final = key.org_id or (facts.org_id if facts is not None else None)
     fresh: Final = key.model_copy(update={"org_id": org_id})
