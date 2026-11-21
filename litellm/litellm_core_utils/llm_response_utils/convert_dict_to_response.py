@@ -944,12 +944,7 @@ def convert_to_model_response_object(
                 keeps_stored_finish_reason: Final = (
                     preserve_stored_finish_reason and choice.get("finish_reason") is not None
                 )
-                if (
-                    not keeps_stored_finish_reason
-                    and finish_reason == "stop"
-                    and message.tool_calls
-                    and len(message.tool_calls) > 0
-                ):
+                if not keeps_stored_finish_reason and finish_reason == "stop" and message.tool_calls:
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
