@@ -65,7 +65,7 @@ from litellm.constants import (
     MICROSOFT_USER_ID_ATTRIBUTE,
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -307,6 +307,22 @@ class _ServicePrincipalPage(Protocol):
 
     @overload
     def get(self, key: Literal["@odata.nextLink"]) -> str | None: ...
+
+
+class _GraphDirectoryObject(Protocol):
+    def get(self, key: str) -> str | None: ...
+
+
+class _GraphGroupsPage(Protocol):
+    @overload
+    def get(
+        self,
+        key: Literal["value"],
+        default: Sequence["_GraphDirectoryObject"],
+    ) -> Sequence["_GraphDirectoryObject"]: ...
+
+    @overload
+    def get(self, key: Literal["@odata.context", "@odata.nextLink"]) -> str | None: ...
 
 
 def _hash_cli_sso_secret(secret: str) -> str:
@@ -1138,6 +1154,10 @@ async def _verify_generic_sso_or_fall_back_to_id_token(
         )
 
 
+def _verified_generic_sso_tokens(generic_sso: _GenericSSOClient) -> tuple[str | None, SSOIdentityAssertion | None]:
+    return generic_sso.access_token, assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
+
+
 class _SSOUserAdmissionError(ProxyException):
     pass
 
@@ -1526,8 +1546,10 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         import ast
 
         try:
-            generic_user_role_mappings_data: dict[LitellmUserRoles, list[str]] = ast.literal_eval(generic_role_mappings)
-            if isinstance(generic_user_role_mappings_data, dict):
+            generic_user_role_mappings_data: Final = as_str_mapping(
+                _DECODED_JSON.validate_python(ast.literal_eval(generic_role_mappings))
+            )
+            if generic_user_role_mappings_data is not None:
                 role_mappings_data = {
                     "provider": "generic",
                     "group_claim": generic_role_mappings_group_claim,
@@ -1795,8 +1817,7 @@ async def get_generic_sso_response(
                 userinfo_endpoint=generic_userinfo_endpoint,
                 response_convertor=response_convertor,
             )
-            access_token_str = generic_sso.access_token
-            sso_assertion = assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
+            access_token_str, sso_assertion = _verified_generic_sso_tokens(generic_sso)
 
         access_token_payload = process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings
@@ -4975,7 +4996,9 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = require_attributes(
+            _DECODED_JSON.validate_python(response.json()), _GraphGroupsPage, "get"
+        )
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")
@@ -4993,7 +5016,7 @@ class MicrosoftSSOHandler:
 
     @staticmethod
     async def _cast_graph_api_response_dict(
-        response: dict,
+        response: _GraphGroupsPage,
     ) -> MicrosoftGraphAPIUserGroupResponse:
         directory_objects: Final[list[MicrosoftGraphAPIUserGroupDirectoryObject]] = []
         for _object in response.get("value", []):
@@ -5042,8 +5065,9 @@ class MicrosoftSSOHandler:
 
         while next_link is not None and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
             response = await async_client.get(next_link, headers=headers)
-            response_json: _ServicePrincipalPage = response.json()
-            verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_json)
+            response_payload = _DECODED_JSON.validate_python(response.json())
+            verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_payload)
+            response_json = require_attributes(response_payload, _ServicePrincipalPage, "get")
 
             for _object in response_json.get("value", []):
                 if _object.get("principalType") == "Group":

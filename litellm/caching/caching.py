@@ -18,16 +18,17 @@ from contextlib import contextmanager
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
@@ -63,6 +64,42 @@ class _SupportsAsyncPing(Protocol):
 class _SupportsAsyncDeleteCacheKeys(Protocol):
     @property
     def delete_cache_keys(self) -> Callable[[object], Awaitable[object]] | None: ...
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _SupportsFieldLookup(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _SupportsEmbeddingData(Protocol):
+    @property
+    def data(self) -> Sequence[object]: ...
+
+
+class _UnvalidatedCachedEmbedding(TypedDict):
+    embedding: ReadOnly[object]
+    index: ReadOnly[object]
+    model: ReadOnly[str | None]
+    prompt_tokens: ReadOnly[int | None]
+    prompt_tokens_details: ReadOnly[Mapping[str, object] | None]
+    format_version: ReadOnly[int]
+    object: ReadOnly[object]
+
+
+def _embedding_item(response: _SupportsEmbeddingData, index: int) -> object:
+    return response.data[index]
+
+
+def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
+    mapping: Final = as_str_mapping(embedding_response)
+    if mapping is not None and isinstance(embedding_response, dict):
+        return mapping
+    if has_attributes(embedding_response, _SupportsModelDump, "model_dump"):
+        return require_attributes(embedding_response.model_dump(), _SupportsFieldLookup, "get")
+    return vars(embedding_response)
 
 
 def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
@@ -969,23 +1006,17 @@ class Cache:
 
     def _convert_to_cached_embedding(
         self,
-        embedding_response: Any,
+        embedding_response: object,
         model: str | None,
         prompt_tokens: int | None = None,
         prompt_tokens_details: dict | None = None,
-    ) -> CachedEmbedding:
+    ) -> _UnvalidatedCachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
         """
         try:
-            data: Final = (
-                embedding_response
-                if isinstance(embedding_response, dict)
-                else embedding_response.model_dump()
-                if hasattr(embedding_response, "model_dump")
-                else vars(embedding_response)
-            )
-            cached: Final[CachedEmbedding] = {
+            data: Final = _embedding_fields(embedding_response)
+            cached: Final[_UnvalidatedCachedEmbedding] = {
                 "embedding": data.get("embedding"),
                 "index": data.get("index"),
                 "object": data.get("object"),
@@ -1073,7 +1104,7 @@ class Cache:
     ) -> tuple[str, dict, dict]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
-        embedding_response: Final = result.data[idx_in_result_data]
+        embedding_response: Final = _embedding_item(result, idx_in_result_data)
 
         # Extract per-item prompt_tokens + details from response usage
         prompt_tokens: Final = self._get_per_item_prompt_tokens(
@@ -1087,7 +1118,7 @@ class Cache:
 
         # Always convert to properly typed CachedEmbedding
         model_name: Final = result.model
-        embedding_dict: Final[CachedEmbedding] = self._convert_to_cached_embedding(
+        embedding_dict: Final = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
             prompt_tokens=prompt_tokens,

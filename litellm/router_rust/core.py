@@ -1519,6 +1519,9 @@ class RustCore(
 ):
     """A ``RouterCore`` served by the Rust router core over a ``PythonHost``. It holds no Python core."""
 
+    if TYPE_CHECKING:
+        explicit_allowed_fails: object
+
     def __init__(self, config: RouterConfig, host: PythonHost, resolved: Resolved) -> None:
         from litellm._service_logger import ServiceLogging
         from litellm.router_utils.cooldown_cache import CooldownCache

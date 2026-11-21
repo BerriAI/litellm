@@ -26,7 +26,13 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, json_contains
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    json_contains,
+    require_attributes,
+    without,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import (
@@ -109,24 +115,6 @@ class _ASGIScope(TypedDict, total=False):
     headers: ReadOnly[Sequence[tuple[bytes | str, bytes | str]]]
 
 
-class _ClientEventItem(TypedDict, total=False):
-    """The ``item`` payload of a client ``conversation.item.create`` frame."""
-
-    type: ReadOnly[str]
-    role: ReadOnly[str]
-    output: ReadOnly[object]
-    content: ReadOnly[Sequence[object]]
-
-
-class _ClientEventFrame(TypedDict, total=False):
-    """The fields the proxy reads from a client realtime frame."""
-
-    type: ReadOnly[str]
-    item: ReadOnly[_ClientEventItem]
-    session: ReadOnly[Mapping[str, object]]
-    response: ReadOnly[Mapping[str, object]]
-
-
 class _ResponseDoneBody(TypedDict, total=False):
     """The ``response`` body of a ``response.done`` event, as read for spend logging."""
 
@@ -148,10 +136,13 @@ def client_websocket_scope(websocket: object) -> MutableMapping[str, object] | N
     return websocket.scope if isinstance(websocket, _ReplayScopeWebSocket) else None
 
 
-class _ClientWebSocket(ScopedWebSocket, Protocol):
+class _ClientWebSocket(Protocol):
     async def send_text(self, data: str) -> None: ...
-    async def receive_text(self) -> str: ...
     async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
+
+
+class _ReceivingClientWebSocket(Protocol):
+    async def receive_text(self) -> str: ...
 
 
 class _LoggingWorker(Protocol):
@@ -407,7 +398,7 @@ def _translation_audio_bytes_per_second(audio_format: "str | RealtimeAudioFormat
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
     def normalize(self, event: dict) -> dict: ...
-    def patch_outgoing_session(self, session: dict) -> dict: ...
+    def patch_outgoing_session(self, session: dict[str, object]) -> dict[str, object]: ...
     def gate_turn_detection(self, turn_detection: object, /) -> Mapping[str, object]: ...
     @property
     def deletes_conversation_items(self) -> bool: ...
@@ -489,7 +480,7 @@ def realtime_guardrails_apply(request_data: Mapping[str, object], callbacks: Seq
 class RealTimeStreaming:
     def __init__(
         self,
-        websocket: Any,
+        websocket: _ClientWebSocket,
         backend_ws: CLIENT_CONNECTION_CLASS | RealtimeBackend,
         logging_obj: LiteLLMLogging,
         provider_config: BaseRealtimeConfig | None = None,
@@ -669,11 +660,7 @@ class RealTimeStreaming:
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
-        if isinstance(message, dict):
-            # TypedDict union members do not narrow to plain dict for mypy.
-            message_obj: dict[str, Any] = cast(dict[str, Any], message)
-        else:
-            message_obj = cast(dict[str, Any], json.loads(message))
+        message_obj: Final = cast(dict[str, Any], message if isinstance(message, dict) else json.loads(message))
         self._collect_tool_calls_from_response_done(message_obj)
         if not self._should_store_message(message_obj):
             return
@@ -1236,7 +1223,7 @@ class RealTimeStreaming:
             self._applied_session_fields = held
             await self._send_held_client_content()
 
-    def _holds_client_content(self, msg_type: str | None, message: str) -> bool:
+    def _holds_client_content(self, msg_type: object, message: str) -> bool:
         held_types: Final = (
             RealTimeStreaming._DEFERRED_SETUP_HELD_CONTENT_TYPES
             if self._uses_deferred_backend_setup()
@@ -1271,7 +1258,7 @@ class RealTimeStreaming:
             self._lazy_setup_deadline if content_deadline is None else min(self._lazy_setup_deadline, content_deadline)
         )
 
-    async def _send_setup_before_content(self, msg_type: str | None) -> None:
+    async def _send_setup_before_content(self, msg_type: object) -> None:
         if self._holds_session_updates_until_first_content():
             await self._send_held_session_update_as_setup()
         await self._send_default_setup_before_first_client_message(msg_type)
@@ -1288,7 +1275,7 @@ class RealTimeStreaming:
         finally:
             receive.cancel()
 
-    async def _send_default_setup_before_first_client_message(self, msg_type: str | None) -> None:
+    async def _send_default_setup_before_first_client_message(self, msg_type: object) -> None:
         if self.session_configuration_request is not None or self.provider_config is None:
             return
         if msg_type == "session.update" or (
@@ -1657,14 +1644,14 @@ class RealTimeStreaming:
             and self._has_audio_transcription_guardrails()
         )
 
-    def _refuses_unscreened_audio(self, msg_type: str | None) -> bool:
+    def _refuses_unscreened_audio(self, msg_type: object) -> bool:
         return (
             msg_type in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
             and self._builds_setup_lazily()
             and self._should_disable_vad_auto_response()
         )
 
-    async def _refuse_unscreened_audio(self, msg_type: str | None, message: str) -> None:
+    async def _refuse_unscreened_audio(self, msg_type: object, message: str) -> None:
         if self._unscreened_audio_refused and msg_type not in RealTimeStreaming._CLIENT_AUDIO_BUFFER_COMMIT_TYPES:
             return
         self._unscreened_audio_refused = True
@@ -2005,14 +1992,14 @@ class RealTimeStreaming:
         self.logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
     @staticmethod
-    def detect_beta_header(websocket: ScopedWebSocket) -> bool:
+    def detect_beta_header(websocket: object) -> bool:
         """Return True if the client sent 'OpenAI-Beta: realtime=v1'.
 
         Checks the raw ASGI scope headers so it works for both FastAPI WebSocket
         objects and any test doubles that expose a .scope dict.
         """
         try:
-            headers: Final = websocket.scope.get("headers", [])
+            headers: Final = require_attributes(websocket, ScopedWebSocket, "scope").scope.get("headers", [])
             for name, value in headers:
                 if isinstance(name, bytes):
                     name = name.decode("latin-1")
@@ -2233,7 +2220,7 @@ class RealTimeStreaming:
         if isinstance(refused_opening_message, str):
             return refused_opening_message
         try:
-            return await self.websocket.receive_text()
+            return await require_attributes(self.websocket, _ReceivingClientWebSocket, "receive_text").receive_text()
         except Exception as e:  # noqa: BLE001  # whatever the client socket raises, the client is gone
             verbose_logger.debug("Client disconnected: %s", e)
             return None
@@ -2241,7 +2228,7 @@ class RealTimeStreaming:
     async def client_ack_messages(self) -> ClientLoopExit:
         import websockets
 
-        client_event: _ClientEventFrame
+        client_event: Mapping[str, object]
         try:
             while True:
                 message = await self._receive_client_message_before_setup_deadline()
@@ -2250,10 +2237,9 @@ class RealTimeStreaming:
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
-                msg_type: str | None = None
+                msg_type: object = None
                 try:
-                    msg_obj = json.loads(message)
-                    client_event = msg_obj
+                    client_event = _decode_json_object(message)
                     msg_type = client_event.get("type")
                     if msg_type == "conversation.item.create":
                         self._pending_guardrail_message = None
@@ -2264,8 +2250,8 @@ class RealTimeStreaming:
                                 self._pending_guardrail_message = " ".join(guarded_item.texts)
                             continue
                         case RealtimeGuardrailRewrite(texts=masked_texts):
-                            msg_obj["item"] = rewritten_item(client_event, masked_texts)
-                            message = json.dumps(msg_obj)
+                            client_event = {**client_event, "item": rewritten_item(client_event, masked_texts)}
+                            message = json.dumps(client_event)
                         case None:
                             pass
 
@@ -2298,8 +2284,8 @@ class RealTimeStreaming:
                         )
                         is not None
                     ):
-                        msg_obj["session"] = gated_first
-                        message = json.dumps(msg_obj)
+                        client_event = {**client_event, "session": gated_first}
+                        message = json.dumps(client_event)
                         guardrail_turn_detection_injected = True
                         verbose_logger.debug(
                             "Injected turn_detection into first session.update for audio transcription guardrails"
@@ -2328,48 +2314,57 @@ class RealTimeStreaming:
                         )
                         is not None
                     ):
-                        msg_obj["session"] = gated_later
-                        message = json.dumps(msg_obj)
+                        client_event = {**client_event, "session": gated_later}
+                        message = json.dumps(client_event)
 
                     # GA compatibility: remap beta-style session fields only when
                     # the upstream is in GA mode. Beta upstreams expect the flat
                     # session shape unchanged.
                     if msg_type == "session.update" and not self._backend_uses_beta_protocol:
-                        session = client_event.get("session", {})
+                        session = as_str_mapping(client_event.get("session", {}))
                         if isinstance(session, dict):
-                            session = self._remap_beta_session_to_ga(
-                                session,
-                                all_beta_fields=self._remaps_all_beta_fields_to_ga,
-                                drop_temperature=self._drop_params,
+                            ga_session = _SESSION_FIELDS.validate_python(
+                                self._remap_beta_session_to_ga(
+                                    session,
+                                    all_beta_fields=self._remaps_all_beta_fields_to_ga,
+                                    drop_temperature=self._drop_params,
+                                )
                             )
-                            if self._is_translation_session:
-                                session.pop("type", None)
-                            msg_obj["session"] = session
-                            message = json.dumps(msg_obj)
+                            client_event = {
+                                **client_event,
+                                "session": without(ga_session, "type") if self._is_translation_session else ga_session,
+                            }
+                            message = json.dumps(client_event)
 
                     if (
                         msg_type == "response.create"
                         and self._remaps_all_beta_fields_to_ga
                         and (beta_response := as_str_mapping(client_event.get("response"))) is not None
                     ):
-                        msg_obj["response"] = self._remap_beta_response_to_ga(
-                            beta_response, drop_temperature=self._drop_params
-                        )
-                        message = json.dumps(msg_obj)
+                        client_event = {
+                            **client_event,
+                            "response": self._remap_beta_response_to_ga(
+                                beta_response, drop_temperature=self._drop_params
+                            ),
+                        }
+                        message = json.dumps(client_event)
 
                     if (
                         msg_type == "conversation.item.create"
                         and self._bridges_beta_client_to_ga
                         and (beta_item := as_str_mapping(client_event.get("item"))) is not None
                     ):
-                        msg_obj["item"] = beta_item_to_ga(beta_item)
-                        message = json.dumps(msg_obj)
+                        client_event = {**client_event, "item": beta_item_to_ga(beta_item)}
+                        message = json.dumps(client_event)
 
                     if msg_type == "session.update" and self._event_normalizer:
-                        session = client_event.get("session")
+                        session = as_str_mapping(client_event.get("session"))
                         if isinstance(session, dict):
-                            msg_obj["session"] = self._event_normalizer.patch_outgoing_session(session)
-                            message = json.dumps(msg_obj)
+                            client_event = {
+                                **client_event,
+                                "session": self._event_normalizer.patch_outgoing_session(session),
+                            }
+                            message = json.dumps(client_event)
 
                 except (json.JSONDecodeError, AttributeError):
                     pass

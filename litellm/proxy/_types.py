@@ -137,7 +137,7 @@ if TYPE_CHECKING:
     from litellm.integrations.lens import TraceReceiver
     from litellm.repositories.database import Database
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -3792,7 +3792,7 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
-    field_value: Any
+    field_value: object
     source: Literal["config", "db", "env", "default", "unset"] = "unset"
     editable: bool = True
 
