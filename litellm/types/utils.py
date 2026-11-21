@@ -4794,6 +4794,7 @@ class LlmProviders(str, Enum):
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
+    GNANI = "gnani"
     SONIOX = "soniox"
     CEREBRAS = "cerebras"
     NADIR = "nadir"
