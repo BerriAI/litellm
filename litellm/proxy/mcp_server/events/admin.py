@@ -202,8 +202,9 @@ async def list_subscriptions(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> SubscriptionList:
     store: Final = services.require_store()
-    key_hash: Final = await services.key_for_alias(key_alias) if key_alias is not None and _is_admin(caller) else None
-    if key_alias is not None and key_hash is None:
+    by_alias: Final = key_alias is not None and _is_admin(caller)
+    key_hash: Final = await services.key_for_alias(key_alias) if by_alias and key_alias is not None else None
+    if by_alias and key_hash is None:
         return SubscriptionList(subscriptions=())
     query: Final = SubscriptionQuery(
         principal=None if _is_admin(caller) else principal_of(caller) or "-",

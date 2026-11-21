@@ -260,3 +260,19 @@ async def test_event_types_filter_servers_by_the_callers_network_address() -> No
     async with httpx.AsyncClient(transport=transport, base_url="http://gw") as client:
         await client.get("/events/types", params={"server_id": "srv-ci"})
     assert seen == ["203.0.113.9"]
+
+
+@pytest.mark.asyncio
+async def test_a_key_alias_filter_from_a_non_admin_is_ignored_and_shows_their_own_rows() -> None:
+    store: Final = MemoryStore(rows={"sub_1": _row("sub_1", ALICE)})
+    async with _client(ALICE, store, Callback()) as client:
+        listed = (await client.get("/events/subscriptions", params={"key_alias": "someone-else"})).json()
+    assert [item["id"] for item in listed["subscriptions"]] == ["sub_1"]
+
+
+def test_keys_limited_to_mcp_routes_reach_the_event_subscription_endpoints() -> None:
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    for route in ("/v1/mcp/events/types", "/v1/mcp/events/subscriptions", "/v1/mcp/events/subscriptions/sub_1/test"):
+        assert RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value)
