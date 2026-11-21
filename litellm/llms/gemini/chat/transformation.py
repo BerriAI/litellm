@@ -98,6 +98,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "n",
             "stop",
             "logprobs",
+            "top_logprobs",
             "frequency_penalty",
             "presence_penalty",
             "seed",
