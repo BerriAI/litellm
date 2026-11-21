@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -178,6 +178,31 @@ def failure_row_response_cost(request_data: Mapping[str, object]) -> float:
         else 0.0
     )
     return recovered_stream_cost + guardrail_information_cost(_failure_row_guardrail_information(request_data))
+
+
+_OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
+
+
+def _call_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=dict(kwargs)))
+
+
+def _is_billed_health_probe_failure(kwargs: Mapping[str, object]) -> bool:
+    probe_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(
+        UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth()
+    )
+    return _call_metadata(kwargs).get("user_api_key") == probe_key and failure_row_response_cost(kwargs) > 0
+
+
+def _health_probe_failure_request(
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the failure spend writer stamps the row onto the request dict
+    litellm_params: Final = _str_keyed_fields(kwargs.get("litellm_params"))
+    return {
+        **kwargs,
+        "metadata": dict(_call_metadata(kwargs)),
+        "litellm_params": {name: value for name, value in litellm_params.items() if name != "litellm_metadata"},
+    }
 
 
 DeploymentLookup: TypeAlias = Callable[[str], Deployment | None]
@@ -826,6 +851,38 @@ class _ProxyDBLogger(CustomLogger):
 
 
 ProxyDBLogger: Final = _ProxyDBLogger
+
+FailureBilling: TypeAlias = Callable[[UserAPIKeyAuth, Exception, dict[str, object]], Awaitable[None]]
+
+
+async def bill_failure_on_spend_logs(
+    user_api_key_dict: UserAPIKeyAuth,
+    exception: Exception,
+    request_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
+) -> None:
+    for callback in litellm.callbacks:
+        if isinstance(callback, _ProxyDBLogger):
+            await callback.async_post_call_failure_hook(
+                request_data=request_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+            )
+
+
+class HealthProbeFailureBiller(CustomLogger):
+    def __init__(self, bill: FailureBilling = bill_failure_on_spend_logs) -> None:
+        super().__init__()
+        self._bill: Final = bill
+
+    async def async_log_failure_event(
+        self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        exception: Final = kwargs.get("exception")
+        if not isinstance(exception, Exception) or not _is_billed_health_probe_failure(kwargs):
+            return
+        await self._bill(
+            UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth(),
+            exception,
+            _health_probe_failure_request(kwargs),
+        )
 
 
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
