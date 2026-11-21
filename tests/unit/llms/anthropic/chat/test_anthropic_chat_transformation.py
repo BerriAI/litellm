@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 from collections.abc import Mapping
 from itertools import chain
 from typing import Final
@@ -23,7 +24,11 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
-from litellm.litellm_core_utils.prompt_templates.factory import _EMPTY_TEXT_PLACEHOLDER, anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _EMPTY_TEXT_PLACEHOLDER,
+    MCP_HISTORY_DROP_WARNING,
+    anthropic_messages_pt,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
@@ -10480,9 +10485,12 @@ def _sent_mcp_history_turn(config_class: type[AnthropicConfig], native_content: 
 
 @pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
 @pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
-def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class, native_content):
-    sent: Final = _sent_mcp_history_turn(config_class, native_content)
+def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config_class, native_content, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = _sent_mcp_history_turn(config_class, native_content)
 
+    warning_prefix: Final = MCP_HISTORY_DROP_WARNING.partition("model=")[0]
+    assert not [message for message in caplog.messages if message.startswith(warning_prefix)]
     assert sent == (
         [_HISTORY_MCP_CALL, _HISTORY_MCP_RESULT, _HISTORY_MCP_ANSWER]
         if native_content
@@ -10493,9 +10501,13 @@ def test_routes_with_the_mcp_connector_send_an_mcp_call_back_from_history(config
 @pytest.mark.parametrize("native_content", [False, True], ids=["parsed-message", "native-content"])
 @pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
 def test_claude_routes_without_the_mcp_connector_send_only_the_text_of_an_mcp_turn_from_history(
-    config_class, route, native_content
+    config_class, route, native_content, caplog
 ):
-    assert _sent_mcp_history_turn(config_class, native_content) == [_HISTORY_MCP_ANSWER]
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = _sent_mcp_history_turn(config_class, native_content)
+
+    assert sent == [_HISTORY_MCP_ANSWER]
+    assert MCP_HISTORY_DROP_WARNING % ("claude-haiku-5-5", route) in caplog.messages
 
 
 def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_sent_them():

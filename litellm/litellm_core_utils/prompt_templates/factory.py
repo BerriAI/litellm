@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import (
     McpReplayPlan,
+    holds_mcp_blocks,
     is_mcp_block,
     mcp_replay_plan,
     mcp_server_name,
@@ -2727,6 +2728,16 @@ def _empty_user_turn_placeholder(span: Sequence[AllMessageValues]) -> AnthropicM
     return None if empty_user_message is None else _empty_text_placeholder(empty_user_message)
 
 
+MCP_HISTORY_DROP_WARNING: Final = (
+    "Leaving the Claude MCP calls and results in the message history out of the request for model=%s on %s, "
+    "because this route cannot send them to the model."
+)
+
+
+def _holds_mcp_history(messages: Sequence[object], mcp_replay: McpReplayPlan) -> bool:
+    return bool(mcp_replay.dropped_ids_by_message) or holds_mcp_blocks(messages)
+
+
 def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
@@ -2760,6 +2771,8 @@ def anthropic_messages_pt(
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
     mcp_replay: Final = mcp_replay_plan(messages, replays_mcp_calls=replays_mcp_calls)
+    if not replays_mcp_calls and _holds_mcp_history(messages, mcp_replay):
+        verbose_logger.warning(MCP_HISTORY_DROP_WARNING, model, llm_provider)
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
 

@@ -32,6 +32,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
+    is_raw_server_tool_use_input,
     raw_server_tool_use_calls,
     write_anthropic_server_tool_calls,
     write_raw_server_tool_use_inputs,
@@ -266,6 +267,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     guardrailed_server_calls=guardrailed_tool_calls[len(tool_calls_to_check) :],
                     server_tool_call_tasks=server_tool_call_tasks,
                     raw_server_tool_use_tasks=raw_server_tool_use_tasks,
+                    guardrail_name=guardrail_to_apply.guardrail_name,
                 )
 
         elif (
@@ -441,6 +443,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrailed_server_calls: Sequence[object],
         server_tool_call_tasks: Sequence[tuple[tuple[int, int], ChatCompletionAssistantToolCall]],
         raw_server_tool_use_tasks: Sequence[tuple[tuple[int, int], ChatCompletionAssistantToolCall]],
+        guardrail_name: str | None,
     ) -> None:
         if len(guardrailed_server_calls) != len(server_tool_call_tasks) + len(raw_server_tool_use_tasks):
             return
@@ -458,6 +461,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             messages=messages,
             guardrailed_tool_calls=guardrailed_server_calls[len(server_tool_call_tasks) :],
             task_mappings=tuple(mapping for mapping, _ in raw_server_tool_use_tasks),
+            guardrail_name=guardrail_name,
         )
 
     async def process_output_response(
@@ -1616,6 +1620,7 @@ def _write_raw_server_tool_use_inputs(
     messages: Sequence[object],
     guardrailed_tool_calls: Sequence[object],
     task_mappings: Sequence[tuple[int, int]],
+    guardrail_name: str | None,
 ) -> None:
     arguments_by_task: Final = MappingProxyType(
         {
@@ -1624,6 +1629,8 @@ def _write_raw_server_tool_use_inputs(
             if (arguments := _guardrailed_tool_call_arguments(guardrailed)) is not None
         }
     )
+    if not all(map(is_raw_server_tool_use_input, arguments_by_task.values())):
+        raise unappliable_request_rewrite(guardrail_name)
     for msg_idx in sorted(frozenset(msg_idx for msg_idx, _ in task_mappings)):
         write_raw_server_tool_use_inputs(
             messages[msg_idx],
