@@ -280,19 +280,15 @@ export const CASES: readonly DifferentialCase[] = [
     },
     ui: {},
   },
+  // Empty oauth2 scopes clearing intentionally diverges from legacyBuild and is tested in editServerPayload.differential.test.ts.
   {
     label: "blank non-admin credential is dropped, not nulled",
-    values: { ...ROOT, auth_type: "oauth2", credentials: { client_id: "", client_secret: "keep", scopes: [] } },
+    values: { ...ROOT, auth_type: "oauth2", credentials: { client_id: "", client_secret: "keep" } },
     ui: {},
   },
   {
-    label: "scopes array filters empties and drops when nothing survives",
+    label: "scopes array filters empty entries",
     values: { ...ROOT, auth_type: "oauth2", credentials: { scopes: ["", null, "read"] } },
-    ui: {},
-  },
-  {
-    label: "scopes entirely empty drops the key",
-    values: { ...ROOT, auth_type: "oauth2", credentials: { scopes: ["", null] } },
     ui: {},
   },
   { label: "credentials absent entirely", values: { ...ROOT, auth_type: "oauth2" }, ui: {} },
