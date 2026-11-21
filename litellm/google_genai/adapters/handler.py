@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Coroutine, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from typing import Final, cast
 
 from openai.types.chat import ChatCompletionStreamOptionsParam
@@ -6,9 +6,10 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.rules import Rules
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CustomPricingLiteLLMParams, ModelResponse
+from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams, ModelResponse
 
 from .transformation import GoogleGenAIAdapter
 
@@ -21,11 +22,43 @@ class _TranslatedCompletionKwargs(TypedDict, total=False, extra_items=object):
     pass
 
 
-def _mark_failure_logged_by_inner_completion(adapter_kwargs: Mapping[str, object]) -> None:
-    outer_logging_obj: Final = adapter_kwargs.get("litellm_logging_obj")
-    if isinstance(outer_logging_obj, LiteLLMLoggingObj):
-        outer_logging_obj.mark_logging_complete(event_type="sync_failure")
-        outer_logging_obj.mark_logging_complete(event_type="async_failure")
+_FORWARDED_REQUEST_KEYS: Final = (
+    "metadata",
+    "litellm_metadata",
+    "proxy_server_request",
+    "extra_headers",
+    "litellm_logging_obj",
+    "litellm_call_id",
+    "litellm_session_id",
+    "no-log",
+)
+
+
+def _message_text(messages: Iterable[Mapping[str, object]]) -> str:
+    return "".join(content for message in messages if isinstance(content := message.get("content"), str))
+
+
+def _run_pre_call_rules(logging_obj: LiteLLMLoggingObj, messages: Iterable[Mapping[str, object]], model: str) -> None:
+    try:
+        Rules().pre_call_rules(input=_message_text(messages), model=model)
+    except Exception:
+        logging_obj.mark_logging_complete(event_type="sync_failure")
+        logging_obj.mark_logging_complete(event_type="async_failure")
+        raise
+
+
+def _forwarded_request_kwargs(
+    request_kwargs: Mapping[str, object], custom_logging_obj: LiteLLMLoggingObj | None
+) -> Mapping[str, object]:
+    forwarded: Final = {key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs}
+    if not isinstance(custom_logging_obj, LiteLLMLoggingObj):
+        return forwarded
+    return {
+        **forwarded,
+        **{key: value for key, value in request_kwargs.items() if key in CUSTOM_PRICING_PARAMS},
+        "litellm_logging_obj": custom_logging_obj,
+        "litellm_call_id": custom_logging_obj.litellm_call_id,
+    }
 
 
 def _adapter_stream_options(requested: object) -> ChatCompletionStreamOptionsParam | None:
@@ -50,47 +83,41 @@ class GenerateContentToCompletionHandler:
         litellm_params: GenericLiteLLMParams | None = None,
         extra_kwargs: Mapping[str, object] | None = None,
         custom_logging_obj: LiteLLMLoggingObj | None = None,
+        completion_call_type: CallTypes = CallTypes.acompletion,
     ) -> GenerateContentCompletionKwargs:
         """Prepare kwargs for litellm.completion/acompletion"""
 
-        # Transform generate_content request to completion format
+        request_kwargs: Final = extra_kwargs or {}
         completion_request: Final = GOOGLE_GENAI_ADAPTER.translate_generate_content_to_completion(
             model=model,
             contents=contents,
             config=config,
             litellm_params=litellm_params,
-            **(extra_kwargs or {}),
+            **request_kwargs,
         )
-
-        completion_kwargs: Final = dict[str, object](completion_request)
-
-        # Forward extra_kwargs that should be passed to completion call
-        if extra_kwargs is not None:
-            # Forward metadata for custom callback
-            if "metadata" in extra_kwargs:
-                completion_kwargs["metadata"] = extra_kwargs["metadata"]
-            # Forward extra_headers for providers that require custom headers (e.g., github_copilot)
-            if "extra_headers" in extra_kwargs:
-                completion_kwargs["extra_headers"] = extra_kwargs["extra_headers"]
-            if "proxy_server_request" in extra_kwargs:
-                completion_kwargs["proxy_server_request"] = extra_kwargs["proxy_server_request"]
-            if "litellm_metadata" in extra_kwargs:
-                completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
-
-        if isinstance(custom_logging_obj, LiteLLMLoggingObj):
-            completion_kwargs["litellm_logging_obj"] = custom_logging_obj
-            completion_kwargs["litellm_call_id"] = custom_logging_obj.litellm_call_id
-            completion_kwargs.update(
-                {key: value for key, value in (extra_kwargs or {}).items() if key in CUSTOM_PRICING_PARAMS}
+        stream_options: Final = _adapter_stream_options(request_kwargs.get("stream_options")) if stream else None
+        forwarded_kwargs: Final = _forwarded_request_kwargs(request_kwargs, custom_logging_obj)
+        logging_obj: Final = forwarded_kwargs.get("litellm_logging_obj")
+        plain_adapter_logging_obj: Final = logging_obj if custom_logging_obj is None else None
+        if isinstance(plain_adapter_logging_obj, LiteLLMLoggingObj):
+            plain_adapter_logging_obj.set_logged_call_type(completion_call_type.value)
+        if isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.apply_adapter_request(completion_request["messages"], stream_options)
+        completion_kwargs: Final = GenerateContentCompletionKwargs(
+            **_TranslatedCompletionKwargs(
+                **dict[str, object](
+                    completion_request,
+                    **forwarded_kwargs,
+                    **({"stream": True} if stream else {}),
+                    **({"stream_options": stream_options} if stream_options is not None else {}),
+                )
             )
+        )
+        messages: Final = completion_kwargs.get("messages", ())
+        if isinstance(plain_adapter_logging_obj, LiteLLMLoggingObj) and messages and Rules.has_pre_call_rules():
+            _run_pre_call_rules(plain_adapter_logging_obj, messages, model)
 
-        if stream:
-            completion_kwargs["stream"] = stream
-            stream_options: Final = _adapter_stream_options((extra_kwargs or {}).get("stream_options"))
-            if stream_options is not None:
-                completion_kwargs["stream_options"] = stream_options
-
-        return GenerateContentCompletionKwargs(**_TranslatedCompletionKwargs(**completion_kwargs))
+        return completion_kwargs
 
     @staticmethod
     async def async_generate_content_handler(
@@ -114,11 +141,7 @@ class GenerateContentToCompletionHandler:
             custom_logging_obj=custom_logging_obj,
         )
 
-        try:
-            completion_response: Final = await litellm.acompletion(**completion_kwargs)
-        except Exception:
-            _mark_failure_logged_by_inner_completion(kwargs)
-            raise
+        completion_response: Final = await litellm.acompletion(**completion_kwargs)
 
         if stream:
             # Check if completion_response is actually a stream or a ModelResponse
@@ -176,13 +199,10 @@ class GenerateContentToCompletionHandler:
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
             custom_logging_obj=custom_logging_obj,
+            completion_call_type=CallTypes.completion,
         )
 
-        try:
-            completion_response: Final = litellm.completion(**completion_kwargs)
-        except Exception:
-            _mark_failure_logged_by_inner_completion(kwargs)
-            raise
+        completion_response: Final = litellm.completion(**completion_kwargs)
 
         if stream:
             # Check if completion_response is actually a stream or a ModelResponse

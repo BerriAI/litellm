@@ -703,6 +703,21 @@ async def test_custom_content_without_native_hook_uses_completion(
     assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
 
 
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_through_completion_is_not_newly_rejected_by_pre_call_rules(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "forbidden" not in text])
+    contents: Final = [{"parts": [{"text": "a forbidden question"}]}]
+    request: Final = dict(model="native_image_test/chat-model", contents=contents)
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
 class FailingCompletionContentLLM(CustomLLM):
     def completion(self, **kwargs: object) -> litellm.ModelResponse:
         raise CustomLLMError(status_code=429, message="adapter quota exhausted")

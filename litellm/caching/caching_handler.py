@@ -1013,14 +1013,15 @@ class LLMCachingHandler:
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=logging_obj.async_success_handler(
-                result=cached_result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
+        if logging_obj.claim_async_success_log():
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=logging_obj.async_success_handler(
+                    result=cached_result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                )
             )
-        )
 
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=cached_result,
@@ -1579,6 +1580,7 @@ class LLMCachingHandler:
             "stream_response": kwargs.get("stream_response", {}),
             "custom_llm_provider": custom_llm_provider,
             "vertex_location": kwargs.get("vertex_location") or kwargs.get("vertex_ai_location"),
+            **({"litellm_metadata": kwargs["litellm_metadata"]} if kwargs.get("litellm_metadata") is not None else {}),
         }
 
         if litellm.cache is not None:

@@ -1675,6 +1675,21 @@ def function_setup(
         raise e
 
 
+def _dispatch_sync_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> None:
+    if not logging_obj.claim_sync_success_log():
+        return
+    # Copy the current context to propagate it to the background thread
+    # This is essential for OpenTelemetry span context propagation
+    ctx: Final = contextvars.copy_context()
+    executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
+    executor.submit(ctx.run, logging_obj.success_handler, result, start_time, end_time)
+
+
 def dispatch_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -2573,16 +2588,7 @@ def client(original_function):
                     ),
                 )
             elif not is_internal_call.get() and not logged_by_fallback_attempt:
-                # Copy the current context to propagate it to the background thread
-                # This is essential for OpenTelemetry span context propagation
-                ctx: Final = contextvars.copy_context()
-                executor.submit(
-                    ctx.run,
-                    logging_obj.success_handler,
-                    checked_result,
-                    start_time,
-                    end_time,
-                )
+                _dispatch_sync_success_logging(logging_obj, checked_result, start_time, end_time)
             # RETURN RESULT
             return checked_result
         except Exception as e:
