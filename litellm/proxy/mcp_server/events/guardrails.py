@@ -23,7 +23,7 @@ class Blocked:
 
 
 ScreenOutcome: TypeAlias = Screened | Blocked
-_RequestData: TypeAlias = dict[str, object]  # mutable-ok: the shared guardrail assignment edits request data in place
+_RequestData: TypeAlias = dict[str, object]
 
 
 def _registered_guardrails() -> Sequence[object]:
