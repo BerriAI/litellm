@@ -4,23 +4,17 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
-from litellm.proxy.mcp_server.events.admission import Admitted, admit, binding_for, screen_all
+from litellm.proxy.mcp_server.events.admission import admit, binding_for, screen_all
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import ensure_sealable, open_cursor, seal_cursor
 from litellm.proxy.mcp_server.events.errors import EventsFailure, internal_error
-from litellm.proxy.mcp_server.events.observability import EventActivity, EventOutcome
+from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import routing_headers
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import PollEventsParams, PollEventsResult
 
 _JSON_OBJECT: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
-
-
-def _outcome(admitted: Admitted) -> EventOutcome:
-    if admitted.blocked:
-        return "blocked"
-    return "throttled" if admitted.throttled else "delivered"
 
 
 async def poll(
@@ -62,18 +56,24 @@ async def poll(
     sealed: Final = seal_cursor(binding, upstream.cursor, runtime.now())
     if isinstance(sealed, Error):
         return Error(sealed.error)
-    if admitted.events or admitted.dropped:
-        await runtime.record(
-            EventActivity(
-                call_type="mcp_event_poll",
-                mode="poll",
-                server_id=resolved.target.server.server_id,
-                event_name=resolved.gateway_name,
-                outcome=_outcome(admitted),
-                caller=context.user_api_key_auth,
-                event_ids=tuple(item.event_id for item in admitted.events),
+    for outcome, amount, event_ids in (
+        ("delivered", len(admitted.events), tuple(item.event_id for item in admitted.events)),
+        ("throttled", admitted.throttled, ()),
+        ("blocked", admitted.blocked, ()),
+    ):
+        if amount:
+            await runtime.record(
+                EventActivity(
+                    call_type="mcp_event_poll",
+                    mode="poll",
+                    server_id=resolved.target.server.server_id,
+                    event_name=resolved.gateway_name,
+                    outcome=outcome,
+                    caller=context.user_api_key_auth,
+                    event_ids=event_ids,
+                    count=amount,
+                )
             )
-        )
     return Ok(
         PollEventsResult(
             events=admitted.events,

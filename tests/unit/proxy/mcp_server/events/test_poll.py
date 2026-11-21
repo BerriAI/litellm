@@ -87,7 +87,10 @@ async def test_events_over_the_per_caller_budget_are_dropped_and_flagged_truncat
     )
     assert isinstance(result, Ok)
     assert ([item.event_id for item in result.ok.events], result.ok.truncated) == (["evt_1"], True)
-    assert [item.outcome for item in records] == ["throttled"]
+    assert [(item.outcome, item.count, item.event_ids) for item in records] == [
+        ("delivered", 1, ("evt_1",)),
+        ("throttled", 1, ()),
+    ]
 
 
 @pytest.mark.asyncio

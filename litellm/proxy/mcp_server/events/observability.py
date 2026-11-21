@@ -29,6 +29,7 @@ class EventActivity:
     subscription_id: str | None = None
     event_ids: tuple[str, ...] = ()
     attempts: int | None = None
+    count: int | None = None
 
 
 class EventMetrics:
@@ -74,7 +75,8 @@ class EventMetrics:
 
 
 async def record(activity: EventActivity) -> None:
-    EventMetrics.count(activity.server_id, activity.event_name, activity.outcome, max(len(activity.event_ids), 1))
+    amount: Final = activity.count if activity.count is not None else max(len(activity.event_ids), 1)
+    EventMetrics.count(activity.server_id, activity.event_name, activity.outcome, amount)
     if activity.caller is None:
         return
     try:
@@ -100,6 +102,7 @@ async def _write_log_row(activity: EventActivity, caller: UserAPIKeyAuth) -> Non
         "subscription_id": activity.subscription_id,
         "event_ids": list(activity.event_ids),
         "attempts": activity.attempts,
+        "count": activity.count,
     }
     metadata: Final = {
         **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(caller),
