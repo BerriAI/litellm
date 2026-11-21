@@ -103,7 +103,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
-    app_key_resource_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     model_access_group_registry_cache_key,
@@ -122,6 +121,7 @@ from pydantic_core import to_json
 from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from tests.unit.proxy.rust_auth_stores import FakeBudgetStore, FakeEndUserStore, FakeUserStore
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
@@ -11685,7 +11685,7 @@ async def test_delete_cache_key_object_is_best_effort_when_the_cache_backend_fai
     hashed_token = "a" * 64
     caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
 
-    resource_key: Final = app_key_resource_cache_key(hashed_token)
+    resource_key: Final = AuthObject.customer_app_key_resource(hashed_token).key
     failing_cache: Final = UserApiKeyCache()
     failing_cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token))
     failing_cache.set_cache(key=resource_key, value={"team_id": "team-1"})
