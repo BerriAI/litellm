@@ -12,7 +12,7 @@ import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { Toaster } from "@/components/ui/sonner";
 import I18nProvider from "@/i18n/I18nProvider";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin", "cyrillic"] });
 
 export const metadata: Metadata = {
   title: "LiteLLM Dashboard",
