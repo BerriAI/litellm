@@ -40,6 +40,7 @@ from litellm.types.utils import (
 
 BLOCK_MESSAGE = "Blocked by policy: this response was withheld."
 ORIGINAL_MARKER = "ORIGINAL-SECRET-ANSWER"
+REDACTED_MARKER = "[REDACTED]"
 TOOL_ARGUMENTS_MARKER = "TOOL-ARGS-SECRET"
 
 
@@ -72,6 +73,19 @@ class _PassingGuardrail(CustomGuardrail):
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
         return inputs
+
+
+class _RewritingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=[text.replace(ORIGINAL_MARKER, REDACTED_MARKER) for text in inputs.get("texts", [])]
+        )
 
 
 class _CountingPassingGuardrail(_PassingGuardrail):
@@ -384,9 +398,12 @@ async def _replay(events: List[dict]) -> AsyncGenerator[dict, None]:
         yield event
 
 
-async def _run_windowed_responses(guardrail: CustomGuardrail, events: List[dict]) -> str:
+async def _run_windowed_responses(
+    guardrail: CustomGuardrail, events: List[dict], end_of_stream_only: bool = False
+) -> str:
     guardrail.streaming_buffer_until_moderated = True
     guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_end_of_stream_only = end_of_stream_only
     guardrail.streaming_sampling_rate = 2
     unified = UnifiedLLMGuardrails()
     user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/responses")
@@ -456,6 +473,29 @@ async def test_buffered_clean_releases_all_content():
         raw.rstrip().endswith('event: message_stop\ndata: {"type": "message_stop"}'.rstrip()) or "message_stop" in raw
     )
     assert BLOCK_MESSAGE not in raw
+
+
+@pytest.mark.asyncio
+async def test_buffered_clean_releases_rewritten_chat_content():
+    guardrail = _RewritingGuardrail(guardrail_name="redactor", event_hook="post_call")
+
+    collected, _ = await _run_windowed(guardrail, [ORIGINAL_MARKER], end_of_stream_only=True)
+    text = _chat_text(collected)
+
+    assert ORIGINAL_MARKER not in text
+    assert text == REDACTED_MARKER
+
+
+@pytest.mark.asyncio
+async def test_buffered_clean_releases_rewritten_responses_content():
+    guardrail = _RewritingGuardrail(guardrail_name="responses-redactor", event_hook="post_call")
+
+    raw = await _run_windowed_responses(
+        guardrail, _responses_message_stream_events([ORIGINAL_MARKER]), end_of_stream_only=True
+    )
+
+    assert ORIGINAL_MARKER not in raw
+    assert REDACTED_MARKER in raw
 
 
 @pytest.mark.asyncio
