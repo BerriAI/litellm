@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import without
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
@@ -95,6 +96,14 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
             "ocr health check documents are resolved by the Rust extension, which is not available"
         )
     return native(model, custom_llm_provider)
+
+
+def _responses_probe_params(model_params: Mapping[str, object]) -> Mapping[str, object]:
+    max_tokens: Final = model_params.get("max_tokens")
+    params: Final = without(model_params, "max_tokens")
+    if max_tokens is None or params.get("max_output_tokens") is not None:
+        return params
+    return {**params, "max_output_tokens": max_tokens}
 
 
 def _provider_base_model(custom_llm_provider: str, model: str) -> str | None:
@@ -372,7 +381,7 @@ class HealthCheckHelpers:
                 filtered_model_params=_filter_model_params(model_params=model_params),
             ),
             "responses": lambda: litellm.aresponses(
-                **_filter_model_params(model_params=model_params),
+                **_responses_probe_params(_filter_model_params(model_params=model_params)),
                 input=prompt or "test",
             ),
             "anthropic_messages": lambda: litellm.anthropic_messages(
