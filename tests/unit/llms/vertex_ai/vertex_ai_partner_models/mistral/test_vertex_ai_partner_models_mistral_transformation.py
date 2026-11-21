@@ -182,7 +182,12 @@ def _tool_call(tool_call_id: str | None, name: str) -> dict[str, object]:
     return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
 
 
-def test_mistral_chat_sends_replayed_tool_call_ids_as_nine_alphanumeric_characters(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "model", ["vertex_ai/mistral-large-2411", "vertex_ai/mistral-large@2407", "vertex_ai/mistral-large-3"]
+)
+def test_mistral_chat_sends_replayed_tool_call_ids_as_nine_alphanumeric_characters(
+    model: str, monkeypatch: pytest.MonkeyPatch
+):
     replayed_ids: Final = ("call_u0U86kcRTK484QKTyPKASCeg", "call_abc123", "toolu_01ABCdef", "D681PevKs")
     messages: Final = [
         {"role": "user", "content": "Weather and time in Paris?"},
@@ -198,7 +203,7 @@ def test_mistral_chat_sends_replayed_tool_call_ids_as_nine_alphanumeric_characte
 
     def send(transport: httpx.MockTransport, _: pytest.MonkeyPatch) -> None:
         litellm.completion(
-            model="vertex_ai/mistral-large-2411",
+            model=model,
             messages=messages,
             vertex_location="us-central1",
             client=HTTPHandler(client=httpx.Client(transport=transport)),
