@@ -9929,7 +9929,11 @@ def check_and_merge_model_level_guardrails(
         # Pass team_id so team-scoped public model names resolve the same way
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
-        deployments: Final = llm_router.registry().deployments(model_name=alias, team_id=team_id) or []
+        from litellm.proxy.auth.auth_checks import deployments_routed_by_litellm_model
+
+        deployments: Final = llm_router.registry().deployments(
+            model_name=alias, team_id=team_id
+        ) or deployments_routed_by_litellm_model(alias, llm_router, team_id if isinstance(team_id, str) else None)
         seen: Final[set] = set()
         union: Final[list] = []
         for dep in deployments:

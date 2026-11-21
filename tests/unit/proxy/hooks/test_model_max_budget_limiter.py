@@ -653,6 +653,50 @@ async def test_an_entry_named_after_a_global_alias_still_governs_that_alias(monk
         await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-4-8")
 
 
+NAMESAKE_MODEL: Final = "openai/namesake-raw"
+
+
+def _router_with_namesakes() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "chat-a",
+                "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"},
+                "model_info": {"access_groups": ["namesake-group"]},
+            },
+            {"model_name": "chat-b", "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"}},
+            {"model_name": "chat-c", "litellm_params": {"model": "openai/other-raw", "api_key": "sk-test"}},
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budget_entry", "governed_name", "other_name"),
+    [("chat-a", "chat-a", "chat-b"), ("chat-b", "chat-b", "chat-a"), ("namesake-group", "chat-a", "chat-b")],
+)
+async def test_an_entry_on_a_public_name_or_access_group_gates_and_charges_requests_by_its_litellm_model(
+    monkeypatch: pytest.MonkeyPatch, budget_entry: str, governed_name: str, other_name: str
+):
+    router: Final = _router_with_namesakes()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(),
+        model_access_groups=lambda model, team_id: model_access_groups_of(router=router, model=model, team_id=team_id),
+        shared_windows=_WindowSpendDatabase().replica(),
+    )
+    budget: Final = {budget_entry: FAMILY_CAP}
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=NAMESAKE_MODEL)
+
+    await _spend_on(limiter, model=NAMESAKE_MODEL, model_max_budget=budget)
+
+    for requested in (NAMESAKE_MODEL, governed_name):
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+    for requested in (other_name, "openai/other-raw"):
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
 @pytest.mark.asyncio
 async def test_a_model_added_to_the_access_group_later_is_covered_with_no_key_change():
     budget: Final = {OPUS_GROUP: FAMILY_CAP}

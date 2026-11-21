@@ -177,9 +177,14 @@ def model_access_groups_of(router: "Router", model: str, team_id: str | None = N
 
     An entry with that name already budgets that model, so reading it as the group too would quietly widen it.
     """
+    from litellm.proxy.auth.auth_checks import access_groups_of_deployments_routed_by_litellm_model
+
     return frozenset(
         group
-        for group in router.registry().access_groups(model_name=model, team_id=team_id)
+        for group in (
+            *router.registry().access_groups(model_name=model, team_id=team_id),
+            *access_groups_of_deployments_routed_by_litellm_model(model, router, team_id),
+        )
         if group not in router.registry().names(kind="group_set")
     )
 
@@ -597,9 +602,10 @@ def _budget_model_candidates(model: str) -> tuple[str, ...]:
     cross-region ``us.anthropic.claude-opus-4-8``), or on the bare family name
     that Bedrock id shares with its direct-provider twin (``claude-opus-4-8``).
     A ``router_settings.model_group_alias`` name is also governed by every name
-    that budgets the model group it routes to, after the names of its own.
+    that budgets the model group it routes to, after the names of its own, and a deployment's
+    ``litellm_params.model`` that routing serves directly by every public name of the deployments behind it.
     """
-    names: Final = (model, *_aliased_model_group(model))
+    names: Final = (model, *_aliased_model_group(model), *_namesake_public_names(model))
     return tuple(dict.fromkeys(itertools.chain.from_iterable(_own_name_candidates(name) for name in names)))
 
 
@@ -613,6 +619,13 @@ def _aliased_model_group(model: str) -> tuple[str, ...]:
         return ()
     target: Final = resolve_model_group_alias(router.registry().aliases(), model)
     return () if target is None else (target,)
+
+
+def _namesake_public_names(model: str) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import public_model_names_of_deployments_routed_by_litellm_model
+
+    router: Final = _proxy_router()
+    return () if router is None else public_model_names_of_deployments_routed_by_litellm_model(model, router, None)
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:

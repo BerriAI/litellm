@@ -367,6 +367,15 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     return resolve_model_group_alias(llm_router.registry().aliases(), model)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
 
 
+def _resolve_namesake_models_via_proxy_router(model: str) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import public_model_names_of_deployments_routed_by_litellm_model
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return ()
+    return public_model_names_of_deployments_routed_by_litellm_model(model, llm_router, None)
+
+
 def _resolve_counted_models_via_proxy_router(model: str, team_id: str | None) -> Sequence[str]:
     from litellm.proxy.proxy_server import llm_router
 
@@ -1140,6 +1149,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        namesake_models_resolver: Callable[[str], tuple[str, ...]] = _resolve_namesake_models_via_proxy_router,
         counted_models_resolver: Callable[[str, str | None], Sequence[str]] = _resolve_counted_models_via_proxy_router,
         media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
         ptu_team_ceiling_resolver: Callable[
@@ -1153,6 +1163,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         self.time_provider = time_provider or datetime.now
         self.tag_rate_limit_resolver = tag_rate_limit_resolver
         self.model_group_resolver = model_group_resolver
+        self.namesake_models_resolver = namesake_models_resolver
         self.counted_models_resolver = counted_models_resolver
         self.media_model_resolver = media_model_resolver
         self.ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
@@ -1729,6 +1740,10 @@ def rate_limited_model(limiter: ParallelRequestLimiterHook, requested_model: str
     )
 
 
+def rate_limit_candidates(limiter: ParallelRequestLimiterHook, model: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*expand_model_latest_alias(model), *limiter.namesake_models_resolver(model))))
+
+
 def _rate_limited_models(
     limiter: ParallelRequestLimiterHook, model: RateLimitedModel | None
 ) -> tuple[RateLimitedModel, ...]:
@@ -1738,7 +1753,7 @@ def _rate_limited_models(
         model,
         *(
             target
-            for candidate in expand_model_latest_alias(model.requested)[1:]
+            for candidate in rate_limit_candidates(limiter, model.requested)[1:]
             if (target := rate_limited_model(limiter, candidate)) is not None
         ),
     )

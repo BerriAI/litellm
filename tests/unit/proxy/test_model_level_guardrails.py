@@ -663,3 +663,34 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
     # guardrail already merged in. Before the fix, this assertion fails
     # because pre_call_hook saw the original data without merge.
     assert "my-pre-call-guardrail" in captured_pre_call_guardrails
+
+
+@pytest.mark.parametrize(
+    "requested,expected",
+    [
+        ("openai/namesake-raw", ["guard-a", "guard-b"]),
+        ("chat-a", ["guard-a"]),
+        ("openai/collides", ["guard-public"]),
+        ("openai/unserved", None),
+    ],
+)
+def test_pre_call_lookup_attaches_the_guardrails_of_every_deployment_a_litellm_model_routes_to(requested, expected):
+    from litellm import Router
+
+    def deployment(name: str, model: str, guardrail: str) -> dict:
+        return {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-test", "guardrails": [guardrail]}}
+
+    router = Router(
+        model_list=[
+            deployment("chat-a", "openai/namesake-raw", "guard-a"),
+            deployment("chat-b", "openai/namesake-raw", "guard-b"),
+            deployment("openai/collides", "openai/public-raw", "guard-public"),
+            deployment("chat-c", "openai/collides", "guard-hidden"),
+        ]
+    )
+
+    result = check_and_merge_model_level_guardrails(
+        data={"model": requested, "metadata": {}}, llm_router=router, trust_client_model_info=False
+    )
+
+    assert result["metadata"].get("guardrails") == expected

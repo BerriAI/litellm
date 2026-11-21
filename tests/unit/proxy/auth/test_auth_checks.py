@@ -54,6 +54,7 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_user_object,
     is_model_cost_zero,
+    public_model_names_of_deployments_routed_by_litellm_model,
     virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
@@ -3052,3 +3053,23 @@ def test_a_litellm_model_name_is_served_by_the_access_groups_of_its_own_deployme
     requested: str | tuple[str, ...], served_by: set[str]
 ) -> None:
     assert _model_access_groups_serving_model(requested, _namesake_router(), team_id=None) == served_by
+
+
+@pytest.mark.parametrize(
+    "requested,team_id,public_names",
+    [
+        ("openai/shared-raw", None, ("shared-a", "shared-b")),
+        ("openai/team-raw", "team-1", ("team-public",)),
+        ("openai/team-2-grouped-raw", "team-2", ("model_name_team-2_grouped",)),
+        ("openai/routed-elsewhere", None, ()),
+        ("granted-public", None, ()),
+        ("openai/unknown", None, ()),
+    ],
+)
+def test_a_litellm_model_name_resolves_to_the_public_names_of_the_deployments_routing_serves_it_from(
+    requested: str, team_id: str | None, public_names: tuple[str, ...]
+) -> None:
+    assert (
+        public_model_names_of_deployments_routed_by_litellm_model(requested, _namesake_router(), team_id)
+        == public_names
+    )

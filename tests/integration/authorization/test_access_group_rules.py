@@ -4,13 +4,14 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import httpx
 import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from litellm.proxy.mcp_server.idp_token_exchange import REJECTED_SUBJECT_TOKEN
-from tests.integration._support.client import Gateway, string_value
+from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
@@ -271,3 +272,68 @@ def test_restricted_callers_reach_a_deployment_by_its_litellm_model_only_when_ev
             for (_, response), (*_, status) in zip(observed, rows)
             if status == 403
         ), [response.text for _, response in observed]
+
+
+def _chat(gateway: Gateway, model: str, key: str, text: str = "raw deployment name control") -> httpx.Response:
+    return gateway.request(
+        "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": text}]}, key=key
+    )
+
+
+@pytest.mark.parametrize("first_call_by", ("model_name", "litellm_model"))
+def test_key_model_rpm_limit_on_the_public_name_counts_requests_by_the_litellm_model(
+    gateway: Gateway, first_call_by: str
+) -> None:
+    with gateway.scenario() as scenario:
+        litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+        public_name: Final = scenario.model(model=litellm_model)
+        key: Final = scenario.key(models=[public_name], model_rpm_limit={public_name: 1})
+        first_model, second_model = (
+            (public_name, litellm_model) if first_call_by == "model_name" else (litellm_model, public_name)
+        )
+        served: Final = _chat(gateway, first_model, key)
+        assert served.status_code == 200, served.text
+        refused: Final = _chat(gateway, second_model, key)
+        assert refused.status_code == 429, refused.text
+        assert "model_per_key" in refused.text, refused.text
+
+
+def test_model_level_during_call_guardrail_runs_for_a_request_by_the_deployment_litellm_model(gateway: Gateway) -> None:
+    forbidden: Final = f"forbidden{uuid.uuid4().hex}"
+    created: Final = gateway.post(
+        "/guardrails",
+        {
+            "guardrail": {
+                "guardrail_name": f"raw-name-filter-{uuid.uuid4().hex}",
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "during_call",
+                    "default_on": False,
+                    "blocked_words": [{"keyword": forbidden, "action": "BLOCK"}],
+                },
+            }
+        },
+    )
+    try:
+        with gateway.scenario() as scenario:
+            litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+            public_name: Final = scenario.model(
+                model=litellm_model, guardrails=[string_value(created["guardrail_name"])]
+            )
+            key: Final = scenario.key(models=[public_name])
+            outcomes: Final = tuple(
+                eventually(
+                    lambda model=model: _chat(gateway, model, key, f"say {forbidden}"),
+                    lambda response: response.status_code != 200,
+                    seconds=30,
+                    return_last_on_timeout=True,
+                )
+                for model in (public_name, litellm_model)
+            )
+            assert [(response.status_code, forbidden in response.text) for response in outcomes] == [
+                (400, True),
+                (400, True),
+            ], [response.text for response in outcomes]
+    finally:
+        deleted: Final = gateway.request("DELETE", f"/guardrails/{string_value(created['guardrail_id'])}")
+        assert deleted.status_code == 200, deleted.text

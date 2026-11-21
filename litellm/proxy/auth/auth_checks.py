@@ -5020,7 +5020,7 @@ def _deployment_granted(
     )
 
 
-def _deployments_routed_by_litellm_model(
+def deployments_routed_by_litellm_model(
     model: str, llm_router: Router, team_id: str | None
 ) -> tuple[DeploymentTypedDict, ...]:
     if not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
@@ -5032,15 +5032,31 @@ def _deployments_routed_by_litellm_model(
     )
 
 
-def _access_groups_of_deployments_routed_by_litellm_model(
+def access_groups_of_deployments_routed_by_litellm_model(
     model: str, llm_router: Router, team_id: str | None
 ) -> frozenset[str]:
     return frozenset[str]().union(
         *(
             deployment_access_groups(deployment)
-            for deployment in _deployments_routed_by_litellm_model(model, llm_router, team_id)
+            for deployment in deployments_routed_by_litellm_model(model, llm_router, team_id)
         )
     )
+
+
+def public_model_names_of_deployments_routed_by_litellm_model(
+    model: str, llm_router: Router, team_id: str | None
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(map(_public_model_name, deployments_routed_by_litellm_model(model, llm_router, team_id)))
+    )
+
+
+def _public_model_name(deployment: DeploymentTypedDict) -> str:
+    match deployment:
+        case {"model_info": {"team_public_model_name": str() as public_name}} if public_name:
+            return public_name
+        case _:
+            return deployment["model_name"]
 
 
 def _every_deployment_with_litellm_model_granted(
@@ -5052,7 +5068,7 @@ def _every_deployment_with_litellm_model_granted(
 ) -> bool:
     if not isinstance(llm_router, Router):
         return False
-    namesakes: Final = _deployments_routed_by_litellm_model(model, llm_router, team_id)
+    namesakes: Final = deployments_routed_by_litellm_model(model, llm_router, team_id)
     return any(llm_router.registry().includes(deployment, team_id=team_id) for deployment in namesakes) and all(
         _deployment_granted(deployment, llm_router, models, team_model_aliases, team_id) for deployment in namesakes
     )
@@ -5412,7 +5428,7 @@ def _model_access_groups_serving_model(
         for requested_model in requested
         for group in (
             *llm_router.registry().access_groups(model_name=requested_model, team_id=team_id),
-            *_access_groups_of_deployments_routed_by_litellm_model(requested_model, llm_router, team_id),
+            *access_groups_of_deployments_routed_by_litellm_model(requested_model, llm_router, team_id),
         )
     )
 
