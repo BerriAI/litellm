@@ -6848,3 +6848,57 @@ def test_chatgpt_model_configuration_reaches_role_authorization(
                 model="",
                 route=inference_route,
             )
+
+
+@pytest.mark.asyncio
+async def test_pre_db_read_auth_checks_admits_client_id_in_query_params_on_get(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"allow_client_side_credentials": False})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/MS_Office/upstream/authorize",
+            "headers": [],
+            "query_string": b"response_type=code&client_id=test-client",
+        }
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        populate_request_with_path_params,
+        safe_set_request_parsed_body,
+    )
+
+    safe_set_request_parsed_body(request=request, parsed_body={})
+    request_data: Final = populate_request_with_path_params(request_data={}, request=request)
+    await pre_db_read_auth_checks(
+        request=request,
+        request_data=request_data,
+        route="/MS_Office/upstream/authorize",
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_db_read_auth_checks_rejects_client_id_in_request_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"allow_client_side_credentials": False})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/MS_Office/upstream/authorize",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        populate_request_with_path_params,
+        safe_set_request_parsed_body,
+    )
+
+    body: Final = {"client_id": "test-client"}
+    safe_set_request_parsed_body(request=request, parsed_body=body)
+    request_data: Final = populate_request_with_path_params(request_data=dict(body), request=request)
+    with pytest.raises(ValueError, match="client_id is not allowed in request body"):
+        await pre_db_read_auth_checks(
+            request=request,
+            request_data=request_data,
+            route="/MS_Office/upstream/authorize",
+        )
