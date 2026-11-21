@@ -504,7 +504,8 @@ def test_transform_falls_back_to_sdk_embedding_without_executor_or_config(
 
     _, body = MilvusVectorStoreConfig().transform_search_vector_store_request(
         vector_store_id="book_2",
-    )
+        query="q",
+        vector_store_search_optional_params={},
         api_base="https://milvus.example",
         litellm_logging_obj=logging_obj,
         litellm_params={"litellm_embedding_model": "openai/text-embedding-3-small"},
