@@ -19,8 +19,11 @@ from typing import Final, TypeAlias
 from litellm.harness.errors import OutputInvalid
 from litellm.harness.evaluation.checks import run_check
 from litellm.harness.evaluation.types import (
+    AgentInput,
+    AgentOutput,
     CheckResult,
     CommandCheck,
+    EvalAgent,
     EvalRun,
     EvalScorecard,
     EvalStatus,
@@ -52,7 +55,7 @@ class _Settings:
 class _Outcome:
     status: EvalStatus
     detail: str
-    result: Result | None = None
+    result: Result | AgentOutput | None = None
     check: CheckResult | None = None
 
 
@@ -101,11 +104,14 @@ def _validate_files(files: Mapping[str, object]) -> None:
             raise TypeError("task file contents must be str or bytes")
 
 
-async def _validate_targets(targets: Sequence[EvalTarget], settings: _Settings) -> None:
+async def _validate_targets(targets: Sequence[EvalTarget | EvalAgent], settings: _Settings) -> None:
+    builtins: Final = tuple(target for target in targets if isinstance(target, EvalTarget))
+    if not builtins:
+        return
     with tempfile.TemporaryDirectory(prefix="litellm-eval-validate-") as directory:
         box: Final = local(directory)
         try:
-            for target in targets:
+            for target in builtins:
                 session = aagent_session(
                     target.harness,
                     sandbox=box,
@@ -162,13 +168,25 @@ async def _setup(task: EvalTask, box: Sandbox) -> str | None:
     return None
 
 
+def _custom_output(value: object) -> AgentOutput:
+    if not isinstance(value, AgentOutput):
+        raise TypeError("custom evaluation agents must return AgentOutput")
+    return value
+
+
 async def _agent_result(
     task: EvalTask,
-    target: EvalTarget,
+    target: EvalTarget | EvalAgent,
     box: Sandbox,
     metadata: Mapping[str, object],
     settings: _Settings,
-) -> Result:
+    trial: int,
+) -> Result | AgentOutput:
+    if isinstance(target, EvalAgent):
+        output: Final = await asyncio.wait_for(
+            target.run(AgentInput(task.id, task.prompt, box, trial, metadata)), timeout=settings.timeout
+        )
+        return _custom_output(output)
     pending: Final = aagent(
         target.harness,
         task.prompt,
@@ -187,16 +205,17 @@ async def _agent_result(
     return await pending
 
 
-def _failure(stage: str, error: Exception, result: Result | None = None) -> _Outcome:
+def _failure(stage: str, error: Exception, result: Result | AgentOutput | None = None) -> _Outcome:
     return _Outcome(EvalStatus.ERROR, f"{stage}: {type(error).__name__}: {error}", result)
 
 
 async def _execute(
     task: EvalTask,
-    target: EvalTarget,
+    target: EvalTarget | EvalAgent,
     box: Sandbox,
     metadata: Mapping[str, object],
     settings: _Settings,
+    trial: int,
 ) -> _Outcome:
     try:
         setup_error: Final = await asyncio.wait_for(_setup(task, box), timeout=settings.setup_timeout)
@@ -205,7 +224,7 @@ async def _execute(
     if setup_error is not None:
         return _Outcome(EvalStatus.ERROR, setup_error)
     try:
-        result: Final = await _agent_result(task, target, box, metadata, settings)
+        result: Final = await _agent_result(task, target, box, metadata, settings, trial)
     except OutputInvalid as error:
         return _failure("agent", error, error.result)
     except Exception as error:  # noqa: BLE001  # Harness failures must not abort sibling runs.
@@ -228,7 +247,7 @@ async def _execute(
         if isinstance(task.check, JudgeCheck):
             return replace(
                 failure,
-                check=CheckResult(False, failure.detail, judge_cost=None, error=failure.detail),
+                check=CheckResult(False, failure.detail, judge_usage=None, judge_cost=None, error=failure.detail),
             )
         return failure
     if checked.error is not None:
@@ -246,9 +265,10 @@ async def _close(box: Sandbox) -> str | None:
 
 async def _attempt(
     task: EvalTask,
-    target: EvalTarget,
+    target: EvalTarget | EvalAgent,
     metadata: Mapping[str, object],
     settings: _Settings,
+    trial: int,
 ) -> _Outcome:
     with tempfile.TemporaryDirectory(prefix="litellm-eval-") as directory:
         try:
@@ -257,7 +277,7 @@ async def _attempt(
         except Exception as error:  # noqa: BLE001  # Custom sandbox factories can raise arbitrary exceptions.
             return _failure("workspace", error)
         try:
-            outcome: Final = await _execute(task, target, box, metadata, settings)
+            outcome: Final = await _execute(task, target, box, metadata, settings, trial)
         finally:
             close_error: Final = await _close(box)
         return replace(outcome, status=EvalStatus.ERROR, detail=close_error) if close_error else outcome
@@ -265,7 +285,7 @@ async def _attempt(
 
 async def _run_attempt(
     task: EvalTask,
-    target: EvalTarget,
+    target: EvalTarget | EvalAgent,
     trial: int,
     suite_id: str,
     settings: _Settings,
@@ -283,7 +303,7 @@ async def _run_attempt(
         }
     )
     try:
-        outcome: Final = await _attempt(task, target, metadata, settings)
+        outcome: Final = await _attempt(task, target, metadata, settings, trial)
     except Exception as error:  # noqa: BLE001  # Workspace cleanup failures become error rows.
         failed: Final = _failure("workspace cleanup", error)
         return EvalRun(
@@ -312,7 +332,7 @@ async def _run_attempt(
 
 async def _run(
     task: EvalTask,
-    target: EvalTarget,
+    target: EvalTarget | EvalAgent,
     trial: int,
     suite_id: str,
     semaphore: asyncio.Semaphore,
@@ -324,7 +344,7 @@ async def _run(
 
 async def aagent_eval_attempt(
     task: EvalTask,
-    target: EvalTarget,
+    target: EvalTarget | EvalAgent,
     *,
     trial: int = 1,
     suite_id: str | None = None,
@@ -348,7 +368,7 @@ async def aagent_eval_attempt(
 
 async def aagent_eval(
     tasks: Sequence[EvalTask],
-    targets: Sequence[EvalTarget],
+    targets: Sequence[EvalTarget | EvalAgent],
     *,
     trials: int = 1,
     max_concurrency: int = 1,
@@ -393,7 +413,7 @@ async def aagent_eval(
 
 def agent_eval(
     tasks: Sequence[EvalTask],
-    targets: Sequence[EvalTarget],
+    targets: Sequence[EvalTarget | EvalAgent],
     *,
     trials: int = 1,
     max_concurrency: int = 1,
