@@ -225,11 +225,6 @@ def reject_unregistered_request_guardrails(
 
 
 def reject_unregistered_deployment_guardrails(guardrails: object) -> None:
-    from litellm.proxy.request_auth_context import REQUEST_AUTH
-
-    if REQUEST_AUTH.get() is None:
-        return
-
     from litellm.proxy.proxy_server import current_general_settings
 
     if reject_unregistered_guardrails_enabled(current_general_settings()):

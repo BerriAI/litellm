@@ -4392,7 +4392,12 @@ def _with_live_params(core: "RustCore", deployment: Mapping[str, object]) -> Map
 def _validate_deployment_guardrails(deployment: Mapping[str, object]) -> None:
     params: Final = as_str_mapping(deployment.get("litellm_params"))
     guardrails: Final = params.get("guardrails") if params is not None else None
-    if guardrails:
+    if not guardrails:
+        return
+
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    if REQUEST_AUTH.get() is not None:
         from litellm.proxy.guardrails.guardrail_helpers import reject_unregistered_deployment_guardrails
 
         reject_unregistered_deployment_guardrails(guardrails)
