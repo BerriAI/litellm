@@ -51,6 +51,14 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "bineric": {
+    "base_url": "https://api.bineric.com/v1",
+    "api_key_env": "BINERIC_API_KEY",
+    "api_base_env": "BINERIC_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
+  },
   "poe": {
     "base_url": "https://api.poe.com/v1",
     "api_key_env": "POE_API_KEY",

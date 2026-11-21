@@ -706,6 +706,7 @@ kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared mo
 streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
+bineric_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 vispark_models: Final[Set[str]] = set()
@@ -1007,6 +1008,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             resetdata_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
+        elif value.get("litellm_provider") == "bineric":
+            bineric_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1192,6 +1195,7 @@ model_list = list(
     | streamlake_models
     | resetdata_models
     | wally_models
+    | bineric_models
     | zerogpu_models
     | v0_models
     | vispark_models
@@ -1326,6 +1330,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "streamlake": streamlake_models,
         "resetdata": resetdata_models,
         "wally": wally_models,
+        "bineric": bineric_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "vispark": vispark_models,
@@ -1819,6 +1824,9 @@ if TYPE_CHECKING:
     )
     from .llms.empiriolabs.decisions.transformation import (
         EmpirioLabsDecisionsConfig as EmpirioLabsDecisionsConfig,
+    )
+    from .llms.bineric.decisions.transformation import (
+        BinericDecisionsConfig as BinericDecisionsConfig,
     )
     from .llms.eu_jev.decisions.transformation import (
         EuJevDecisionsConfig as EuJevDecisionsConfig,
