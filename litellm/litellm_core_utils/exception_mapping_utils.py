@@ -349,7 +349,9 @@ def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | 
         decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(message)))
     except ValueError:
         return None
-    relayed: Final = None if decoded is None else as_str_mapping(decoded.get("error"))
+    if decoded is None or decoded.get("type") == "error":
+        return None
+    relayed: Final = as_str_mapping(decoded.get("error"))
     return relayed if relayed is not None and isinstance(relayed.get("message"), str) else None
 
 
