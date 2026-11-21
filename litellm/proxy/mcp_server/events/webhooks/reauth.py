@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, TypeAlias
 
+from fastapi import HTTPException
+
 from litellm.proxy._types import LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import grant_allows
@@ -29,6 +31,7 @@ class Unavailable:
 
 Reauthorization: TypeAlias = Authorized | Revoked | Unavailable
 CallerLoader: TypeAlias = Callable[[SubscriptionRow], Awaitable[Reauthorization]]
+UserReloader: TypeAlias = Callable[[str], Awaitable[UserAPIKeyAuth]]
 
 
 def _key_revoked(key: UserAPIKeyAuth) -> bool:
@@ -37,15 +40,28 @@ def _key_revoked(key: UserAPIKeyAuth) -> bool:
     return bool(key.blocked) or expired
 
 
+async def _reload_live_user(user_id: str) -> UserAPIKeyAuth:
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    return await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
+
+
+async def admitted_user(user_id: str, reload: UserReloader = _reload_live_user) -> Reauthorization:
+    try:
+        return Authorized(await reload(user_id))
+    except HTTPException as error:
+        return Revoked("user") if error.status_code == 401 else Unavailable(str(error.detail))
+    except Exception as error:  # noqa: BLE001  # a transient lookup failure delays delivery instead of ending the subscription
+        return Unavailable(str(error))
+
+
 async def stored_caller(row: SubscriptionRow) -> Reauthorization:
     from litellm.proxy.auth.auth_checks import get_key_object
     from litellm.proxy.proxy_server import master_key, prisma_client, proxy_logging_obj, user_api_key_cache
     from litellm.proxy.utils import hash_token
 
     if row.key_hash is None:
-        return (
-            Authorized(UserAPIKeyAuth(user_id=row.user_id, team_id=row.team_id)) if row.user_id else Revoked("caller")
-        )
+        return await admitted_user(row.user_id) if row.user_id else Revoked("caller")
     if isinstance(master_key, str) and row.key_hash == hash_token(master_key):
         return Authorized(UserAPIKeyAuth(api_key=row.key_hash, user_role=LitellmUserRoles.PROXY_ADMIN))
     try:

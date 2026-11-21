@@ -6,7 +6,14 @@ import pytest
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.mcp_server.events.access import EventGrant, grant_allows, intersect_grants, principal_of
+from litellm.proxy.mcp_server.events.access import (
+    EventGrant,
+    grant_allows,
+    intersect_grants,
+    principal_of,
+    stored_key_hash,
+)
+from litellm.types.proxy.auth.user_api_key_auth import hash_token
 
 
 def _identity(permissions: Mapping[str, Sequence[str]]) -> Mapping[str, Sequence[str]]:
@@ -60,3 +67,37 @@ def test_event_grants_intersect_across_levels(
 )
 def test_grant_allows(grant: EventGrant, name: str, allowed: bool) -> None:
     assert grant_allows(grant, name) is allowed
+
+
+_JWT_A: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJlLWE"
+_JWT_B: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiaWF0IjoyfQ.c2lnbmF0dXJlLWI"
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "same"),
+    (
+        (UserAPIKeyAuth(api_key="sk-a"), UserAPIKeyAuth(api_key="sk-a", user_id="u"), True),
+        (UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), UserAPIKeyAuth(api_key=_JWT_B, user_id="u"), True),
+        (UserAPIKeyAuth(user_id="u"), UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), True),
+        (UserAPIKeyAuth(api_key="sk-a"), UserAPIKeyAuth(api_key="sk-b"), False),
+        (UserAPIKeyAuth(user_id="u1"), UserAPIKeyAuth(user_id="u2"), False),
+    ),
+)
+def test_the_principal_survives_token_refresh_and_tracks_the_database_key(
+    first: UserAPIKeyAuth, second: UserAPIKeyAuth, same: bool
+) -> None:
+    assert (principal_of(first) == principal_of(second)) is same
+
+
+@pytest.mark.parametrize(
+    ("caller", "key_hash"),
+    (
+        (UserAPIKeyAuth(api_key="sk-a", user_id="u"), hash_token("sk-a")),
+        (UserAPIKeyAuth(api_key=_JWT_A, user_id="u"), None),
+        (UserAPIKeyAuth(api_key="custom-raw-secret", user_id="u"), None),
+        (UserAPIKeyAuth(user_id="u"), None),
+        (None, None),
+    ),
+)
+def test_only_database_keys_are_stored_as_key_hashes(caller: UserAPIKeyAuth | None, key_hash: str | None) -> None:
+    assert stored_key_hash(caller) == key_hash

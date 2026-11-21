@@ -8,7 +8,7 @@ from mcp.shared.exceptions import MCPError
 from pydantic import ValidationError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
-from litellm.proxy.mcp_server.events.access import principal_of, token_hash
+from litellm.proxy.mcp_server.events.access import principal_of, stored_key_hash
 from litellm.proxy.mcp_server.events.admission import admit, binding_for, check_routing_headers
 from litellm.proxy.mcp_server.events.catalog import PreparedEvent, prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
@@ -114,7 +114,7 @@ def _new_row(
     return SubscriptionRow(
         id=sid,
         principal=request.principal,
-        key_hash=token_hash(caller.api_key) if caller is not None and caller.api_key else None,
+        key_hash=stored_key_hash(caller),
         user_id=caller.user_id if caller is not None else None,
         team_id=caller.team_id if caller is not None else None,
         server_id=prepared.resolved.target.server.server_id,

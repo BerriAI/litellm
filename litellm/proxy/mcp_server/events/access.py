@@ -12,15 +12,17 @@ EventGrant: TypeAlias = frozenset[str] | None
 _TOKEN_HASH: Final = re.compile(r"[0-9a-f]{64}")
 
 
-def token_hash(api_key: str) -> str:
-    return api_key if _TOKEN_HASH.fullmatch(api_key) else hashlib.sha256(api_key.encode()).hexdigest()
+def stored_key_hash(caller: UserAPIKeyAuth | None) -> str | None:
+    token: Final = caller.token if caller is not None else None
+    return token if token is not None and _TOKEN_HASH.fullmatch(token) else None
 
 
 def principal_of(caller: UserAPIKeyAuth | None) -> str | None:
     if caller is None:
         return None
-    if caller.api_key:
-        return "key:" + token_hash(caller.api_key)
+    key: Final = stored_key_hash(caller)
+    if key is not None:
+        return "key:" + key
     if caller.user_id:
         return "user:" + hashlib.sha256(caller.user_id.encode()).hexdigest()
     return None
