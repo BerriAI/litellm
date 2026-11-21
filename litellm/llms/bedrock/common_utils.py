@@ -1205,7 +1205,7 @@ _get_all_bedrock_regions = get_all_bedrock_regions
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
     """Abbreviations of regions AWS Bedrock supports for cross region inference."""
-    return ["global", "us", "eu", "apac", "jp", "au", "ca", "in", "us-gov"]
+    return ["global", "us", "eu", "apac", "jp", "au", "ca", "us-gov"]
 
 
 def extract_model_name_from_bedrock_arn(model: str) -> str:

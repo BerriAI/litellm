@@ -522,9 +522,13 @@ def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
     )
 
 
+_CROSS_REGION_GEOS_THE_SHARED_LIST_LACKS: Final = ("in",)
+
+
 def _cross_region_profile_geo(model_id: str) -> str | None:
     geo: Final = model_id.partition(".")[0]
-    return geo if geo in get_bedrock_cross_region_inference_regions() else None
+    known_geos: Final = (*get_bedrock_cross_region_inference_regions(), *_CROSS_REGION_GEOS_THE_SHARED_LIST_LACKS)
+    return geo if geo in known_geos else None
 
 
 def _partition_serving_geo(geo: str) -> str:
