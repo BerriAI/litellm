@@ -125,6 +125,7 @@ class KeysManagementClient:
         budget_id: str | None = None,
         config: Mapping[str, object] | None = None,
         return_request: bool = False,
+        max_budget: float | None = None,
     ) -> object | requests.Request:
         """
         Generate an API key based on the provided data.
@@ -134,7 +135,7 @@ class KeysManagementClient:
         Args:
             models (Optional[List[str]]): List of allowed models for this key
             aliases (Optional[Dict[str, str]]): Model alias mappings
-            spend (Optional[float]): Maximum spend limit for this key
+            spend (Optional[float]): Spend already recorded on the key when it is created. This is not a limit
             duration (Optional[str]): Duration for which the key is valid (e.g. "24h", "7d")
             key_alias (Optional[str]): Alias/name for the key for easier identification
             team_id (Optional[str]): Team ID to associate the key with
@@ -142,6 +143,7 @@ class KeysManagementClient:
             budget_id (Optional[str]): Budget ID to associate the key with
             config (Optional[Dict[str, Any]]): Additional configuration parameters
             return_request (bool): If True, returns the prepared request object instead of executing it
+            max_budget (Optional[float]): Maximum spend limit for this key
 
         Returns:
             Union[Dict[str, Any], requests.Request]: Either the response from the server or
@@ -160,6 +162,8 @@ class KeysManagementClient:
             data["aliases"] = aliases
         if spend is not None:
             data["spend"] = spend
+        if max_budget is not None:
+            data["max_budget"] = max_budget
         if duration is not None:
             data["duration"] = duration
         if key_alias is not None:
