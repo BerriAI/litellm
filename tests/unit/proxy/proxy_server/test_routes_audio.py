@@ -432,26 +432,50 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
     assert len(response.content) > 0
 
 
+_PROVIDER_API_BASE: Final = "https://transcription-provider.example/v1"
 _SUBTITLES: Final = "1\n00:00:00,000 --> 00:00:02,000\nGrüße, 世界\n\n"
 
 
 @pytest.fixture
-def patched_transcription_formats(monkeypatch: pytest.MonkeyPatch, patched_transcription: None) -> None:
+def patched_transcription_formats(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, patched_transcription: None
+) -> None:
     monkeypatch.setattr(proxy_server, "get_form_data", get_form_data)
     proxy_server.proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
         return_value={"x-callback-trace": "callback-value"}
     )
 
-    async def _transcribe(data: Mapping[str, object], **kwargs: object) -> TranscriptionResponse:
-        body: Final = {"text": "hello world\n", "srt": _SUBTITLES, "vtt": f"WEBVTT\n\n{_SUBTITLES}"}
-        response: Final = TranscriptionResponse(text=body.get(str(data.get("response_format")), "hello world"))
-        response.hidden_params = {"litellm_call_id": "transcription-call-id", "model_id": "transcription-model-id"}
-        return response
+    def _provider_reply(request: httpx.Request) -> httpx.Response:
+        bodies: Final = {"text": "hello world\n", "srt": _SUBTITLES, "vtt": f"WEBVTT\n\n{_SUBTITLES}"}
+        requested: Final = next(
+            (name for name in bodies if f'name="response_format"\r\n\r\n{name}\r\n'.encode() in request.content), None
+        )
+        if requested is None:
+            return httpx.Response(200, json={"text": "hello world"})
+        return httpx.Response(200, text=bodies[requested], headers={"content-type": "text/plain; charset=utf-8"})
 
-    async def _route_request(data: Mapping[str, object], **kwargs: object) -> Awaitable[TranscriptionResponse]:
-        return _transcribe(data)
-
-    monkeypatch.setattr(proxy_server, "route_request", _route_request)
+    respx_mock.post(url__startswith=_PROVIDER_API_BASE).mock(side_effect=_provider_reply)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "whisper-1",
+                    "litellm_params": {
+                        "model": "openai/whisper-1",
+                        "api_base": _PROVIDER_API_BASE,
+                        "api_key": "provider-key",
+                        "max_retries": 0,
+                    },
+                    "model_info": {"id": "transcription-model-id"},
+                }
+            ],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
@@ -477,7 +501,7 @@ def test_audio_transcription_text_formats_return_the_bare_body_as_plain_text(
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/plain; charset=utf-8"
     assert response.content == expected_body.encode("utf-8")
-    assert response.headers["x-litellm-call-id"] == "transcription-call-id"
+    assert response.headers["x-litellm-call-id"]
     assert response.headers["x-litellm-model-id"] == "transcription-model-id"
     assert response.headers["x-callback-trace"] == "callback-value"
 
@@ -501,7 +525,7 @@ def test_audio_transcription_json_formats_keep_the_json_body_and_headers(
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
     assert response.json()["text"] == "hello world"
-    assert response.headers["x-litellm-call-id"] == "transcription-call-id"
+    assert response.headers["x-litellm-model-id"] == "transcription-model-id"
     assert response.headers["x-callback-trace"] == "callback-value"
 
 
