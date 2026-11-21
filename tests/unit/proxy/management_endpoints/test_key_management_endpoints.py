@@ -18,7 +18,7 @@ from pydantic import JsonValue, ValidationError
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds, normalize_budget_window_start
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
@@ -54,12 +54,13 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheI
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    app_key_resource_cache_key,
     project_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     KeyProjectBindingError,
+    _advance_one_key_budget_window,
+    _window_with_reset_at,
     _can_user_query_key_info,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
@@ -113,6 +114,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -2207,6 +2209,19 @@ async def test_update_key_keeps_existing_budget_reset_when_the_duration_is_resen
     assert ("budget_reset_at" in updated) is moves_reset
 
 
+@pytest.mark.asyncio
+async def test_key_cap_edit_retains_an_existing_elapsed_schedule() -> None:
+    existing: Final = LiteLLM_VerificationToken(
+        token="hashed", max_budget=10, budget_duration="24h",
+        budget_reset_at=datetime(2099, 7, 16, 4, tzinfo=timezone.utc),
+    )
+    updated: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", max_budget=20, budget_duration="24h"), existing_key_row=existing
+    )
+
+    assert updated["max_budget"] == 20
+    assert "budget_reset_at" not in updated
+
 
 @pytest.mark.asyncio
 async def test_update_key_clears_end_user_budget_id_with_empty_string():
@@ -2670,7 +2685,6 @@ async def test_prepare_key_update_data_leaves_due_windows_for_the_reset_job() ->
     assert datetime.fromisoformat(windows["7d"]["reset_at"]) == stale_reset_at
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("writer", ["ordinary", "project", "soft_budget", "regeneration"])
 @pytest.mark.parametrize("sibling", [
@@ -2694,7 +2708,10 @@ async def test_key_window_writers_keep_committed_resets_without_merging_admin_ed
     )
     from litellm.proxy.utils import PrismaClient
 
-    original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
+    original: Final = {
+        "budget_duration": "1d", "max_budget": 10.0,
+        "reset_at": "2030-01-02T00:00:00+00:00", "window_start": "2030-01-01T00:00:00+00:00",
+    }
     siblings: Final = [sibling] if sibling is not None else []
     existing: Final = LiteLLM_VerificationToken(token="window-key", budget_limits=[original, *siblings])
     proposed: Final = [{**original, "max_budget": 50.0}, {
@@ -2705,6 +2722,7 @@ async def test_key_window_writers_keep_committed_resets_without_merging_admin_ed
     tx: Final = database.tx.return_value.__aenter__.return_value
     tx.query_raw = AsyncMock(return_value=[{"budget_limits": [{
         **original, "max_budget": current_cap, "reset_at": current_reset,
+        "window_start": (datetime.fromisoformat(current_reset) - timedelta(days=1)).isoformat(),
     }, *siblings]}])
     tx.litellm_verificationtoken.update = AsyncMock(return_value=existing)
     tx.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
@@ -2725,7 +2743,10 @@ async def test_key_window_writers_keep_committed_resets_without_merging_admin_ed
 
     write: Final = tx.litellm_verificationtoken.update_many if writer == "project" else tx.litellm_verificationtoken.update
     assert json.loads(write.call_args.kwargs["data"]["budget_limits"]) == [
-        {**proposed[0], "reset_at": expected_reset}, proposed[1],
+        {
+            **proposed[0], "reset_at": expected_reset,
+            "window_start": (datetime.fromisoformat(expected_reset) - timedelta(days=1)).isoformat(),
+        }, proposed[1],
     ]
     assert tx.query_raw.await_count == 1
     assert database.tx.return_value.__aexit__.await_count == 1
@@ -6140,8 +6161,8 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
     raw_key: Final = "sk-" + uuid4().hex
     hashed_token: Final = hash_token(raw_key)
     other_team_counter: Final = "spend:team:other-team"
-    resource_key: Final = app_key_resource_cache_key(hashed_token)
-    unrelated_resource_key: Final = app_key_resource_cache_key(hash_token("sk-other-owner"))
+    resource_key: Final = AuthObject.customer_app_key_resource(hashed_token).key
+    unrelated_resource_key: Final = AuthObject.customer_app_key_resource(hash_token("sk-other-owner")).key
     deleting_worker_cache: Final = UserApiKeyCache()
     peer_worker_cache: Final = UserApiKeyCache()
     peer_spend_counters: Final = InMemoryCache()
@@ -9121,7 +9142,7 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     assert persisted_windows[2] == {"max_budget": 20.0, "reset_at": "2020-01-01T00:00:00+00:00"}
     assert spend.memory[f"spend:key:{hashed_key}:window:1mo"] == 0.0
     persisted_reset_at = datetime.fromisoformat(persisted_windows[0]["reset_at"])
-    assert before_call + timedelta(days=1) <= persisted_reset_at <= after_call + timedelta(days=1)
+    assert normalize_budget_window_start(before_call) + timedelta(days=1) <= persisted_reset_at <= after_call + timedelta(days=1)
 
 
 @pytest.mark.asyncio
@@ -18534,62 +18555,21 @@ async def test_budget_limits_admin_unrestricted(monkeypatch):
     assert result is not None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_non_admin(monkeypatch, non_finite):
-    """A non-admin caller submitting a non-finite `budget_limits` window
-    gets 400. The finite-number invariant applies before role / ceiling
-    checks."""
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
-        None,
-        raising=False,
-    )
-    caller = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
-        user_id="user-1",
-        max_budget=10.0,
-    )
-    request = GenerateKeyRequest(
-        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await _common_key_generation_helper(
-            data=request,
-            user_api_key_dict=caller,
-            litellm_changed_by=None,
-            team_table=None,
-        )
-    assert exc_info.value.status_code == 400
-    assert "finite" in str(exc_info.value.detail)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
-async def test_budget_limits_window_non_finite_rejected_for_admin(monkeypatch, non_finite):
-    """The finite-number invariant applies to every caller including
-    proxy admin."""
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
-        None,
-        raising=False,
-    )
-    admin = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-        user_id="admin-1",
-    )
-    request = GenerateKeyRequest(
-        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await _common_key_generation_helper(
-            data=request,
-            user_api_key_dict=admin,
-            litellm_changed_by=None,
-            team_table=None,
-        )
-    assert exc_info.value.status_code == 400
-    assert "finite" in str(exc_info.value.detail)
+@pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize(
+    "windows",
+    [
+        [{"budget_duration": "1d", "max_budget": float("nan")}],
+        [{"budget_duration": "1d", "max_budget": float("inf")}],
+        [{"budget_duration": "1d", "max_budget": -1.0}],
+        [{"budget_duration": "5x", "max_budget": 1.0}],
+        [{"budget_duration": "1d", "max_budget": 1.0}, {"budget_duration": "1d", "max_budget": 2.0}],
+    ],
+    ids=["nan", "inf", "negative", "unsupported-duration", "duplicate-duration"],
+)
+def test_key_budget_windows_reject_invalid_windows(request_type, windows):
+    with pytest.raises(ValidationError):
+        request_type(key="sk-test", budget_limits=windows)
 
 
 @pytest.mark.asyncio
@@ -25264,18 +25244,47 @@ def test_public_key_requests_cannot_assign_the_server_owned_key_identity(
     assert "key_id" not in request.model_dump(exclude_unset=True)
 
 
-@pytest.mark.asyncio
-async def test_key_cap_edit_retains_an_existing_elapsed_schedule() -> None:
-    existing: Final = LiteLLM_VerificationToken(
-        token="hashed", max_budget=10, budget_duration="24h",
-        budget_reset_at=datetime(2099, 7, 16, 4, tzinfo=timezone.utc),
+@pytest.mark.parametrize(
+    "duration,now,expected_end",
+    (
+        ("30d", "2026-07-15T12:00:00Z", "2026-08-14T12:00:00Z"),
+        ("1mo", "2026-01-31T12:00:00Z", "2026-02-28T12:00:00Z"),
+        ("12mo", "2028-02-29T12:00:00Z", "2029-02-28T12:00:00Z"),
+        ("1d", "2026-03-07T17:00:00Z", "2026-03-08T17:00:00Z"),
+        ("1d", "2026-10-31T16:00:00Z", "2026-11-01T16:00:00Z"),
+        ("1h", "2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"),
+    ),
+)
+def test_manual_reset_keeps_its_exact_start_after_serialization(duration: str, now: str, expected_end: str) -> None:
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+    from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+
+    start: Final = datetime.fromisoformat(now)
+    reset: Final = _advance_one_key_budget_window({"budget_duration": duration, "max_budget": 1.0}, start)
+    stored: Final = BudgetLimitEntry.model_validate_json(json.dumps(reset))
+
+    assert stored.reset_at == datetime.fromisoformat(expected_end)
+    assert get_budget_window_start(stored, BudgetResetSettings(timezone="America/New_York")) == start
+    assert get_budget_window_start(stored, BudgetResetSettings(timezone="Asia/Kolkata")) == start
+
+
+@pytest.mark.parametrize("year", (2024, 2099))
+def test_editing_a_manually_reset_key_keeps_the_server_start(year: int) -> None:
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+
+    start: Final = datetime(year, 7, 15, 12, tzinfo=timezone.utc)
+    stored: Final = BudgetLimitEntry.model_validate(
+        _advance_one_key_budget_window({"budget_duration": "30d", "max_budget": 1.0}, start)
     )
-    updated: Final = await prepare_key_update_data(
-        data=UpdateKeyRequest(key="sk-1", max_budget=20, budget_duration="24h"), existing_key_row=existing
+    edited: Final = _window_with_reset_at(
+        {"budget_duration": "30d", "max_budget": 2.0, "window_start": "2100-01-01T00:00:00Z"}, (stored,)
     )
 
-    assert updated["max_budget"] == 20
-    assert "budget_reset_at" not in updated
+    assert edited["max_budget"] == 2.0
+    assert get_budget_window_start(edited) == start
+    assert datetime.fromisoformat(str(edited["reset_at"])) == stored.reset_at
 
 
 @pytest.mark.asyncio

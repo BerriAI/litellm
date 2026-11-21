@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_SpendLogs\" (\n    \"request_id\", \"call_type\", \"api_key\", \"spend\", \"total_tokens\", \"prompt_tokens\",\n    \"completion_tokens\", \"startTime\", \"endTime\", \"request_duration_ms\", \"completionStartTime\",\n    \"model\", \"model_id\", \"model_group\", \"custom_llm_provider\", \"api_base\", \"user\", \"metadata\",\n    \"cache_hit\", \"cache_key\", \"request_tags\", \"team_id\", \"organization_id\", \"end_user\",\n    \"requester_ip_address\", \"messages\", \"response\", \"session_id\", \"status\",\n    \"mcp_namespaced_tool_name\", \"billing_agent_id\", \"agent_id\", \"proxy_server_request\",\n    \"litellm_call_id\", \"created_at\", \"updated_at\"\n)\nSELECT\n    \"request_id\", \"call_type\", \"api_key\", \"spend\", \"total_tokens\", \"prompt_tokens\",\n    \"completion_tokens\", \"startTime\", \"endTime\", \"request_duration_ms\", \"completionStartTime\",\n    \"model\", \"model_id\", \"model_group\", \"custom_llm_provider\", \"api_base\", \"user\", \"metadata\",\n    \"cache_hit\", \"cache_key\", \"request_tags\", \"team_id\", \"organization_id\", \"end_user\",\n    \"requester_ip_address\", \"messages\", \"response\", \"session_id\", \"status\",\n    \"mcp_namespaced_tool_name\", \"billing_agent_id\", \"agent_id\", \"proxy_server_request\",\n    \"litellm_call_id\", \"created_at\", \"updated_at\"\nFROM jsonb_populate_recordset(NULL::\"LiteLLM_SpendLogs\", $1::jsonb)\nON CONFLICT DO NOTHING RETURNING request_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "request_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_SpendLogs\"",
+            "name": "request_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7c0ac67fe89f72ca4c051c73edbb79ae2affb46b7d53bad11e6c20a71c4f0f5a"
+}

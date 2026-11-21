@@ -101,18 +101,28 @@ impl SpendCounter {
         }
     }
 
+    /// The charges-only twin of a key, team, user, org or end user lifetime counter; `None` for any
+    /// other counter, which has no twin.
+    pub fn committed(self) -> Option<Self> {
+        matches!(
+            self,
+            Self::Key { window: None, .. }
+                | Self::Team { window: None, .. }
+                | Self::User(_)
+                | Self::Org(_)
+                | Self::EndUser(_)
+        )
+        .then(|| Self::Committed(Box::new(self)))
+    }
+
     pub fn parse(key: &str) -> Result<Self, NotASpendCounter> {
         let invalid = || NotASpendCounter(key.to_owned());
         let rest = key.strip_prefix("spend:").ok_or_else(invalid)?;
         if let Some(twin) = rest.strip_prefix("committed:") {
-            return match Self::parse(&format!("spend:{twin}")).map_err(|_| invalid())? {
-                counter @ (Self::Key { window: None, .. }
-                | Self::Team { window: None, .. }
-                | Self::User(_)
-                | Self::Org(_)
-                | Self::EndUser(_)) => Ok(Self::Committed(Box::new(counter))),
-                _ => Err(invalid()),
-            };
+            return Self::parse(&format!("spend:{twin}"))
+                .ok()
+                .and_then(Self::committed)
+                .ok_or_else(invalid);
         }
         let (scope, id) = rest.split_once(':').ok_or_else(invalid)?;
         if let Ok(scope) = scope.parse::<CustomerScope>() {
@@ -202,6 +212,27 @@ mod tests {
             SpendCounter::parse(key).expect("customer counter").key(),
             key
         );
+    }
+
+    #[rstest]
+    #[case::key("spend:key:k", Some("spend:committed:key:k"))]
+    #[case::team("spend:team:t", Some("spend:committed:team:t"))]
+    #[case::user("spend:user:u", Some("spend:committed:user:u"))]
+    #[case::org("spend:org:o", Some("spend:committed:org:o"))]
+    #[case::end_user("spend:end_user:e", Some("spend:committed:end_user:e"))]
+    #[case::key_window("spend:key:k:window:1d", None)]
+    #[case::user_window("spend:user_window:u:1d", None)]
+    #[case::tag("spend:tag:t", None)]
+    #[case::team_member("spend:team_member:u:t", None)]
+    fn committed_twins_exist_only_for_lifetime_entity_counters(
+        #[case] key: &str,
+        #[case] twin: Option<&str>,
+    ) {
+        let committed = SpendCounter::parse(key).unwrap().committed();
+        assert_eq!(committed.as_ref().map(SpendCounter::key).as_deref(), twin);
+        if let Some(twin) = twin {
+            assert_eq!(SpendCounter::parse(twin).ok(), committed);
+        }
     }
 
     #[rstest]

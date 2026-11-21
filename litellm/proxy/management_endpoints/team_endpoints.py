@@ -138,7 +138,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    get_budget_window_reset_fields,
+    keeps_budget_reset,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
@@ -2140,8 +2144,7 @@ async def new_team(
             initialized_windows: Final = []
             for window in complete_team_data.budget_limits:
                 w = window if isinstance(window, dict) else window.model_dump()
-                w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-                initialized_windows.append(w)
+                initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
             complete_team_data.budget_limits = initialized_windows
 
         ## Add Team Member Budget Table

@@ -104,6 +104,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     JWTMappingRow,
 )
 from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.proxy.rust_auth_stores import (
@@ -10315,11 +10316,7 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     """
     from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        app_cache_key,
-        app_key_resource_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     team = LiteLLM_TeamTable(
         team_id="team-doomed",
@@ -10356,12 +10353,12 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     peer_cache: Final = UserApiKeyCache()
     expected_keys: Final = (
         "hashed-doomed-key",
-        app_key_resource_cache_key("hashed-doomed-key"),
+        AuthObject.customer_app_key_resource("hashed-doomed-key").key,
         "team_id:team-doomed",
         "team_alias:doomed-team",
-        app_cache_key("team", "team-doomed"),
+        AuthObject.customer_app("team", "team-doomed").key,
     )
-    unrelated_key: Final = app_cache_key("team", "team-other")
+    unrelated_key: Final = AuthObject.customer_app("team", "team-other").key
     for worker_cache in (cache, peer_cache):
         for key in (*expected_keys, unrelated_key):
             worker_cache.set_cache(key=key, value="cached")
@@ -13605,6 +13602,35 @@ def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" not in updated_kv
+
+
+@pytest.mark.parametrize("saved_start", (None, "2026-07-15T12:00:00+00:00"))
+def test_team_cap_edit_preserves_legacy_and_saved_window_boundaries(saved_start: str | None) -> None:
+    from litellm.proxy._types import BudgetLimitEntry, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+    from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+
+    stored: Final = BudgetLimitEntry(
+        budget_duration="30d", max_budget=10,
+        reset_at=datetime(2026, 8, 14, 12, tzinfo=timezone.utc),
+        window_start=datetime.fromisoformat(saved_start) if saved_start is not None else None,
+    )
+    request: Final = UpdateTeamRequest(
+        team_id="test-team",
+        budget_limits=[BudgetLimitEntry(
+            budget_duration="30d", max_budget=20,
+            reset_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+            window_start=datetime(2098, 12, 1, tzinfo=timezone.utc),
+        )],
+    )
+    updated: Final[dict[str, object]] = {}
+    _set_budget_reset_at(request, updated, LiteLLM_TeamTable(team_id="test-team", budget_limits=[stored]))
+    windows: Final = json.loads(str(updated["budget_limits"]))
+
+    assert windows[0]["max_budget"] == 20
+    assert windows[0]["reset_at"] == stored.reset_at.isoformat()
+    assert windows[0].get("window_start") == saved_start
+    assert get_budget_window_start(windows[0]) == get_budget_window_start(stored.model_dump())
 
 
 def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
@@ -20241,3 +20267,25 @@ async def test_team_duration_edits_use_the_writers_current_schedule(
     persisted: Final = {**stored, **transaction.litellm_teamtable.update.call_args.kwargs["data"]}
     assert persisted["budget_duration"] == "45m"
     assert persisted["budget_reset_at"] == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("request_type", [NewTeamRequest, UpdateTeamRequest])
+@pytest.mark.parametrize(
+    "windows",
+    [
+        [{"budget_duration": "1d", "max_budget": -1.0}],
+        [{"budget_duration": "5x", "max_budget": 1.0}],
+        [{"budget_duration": "1d", "max_budget": 1.0}, {"budget_duration": "1d", "max_budget": 2.0}],
+    ],
+    ids=["negative", "unsupported-duration", "duplicate-duration"],
+)
+def test_team_budget_windows_reject_invalid_windows(request_type, windows):
+    with pytest.raises(ValidationError):
+        request_type(team_id="team-1", budget_limits=windows)
+
+
+def test_stored_team_windows_load_without_request_validation():
+    team = LiteLLM_TeamTable(
+        team_id="team-1", budget_limits=[{"budget_duration": "1d", "max_budget": -1.0}, {"budget_duration": "1d", "max_budget": 2.0}]
+    )
+    assert [window.max_budget for window in team.budget_limits or ()] == [-1.0, 2.0]
