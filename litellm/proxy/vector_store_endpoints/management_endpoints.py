@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final, Literal, overload
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedVectorStoresTable as _VectorStoreRow
@@ -25,6 +25,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -43,6 +44,8 @@ from litellm.repositories.table_repositories import ManagedVectorStoresRepositor
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreListResponse,
+    VectorStoreConnectionFailure,
+    VectorStoreConnectionSuccess,
     VectorStoreDeleteRequest,
     VectorStoreInfoRequest,
     VectorStoreUpdateRequest,
@@ -50,6 +53,8 @@ from litellm.types.vector_stores import (
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router: Final = APIRouter()
+
+CONNECTION_TEST_SUPPORTED_VECTOR_STORE_PROVIDERS: Final = frozenset({"milvus"})
 
 
 def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorStoreRow]":
@@ -155,6 +160,62 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
         )
         for key, value in fields.items()
     }
+
+
+def _parse_litellm_params(litellm_params: object) -> Mapping[str, object]:
+    if isinstance(litellm_params, str):
+        try:
+            parsed: Final = _DECODED_JSON.validate_python(json.loads(litellm_params))
+        except (TypeError, ValueError):
+            return {}
+        parsed_fields: Final = as_str_mapping(parsed)
+        return dict(parsed_fields) if parsed_fields is not None else {}
+    fields = as_str_mapping(litellm_params)
+    return dict(fields) if fields is not None else {}
+
+
+def _resolve_vector_store_connection_params(
+    litellm_params: object,
+    litellm_credential_name: str | None,
+) -> Mapping[str, object]:
+    credential_values: Final = (
+        CredentialAccessor.get_credential_values(litellm_credential_name) if litellm_credential_name else {}
+    )
+    return {
+        **_parse_litellm_params(litellm_params),
+        **(dict(credential_values) if credential_values else {}),
+    }
+
+
+async def _test_vector_store_connection_if_supported(
+    vector_store_id: str,
+    custom_llm_provider: str,
+    litellm_params: object,
+    litellm_credential_name: str | None,
+) -> None:
+    normalized_provider: Final = custom_llm_provider.lower()
+    if normalized_provider not in CONNECTION_TEST_SUPPORTED_VECTOR_STORE_PROVIDERS:
+        return
+
+    if normalized_provider == "milvus":
+        from litellm.llms.milvus.vector_stores.transformation import MilvusVectorStoreConfig
+
+        result: Final = await MilvusVectorStoreConfig().test_connection(
+            vector_store_id=vector_store_id,
+            litellm_params=_resolve_vector_store_connection_params(
+                litellm_params=litellm_params,
+                litellm_credential_name=litellm_credential_name,
+            ),
+        )
+        match result:
+            case VectorStoreConnectionSuccess():
+                return
+            case VectorStoreConnectionFailure(message=message):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unable to connect to {normalized_provider} vector store: {message}",
+                )
+        assert_never(result)
 
 
 async def _fetch_and_authorize_vector_store(
@@ -327,6 +388,13 @@ async def new_vector_store(
                 detail="vector_store_id and custom_llm_provider are required",
             )
         _raise_if_config_owned(vector_store_id)
+
+        await _test_vector_store_connection_if_supported(
+            vector_store_id=vector_store_id,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=vector_store.get("litellm_params"),
+            litellm_credential_name=vector_store.get("litellm_credential_name"),
+        )
 
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
@@ -662,7 +730,7 @@ async def update_vector_store(
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —
         # including stores belonging to other teams.
-        await _fetch_and_authorize_vector_store(
+        existing_vector_store: Final = await _fetch_and_authorize_vector_store(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -679,9 +747,32 @@ async def update_vector_store(
         # through the router at request time, so this row only ever stores
         # the user-supplied ``litellm_embedding_model`` reference.
         if "litellm_params" in update_data:
-            _input_litellm_params: Final[dict] = update_data.get("litellm_params", {}) or {}
-            litellm_params_dict: Final = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
+            existing_litellm_params: Final = _parse_litellm_params(existing_vector_store.get("litellm_params"))
+            submitted_litellm_params: Final = _parse_litellm_params(update_data.get("litellm_params"))
+            merged_litellm_params: Final = {**existing_litellm_params, **submitted_litellm_params}
+            litellm_params_dict: Final = GenericLiteLLMParams(**merged_litellm_params).model_dump(exclude_none=True)
             update_data["litellm_params"] = safe_dumps(litellm_params_dict)
+
+        effective_provider: Final = update_data.get("custom_llm_provider") or existing_vector_store.get(
+            "custom_llm_provider"
+        )
+        effective_litellm_params: Final = update_data.get("litellm_params") or existing_vector_store.get(
+            "litellm_params"
+        )
+        effective_credential_name: Final = (
+            update_data["litellm_credential_name"]
+            if "litellm_credential_name" in update_data
+            else existing_vector_store.get("litellm_credential_name")
+        )
+        if isinstance(effective_provider, str):
+            await _test_vector_store_connection_if_supported(
+                vector_store_id=vector_store_id,
+                custom_llm_provider=effective_provider,
+                litellm_params=effective_litellm_params,
+                litellm_credential_name=(
+                    effective_credential_name if isinstance(effective_credential_name, str) else None
+                ),
+            )
 
         # Update in database
         updated: Final = await _vector_store_table(prisma_client).update(

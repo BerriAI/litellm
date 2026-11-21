@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, CircleHelp, Lock } from "lucide-react";
-import { z } from "zod";
 import {
   vectorStoreInfoCall,
   vectorStoreUpdateCall,
@@ -14,7 +13,6 @@ import { getVectorStoreProviderLogoAndName } from "@/components/vector_store_pro
 import { Logo } from "@/components/molecules/logo/Logo";
 import VectorStoreTester from "./VectorStoreTester";
 import { toast } from "@/lib/toast";
-import i18n from "@/i18n/i18n";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -31,6 +29,13 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { credentialOptions } from "@/components/shared/credentialOptions";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
+import {
+  buildVectorStoreLitellmParams,
+  EMPTY_VECTOR_STORE_EDIT_VALUES,
+  toVectorStoreEditValues,
+  VectorStoreEditValues,
+  vectorStoreEditSchema,
+} from "./vector_store_info_utils";
 
 const DEFAULT_VECTOR_STORE_PROVIDER = "bedrock";
 
@@ -41,31 +46,6 @@ interface VectorStoreInfoViewProps {
   is_admin: boolean;
   editVectorStore: boolean;
 }
-
-const vectorStoreEditShape = {
-  vector_store_id: z.string().min(1, { error: () => i18n.t("vectorStores.info.errors.idRequired") }),
-  vector_store_name: z.string().nullish(),
-  vector_store_description: z.string().nullish(),
-  custom_llm_provider: z.string().min(1, { error: () => i18n.t("vectorStores.info.errors.providerRequired") }),
-  litellm_credential_name: z.string().nullable().optional(),
-};
-
-const vectorStoreEditSchema = z.object(vectorStoreEditShape);
-
-type VectorStoreEditValues = z.output<typeof vectorStoreEditSchema>;
-
-const EMPTY_VALUES: VectorStoreEditValues = {
-  vector_store_id: "",
-  custom_llm_provider: "",
-};
-
-const toFormValues = (vectorStore: VectorStore): VectorStoreEditValues => ({
-  vector_store_id: vectorStore.vector_store_id,
-  vector_store_name: vectorStore.vector_store_name,
-  vector_store_description: vectorStore.vector_store_description,
-  custom_llm_provider: vectorStore.custom_llm_provider ?? "",
-  litellm_credential_name: vectorStore.litellm_credential_name,
-});
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -85,7 +65,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   editVectorStore,
 }) => {
   const { t } = useTranslation();
-  const form = useZodForm(vectorStoreEditSchema, { defaultValues: EMPTY_VALUES });
+  const form = useZodForm(vectorStoreEditSchema, { defaultValues: EMPTY_VECTOR_STORE_EDIT_VALUES });
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStore | null>(null);
   const [loadFailed, setLoadFailed] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(editVectorStore);
@@ -111,7 +91,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         setMetadataString(JSON.stringify(metadata, null, 2));
       }
 
-      form.reset(toFormValues(response.vector_store));
+      form.reset(toVectorStoreEditValues(response.vector_store));
     } catch (error) {
       console.error("Error fetching vector store details:", error);
       toast.fromError(t("vectorStores.info.toasts.fetchFailed", { error: String(error) }));
@@ -136,7 +116,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 
   const startEditing = () => {
     if (vectorStoreDetails) {
-      form.reset(toFormValues(vectorStoreDetails));
+      form.reset(toVectorStoreEditValues(vectorStoreDetails));
     }
     setIsEditing(true);
   };
@@ -152,12 +132,16 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         return;
       }
 
+      const litellmParams = buildVectorStoreLitellmParams(values);
+
       const updateData = {
         vector_store_id: values.vector_store_id,
         custom_llm_provider: values.custom_llm_provider,
         vector_store_name: values.vector_store_name,
         vector_store_description: values.vector_store_description,
         vector_store_metadata: metadata,
+        litellm_credential_name: values.litellm_credential_name,
+        litellm_params: litellmParams,
       };
 
       await vectorStoreUpdateCall(accessToken, updateData);
@@ -286,7 +270,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                             "aria-invalid": ariaInvalid,
                             "aria-describedby": ariaDescribedBy,
                           }) => (
-                            <Select value={value} onValueChange={onChange}>
+                            <Select value={value} onValueChange={onChange} disabled>
                               <SelectTrigger
                                 id={id}
                                 aria-invalid={ariaInvalid}
@@ -318,6 +302,60 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                             </Select>
                           )}
                         </FormField>
+
+                        {vectorStoreDetails.custom_llm_provider?.toLowerCase() === "milvus" && (
+                          <>
+                            <FormField
+                              control={form.control}
+                              name="api_base"
+                              label={labelWithHint(
+                                t("vectorStores.providerFields.labels.apiBase"),
+                                t("vectorStores.providerFields.tooltips.milvus.apiBase"),
+                              )}
+                            >
+                              {({ ref, value, ...field }) => (
+                                <Input
+                                  {...field}
+                                  ref={ref}
+                                  value={value ?? ""}
+                                  placeholder="https://your-milvus-endpoint.com/"
+                                />
+                              )}
+                            </FormField>
+
+                            <FormField
+                              control={form.control}
+                              name="api_key"
+                              label={labelWithHint(
+                                t("vectorStores.providerFields.labels.apiKey"),
+                                t("vectorStores.providerFields.tooltips.milvus.apiKey"),
+                              )}
+                            >
+                              {({ ref, value, ...field }) => (
+                                <Input
+                                  {...field}
+                                  ref={ref}
+                                  value={value ?? ""}
+                                  type="password"
+                                  placeholder={t("vectorStores.info.edit.apiKeyPlaceholder")}
+                                />
+                              )}
+                            </FormField>
+
+                            <FormField
+                              control={form.control}
+                              name="embedding_model"
+                              label={labelWithHint(
+                                t("vectorStores.providerFields.labels.embeddingModel"),
+                                t("vectorStores.providerFields.tooltips.milvus.embeddingModel"),
+                              )}
+                            >
+                              {({ ref, value, ...field }) => (
+                                <Input {...field} ref={ref} value={value ?? ""} placeholder="text-embedding-3-small" />
+                              )}
+                            </FormField>
+                          </>
+                        )}
 
                         <p className="text-sm text-muted-foreground">{t("vectorStores.info.edit.credentialsHint")}</p>
 

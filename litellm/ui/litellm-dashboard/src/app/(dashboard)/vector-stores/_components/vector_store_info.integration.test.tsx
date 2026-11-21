@@ -69,15 +69,16 @@ describe("VectorStoreInfoView save payload", () => {
       vector_store_name: null,
       vector_store_description: null,
       vector_store_metadata: { tier: "gold" },
+      litellm_credential_name: "bedrock-prod",
+      litellm_params: undefined,
     });
   });
 
-  it("sends only the five editable keys and drops every server-only field", async () => {
+  it("sends editable fields and drops every server-only field", async () => {
     const user = userEvent.setup();
     renderView(true);
 
     const nameInput = await screen.findByDisplayValue("support-docs-store");
-    await user.clear(nameInput);
     fireEvent.change(nameInput, { target: { value: "renamed-store" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -89,17 +90,18 @@ describe("VectorStoreInfoView save payload", () => {
       vector_store_name: "renamed-store",
       vector_store_description: "Docs for support",
       vector_store_metadata: { tier: "gold" },
+      litellm_credential_name: "bedrock-prod",
+      litellm_params: undefined,
     });
   });
 
-  it("sends the same five keys when editing is entered from the details view", async () => {
+  it("sends the same editable keys when editing is entered from the details view", async () => {
     const user = userEvent.setup();
     renderView(false);
 
     const editButtons = await screen.findAllByRole("button", { name: "Edit Vector Store" });
     await user.click(editButtons[0]);
     const descriptionInput = await screen.findByDisplayValue("Docs for support");
-    await user.clear(descriptionInput);
     fireEvent.change(descriptionInput, { target: { value: "new description" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -110,10 +112,12 @@ describe("VectorStoreInfoView save payload", () => {
       vector_store_name: "support-docs-store",
       vector_store_description: "new description",
       vector_store_metadata: { tier: "gold" },
+      litellm_credential_name: "bedrock-prod",
+      litellm_params: undefined,
     });
   });
 
-  it("keeps the credential field out of the payload even after it is picked", async () => {
+  it("includes the selected credential in the update payload", async () => {
     const user = userEvent.setup();
     renderView(true);
 
@@ -124,13 +128,60 @@ describe("VectorStoreInfoView save payload", () => {
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await vi.waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
-    expect(Object.keys(savedPayload())).toStrictEqual([
-      "vector_store_id",
-      "custom_llm_provider",
-      "vector_store_name",
-      "vector_store_description",
-      "vector_store_metadata",
-    ]);
+    expect(savedPayload().litellm_credential_name).toBe("bedrock-prod");
+  });
+
+  it("edits Milvus settings without sending the redacted API key", async () => {
+    const user = userEvent.setup();
+    mockInfo.mockResolvedValue({
+      vector_store: {
+        ...serverRecord,
+        custom_llm_provider: "Milvus",
+        litellm_credential_name: undefined,
+        litellm_params: JSON.stringify({
+          api_base: "https://old.milvus.example",
+          api_key: "********",
+          litellm_embedding_model: "text-embedding-3-small",
+        }),
+      },
+    });
+    renderView(true);
+
+    const apiBase = await screen.findByDisplayValue("https://old.milvus.example");
+    fireEvent.change(apiBase, { target: { value: "https://new.milvus.example" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await vi.waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    expect(savedPayload().litellm_params).toStrictEqual({
+      api_base: "https://new.milvus.example",
+      litellm_embedding_model: "text-embedding-3-small",
+    });
+  });
+
+  it("sends a replacement Milvus API key when one is entered", async () => {
+    const user = userEvent.setup();
+    mockInfo.mockResolvedValue({
+      vector_store: {
+        ...serverRecord,
+        custom_llm_provider: "milvus",
+        litellm_credential_name: undefined,
+        litellm_params: {
+          api_base: "https://milvus.example",
+          api_key: "********",
+          litellm_embedding_model: "text-embedding-3-small",
+        },
+      },
+    });
+    renderView(true);
+
+    await screen.findByDisplayValue("https://milvus.example");
+    fireEvent.change(screen.getByPlaceholderText("Leave blank to keep the current API key"), {
+      target: { value: "new-secret" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await vi.waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    expect(savedPayload().litellm_params.api_key).toBe("new-secret");
   });
 
   it("blocks the request and reports invalid metadata JSON instead of saving", async () => {
@@ -138,7 +189,6 @@ describe("VectorStoreInfoView save payload", () => {
     renderView(true);
 
     const metadataInput = await screen.findByPlaceholderText('{"key": "value"}');
-    await user.clear(metadataInput);
     fireEvent.change(metadataInput, { target: { value: "not json" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
