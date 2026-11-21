@@ -118,8 +118,7 @@ class DeliveryWorker:
 
     async def process(self, delivery: QueuedDelivery) -> None:
         row: Final = await self._store.get(delivery.subscription_id)
-        paused: Final = row is not None and row.status == "suspended" and not _is_control(delivery)
-        if row is None or row.status in ("terminated", "pending") or self._expired(row) or paused:
+        if row is None or not self._deliverable(row, delivery):
             await self._store.finish(delivery.delivery_id, self._clock())
             return
         authorization: Final = await authorize_row(row, self._runtime, self._load_caller)
@@ -146,6 +145,12 @@ class DeliveryWorker:
             await self._store.finish(delivery.delivery_id, self._clock())
             return
         await self._send(context, outgoing)
+
+    def _deliverable(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
+        """Active and unexpired; a suspended subscription still gets its gap and terminated notices."""
+        if row.status in ("terminated", "pending") or self._expired(row):
+            return False
+        return row.status != "suspended" or _is_control(delivery)
 
     def _expired(self, row: SubscriptionRow) -> bool:
         return row.refresh_before is not None and row.refresh_before <= self._clock()
