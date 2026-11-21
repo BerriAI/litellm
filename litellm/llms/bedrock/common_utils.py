@@ -347,22 +347,40 @@ def _bedrock_native_output_flag(
 
     provider_model: Final = model if model.startswith(f"{custom_llm_provider}/") else f"{custom_llm_provider}/{model}"
     routed_model: Final = strip_bedrock_routing_prefix(model)
-    map_entries: Final = (
-        _model_cost_entry(provider_model),
-        _model_cost_entry(f"bedrock/{routed_model}"),
-        *_bedrock_price_map_entries(model),
+    region_path: Final = split_bedrock_region_path(model)[0] is not None
+    map_keys: Final = tuple(
+        dict.fromkeys(
+            (
+                provider_model,
+                f"bedrock/{routed_model}",
+                routed_model,
+                split_bedrock_region_path(routed_model)[1],
+            )
+        )
     )
-    default_flag: Final = next(
-        (
-            flag
-            for entry in map_entries
-            if entry is not None
-            and isinstance(flag := entry.get("supports_bedrock_native_structured_output_by_default"), bool)
-        ),
-        None,
+    map_entries: Final = tuple(_model_cost_entry(key) for key in map_keys)
+    mantle_route: Final = custom_llm_provider == "bedrock_mantle" or model.startswith(
+        ("bedrock/mantle/", "mantle/", "bedrock_mantle/")
     )
-    if isinstance(default_flag, bool):
-        return default_flag
+    for index, entry in enumerate(map_entries):
+        if entry is None:
+            continue
+        default_flag = entry.get("supports_bedrock_native_structured_output_by_default")
+        if default_flag is True:
+            return True
+        native_flag = entry.get("supports_native_structured_output")
+        if native_flag is True:
+            return True
+        if (
+            mantle_route
+            and entry.get("supports_forced_tool_use") is False
+            and entry.get("supports_bedrock_native_structured_output") is not False
+        ):
+            return None
+        if native_flag is False and region_path and map_keys[index] == f"bedrock/{routed_model}":
+            return False
+        if default_flag is False:
+            return False
     return True if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) else None
 
 

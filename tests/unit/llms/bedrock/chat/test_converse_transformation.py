@@ -12279,6 +12279,28 @@ def test_govcloud_fable_51_keeps_the_json_tool() -> None:
     assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("bedrock/us-gov-east-1/anthropic.claude-fable-5-1", id="bedrock-east"),
+        pytest.param("us-gov-east-1/anthropic.claude-fable-5-1", id="east"),
+        pytest.param("us-gov-west-1/anthropic.claude-fable-5-1", id="west"),
+    ],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_govcloud_fable_51_slash_region_routes_keep_the_json_tool(model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    model_cost_key: Final = model if model.startswith("bedrock/") else f"bedrock/{model}"
+    model_info: Final = litellm.model_cost[model_cost_key]
+    assert model_info["supports_bedrock_native_structured_output_by_default"] is False
+    monkeypatch.delitem(model_info, "supports_bedrock_native_structured_output_by_default")
+
+    assert bedrock_common_utils.bedrock_chat_uses_native_structured_output(model, "bedrock") is False
+    _, request = _converse_request_for_json_schema(model, False)
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+
+
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_deployment_native_output_opt_outs_keep_the_json_tool() -> None:
     model: Final = "us.anthropic.claude-sonnet-5-5"
