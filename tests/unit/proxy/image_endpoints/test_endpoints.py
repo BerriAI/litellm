@@ -3,7 +3,8 @@ import copy
 import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Final
+from unittest.mock import AsyncMock, MagicMock
 
 import orjson
 import pytest
@@ -12,10 +13,19 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.image_endpoints import endpoints
+from litellm.proxy.proxy_server import ProxyConfig
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.utils import ImageResponse
+from litellm.utils import custom_llm_setup
 
 
 @pytest.mark.asyncio
@@ -410,3 +420,79 @@ async def test_failure_before_the_provider_call_bills_the_callers_litellm_call_i
 
     assert raised.value.headers["x-litellm-call-id"] == call_id
     assert [data["litellm_call_id"] for data in hook_request_data] == [call_id]
+
+
+class _BilledThenFailingImageHandler(litellm.CustomLLM):
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        assert isinstance(logging_obj, LiteLLMLoggingObj)
+        logging_obj.pre_call(input=prompt, api_key=api_key)
+        logging_obj.record_partial_usage_for_failure(
+            litellm.Usage(prompt_tokens=16, completion_tokens=2240, total_tokens=2256), 0.25
+        )
+        raise litellm.RateLimitError(message="refused after billing", llm_provider="image-regression", model=model)
+
+
+def test_failed_image_generation_spend_row_bills_what_the_provider_charged(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [{"provider": "image-regression", "custom_handler": _BilledThenFailingImageHandler()}],
+    )
+    custom_llm_setup()
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    monkeypatch.setattr(litellm, "model_alias_map", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "A", "litellm_params": {"model": "image-regression/refusing"}}],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_config", ProxyConfig())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "version", "test-version")
+    app: Final = FastAPI()
+    app.include_router(endpoints.router)
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test")
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 429, response.text
+    db_call: Final = spend_writer.update_database.call_args.kwargs
+    payload: Final = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert db_call["response_cost"] == 0.25
+    assert (payload["status"], payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (
+        "failure",
+        16,
+        2240,
+        2256,
+    )
