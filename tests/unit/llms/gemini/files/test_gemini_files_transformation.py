@@ -363,6 +363,8 @@ class TestGoogleAIStudioFilesTransformation:
         "files/batch-la6",
         "https://generativelanguage.googleapis.com/v1beta/files/batch-la6",
         "https://generativelanguage.googleapis.com/v1/files/batch-la6",
+        "https://example.invalid/batch-la6",
+        "http://example.invalid/batch-la6?alt=media#download",
     ],
 )
 def test_file_content_request_downloads_the_file_as_media(file_id):

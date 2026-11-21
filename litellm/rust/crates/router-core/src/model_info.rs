@@ -2,7 +2,7 @@
 //! cost map, what the background refresh discovered, and the deployment's own `model_info`.
 //!
 //! The merge rules are the Python router core's (`get_router_model_info`,
-//! `get_deployment_model_info`); every cost-map read is a [`Host::model_info`] lookup asked while
+//! `get_deployment_model_info`); every cost-map read is a [`RegistryHost::model_info`] lookup asked while
 //! the query runs, so a price reload or a registration the host made since the router was built is
 //! what the next query reads. The host keeps choosing the keys a lookup tries (`get_model_info`);
 //! the core chooses which lookups a query makes.
@@ -14,7 +14,7 @@ use serde_json::{Map, Number, Value};
 
 use crate::{
     error::Error,
-    host::{Host, LogLevel, ModelInfoLookup},
+    host::{LogLevel, ModelInfoLookup, RegistryHost},
 };
 
 /// The key the host wraps a value it cannot spell as JSON in.
@@ -84,13 +84,16 @@ fn positive_or_zero(value: Option<&Value>) -> bool {
         .is_some_and(|n| n > 0.0)
 }
 
-pub(crate) async fn lookup(host: &dyn Host, lookup: ModelInfoLookup) -> Result<Value, Error> {
+pub(crate) async fn lookup(
+    host: &impl RegistryHost,
+    lookup: ModelInfoLookup,
+) -> Result<Value, Error> {
     host.model_info(&lookup).await
 }
 
 /// `get_model_info(model=...)`: the row, or `None` when the lookup tolerates a failure and failed.
 async fn catalog_row(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     model: Value,
     tolerate: bool,
 ) -> Result<Option<Map<String, Value>>, Error> {
@@ -112,7 +115,11 @@ async fn catalog_row(
 }
 
 /// `model_cost.get(key)`: `None` when the key is absent, else the entry as stored.
-async fn cost_entry(host: &dyn Host, key: &str, process: bool) -> Result<Option<Value>, Error> {
+async fn cost_entry(
+    host: &impl RegistryHost,
+    key: &str,
+    process: bool,
+) -> Result<Option<Value>, Error> {
     match lookup(
         host,
         ModelInfoLookup::CostEntry {
@@ -128,7 +135,10 @@ async fn cost_entry(host: &dyn Host, key: &str, process: bool) -> Result<Option<
     }
 }
 
-pub(crate) async fn discovered(host: &dyn Host, id: Value) -> Result<Map<String, Value>, Error> {
+pub(crate) async fn discovered(
+    host: &impl RegistryHost,
+    id: Value,
+) -> Result<Map<String, Value>, Error> {
     match lookup(host, ModelInfoLookup::Discovered { id }).await? {
         Value::Null => Ok(Map::new()),
         Value::Object(limits) => Ok(limits),
@@ -136,7 +146,7 @@ pub(crate) async fn discovered(host: &dyn Host, id: Value) -> Result<Map<String,
     }
 }
 
-async fn log(host: &dyn Host, level: LogLevel, message: String) -> Result<(), Error> {
+async fn log(host: &impl RegistryHost, level: LogLevel, message: String) -> Result<(), Error> {
     lookup(host, ModelInfoLookup::Log { level, message })
         .await
         .map(|_| ())
@@ -144,7 +154,11 @@ async fn log(host: &dyn Host, level: LogLevel, message: String) -> Result<(), Er
 
 /// `_provider_model_id`: the model id a cost-map key or base model names, bedrock base model ids
 /// normalized.
-async fn provider_model_id(host: &dyn Host, name: &str, provider: &str) -> Result<String, Error> {
+async fn provider_model_id(
+    host: &impl RegistryHost,
+    name: &str,
+    provider: &str,
+) -> Result<String, Error> {
     let model_id = name.rsplit('/').next().unwrap_or(name).to_owned();
     if !provider.starts_with("bedrock") {
         return Ok(model_id);
@@ -158,7 +172,7 @@ async fn provider_model_id(host: &dyn Host, name: &str, provider: &str) -> Resul
 /// `_exact_base_model_max_input_tokens`: the base model's own window, unless its row came from a
 /// fallback-generalization rule or it is unmapped.
 async fn exact_base_model_max_input_tokens(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     base_model: &str,
 ) -> Result<Option<Value>, Error> {
     let answer = lookup(
@@ -190,7 +204,7 @@ async fn exact_base_model_max_input_tokens(
 /// `_base_model_widened_window`: a base model naming the same model as the route can only widen
 /// its context window.
 async fn base_model_widened_window(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     route: &Map<String, Value>,
     base_model: Option<&str>,
     provider: &str,
@@ -240,7 +254,7 @@ fn declared_base_model(value: &Value) -> Option<&str> {
 /// refresh discovered and then with every value the deployment sets itself. `None` when the
 /// lookup answers `None`; an unmapped model raises as the lookup raises.
 pub async fn router_model_info(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     query: &RouterModelInfoQuery,
 ) -> Result<Option<MergedModelInfo>, Error> {
     let base_model = if query.model_info_base_model.is_null() {
@@ -466,7 +480,10 @@ pub fn update_dictionary(existing: &mut Map<String, Value>, new: &Map<String, Va
 
 /// `cost_map_omits_token_price`: the cost-map entries under `keys` exist, and none carries a
 /// per-token price.
-async fn cost_map_omits_token_price(host: &dyn Host, keys: &[Option<&str>]) -> Result<bool, Error> {
+async fn cost_map_omits_token_price(
+    host: &impl RegistryHost,
+    keys: &[Option<&str>],
+) -> Result<bool, Error> {
     let mut entries = 0;
     for key in keys.iter().flatten() {
         if let Some(entry) = cost_entry(host, key, true).await?
@@ -487,7 +504,7 @@ async fn cost_map_omits_token_price(host: &dyn Host, keys: &[Option<&str>]) -> R
 /// discovered, over its base model's row), merged over the row of its litellm model `model_name`.
 /// A lookup that fails leaves its layer out, as the Python router ignores it.
 pub async fn deployment_model_info(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     model_id: &str,
     model_name: &Value,
 ) -> Result<Option<Map<String, Value>>, Error> {
@@ -558,21 +575,11 @@ pub async fn deployment_model_info(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::{Arc, Mutex},
-    };
+    use std::{collections::BTreeMap, sync::Mutex};
 
-    use async_trait::async_trait;
     use serde_json::json;
 
     use super::*;
-    use crate::{
-        cache::{InMemoryRouterCache, RouterCache},
-        error::AttemptError,
-        host::{Attempt, Output, RouterEvent, RouterRequest, RoutingContext, SelectStage},
-        registry::Deployment,
-    };
 
     /// A cost map and a provider, answering lookups the way `PythonHost` does.
     #[derive(Default)]
@@ -583,31 +590,7 @@ mod tests {
         lookups: Mutex<Vec<Value>>,
     }
 
-    #[async_trait]
-    impl Host for Catalog {
-        async fn invoke(&self, _attempt: &Attempt) -> Result<Output, AttemptError> {
-            unreachable!("a model-info query runs no attempt")
-        }
-        async fn select(
-            &self,
-            _stage: &SelectStage,
-            _ctx: &RoutingContext<'_>,
-            candidates: Vec<Arc<Deployment>>,
-        ) -> Result<Vec<Arc<Deployment>>, Error> {
-            Ok(candidates)
-        }
-        async fn allow_fallback(
-            &self,
-            _request: &RouterRequest,
-            _target: &str,
-        ) -> Result<bool, crate::error::AttemptError> {
-            Ok(true)
-        }
-        async fn sleep(&self, _duration: std::time::Duration) {}
-        fn observe(&self, _event: &RouterEvent) {}
-        fn cache(&self) -> Arc<dyn RouterCache> {
-            Arc::new(InMemoryRouterCache::default())
-        }
+    impl RegistryHost for Catalog {
         async fn model_info(&self, lookup: &ModelInfoLookup) -> Result<Value, Error> {
             self.lookups
                 .lock()

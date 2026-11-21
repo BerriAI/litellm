@@ -15,6 +15,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-bridge:
+    name: smoke-rust-bridge
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      artifact: ${{ steps.bridge.outputs.artifact }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Detect a cost-map-only change
+        id: cost-map-only
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/detect-changes
+        with:
+          category: cost-map-only
+
+      - name: Build or restore the Rust bridge
+        id: bridge
+        uses: ./.github/actions/build-rust-bridge
+        with:
+          stale-cost-map: ${{ steps.cost-map-only.outputs.decision == 'run' }}
+
   dashboard-build:
     name: dashboard-build
     runs-on: ubuntu-24.04
@@ -30,6 +58,7 @@ jobs:
 
   core-checks:
     name: py${{ matrix.python-version }}
+    needs: rust-bridge
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -54,23 +83,15 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Restore the Rust bridge
-        id: rust-bridge
-        uses: ./.github/actions/restore-rust-bridge
-
-      - name: Restore the Cargo build cache
-        if: steps.rust-bridge.outputs.cache-hit != 'true'
-        uses: ./.github/actions/cache-cargo-build
+      - name: Download the Rust bridge
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
       - name: Install dependencies
         env:
-          RUST_BRIDGE_RESTORED: ${{ steps.rust-bridge.outputs.cache-hit }}
           PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          if [ "$RUST_BRIDGE_RESTORED" != "true" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$PYTHON_VERSION"
-            exit 0
-          fi
           .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$PYTHON_VERSION" --no-install-project
           uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/litellm-*.whl
           cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
@@ -126,6 +147,7 @@ jobs:
 
   all-extras:
     name: all-extras-py${{ matrix.python-version }}
+    needs: rust-bridge
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -150,23 +172,15 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Restore the Rust bridge
-        id: rust-bridge
-        uses: ./.github/actions/restore-rust-bridge
-
-      - name: Restore the Cargo build cache
-        if: steps.rust-bridge.outputs.cache-hit != 'true'
-        uses: ./.github/actions/cache-cargo-build
+      - name: Download the Rust bridge
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
       - name: Install every extra and dependency group
         env:
-          RUST_BRIDGE_RESTORED: ${{ steps.rust-bridge.outputs.cache-hit }}
           PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          if [ "$RUST_BRIDGE_RESTORED" != "true" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$PYTHON_VERSION"
-            exit 0
-          fi
           .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$PYTHON_VERSION" --no-install-project --no-install-package litellm-proxy
           uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
           cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
@@ -356,7 +370,7 @@ jobs:
 
   smoke-passed:
     name: smoke passed
-    needs: [dashboard-build, core-checks, all-extras]
+    needs: [rust-bridge, dashboard-build, core-checks, all-extras]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

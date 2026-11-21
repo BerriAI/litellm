@@ -23,15 +23,21 @@ from typing import (
 from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    iter_items,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
+from litellm.llms.gemini.files.utils import gemini_file_id
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -329,7 +335,13 @@ def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
     return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
-def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
+class _FileIdLike(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+def encode_file_id_with_model(
+    file_id: str | _FileIdLike, model: str, id_type: Literal["file", "batch"] = "file"
+) -> str:
     """
     Encode a file/batch ID with model routing information.
 
@@ -383,7 +395,10 @@ def encode_batch_response_ids(response, model: str) -> None:
             setattr(
                 response,
                 attr,
-                encode_file_id_with_model(file_id=getattr(response, attr), model=model),
+                encode_file_id_with_model(
+                    file_id=require_attributes(attribute_or_none(response, attr), _FileIdLike, "startswith"),
+                    model=model,
+                ),
             )
 
 
@@ -468,9 +483,7 @@ _GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/fil
 
 
 def _gemini_files_tail(file_id: str) -> str:
-    """The id Gemini resolves ``file_id`` to, whatever scheme or case wraps it: the text after its ``files/``."""
-    files_index: Final = file_id.find("files/")
-    return file_id[files_index:].strip("/").removeprefix("files/").strip("/") if files_index != -1 else ""
+    return gemini_file_id(file_id) if file_id.startswith(("http://", "https://")) or "files/" in file_id else ""
 
 
 def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
@@ -486,7 +499,11 @@ def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
     canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
     stored before ids were canonicalized."""
     original: Final = get_original_file_id(file_id)
-    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    reductions: Final = (
+        canonical_provider_file_id(original),
+        _gemini_files_tail(unquote(original)),
+        _gemini_files_tail(original),
+    )
     bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
     return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
 
@@ -941,9 +958,8 @@ _CONFIG_FILE_RANK: Final = datetime.min.replace(tzinfo=timezone.utc)
 _UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
 
 
-class _RouterDeployment(TypedDict):
-    model_name: ReadOnly[NotRequired[str]]
-    model_info: ReadOnly[Mapping[str, object]]
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class _KeyReach(IntEnum):
@@ -951,7 +967,7 @@ class _KeyReach(IntEnum):
     SHARED = 1
 
 
-def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
+def _team_deployment_rank(model_info: _SupportsGet, deployment_id: str) -> tuple[datetime, str]:
     if model_info.get("db_model") is not True:
         return _CONFIG_FILE_RANK, ""
     created_at: Final = model_info.get("created_at")
@@ -1005,11 +1021,13 @@ def _team_provider_deployments(
         )
         return None if shared_model is None else _KeyReach.SHARED
 
-    def _usable_team_deployment_order(deployment: _RouterDeployment) -> _TeamDeploymentOrder | None:
-        model_info: Final[Mapping[str, object]] = deployment["model_info"]
+    def _usable_team_deployment_order(deployment: object) -> _TeamDeploymentOrder | None:
+        model_info: Final = require_attributes(subscript(deployment, "model_info"), _SupportsGet, "get")
         if model_info.get("team_id") != team_id:
             return None
-        public_model_name: Final = model_info.get("team_public_model_name") or deployment.get("model_name")
+        public_model_name: Final = model_info.get("team_public_model_name") or require_attributes(
+            deployment, _SupportsGet, "get"
+        ).get("model_name")
         deployment_id: Final = model_info.get("id")
         if not isinstance(public_model_name, str) or not isinstance(deployment_id, str):
             return None
@@ -1028,7 +1046,7 @@ def _team_provider_deployments(
     team_deployment_orders: Final = sorted(
         (
             order
-            for deployment in registry.all() or []
+            for deployment in iter_items(registry.all() or [])
             if (order := _usable_team_deployment_order(deployment)) is not None
         ),
         key=_by_team_deployment_rank,

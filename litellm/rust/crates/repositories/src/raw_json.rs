@@ -1,6 +1,6 @@
 //! JSON columns read as raw text, so a store can hand them to its caller without parsing them.
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use sqlx::{
     Postgres,
@@ -14,7 +14,7 @@ use sqlx::{
 /// These columns are settings bags (key metadata, router settings, permissions) that may hold
 /// credentials, so `Debug` redacts the whole value.
 #[derive(Clone, veil::Redact)]
-pub(crate) struct RawJson(#[redact(with = "[REDACTED]")] pub Box<RawValue>);
+pub struct RawJson(#[redact(with = "[REDACTED]")] pub Box<RawValue>);
 
 impl sqlx::Type<Postgres> for RawJson {
     fn type_info() -> PgTypeInfo {
@@ -40,8 +40,14 @@ impl PartialEq for RawJson {
 
 impl RawJson {
     /// The column's JSON text exactly as Postgres returned it.
-    pub(crate) fn get(&self) -> &str {
+    pub fn get(&self) -> &str {
         self.0.get()
+    }
+}
+
+impl<'de> Deserialize<'de> for RawJson {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Box::<RawValue>::deserialize(deserializer).map(Self)
     }
 }
 

@@ -24,6 +24,8 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
+from litellm.litellm_core_utils.core_helpers import unpackable_mapping
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
@@ -119,6 +121,10 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 _CLIENT_FORWARDED_TOKEN_AUTH_TYPES: Final = frozenset((MCPAuth.true_passthrough, MCPAuth.oauth_delegate))
 
 _NO_TOOL_ARGUMENTS: Final[Mapping[str, Never]] = MappingProxyType({})
+
+_NO_REQUEST_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
@@ -419,6 +425,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=virtual_logging_obj,
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
                 incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
+                flatten_url_elicitation=True,
             )
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
@@ -1227,7 +1234,7 @@ if MCP_AVAILABLE:
     async def _execute_rest_mcp_tool(
         request: Request,
         tool_name: str,
-        tool_arguments: Mapping[str, object],
+        tool_arguments: object,
         allowed_mcp_servers: Sequence[MCPServer],
         canonical_server_id: str,
         target_server: MCPServer | None,
@@ -1286,6 +1293,7 @@ if MCP_AVAILABLE:
             requested_server_id=canonical_server_id,
             incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             guardrail_auth=guardrail_auth,
+            flatten_url_elicitation=True,
         )
         return executed, tool_start_time
 
@@ -1344,10 +1352,12 @@ if MCP_AVAILABLE:
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         try:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
-            data = await request.json()
+            body: Final = await request.json()
 
-            tool_name: Final[str | None] = data.get("name")
-            tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
+            tool_name: Final[str | None] = body.get("name")
+            decoded_body: Final = _DECODED_JSON.validate_python(body)
+            data = decoded_body if is_str_keyed_dict(decoded_body) else {**unpackable_mapping(decoded_body)}
+            tool_arguments: Final[object] = data.get("arguments") or {}
 
             from litellm.proxy.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
 
@@ -1355,7 +1365,7 @@ if MCP_AVAILABLE:
                 return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
 
             # Validate required parameters early
-            server_id: Final[str | None] = data.get("server_id")
+            server_id: Final[str | None] = body.get("server_id")
             if not server_id:
                 raise HTTPException(
                     status_code=400,
@@ -1376,7 +1386,7 @@ if MCP_AVAILABLE:
 
             data["model"] = f"MCP: {tool_name}"
             model_metadata: Final[_MCPModelMetadata] = {
-                **(data.get("metadata") or MappingProxyType({})),
+                **unpackable_mapping(data.get("metadata") or _NO_REQUEST_METADATA),
                 "model_group": f"MCP: {tool_name}",
             }
             data["metadata"] = model_metadata

@@ -33,17 +33,17 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
 )
 from litellm.redis.stores.spend_counters import END_USER_COUNTER_PREFIX, SPEND_COUNTERS_TARGET, SpendCounterStore
 from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
-    EndUserRepository,
-    SpendLogsRepository,
-    TeamMembershipRepository,
 )
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -68,6 +68,8 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
         "app": Litellm_EntityType.APP.value,
         "app_customer_org": Litellm_EntityType.APP_CUSTOMER_ORG.value,
         "app_customer_member": Litellm_EntityType.APP_CUSTOMER_MEMBER.value,
+        "app_group": Litellm_EntityType.APP_GROUP.value,
+        "app_group_customer_org": Litellm_EntityType.APP_GROUP_CUSTOMER_ORG.value,
     }
 )
 
@@ -98,7 +100,7 @@ def recorded_window_spend(
 
 _CUSTOMER_OVERRIDE_INCLUDE: Final = MappingProxyType({"budget": True, "budget_override": True})
 _CUSTOMER_COUNTER: Final = re.compile(
-    r"spend:(customer_org|customer_team|customer_member|app|app_customer_org|app_customer_member):(.+):"
+    r"spend:(customer_org|customer_team|customer_member|app|app_customer_org|app_customer_member|app_group|app_group_customer_org):(.+):"
     r"(lifetime|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
 )
 
@@ -202,11 +204,25 @@ class SpendCounterReseed:
         return float(getattr(row, "spend", 0.0) or 0.0)
 
     @staticmethod
+    async def _group_counter_row(prisma_client: "PrismaClient", family: str, entity_id: str) -> object | None:
+        from litellm.proxy.management_helpers.app_groups import AppGroupOrganizationRepository, AppGroupRepository
+        from litellm.proxy.management_helpers.apps import app_scope_identity
+
+        if family == "app_group":
+            return await AppGroupRepository(prisma_client).table.find_unique(where={"app_group_id": entity_id})
+        group_id, customer_id = app_scope_identity(entity_id)
+        return await AppGroupOrganizationRepository(prisma_client).table.find_unique(
+            where={"app_group_id_customer_org_id": {"app_group_id": group_id, "customer_org_id": customer_id}}
+        )
+
+    @staticmethod
     async def _counter_row(prisma_client: "PrismaClient", counter_key: str) -> object | None:
         async with db_lookup_gate.current():
             customer: Final = _CUSTOMER_COUNTER.fullmatch(counter_key)
             if customer is not None:
                 family, entity_id, _ = customer.groups()
+                if family in ("app_group", "app_group_customer_org"):
+                    return await SpendCounterReseed._group_counter_row(prisma_client, family, entity_id)
                 if family == "app" or family.startswith("app_"):
                     from litellm.proxy.management_helpers.apps import (
                         AppCustomerMemberRepository,
