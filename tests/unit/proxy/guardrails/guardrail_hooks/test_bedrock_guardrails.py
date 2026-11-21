@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import sys
 import uuid
 from itertools import chain
+from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -8406,16 +8407,29 @@ _SCAN_REQUESTS: Final = (
 
 
 class _ApplyGuardrailRecorder:
-    """Bedrock ApplyGuardrail behind a real AsyncHTTPHandler: records each scan's texts and blocks the attack text."""
+    """Bedrock ApplyGuardrail behind a real AsyncHTTPHandler: records each scan's texts, blocks the attack text, masks
+    the texts in ``redactions`` with one output per scanned text as AWS does, and reports its first ``failed_scans``
+    scans as failed inside a 200."""
 
-    def __init__(self, outputs: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        outputs: tuple[str, ...] = (),
+        failed_scans: int = 0,
+        redactions: Mapping[str, str] = MappingProxyType({}),
+    ) -> None:
         self.scans: tuple[tuple[str, ...], ...] = ()
         self.outputs: Final = outputs
+        self.failed_scans: Final = failed_scans
+        self.redactions: Final = redactions
         self.handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(self._answer))
 
     def _answer(self, request: httpx.Request) -> httpx.Response:
         texts: Final = tuple(item["text"]["text"] for item in json.loads(request.content)["content"])
         self.scans = (*self.scans, texts)
+        if len(self.scans) <= self.failed_scans:
+            return httpx.Response(
+                200, json={"Output": {"__type": "com.amazon.coral.service#InternalServerException"}, "Version": "1.0"}
+            )
         if any(_SCAN_ATTACK in text for text in texts):
             return httpx.Response(
                 200,
@@ -8423,6 +8437,14 @@ class _ApplyGuardrailRecorder:
                     "action": "GUARDRAIL_INTERVENED",
                     "outputs": [{"text": "Blocked."}],
                     "assessments": [{"contentPolicy": {"filters": [{"type": "PROMPT_ATTACK", "action": "BLOCKED"}]}}],
+                },
+            )
+        if any(text in self.redactions for text in texts):
+            return httpx.Response(
+                200,
+                json={
+                    "action": "GUARDRAIL_INTERVENED",
+                    "outputs": [{"text": self.redactions.get(text, text)} for text in texts],
                 },
             )
         if self.outputs:
@@ -8564,3 +8586,98 @@ async def test_during_call_on_v1_messages_leaves_out_the_parts_the_guardrail_is_
     assert [sorted(scan) for scan in recorder.scans] == [
         sorted(text for text in (_SCAN_SYSTEM, _SCAN_ASK, *_SCAN_RESULTS) if text not in left_out)
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "build"), _SCAN_REQUESTS)
+async def test_a_session_text_whose_scan_failed_inside_a_200_is_scanned_again_on_the_next_turn(
+    call_type: str, build: Callable[[tuple[str, ...]], Mapping[str, object]]
+) -> None:
+    recorder: Final = _ApplyGuardrailRecorder(failed_scans=1)
+    guardrail: Final = _during_call_guardrail(recorder, only_scan_new_messages=True)
+    session: Final = f"session-{uuid.uuid4().hex}"
+
+    for turn in range(2):
+        await _moderate(guardrail, call_type, {**build(_SCAN_RESULTS[:turn]), "litellm_session_id": session})
+
+    assert [sorted(scan) for scan in recorder.scans] == [
+        sorted((_SCAN_SYSTEM, _SCAN_ASK)),
+        sorted((_SCAN_SYSTEM, _SCAN_ASK, _SCAN_RESULTS[0])),
+    ]
+
+
+_REDACTED_ASK: Final = "Summarise the [REDACTED] notes."
+_REDACTED_RESULT: Final = "notes-0: the [REDACTED] runs lint."
+
+
+@pytest.mark.asyncio
+async def test_a_masked_session_turn_that_skipped_nothing_is_sent_to_bedrock_once_and_masked() -> None:
+    recorder: Final = _ApplyGuardrailRecorder(redactions={_SCAN_ASK: _REDACTED_ASK})
+    data: Final = {**_anthropic_request(()), "litellm_session_id": f"session-{uuid.uuid4().hex}"}
+
+    await _moderate(
+        _during_call_guardrail(recorder, only_scan_new_messages=True), CallTypes.anthropic_messages.value, data
+    )
+
+    assert recorder.scans == ((_SCAN_ASK, _SCAN_SYSTEM),)
+    assert data["messages"] == [{"role": "user", "content": _REDACTED_ASK}]
+
+
+@pytest.mark.asyncio
+async def test_a_masked_session_turn_that_skipped_text_falls_back_to_a_full_scan() -> None:
+    recorder: Final = _ApplyGuardrailRecorder(redactions={_SCAN_RESULTS[0]: _REDACTED_RESULT})
+    guardrail: Final = _during_call_guardrail(recorder, only_scan_new_messages=True)
+    session: Final = f"session-{uuid.uuid4().hex}"
+
+    for turn in range(2):
+        await _moderate(
+            guardrail,
+            CallTypes.anthropic_messages.value,
+            {**_anthropic_request(_SCAN_RESULTS[:turn]), "litellm_session_id": session},
+        )
+
+    assert recorder.scans == (
+        (_SCAN_ASK, _SCAN_SYSTEM),
+        (_SCAN_RESULTS[0],),
+        (_SCAN_ASK, _SCAN_SYSTEM, _SCAN_RESULTS[0]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_during_call_keeps_the_tool_blocks_when_bedrock_masks_only_an_added_tool_result() -> None:
+    recorder: Final = _ApplyGuardrailRecorder(redactions={_SCAN_RESULTS[0]: _REDACTED_RESULT})
+    request: Final = _anthropic_request(_SCAN_RESULTS[:1])
+    data: Final = {**request}
+
+    await _moderate(_during_call_guardrail(recorder), CallTypes.anthropic_messages.value, data)
+
+    assert recorder.scans == ((_SCAN_ASK, _SCAN_SYSTEM, _SCAN_RESULTS[0]),)
+    assert data["messages"] == request["messages"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_on_v1_messages_scans_each_assistant_text_block_once() -> None:
+    blocks: Final = ("I will read the notes.", "Reading them now.")
+    recorder: Final = _ApplyGuardrailRecorder()
+    data: Final = {
+        **_anthropic_request(()),
+        "messages": [
+            {"role": "user", "content": _SCAN_ASK},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": blocks[0]},
+                    {"type": "text", "text": blocks[1]},
+                    {"type": "tool_use", "id": "toolu_0", "name": "read", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_0", "content": _SCAN_RESULTS[0]}],
+            },
+        ],
+    }
+
+    await _moderate(_during_call_guardrail(recorder), CallTypes.anthropic_messages.value, data)
+
+    assert [sorted(scan) for scan in recorder.scans] == [sorted((_SCAN_SYSTEM, _SCAN_ASK, *blocks, _SCAN_RESULTS[0]))]

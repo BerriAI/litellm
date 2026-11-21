@@ -663,6 +663,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 skip_system=effective_skip_system_message_for_guardrail(self),
                 skip_tool=effective_skip_tool_message_for_guardrail(self),
             )
+            if structured[index]["role"] in ("system", "tool")
         )
         carried: Final = frozenset(self._message_texts(messages))
         return tuple(text for text in self._message_texts(scoped) if text not in carried)
@@ -2942,9 +2943,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             and self.experimental_use_latest_role_message_only is not True
             else filtered_messages
         )
-        if await self._scanned_only_new_texts(
+        session_scan: Final = await self._scanned_only_new_texts(
             texts=self._message_texts(scanned_messages), request_data=data, logging_event_type=event_type
-        ):
+        )
+        if session_scan is True:
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
             return data
 
@@ -2958,7 +2960,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # unpacked kwargs before this hook ran, and the LLM task's response was taken
         # unconditionally. Letting the exception propagate cancels the LLM task and
         # the endpoint handler returns the block response.
-        bedrock_guardrail_response: Final = await self.make_bedrock_api_request(
+        bedrock_guardrail_response: Final = session_scan or await self.make_bedrock_api_request(
             source="INPUT",
             messages=scanned_messages,
             request_data=data,
@@ -2969,9 +2971,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        updated_subset: Final = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=filtered_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        own_texts: Final = self._message_texts(filtered_messages)
+        updated_subset: Final = (
+            filtered_messages
+            if tuple(self._extract_masked_texts_from_response(bedrock_guardrail_response)[: len(own_texts)])
+            == own_texts
+            else self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=filtered_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
         data["messages"] = self._merge_filtered_messages(
             original_messages=filter_result.original_messages or new_messages,
@@ -3469,17 +3477,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         texts: Sequence[str],
         request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         logging_event_type: GuardrailEventHooks,
-    ) -> bool:
+    ) -> BedrockGuardrailResponse | bool:
         """Scan only the text segments not already seen earlier in this session.
 
-        Returns ``False`` when incremental scanning is inactive (feature off, no
-        session id, masking enabled, or cache unavailable) or when the guardrail
-        turns out to mask content, telling the caller to run the normal full scan.
-        Otherwise scans only the new segments and skips the Bedrock call entirely
-        when nothing is new. Incremental mode is for blocking/detection guardrails
-        only: if the guardrail returns masked output it cannot be applied to the
-        skipped context, so the scan falls back to the full path and no session
-        state is recorded.
+        Returns ``True`` when this settles the request: nothing was new, the new
+        segments passed, or Bedrock reported the scan as failed inside a 200, which
+        lets the request through as the full scan does. Returns ``False`` when the
+        caller must run the normal full scan: incremental scanning is inactive
+        (feature off, no session id, masking enabled, or cache unavailable), or
+        Bedrock masked text while segments were skipped, since masking cannot apply
+        to skipped context. A masked scan that skipped nothing is returned itself,
+        as it already is the full scan. Only a passing scan records its segments.
         """
         cache: Final = self._incremental_scan_cache()
 
@@ -3502,7 +3510,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             logging_event_type=logging_event_type,
         )
 
-        if self._bedrock_response_has_masked_output(bedrock_response):
+        if bedrock_error_type(bedrock_response) is not None:
+            return True
+
+        masked: Final = self._bedrock_response_has_masked_output(bedrock_response)
+        if masked and len(new_texts) == len(texts):
+            return bedrock_response
+
+        if masked:
             verbose_proxy_logger.warning(
                 "Bedrock Guardrail %s: guardrail returned masked/anonymized content; "
                 "only_scan_new_messages cannot apply masking to skipped context, falling back to a full-context scan",
@@ -3608,8 +3623,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 tool_calls=inputs.get("tool_calls") or [], request_data=request_data, input_type=input_type
             )
 
-            if input_type == "request" and await self._scanned_only_new_texts(
-                texts=texts, request_data=request_data, logging_event_type=GuardrailEventHooks.pre_call
+            if (
+                input_type == "request"
+                and await self._scanned_only_new_texts(
+                    texts=texts, request_data=request_data, logging_event_type=GuardrailEventHooks.pre_call
+                )
+                is True
             ):
                 return inputs
 
