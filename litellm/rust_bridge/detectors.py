@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -16,6 +17,8 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
+
+_HOOK_ATTRIBUTE: Final = TypeAdapter(object)
 
 Detector: TypeAlias = Callable[[NativeCall], bool]
 Detectors: TypeAlias = Mapping[Feature, Detector]
@@ -132,7 +135,7 @@ def _custom_loggers(callbacks: Iterable[object]) -> tuple[CustomLogger, ...]:
 
 
 def overridden(method: str, callbacks: Iterable[object]) -> bool:
-    base: Final[object] = getattr(CustomLogger, method)
+    base: Final = _HOOK_ATTRIBUTE.validate_python(getattr(CustomLogger, method))
     return any(getattr(type(callback), method, base) is not base for callback in _custom_loggers(callbacks))
 
 

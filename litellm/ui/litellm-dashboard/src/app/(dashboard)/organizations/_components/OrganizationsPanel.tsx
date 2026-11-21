@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import React, { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { Building2 } from "lucide-react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import { organizationDeleteCall } from "@/components/networking";
@@ -12,6 +13,8 @@ import { OrgCreateDialog } from "@/components/organization/org-create/OrgCreateD
 import OrganizationInfoView from "@/components/organization/organization_view";
 import { ORGANIZATION_TAB_URL_KEY, ORGANIZATION_TABS } from "@/components/organization/organizationTabs";
 import { Button } from "@/components/ui/button";
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
 import OrganizationsTable from "./OrganizationsTable";
 import { organizationIdFilter, useOrganizationsTableState } from "./useOrganizationsTableState";
@@ -99,7 +102,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
 
   if (!premiumUser) {
     return (
-      <div className="mx-4 mt-4">
+      <Page>
         <p className="text-sm text-muted-foreground">
           <Trans
             i18nKey="organizations.panel.enterpriseNotice"
@@ -115,48 +118,55 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             }}
           />
         </p>
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="mx-4 mt-4 flex flex-col gap-4">
-      {(userRole === "Admin" || userRole === "Org Admin") && (
-        <Button className="w-fit" onClick={() => setIsOrgModalVisible(true)}>
-          {t("organizations.panel.createButton")}
-        </Button>
-      )}
-
-      {selectedOrgId ? (
-        <OrganizationInfoView
-          organizationId={selectedOrgId}
-          onClose={() => void setOrganizationDetail(null)}
-          accessToken={accessToken}
-          is_org_admin={true}
-          is_proxy_admin={userRole === "Admin"}
-          userModels={userModels}
-        />
-      ) : (
-        <>
-          <p className="text-sm text-muted-foreground">{t("organizations.panel.listHint")}</p>
-          <OrganizationFilters
-            filters={filters}
-            showFilters={showFilters}
-            onToggleFilters={setShowFilters}
-            onChange={handleFilterChange}
-            onReset={handleFilterReset}
+    <Page>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Building2 />
+            {t("shell.nav.items.organizations")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("organizations.panel.listHint")}</PageHeaderDescription>
+          {(userRole === "Admin" || userRole === "Org Admin") && (
+            <PageHeaderControls>
+              <Button onClick={() => setIsOrgModalVisible(true)}>{t("organizations.panel.createButton")}</Button>
+            </PageHeaderControls>
+          )}
+        </PageHeader>
+        {selectedOrgId ? (
+          <OrganizationInfoView
+            organizationId={selectedOrgId}
+            onClose={() => void setOrganizationDetail(null)}
+            accessToken={accessToken}
+            is_org_admin={true}
+            is_proxy_admin={userRole === "Admin"}
+            userModels={userModels}
           />
-          <OrganizationsTable
-            organizations={organizations}
-            isLoading={isLoading}
-            userRole={userRole}
-            searchActive={searchActive}
-            onOrganizationClick={(organizationId) => void setOrganizationDetail({ org: organizationId, tab: null })}
-            onEditClick={(organizationId) => void setOrganizationDetail({ org: organizationId, tab: "settings" })}
-            onDeleteClick={handleDelete}
-          />
-        </>
-      )}
+        ) : (
+          <>
+            <OrganizationFilters
+              filters={filters}
+              showFilters={showFilters}
+              onToggleFilters={setShowFilters}
+              onChange={handleFilterChange}
+              onReset={handleFilterReset}
+            />
+            <OrganizationsTable
+              organizations={organizations}
+              isLoading={isLoading}
+              userRole={userRole}
+              searchActive={searchActive}
+              onOrganizationClick={(organizationId) => void setOrganizationDetail({ org: organizationId, tab: null })}
+              onEditClick={(organizationId) => void setOrganizationDetail({ org: organizationId, tab: "settings" })}
+              onDeleteClick={handleDelete}
+            />
+          </>
+        )}
+      </PageContent>
 
       <OrgCreateDialog open={isOrgModalVisible} onOpenChange={setIsOrgModalVisible} accessToken={accessToken || ""} />
 
@@ -170,7 +180,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         onOk={confirmDelete}
         confirmLoading={isDeleting}
       />
-    </div>
+    </Page>
   );
 };
 

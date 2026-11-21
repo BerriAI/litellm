@@ -16,6 +16,8 @@ import base64
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
+from typing_extensions import ReadOnly
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid4
@@ -29,16 +31,20 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.rag.ingestion.file_parsers import extract_text_from_pdf
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
-from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
+from litellm.types.rag import RAGChunkingStrategy, RAGIngestOptions, RAGIngestResponse
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
 
     from litellm import Router
 
 
 class RAGIngestBadRequestError(ValueError):
     status_code: Final = 400
+
+
+class _ChunkingStrategyWithType(RAGChunkingStrategy, total=False):
+    type: ReadOnly[str]
 
 
 class _OcrRouter(Protocol):
@@ -54,6 +60,10 @@ class _OcrPages(Protocol):
 class _OcrPage(Protocol):
     @property
     def markdown(self) -> str: ...
+
+
+def _vector_store_provider(vector_store_config: Mapping[str, object]) -> object:
+    return vector_store_config.get("custom_llm_provider", "openai")
 
 
 class BaseRAGIngestion(ABC):
@@ -78,7 +88,9 @@ class BaseRAGIngestion(ABC):
 
         # Extract configs from options
         self.ocr_config = ingest_options.get("ocr")
-        self.chunking_strategy = ingest_options.get("chunking_strategy") or {"type": "auto"}
+        self.chunking_strategy: RAGChunkingStrategy | _ChunkingStrategyWithType = ingest_options.get(
+            "chunking_strategy"
+        ) or {"type": "auto"}
         self.embedding_config = ingest_options.get("embedding")
         self.vector_store_config: dict[str, Any] = cast(dict[str, Any], ingest_options.get("vector_store") or {})
         self.ingest_name = ingest_options.get("name")
@@ -114,9 +126,9 @@ class BaseRAGIngestion(ABC):
                     del self.vector_store_config[key]
 
     @property
-    def custom_llm_provider(self) -> str:
+    def custom_llm_provider(self) -> object:
         """Get the vector store provider."""
-        return self.vector_store_config.get("custom_llm_provider", "openai")
+        return _vector_store_provider(self.vector_store_config)
 
     async def upload(
         self,
@@ -254,15 +266,11 @@ class BaseRAGIngestion(ABC):
         chunk_overlap: Final = splitter_args.get("chunk_overlap", DEFAULT_CHUNK_OVERLAP)
         separators: Final = splitter_args.get("separators", None)
 
-        # Build splitter kwargs
-        splitter_kwargs: Final[dict[str, Any]] = {
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
-        }
-        if separators:
-            splitter_kwargs["separators"] = separators
-
-        text_splitter: Final = RecursiveCharacterTextSplitter(**splitter_kwargs)
+        text_splitter: Final = (
+            RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap, separators=separators)
+            if separators
+            else RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        )
         return text_splitter.split_text(text_to_chunk)
 
     async def embed(

@@ -52,7 +52,9 @@ from litellm.types.decisions import (
     DecisionsUsage,
     NoulAnswer,
     NoulQuestion,
+    OpenAIDecisionContentPart,
     OpenAIDecisionInputImage,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     ScoreAnswer,
@@ -150,17 +152,25 @@ def image_param(decision_input: DecisionsIRState | DecisionsIRMessages) -> str |
             assert_never(decision_input)
 
 
-def _kept_part(part: OpenAIDecisionInputText | OpenAIDecisionInputImage, keep: Callable[[str], bool]) -> bool:
-    return isinstance(part, OpenAIDecisionInputText) or keep(part.image_url)
-
-
-def _message_with_images_where(
-    message: OpenAIDecisionInputMessage, keep: Callable[[str], bool]
+def _message_with_parts_where(
+    message: OpenAIDecisionInputMessage, keep: Callable[[OpenAIDecisionContentPart], bool]
 ) -> OpenAIDecisionInputMessage | None:
     if isinstance(message.content, str):
         return message
-    kept_parts: Final = tuple(part for part in message.content if _kept_part(part, keep))
+    kept_parts: Final = tuple(filter(keep, message.content))
     return message.model_copy(update={"content": kept_parts}) if kept_parts else None
+
+
+def _messages_with_parts_where(
+    decision_input: DecisionsIRMessages, keep: Callable[[OpenAIDecisionContentPart], bool]
+) -> DecisionsIRMessages:
+    return DecisionsIRMessages(
+        messages=tuple(
+            kept
+            for message in decision_input.messages
+            if (kept := _message_with_parts_where(message, keep)) is not None
+        )
+    )
 
 
 def with_images_where(
@@ -170,15 +180,31 @@ def with_images_where(
         case DecisionsIRState():
             return replace(decision_input, images=tuple(image for image in decision_input.images if keep(image)))
         case DecisionsIRMessages():
-            return DecisionsIRMessages(
-                messages=tuple(
-                    kept
-                    for message in decision_input.messages
-                    if (kept := _message_with_images_where(message, keep)) is not None
-                )
+            return _messages_with_parts_where(
+                decision_input, lambda part: not isinstance(part, OpenAIDecisionInputImage) or keep(part.image_url)
             )
         case _:
             assert_never(decision_input)
+
+
+def _is_json_part(part: OpenAIDecisionContentPart) -> bool:
+    return isinstance(part, OpenAIDecisionInputJSON)
+
+
+def _has_json_part(message: OpenAIDecisionInputMessage) -> bool:
+    return not isinstance(message.content, str) and any(map(_is_json_part, message.content))
+
+
+def has_json_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return isinstance(decision_input, DecisionsIRMessages) and any(map(_has_json_part, decision_input.messages))
+
+
+def without_json_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> DecisionsIRState | DecisionsIRMessages:
+    if isinstance(decision_input, DecisionsIRState):
+        return decision_input
+    return _messages_with_parts_where(decision_input, lambda part: not _is_json_part(part))
 
 
 def remote_image_urls(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[str, ...]:
@@ -195,9 +221,7 @@ def _inlined_image(image: DecisionsImage, data_urls: Mapping[str, str]) -> Decis
     return data_urls.get(image, image) if isinstance(image, str) else image
 
 
-def _inlined_part(
-    part: OpenAIDecisionInputText | OpenAIDecisionInputImage, data_urls: Mapping[str, str]
-) -> OpenAIDecisionInputText | OpenAIDecisionInputImage:
+def _inlined_part(part: OpenAIDecisionContentPart, data_urls: Mapping[str, str]) -> OpenAIDecisionContentPart:
     if isinstance(part, OpenAIDecisionInputImage) and part.image_url in data_urls:
         return part.model_copy(update={"image_url": data_urls[part.image_url]})
     return part
@@ -279,11 +303,13 @@ def _raw_part_with_readable_breakpoint(part: object) -> object:
     marker: Final = None if fields is None else fields.get("prompt_cache_breakpoint")
     if fields is None or marker is None:
         return part
+    without_breakpoint: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    if fields.get("type") == "input_json":
+        return without_breakpoint
     marker_fields: Final = _raw_fields(marker)
     readable: Final = prompt_cache_breakpoint_for_wire(
         marker if marker_fields is None else marker_fields, drop_params=True
     )
-    without_breakpoint: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
     return without_breakpoint if readable is None else {**without_breakpoint, "prompt_cache_breakpoint": readable}
 
 
@@ -628,6 +654,7 @@ class BaseDecisionsConfig(ABC):
     supports_prompt_cache: bool = False
     supports_developer_and_system_messages: bool = False
     supports_images: bool = False
+    supports_json_input: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None
     max_total_image_bytes: int | None = None
@@ -645,6 +672,9 @@ class BaseDecisionsConfig(ABC):
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
 
+    def systemone_config(self) -> "BaseDecisionsConfig":
+        return self
+
     def get_input_limits(
         self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
     ) -> DecisionsInputLimits:
@@ -660,6 +690,9 @@ class BaseDecisionsConfig(ABC):
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
+
+    def missing_api_key_message(self, custom_llm_provider: str) -> str:
+        return f"Missing API key for Decisions provider '{custom_llm_provider}'"
 
     def resolve_api_base(self, api_base: str | None) -> str | None:
         return api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()

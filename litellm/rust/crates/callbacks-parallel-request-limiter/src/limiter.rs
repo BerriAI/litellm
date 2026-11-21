@@ -170,6 +170,8 @@ pub struct PostCallFailureFacts {
 pub struct TargetFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_group_id: Option<String>,
     pub user_api_key_hash: Option<String>,
     pub user_api_key_user_id: Option<String>,
     pub user_api_key_team_id: Option<String>,
@@ -1976,6 +1978,9 @@ fn collect_targets(
     let app_member = truthy(&facts.app_id)
         .zip(truthy(&facts.customer_member_id))
         .map(|(app, customer)| format!("{app}:{customer}"));
+    let group_org = truthy(&facts.app_group_id)
+        .zip(truthy(&facts.customer_org_id))
+        .map(|(group, customer)| format!("{group}:{customer}"));
     let customers = [
         ("customer_org", truthy(&facts.customer_org_id)),
         ("customer_team", truthy(&facts.customer_team_id)),
@@ -1983,6 +1988,8 @@ fn collect_targets(
         ("app", truthy(&facts.app_id)),
         ("app_customer_org", app_org.as_deref()),
         ("app_customer_member", app_member.as_deref()),
+        ("app_group", truthy(&facts.app_group_id)),
+        ("app_group_customer_org", group_org.as_deref()),
     ];
     for (scope, owner) in customers {
         if let Some(owner) = owner {
@@ -2001,6 +2008,8 @@ fn collect_targets(
         ("model_per_app", customers[3].1),
         ("model_per_app_customer_org", customers[4].1),
         ("model_per_app_customer_member", customers[5].1),
+        ("model_per_app_group", customers[6].1),
+        ("model_per_app_group_customer_org", customers[7].1),
     ];
     if let Some(model_group) = model_group.filter(|group| !group.is_empty()) {
         let mut seen: Vec<&str> = Vec::new();
@@ -2071,12 +2080,15 @@ mod app_tests {
     #[case::app("app", "app")]
     #[case::organization("app_customer_org", "app:org")]
     #[case::member("app_customer_member", "app:member")]
+    #[case::group("app_group", "group")]
+    #[case::group_org("app_group_customer_org", "group:org")]
     fn app_usage_settles_on_its_scope_and_every_served_model(
         #[case] owner: &str,
         #[case] identity: &str,
     ) {
         let facts = TargetFacts {
             app_id: Some("app".into()),
+            app_group_id: Some("group".into()),
             customer_org_id: Some("org".into()),
             customer_member_id: Some("member".into()),
             ..Default::default()

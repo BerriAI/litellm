@@ -15,15 +15,13 @@ from litellm.proxy._types import (
     LiteLLM_ProjectTableCachedObj,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    project_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     release_unbound_budget_reservation,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.proxy.spend_tracking.native_budgets_replica import install_native_owner, reserve_budget_for_request
@@ -101,7 +99,7 @@ COUNT_TOKENS_REQUESTS: Final[tuple[tuple[str, dict[str, object]], ...]] = (
 TINY_BUDGET_KEY_TOKEN: Final = "hashed-count-tokens-key"
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def spend_counter_store(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
     store: Final = SpendCounterStore(connect(None).spend_counters())
     monkeypatch.setattr(proxy_server, "spend_counter_store", store)
@@ -188,7 +186,7 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spend_counter_store: SpendCounterStore):
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="org_id:org-budgeted:with_budget",
+        key=AuthObject.org_with_budget("org-budgeted"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-budgeted",
             budget_id="org-budget",
@@ -201,7 +199,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
         model_type=LiteLLM_OrganizationTable,
     )
     await cache.async_set_cache(
-        key=project_cache_key("project-budgeted"),
+        key=AuthObject.project("project-budgeted"),
         value=LiteLLM_ProjectTableCachedObj(
             project_id="project-budgeted", spend=2.5, litellm_budget_table=LiteLLM_BudgetTable(max_budget=20.0)
         ),

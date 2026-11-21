@@ -620,6 +620,9 @@ jobs:
       - name: test_unit_passed_gate
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_unit_passed_gate.py
 
+      - name: test_scan_bundled_crypto
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_scan_bundled_crypto.py
+
       - name: test_e2e_idp_stack
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_idp_stack.py
 

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllEmbeddingInputValues
 
 from httpx._models import Headers, Response
+from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -24,6 +25,7 @@ from .cohere_transformation import SagemakerCohereEmbeddingConfig
 from .openai_transformation import SagemakerOpenAIEmbeddingConfig
 
 OPENAI_COMPATIBLE_ROUTE: Final = "openai/"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _model_specific_config(model: str) -> BaseEmbeddingConfig | None:
@@ -108,7 +110,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Transform embedding response for Hugging Face models on SageMaker
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise SagemakerError(
                 message=f"Failed to parse response: {e}",
