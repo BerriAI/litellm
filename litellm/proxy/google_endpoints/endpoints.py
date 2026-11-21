@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.proxy.litellm_pre_call_utils import anthropic_user_profile_id, pinned_anthropic_user_profile_id
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -332,7 +333,12 @@ async def google_stream_generate_content(
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
 )
-async def google_count_tokens(request: Request, model_name: str, fastapi_response: Response):
+async def google_count_tokens(
+    request: Request,
+    model_name: str,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
     """
     ```json
     return {
@@ -349,12 +355,15 @@ async def google_count_tokens(request: Request, model_name: str, fastapi_respons
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _google_count_tokens(request, model_name, litellm_call_id), litellm_call_id, request, fastapi_response
+        _google_count_tokens(request, model_name, litellm_call_id, user_api_key_dict),
+        litellm_call_id,
+        request,
+        fastapi_response,
     )
 
 
 async def _google_count_tokens(
-    request: Request, model_name: str, litellm_call_id: str
+    request: Request, model_name: str, litellm_call_id: str, user_api_key_dict: UserAPIKeyAuth
 ) -> JSONResponse | TokenCountDetailsResponse:
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from litellm.proxy.proxy_server import count_request_tokens
@@ -379,7 +388,13 @@ async def _google_count_tokens(
 
     try:
         token_response: Final = await count_request_tokens(
-            request=token_request, call_endpoint=True, litellm_call_id=litellm_call_id
+            request=token_request,
+            call_endpoint=True,
+            litellm_call_id=litellm_call_id,
+            pinned_user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
+            client_user_profile_id=anthropic_user_profile_id(
+                user_api_key_dict, request.headers, caller_credential=True
+            ),
         )
     except ProxyException as error:
         return _google_error_response(request, error)

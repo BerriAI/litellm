@@ -5057,8 +5057,13 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
-    extra_headers: dict
+    extra_headers: ReadOnly[dict[str, str]]
     native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
+    claude_models_only: NotRequired[ReadOnly[bool]]
+    non_claude_models_only: NotRequired[ReadOnly[bool]]
+    yields_to_configured: NotRequired[ReadOnly[bool]]
+    configured_credential_headers: NotRequired[ReadOnly[tuple[str, ...]]]
+    configured_credential_prefix: NotRequired[ReadOnly[str]]
 
 
 class SelectTokenizerResponse(TypedDict):

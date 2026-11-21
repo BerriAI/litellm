@@ -20129,6 +20129,39 @@ def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooli
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("isolate_litellm_state")
+@pytest.mark.parametrize(
+    "model_filter, serves_from_the_shared_deployment",
+    [("non_claude_models_only", True), ("claude_models_only", False)],
+)
+async def test_a_caller_authorization_isolates_a_claude_deployment_only_when_it_reaches_claude(
+    model_filter: str, serves_from_the_shared_deployment: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "fake-gateway-key"},
+                "model_info": {"id": "shared-anthropic"},
+            }
+        ],
+    )
+
+    response: Final = await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+        provider_specific_header={
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"Authorization": "Bearer sk-ant-oat-fake-caller"},
+            model_filter: True,
+        },
+    )
+
+    assert (response._hidden_params["model_id"] == "shared-anthropic") is serves_from_the_shared_deployment
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("isolate_litellm_state")
 @pytest.mark.parametrize("surface", ["chat", "messages"])
 @pytest.mark.parametrize("credential_kind", ["oauth", "api_key"])
 async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(

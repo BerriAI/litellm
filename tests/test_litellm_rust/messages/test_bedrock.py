@@ -919,6 +919,66 @@ async def test_bedrock_mantle_strips_the_region_prefix_from_the_model_as_python_
     assert _OBJECT.validate_python(rust_sent.body)["model"] == "anthropic.claude-haiku-4-5"
 
 
+_MANTLE_ROUTES: Final = (
+    pytest.param(MANTLE_MODEL, id="bedrock-mantle"),
+    pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", id="mantle-route"),
+)
+
+
+def _sent_user_profile(request: RecordedRequest) -> tuple[object, object]:
+    return (
+        _OBJECT.validate_python(request.body).get("user_profile_id"),
+        request.headers.get("anthropic-user-profile-id"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", _MANTLE_ROUTES)
+@pytest.mark.parametrize(
+    "caller_headers",
+    (
+        pytest.param({}, id="pinned"),
+        pytest.param({"Anthropic-User-Profile-Id": "uprof_other"}, id="pin-beats-a-caller-header-in-another-case"),
+    ),
+)
+async def test_bedrock_mantle_sends_the_proxy_user_profile_id_in_the_body(
+    server: RecordingServer, model: str, caller_headers: Mapping[str, str]
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    proxy_request: Final[dict[str, object]] = {}  # mutable-ok: the proxy helper fills the request it is handed
+    add_provider_specific_headers_to_request(data=proxy_request, headers={}, user_profile_id="uprof_pinned")
+
+    await _mantle(_RUST_ENTRY, server, model=model, extra_headers=dict(caller_headers), **proxy_request)
+
+    assert_served_natively(server)
+    [rust_sent] = server.requests
+    assert _sent_user_profile(rust_sent) == ("uprof_pinned", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", _MANTLE_ROUTES)
+@pytest.mark.parametrize(
+    ("extra_headers", "profile_id"),
+    (
+        pytest.param({"Anthropic-User-Profile-Id": "uprof_sdk"}, "uprof_sdk", id="sdk-header-in-any-case"),
+        pytest.param({"anthropic-user-profile-id": ""}, None, id="empty-sdk-header"),
+        pytest.param({}, None, id="no-profile"),
+    ),
+)
+async def test_bedrock_mantle_sends_an_sdk_user_profile_header_as_the_body_field(
+    server: RecordingServer, model: str, extra_headers: Mapping[str, str], profile_id: str | None
+) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+
+    await _mantle(_RUST_ENTRY, server, model=model, extra_headers=dict(extra_headers))
+
+    assert_served_natively(server)
+    [rust_sent] = server.requests
+    assert _sent_user_profile(rust_sent) == (profile_id, None)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model",

@@ -445,7 +445,9 @@ def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_para
     if deployment_provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
         return None
     header: Final = kwargs.get("provider_specific_header")
-    return ProviderSpecificHeaderUtils.forwarded_authorization(header, deployment_provider)
+    return ProviderSpecificHeaderUtils.forwarded_authorization(
+        header, deployment_provider, declared_model if isinstance(declared_model, str) else None
+    )
 
 
 def serves_caller_credentials(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> bool:

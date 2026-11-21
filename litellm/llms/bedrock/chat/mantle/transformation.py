@@ -15,7 +15,12 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonMode
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.bedrock.common_utils import bedrock_chat_opts_into_native_structured_output, build_mantle_messages_url
+from litellm.llms.bedrock.common_utils import (
+    REQUEST_HEADERS,
+    bedrock_chat_opts_into_native_structured_output,
+    bedrock_user_profile_fields,
+    build_mantle_messages_url,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -113,6 +118,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             request=request,
             model_id=model_id,
             optional_params=optional_params,
+            headers=REQUEST_HEADERS.validate_python(headers),
         )
 
     async def async_transform_request(
@@ -138,14 +144,20 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         model: str,
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
-        return AnthropicConfig.transform_extra_body(
-            self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
-        )
+        profile_fields: Final = {"user_profile_id": request["user_profile_id"]} if "user_profile_id" in request else {}
+        return {
+            **AnthropicConfig.transform_extra_body(
+                self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+            ),
+            **profile_fields,
+        }
 
     @staticmethod
-    def _restore_mantle_body_fields(request: dict, model_id: str, optional_params: dict) -> dict:
+    def _restore_mantle_body_fields(
+        request: dict, model_id: str, optional_params: dict, headers: Mapping[str, object]
+    ) -> dict:
         stream_fields: Final[dict] = {"stream": True} if optional_params.get("stream") is True else {}
-        return {**request, "model": model_id, **stream_fields}
+        return {**request, "model": model_id, **stream_fields, **bedrock_user_profile_fields(headers)}
 
     @property
     def has_custom_stream_wrapper(self) -> bool:

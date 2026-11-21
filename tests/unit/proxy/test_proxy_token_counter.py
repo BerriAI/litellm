@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -27,6 +28,7 @@ import pytest
 import respx
 import tiktoken
 from dotenv import load_dotenv
+from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -68,6 +70,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.mistral.count_tokens import handler as mistral_count_tokens_http
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
+from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler as vertex_partner_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import (
@@ -91,7 +94,11 @@ from litellm.proxy.proxy_server import (
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesRequest
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_USER_PROFILE_ID_HEADER,
+    AnthropicMessagesRequest,
+)
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -447,6 +454,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -530,6 +539,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1353,6 +1364,8 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1413,6 +1426,8 @@ async def test_anthropic_endpoint_403_permission_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1473,6 +1488,8 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        pinned_user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -4382,12 +4399,16 @@ def _groq_router(
     )
 
 
-async def _messages_endpoint_count(router: Router, request_body: Mapping[str, JsonValue]) -> object:
+async def _messages_endpoint_count(
+    router: Router,
+    request_body: Mapping[str, JsonValue],
+    headers: Mapping[str, str] = MappingProxyType({}),
+) -> object:
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
 
     mock_request: Final = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = dict(headers)
     with (
         patch.object(proxy_server, "llm_router", router),
         patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=dict(request_body))),
@@ -4819,6 +4840,7 @@ async def _count_on_a_bridged_provider_count_api(
     peer_reply: Mapping[str, JsonValue] = MappingProxyType({"inputTokens": 57}),
     model_info: Mapping[str, JsonValue] = MappingProxyType({}),
     peer_status: int = 200,
+    headers: Mapping[str, str] = MappingProxyType({}),
 ) -> tuple[object, tuple[httpx.Request, ...]]:
     from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
     from litellm.llms.bedrock.count_tokens import mantle_handler as bedrock_mantle_count_tokens_handler
@@ -4844,7 +4866,7 @@ async def _count_on_a_bridged_provider_count_api(
         patch.object(bedrock_count_tokens_handler, "get_async_httpx_client", return_value=client),
         patch.object(bedrock_mantle_count_tokens_handler, "get_async_httpx_client", return_value=client),
     ):
-        response: Final = await _messages_endpoint_count(router, {**request_body, "model": "nova-agent"})
+        response: Final = await _messages_endpoint_count(router, {**request_body, "model": "nova-agent"}, headers)
     return response, peer.requests
 
 
@@ -4972,6 +4994,50 @@ async def test_a_mantle_count_rejecting_the_forwarded_count_options_answers_with
     assert ("thinking" in json.loads(sent[0].content)) == bool(count_options)
     message: Final = json.loads(bytes(response.body))["error"]["message"]
     assert message.count("counts tokens with us.anthropic.claude-sonnet-5-5 in us-west-2") == region_hints
+
+
+
+@pytest.mark.parametrize(
+    ("client_headers", "sent_profile_id", "region_hints"),
+    [({ANTHROPIC_USER_PROFILE_ID_HEADER: "uprof_malformed"}, "uprof_malformed", 0), ({}, None, 1)],
+    ids=["user_profile_id_forwarded", "no_user_profile_id"],
+)
+@pytest.mark.asyncio
+async def test_a_mantle_count_rejecting_the_forwarded_user_profile_id_answers_without_the_region_hint(
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+    region_hints: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, sent = await _count_on_a_bridged_provider_count_api(
+        {"messages": [{"role": "user", "content": "Read the README"}]},
+        monkeypatch,
+        "bedrock/mantle/anthropic.claude-sonnet-5-5",
+        MappingProxyType(
+            {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "user_profile_id: must be a well-formed ID"},
+            }
+        ),
+        MappingProxyType(
+            {
+                "token_count_model": {
+                    "model": "anthropic.claude-sonnet-5-5",
+                    "litellm_provider": "bedrock_mantle",
+                    "region": "us-west-2",
+                }
+            }
+        ),
+        peer_status=400,
+        headers=client_headers,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert len(sent) == 1
+    assert json.loads(sent[0].content).get("user_profile_id") == sent_profile_id
+    message: Final = json.loads(bytes(response.body))["error"]["message"]
+    assert message.count("counts tokens with anthropic.claude-sonnet-5-5 in us-west-2") == region_hints
 
 
 @pytest.mark.asyncio
@@ -5159,7 +5225,7 @@ class _PartnerCountRequest(BaseModel):
 
 
 async def _vertex_partner_word_count(
-    model: str, request_data: JsonValue, litellm_params: JsonValue
+    model: str, request_data: JsonValue, litellm_params: JsonValue, extra_headers: Mapping[str, str]
 ) -> dict[str, JsonValue]:
     body: Final = _PartnerCountRequest.model_validate(request_data)
     return {"input_tokens": sum(len(message.content.split()) for message in body.messages)}
@@ -6082,7 +6148,10 @@ _LLAMA_3_HUB_TOKENIZER: Final = "Xenova/llama-3-tokenizer"
 
 async def _token_counter_route(request: TokenCountRequest) -> TokenCountResponse:
     return await token_counter(
-        request=request, http_request=_json_request({}, "python-httpx/0.28.1"), fastapi_response=Response()
+        request=request,
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
 
@@ -6578,6 +6647,211 @@ def _utils_token_counter(
     return TestClient(app, raise_server_exceptions=False).post(
         "/utils/token_counter", json=dict(body), headers=dict(headers)
     )
+
+
+_CLAUDE_COUNT_DEPLOYMENTS: Final = (
+    pytest.param(
+        {"model": "anthropic/claude-sonnet-5-5", "api_key": "test-key", "api_base": "https://count-tokens.test"},
+        id="anthropic",
+    ),
+    pytest.param(
+        {"model": "azure_ai/claude-sonnet-5-5", "api_key": "test-key", "api_base": "https://count-tokens.test"},
+        id="azure_ai",
+    ),
+    pytest.param(
+        {"model": "vertex_ai/claude-sonnet-5-5", "vertex_project": "test-project", "vertex_location": "us-east5"},
+        id="vertex_ai",
+    ),
+)
+
+
+_HELLO_COUNT_ROUTES: Final = (
+    pytest.param(
+        "/utils/token_counter?call_endpoint=true",
+        {"model": "provider-counted", "messages": [{"role": "user", "content": "Hello"}]},
+        "total_tokens",
+        id="utils_token_counter",
+    ),
+    pytest.param(
+        "/v1/responses/input_tokens",
+        {"model": "provider-counted", "input": "Hello"},
+        "input_tokens",
+        id="responses_input_tokens",
+    ),
+    pytest.param(
+        "/v1beta/models/provider-counted:countTokens",
+        {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        "totalTokens",
+        id="google_count_tokens",
+    ),
+)
+
+
+@pytest.mark.parametrize("litellm_params", _CLAUDE_COUNT_DEPLOYMENTS)
+@pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
+@pytest.mark.parametrize(
+    ("key_metadata", "deployment_headers", "sent_profile_id"),
+    (
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
+        ({}, {}, "uprof_client"),
+        ({}, {"Anthropic-User-Profile-Id": "uprof_deployment"}, "uprof_deployment"),
+        (
+            {"anthropic_user_profile_id": "uprof_pinned"},
+            {"Anthropic-User-Profile-Id": "uprof_deployment"},
+            "uprof_pinned",
+        ),
+    ),
+    ids=(
+        "key_pin_over_client_header",
+        "client_header",
+        "deployment_header_over_client_header",
+        "key_pin_over_deployment_header",
+    ),
+)
+def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_would_send(
+    litellm_params: dict[str, JsonValue],
+    path: str,
+    body: Mapping[str, JsonValue],
+    count_field: str,
+    key_metadata: Mapping[str, str],
+    deployment_headers: dict[str, JsonValue],
+    sent_profile_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get("anthropic-user-profile-id")
+        if received == sent_profile_id:
+            return httpx.Response(200, json={"input_tokens": 41}, request=request)
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+            request=request,
+        )
+
+    _route_to_one_deployment({**litellm_params, "extra_headers": deployment_headers}, monkeypatch)
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-test", metadata=dict(key_metadata)),
+    )
+    with (
+        _count_apis_answering(count_api),
+        patch.object(
+            vertex_partner_count_tokens_http,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_api)),
+        ),
+        patch(
+            "google.auth.default",
+            return_value=(
+                Credentials(
+                    token="fake-token",
+                    refresh_handler=lambda request, scopes: ("fake-token", datetime(2100, 1, 1)),
+                ),
+                "test-project",
+            ),
+        ),
+    ):
+        response: Final = TestClient(app, raise_server_exceptions=False).post(
+            path, json=body, headers={"anthropic-user-profile-id": "uprof_client"}
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()[count_field] == 41
+
+
+@pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
+def test_count_routes_send_no_user_profile_id_for_a_model_that_is_not_claude(
+    path: str, body: Mapping[str, JsonValue], count_field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get_list("anthropic-user-profile-id")
+        if not received:
+            return httpx.Response(200, json={"input_tokens": 41}, request=request)
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+            request=request,
+        )
+
+    _route_to_one_deployment(
+        {
+            "model": "anthropic/kimi-k3",
+            "api_key": "test-key",
+            "api_base": "https://count-tokens.test",
+            "extra_headers": {"anthropic-user-profile-id": "uprof_deployment"},
+        },
+        monkeypatch,
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-test", metadata={"anthropic_user_profile_id": "uprof_pinned"}),
+    )
+    with _count_apis_answering(count_api):
+        response: Final = TestClient(app, raise_server_exceptions=False).post(
+            path, json=body, headers={"anthropic-user-profile-id": "uprof_client"}
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()[count_field] == 41
+
+
+
+@pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
+def test_count_routes_send_the_pinned_user_profile_id_in_the_mantle_count_body_mantle_inference_sends(
+    path: str, body: Mapping[str, JsonValue], count_field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if request.url.host != "bedrock-mantle.us-east-1.api.aws":
+            return httpx.Response(
+                400, json={"message": "The provided model doesn't support counting tokens."}, request=request
+            )
+        received: Final = json.loads(request.content).get("user_profile_id")
+        if received == "uprof_pinned":
+            return httpx.Response(200, json={"input_tokens": 41}, request=request)
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+            request=request,
+        )
+
+    _route_to_one_deployment(
+        {
+            "model": "bedrock/mantle/anthropic.claude-opus-5-5",
+            "aws_access_key_id": "AKIATESTACCESSKEY",
+            "aws_secret_access_key": "test-secret",
+            "aws_region_name": "us-east-1",
+        },
+        monkeypatch,
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-test", metadata={"anthropic_user_profile_id": "uprof_pinned"}),
+    )
+    with _count_apis_answering(bedrock):
+        response: Final = TestClient(app, raise_server_exceptions=False).post(
+            path, json=body, headers={"anthropic-user-profile-id": "uprof_client"}
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()[count_field] == 41
 
 
 def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
@@ -7256,6 +7530,7 @@ async def _utils_route_count(tool_choice: Mapping[str, JsonValue], model: str = 
         ),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     return response.total_tokens
 
@@ -7539,11 +7814,13 @@ async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION, tool_choice="required"),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     prompt_alone: Final = await token_counter(
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
     assert (with_choice.error, with_choice.total_tokens) == (False, prompt_alone.total_tokens)

@@ -20,7 +20,7 @@ from collections.abc import (
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import datetime
-from functools import reduce
+from functools import partial, reduce
 from itertools import chain, count, groupby, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
@@ -82,6 +82,11 @@ from litellm.litellm_core_utils.core_helpers import (
     iter_items,
     require_attributes,
     set_item,
+)
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
+    names_a_claude_model,
+    override_headers,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -162,6 +167,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     check_customer_request_model_access,
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    pinned_anthropic_user_profile_id,
     redact_credential_headers,
     resolve_customer_request_usage,
     strip_client_guardrail_information,
@@ -184,6 +190,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
 from litellm.types.litellm_params import ProxyRequestState, wire_names
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -1338,9 +1345,59 @@ from litellm.passthrough.timeout_utils import (
     resolve_pass_through_request_timeout,
 )
 
+_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
 
-def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+
+def _with_pinned_profile_id_for_claude_or_where_sent(
+    pinned_profile_id: str | None,
+    caller_credentials: Mapping[str, str],
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+) -> Mapping[str, str]:
+    sends_profile_id: Final = any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers)
+    sends_caller_credential: Final = any(
+        caller_credentials.get(name.lower()) == value for name, value in headers.items()
+    )
+    model: Final = None if body is None else body.get("model")
+    names_claude: Final = isinstance(model, str) and names_a_claude_model(model)
+    if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or names_claude):
+        return headers
+    return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id})
+
+
+def _headers_unchanged(headers: Mapping[str, str], body: Mapping[str, object] | None) -> Mapping[str, str]:
     return headers
+
+
+def _profile_pin_for_generic_routes(
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str],
+    route_headers: Mapping[str, object],
+    custom_llm_provider: str | None,
+    configured_route: bool,
+) -> Callable[[Mapping[str, str], Mapping[str, object] | None], Mapping[str, str]]:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
+
+    claude_route: Final = configured_route or custom_llm_provider in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
+    if upstream_headers_filter is not None or not claude_route:
+        return _headers_unchanged
+    route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
+    caller_credentials: Final[Mapping[str, str]] = (
+        {}
+        if route_sets_credential
+        else {
+            name: value
+            for name in _UPSTREAM_CREDENTIAL_HEADERS
+            if (value := request_headers.get(name)) is not None
+            and not is_authenticated_caller_secret(value, user_api_key_dict)
+        }
+    )
+    return partial(
+        _with_pinned_profile_id_for_claude_or_where_sent,
+        pinned_anthropic_user_profile_id(user_api_key_dict),
+        caller_credentials,
+    )
 
 
 _METHODS_WITHOUT_REQUEST_BODY: Final = frozenset({"GET", "DELETE"})
@@ -1617,7 +1674,7 @@ async def _opaque_passthrough_response(
 async def pass_through_request(
     request: Request,
     target: str,
-    custom_headers: dict,
+    custom_headers: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: dict | None = None,
     forward_headers: bool | None = False,
@@ -1629,7 +1686,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
-    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None = None,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
@@ -1692,12 +1749,20 @@ async def pass_through_request(
         url = httpx.URL(target)
         forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request_headers=safe_get_request_headers(request).copy(),
-            headers=custom_headers,
+            headers=dict(custom_headers),
             forward_headers=forward_headers,
         )
         upstream_headers: Final = _with_trace_context(
-            upstream_headers_filter(forwarded_headers),
+            forwarded_headers if upstream_headers_filter is None else upstream_headers_filter(forwarded_headers),
             parent_span=user_api_key_dict.parent_otel_span,
+        )
+        profile_pin: Final = _profile_pin_for_generic_routes(
+            upstream_headers_filter,
+            user_api_key_dict,
+            safe_get_request_headers(request),
+            custom_headers,
+            custom_llm_provider,
+            configured_route=not builtin_provider_route,
         )
 
         requested_query_params: dict | None = (
@@ -2013,7 +2078,7 @@ async def pass_through_request(
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         outbound_headers, upstream_body = _filtered_upstream_request(
             upstream_request_filter,
-            upstream_headers,
+            profile_pin(upstream_headers, outgoing_body),
             _with_anthropic_user_id(outgoing_body, client_user_id),
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
@@ -2721,7 +2786,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
-    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None = None,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,

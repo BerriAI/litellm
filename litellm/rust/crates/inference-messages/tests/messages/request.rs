@@ -497,6 +497,7 @@ async fn caller_headers_and_provider_scoped_headers_are_forwarded(call: Messages
     let scoped = |provider: &str, value: &str| ProviderSpecificHeader {
         custom_llm_provider: provider.into(),
         extra_headers: object(json!({"x-scoped": value})),
+        ..Default::default()
     };
 
     run_message(MessagesCall {

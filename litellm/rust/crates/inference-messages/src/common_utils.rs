@@ -264,7 +264,10 @@ mod tests {
     }
 }
 
-/// Python's `_merge_messages_header_sources`: later sources win per header name, except
+const ANTHROPIC_USER_PROFILE_ID_HEADER: &str = "anthropic-user-profile-id";
+
+/// Python's `_merge_messages_header_sources`: later sources win per header name, and an
+/// `anthropic-user-profile-id` in any casing replaces earlier casings of it, except
 /// `anthropic-beta` (any casing), whose values from every source are unioned, deduplicated and
 /// sorted into one lowercase `anthropic-beta` entry.
 pub fn merge_messages_header_sources(
@@ -272,24 +275,34 @@ pub fn merge_messages_header_sources(
 ) -> Map<String, Value> {
     let mut merged = Map::new();
     let mut betas = std::collections::BTreeSet::new();
-    for (name, value) in sources.into_iter().flatten() {
-        if !name.eq_ignore_ascii_case("anthropic-beta") {
-            merged.insert(name, value);
-            continue;
+    for source in sources {
+        if source
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(ANTHROPIC_USER_PROFILE_ID_HEADER))
+        {
+            merged.retain(|existing, _| {
+                !existing.eq_ignore_ascii_case(ANTHROPIC_USER_PROFILE_ID_HEADER)
+            });
         }
-        let values: Vec<&str> = match &value {
-            Value::String(text) => vec![text.as_str()],
-            Value::Array(entries) => entries.iter().filter_map(Value::as_str).collect(),
-            _ => Vec::new(),
-        };
-        betas.extend(
-            values
-                .iter()
-                .flat_map(|value| value.split(','))
-                .map(str::trim)
-                .filter(|beta| !beta.is_empty())
-                .map(str::to_owned),
-        );
+        for (name, value) in source {
+            if !name.eq_ignore_ascii_case("anthropic-beta") {
+                merged.insert(name, value);
+                continue;
+            }
+            let values: Vec<&str> = match &value {
+                Value::String(text) => vec![text.as_str()],
+                Value::Array(entries) => entries.iter().filter_map(Value::as_str).collect(),
+                _ => Vec::new(),
+            };
+            betas.extend(
+                values
+                    .iter()
+                    .flat_map(|value| value.split(','))
+                    .map(str::trim)
+                    .filter(|beta| !beta.is_empty())
+                    .map(str::to_owned),
+            );
+        }
     }
     if !betas.is_empty() {
         merged.insert(
@@ -302,6 +315,7 @@ pub fn merge_messages_header_sources(
 
 #[cfg(test)]
 mod merge_tests {
+    use rstest::rstest;
     use serde_json::{Map, Value, json};
 
     use super::merge_messages_header_sources;
@@ -327,5 +341,56 @@ mod merge_tests {
     fn no_beta_values_leave_no_beta_header() {
         let merged = merge_messages_header_sources([map(json!({"anthropic-beta": ""}))]);
         assert!(merged.is_empty());
+    }
+
+    #[rstest]
+    fn a_later_source_replaces_the_same_header_spelled_in_another_case() {
+        let merged = merge_messages_header_sources([
+            map(json!({"Anthropic-User-Profile-Id": "uprof_caller", "x-kept": "1"})),
+            map(json!({"anthropic-user-profile-id": "uprof_pinned"})),
+        ]);
+        assert_eq!(
+            Value::Object(merged),
+            json!({"x-kept": "1", "anthropic-user-profile-id": "uprof_pinned"})
+        );
+    }
+
+    #[rstest]
+    fn other_headers_spelled_in_another_case_are_all_kept() {
+        let merged = merge_messages_header_sources([
+            map(json!({"X-Custom": "deployment"})),
+            map(json!({"x-custom": "client"})),
+        ]);
+        assert_eq!(
+            Value::Object(merged),
+            json!({"X-Custom": "deployment", "x-custom": "client"})
+        );
+    }
+
+    #[rstest]
+    #[case::empty(json!({}), json!({}), json!({}))]
+    #[case::disjoint(json!({"x-one": "1"}), json!({"x-two": "2"}), json!({"x-one": "1", "x-two": "2"}))]
+    #[case::same_spelling(
+        json!({"x-priority": "old", "x-kept": "yes"}),
+        json!({"x-priority": "new"}),
+        json!({"x-priority": "new", "x-kept": "yes"})
+    )]
+    #[case::multiple_casings(
+        json!({"X-Profile": "old"}),
+        json!({"X-Profile": "first", "x-profile": "last"}),
+        json!({"X-Profile": "first", "x-profile": "last"})
+    )]
+    fn merging_retains_all_incoming_values(
+        #[case] first: Value,
+        #[case] second: Value,
+        #[case] expected: Value,
+    ) {
+        let merged = merge_messages_header_sources([map(first), map(second)]);
+        let expected = map(expected);
+        assert_eq!(merged, expected);
+        assert_eq!(
+            merged.keys().collect::<Vec<_>>(),
+            expected.keys().collect::<Vec<_>>()
+        );
     }
 }
