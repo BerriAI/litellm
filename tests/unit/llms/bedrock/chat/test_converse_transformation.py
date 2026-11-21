@@ -6046,7 +6046,7 @@ def _sends_native_output(body: Mapping[str, object], route: str) -> bool:
 
 
 @pytest.mark.parametrize("route", ["converse", "invoke"])
-def test_deprecated_deployment_native_output_flag_does_not_opt_in(set_native_structured_output, route):
+def test_deprecated_deployment_native_output_flag_is_honored(set_native_structured_output, route):
     set_native_structured_output("us.anthropic.claude-opus-4-8", None)
     litellm_params: Final = {
         "model": f"bedrock/{route}/us.anthropic.claude-opus-4-8",
@@ -6065,7 +6065,7 @@ def test_deprecated_deployment_native_output_flag_does_not_opt_in(set_native_str
         ]
     )
 
-    assert not _sends_native_output(_routed_request_body(router, "opted-in", route), route)
+    assert _sends_native_output(_routed_request_body(router, "opted-in", route), route)
     assert not _sends_native_output(_routed_request_body(router, "sibling", route), route)
 
 
@@ -12309,18 +12309,14 @@ def test_govcloud_fable_51_uses_native_output(model: str) -> None:
     ],
 )
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_govcloud_fable_51_exact_region_opt_out_precedes_stripped_row(
+def test_govcloud_fable_51_exact_region_default_precedes_stripped_row(
     model: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model_cost_key: Final = model if model.startswith("bedrock/") else f"bedrock/{model}"
     base_model_cost_key: Final = model.rsplit("/", 1)[-1]
     exact_model_info: Final = {
-        **{
-            key: value
-            for key, value in litellm.model_cost[model_cost_key].items()
-            if key != "supports_bedrock_native_structured_output_by_default"
-        },
-        "supports_native_structured_output": False,
+        **litellm.model_cost[model_cost_key],
+        "supports_bedrock_native_structured_output_by_default": False,
     }
     stripped_model_info: Final = {
         **litellm.model_cost[base_model_cost_key],

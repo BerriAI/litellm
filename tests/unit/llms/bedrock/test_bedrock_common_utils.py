@@ -2613,7 +2613,7 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
         ("us-gov.anthropic.claude-opus-4-8", None, True),
         ("us.anthropic.claude-opus-4-8", {"supports_native_structured_output": False}, False),
         ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
-        ("us.anthropic.claude-4-5", {"supports_bedrock_native_structured_output": True}, None),
+        ("us.anthropic.claude-4-5", {"supports_bedrock_native_structured_output": True}, True),
     ],
     ids=[
         "default_model",
@@ -2621,10 +2621,10 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
         "default_govcloud_model",
         "deployment_opt_out",
         "deprecated_opt_out",
-        "deprecated_opt_in_ignored",
+        "deprecated_opt_in_honored",
     ],
 )
-def test_bedrock_native_output_uses_map_defaults_and_only_deployment_opt_outs(
+def test_bedrock_native_output_uses_map_defaults_and_deployment_overrides(
     local_model_cost_map: None,
     model: str,
     model_info: dict[str, object] | None,
@@ -2633,21 +2633,22 @@ def test_bedrock_native_output_uses_map_defaults_and_only_deployment_opt_outs(
     assert _bedrock_native_output_flag(model, "bedrock", model_info) is expected
 
 
-def test_deprecated_native_output_model_info_warns_once(local_model_cost_map: None) -> None:
+@pytest.mark.parametrize(
+    ("model", "deprecated_flag", "expected"),
+    [
+        ("us.anthropic.claude-opus-4-8", False, False),
+        ("us.anthropic.claude-4-5", True, True),
+    ],
+    ids=["opt-out", "opt-in"],
+)
+def test_deprecated_native_output_model_info_warns_once(
+    local_model_cost_map: None, model: str, deprecated_flag: bool, expected: bool
+) -> None:
     _warn_deprecated_bedrock_native_output_model_info.cache_clear()
+    model_info: Final = {"supports_bedrock_native_structured_output": deprecated_flag}
     with patch("litellm.llms.bedrock.common_utils.verbose_logger.warning") as warning:
-        assert (
-            _bedrock_native_output_flag(
-                "us.anthropic.claude-opus-4-8", "bedrock", {"supports_bedrock_native_structured_output": False}
-            )
-            is False
-        )
-        assert (
-            _bedrock_native_output_flag(
-                "us.anthropic.claude-opus-4-8", "bedrock", {"supports_bedrock_native_structured_output": False}
-            )
-            is False
-        )
+        assert _bedrock_native_output_flag(model, "bedrock", model_info) is expected
+        assert _bedrock_native_output_flag(model, "bedrock", model_info) is expected
     assert warning.call_count == 1
     assert "supports_native_structured_output" in warning.call_args.args[0]
     _warn_deprecated_bedrock_native_output_model_info.cache_clear()
