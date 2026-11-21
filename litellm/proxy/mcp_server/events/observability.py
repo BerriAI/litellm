@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, TypeAlias
@@ -74,18 +75,22 @@ class EventMetrics:
             cls.subscriptions.labels(status=status).set(value)
 
 
-async def record(activity: EventActivity) -> None:
+LogWriter: TypeAlias = Callable[[EventActivity, UserAPIKeyAuth], Awaitable[None]]
+
+
+async def record(activity: EventActivity, write: LogWriter | None = None) -> None:
     amount: Final = activity.count if activity.count is not None else max(len(activity.event_ids), 1)
     EventMetrics.count(activity.server_id, activity.event_name, activity.outcome, amount)
     if activity.caller is None:
         return
     try:
-        await _write_log_row(activity, activity.caller)
+        await (write or write_log_row)(activity, activity.caller)
     except Exception as error:  # noqa: BLE001  # logging must never change what the client receives
         verbose_logger.warning("Failed to log MCP event activity: %s", error)
 
 
-async def _write_log_row(activity: EventActivity, caller: UserAPIKeyAuth) -> None:
+async def write_log_row(activity: EventActivity, caller: UserAPIKeyAuth) -> None:
+    """One spend-log row per event outcome, attributed to the caller, so event traffic shows next to tool calls."""
     from mcp.types import CallToolResult, TextContent
 
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
