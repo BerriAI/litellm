@@ -98,9 +98,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.rust_bridge._native import RustIdentity, jwt_key_mapping_cache_key
+from litellm.rust_bridge._native import RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -549,7 +550,7 @@ class PythonAuthHost:
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def cached_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> object:
         return await self.user_api_key_cache.async_get_cache(
-            jwt_key_mapping_cache_key(claim_field, claim_value, issuer)
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer)
         )
 
     @with_service_target(AUTH_OBJECTS_TARGET)
@@ -557,11 +558,13 @@ class PythonAuthHost:
         self, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float
     ) -> None:
         await self.user_api_key_cache.async_set_cache(
-            key=jwt_key_mapping_cache_key(claim_field, claim_value, issuer), value=value, ttl=ttl_seconds
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer), value, ttl=ttl_seconds
         )
 
     async def forget_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> None:
-        await self.user_api_key_cache.async_delete_cache(jwt_key_mapping_cache_key(claim_field, claim_value, issuer))
+        await self.user_api_key_cache.async_delete_cache(
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer).key
+        )
 
     async def _team(
         self, team_id: str, *, upsert: bool = False, check_db_only: bool = False
@@ -675,7 +678,7 @@ class PythonAuthHost:
 
     async def _recache_user(self, user: LiteLLM_UserTable) -> LiteLLM_UserTable:
         await self.user_api_key_cache.async_set_cache(
-            key=user.user_id,
+            key=AuthObject.user(user.user_id),
             value=user,
             model_type=LiteLLM_UserTable,
             ttl=get_management_object_ttl(self.user_api_key_cache),
