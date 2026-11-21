@@ -38,6 +38,7 @@ _CHAT_RESPONSE: Final = {"id": "chatcmpl-1", "choices": [{"message": {"role": "a
 _RESPONSES_API_RESPONSE_WITHOUT_TOOLS: Final = {"id": "resp_1", "status": "completed", "output": [{"type": "message"}]}
 _RESPONSES_API_RESPONSE: Final = {**_RESPONSES_API_RESPONSE_WITHOUT_TOOLS, "tools": _TOOLS}
 _TEXT_RESPONSE: Final = "a transcription returned as plain text"
+_DROPPABLE_PATHS: Final = ("response.tools", "model_map_information.model_map_value", "model_parameters.tools")
 
 
 @pytest.fixture(autouse=True)
@@ -377,13 +378,24 @@ async def test_async_send_message_warns_which_fields_it_dropped_to_fit(
     assert str(_size(payload)) in warnings[0]
 
 
+@pytest.mark.parametrize(
+    ("payload", "dropped"),
+    [
+        (_chat_payload(), ("model_map_information.model_map_value", "model_parameters.tools")),
+        (_chat_payload_without_model_map_value_and_tools(), ()),
+    ],
+    ids=["chat_completion_with_tools", "nothing_to_drop"],
+)
 @pytest.mark.asyncio
 async def test_async_send_message_does_not_send_a_message_that_cannot_fit(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    payload: StandardLoggingPayload,
+    dropped: tuple[str, ...],
 ) -> None:
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
     route: Final = respx_mock.post(_QUEUE_URL).mock(return_value=httpx.Response(200))
-    payload: Final = _chat_payload()
     logger: Final = _sqs_logger(
         monkeypatch, sqs_max_message_bytes=_size(_chat_payload_without_model_map_value_and_tools()) - 1
     )
@@ -396,6 +408,7 @@ async def test_async_send_message_does_not_send_a_message_that_cannot_fit(
     assert len(errors) == 1
     assert "call-with-tools" in errors[0]
     assert str(_size(payload)) in errors[0]
+    assert tuple(path for path in _DROPPABLE_PATHS if path in errors[0]) == dropped
 
 
 @pytest.mark.asyncio

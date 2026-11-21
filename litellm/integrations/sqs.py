@@ -354,11 +354,11 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         if fitting is None:
             verbose_logger.error(
                 "Dropped the SQS message for litellm_call_id=%s. It is %s bytes, over sqs_max_message_bytes=%s, "
-                "even after dropping %s",
+                "even after dropping the optional fields it had (%s)",
                 call_id,
                 full_size,
                 self.sqs_max_message_bytes,
-                ", ".join(field.path for field in _DROPPABLE_FIELDS),
+                ", ".join(field.path for field in droppable) or "none",
             )
             return None
         dropped, body = fitting
