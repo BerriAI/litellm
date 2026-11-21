@@ -4344,6 +4344,96 @@ def test_get_error_information_error_code_priority():
     assert result["error_class"] == "NoCodeException"
 
 
+@pytest.mark.parametrize(
+    "provider_code", ["context_length_exceeded", "integer_below_min_value", "content_filter", "1211", "200"]
+)
+def test_get_error_information_logs_the_http_status_and_keeps_the_provider_error_code(provider_code: str):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    error: Final = litellm.BadRequestError(
+        message="rejected",
+        model="gpt-5.6",
+        llm_provider="openai",
+        body={"message": "rejected", "type": "invalid_request_error", "param": None, "code": provider_code},
+    )
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(error)
+
+    assert error.code == provider_code
+    assert error_information["error_code"] == "400"
+    assert error_information["error_provider_code"] == provider_code
+
+
+@pytest.mark.parametrize("carried_code", [None, "", 400, "400"])
+def test_get_error_information_logs_no_provider_error_code_when_the_carried_code_is_empty_or_the_http_status(
+    carried_code: int | str | None,
+):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    error: Final = litellm.BadRequestError(
+        message="rejected",
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", "type": "BadRequestError", "param": "max_tokens", "code": carried_code},
+    )
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(error)
+
+    assert error_information["error_code"] == "400"
+    assert error_information["error_provider_code"] is None
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_get_error_information_keeps_the_provider_error_code_of_a_mapped_rate_limit_error(custom_llm_provider: str):
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.llms.openai.common_utils import OpenAIError
+
+    upstream_error: Final = OpenAIError(
+        status_code=429,
+        message="You exceeded your current quota, please check your plan and billing details.",
+        body={
+            "message": "You exceeded your current quota, please check your plan and billing details.",
+            "type": "insufficient_quota",
+            "param": None,
+            "code": "insufficient_quota",
+        },
+    )
+    with pytest.raises(litellm.RateLimitError) as mapped:
+        exception_type(model="gpt-5.6", original_exception=upstream_error, custom_llm_provider=custom_llm_provider)
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(mapped.value)
+
+    assert error_information["error_code"] == "429"
+    assert error_information["error_provider_code"] == "insufficient_quota"
+
+
+@pytest.mark.parametrize("error_class", [litellm.BadRequestError, litellm.RateLimitError])
+def test_get_error_information_redacts_secrets_in_the_provider_error_code(
+    error_class: type[litellm.BadRequestError] | type[litellm.RateLimitError],
+):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    leaked_key: Final = "AKIAIOSFODNN7EXAMPLE"
+    error: Final = error_class(
+        message="rejected",
+        model="gpt-5.6",
+        llm_provider="openai",
+        body={"message": "rejected", "type": "invalid_request_error", "param": None, "code": f"bad_key_{leaked_key}"},
+    )
+    logged_provider_code: Final = StandardLoggingPayloadSetup.get_error_information(error)["error_provider_code"]
+
+    assert logged_provider_code is not None
+    assert logged_provider_code.startswith("bad_key_")
+    assert leaked_key not in logged_provider_code
+
+
+def test_get_error_information_logs_a_provider_error_code_when_no_http_status_is_known():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    class CodeOnlyError(Exception):
+        code = "invalid_api_key"
+
+    assert StandardLoggingPayloadSetup.get_error_information(CodeOnlyError())["error_code"] == "invalid_api_key"
+
+
 def test_get_error_information_prefers_message_attribute_over_str():
     """
     Regression for empty-error_message-in-spend-logs.

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anthropic
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -12361,3 +12362,383 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+_DOWNSTREAM_GUARDRAIL_FIELDS: Final = MappingProxyType(
+    {"guardrail_name": "block-secret-project", "guardrail_mode": "pre_call", "pattern": "secret_project_codename"}
+)
+
+
+def _downstream_proxy_rejection(
+    route: str, call: Callable[[], object], fields: Mapping[str, object] = _DOWNSTREAM_GUARDRAIL_FIELDS
+) -> Exception:
+    body: Final = {
+        "error": {
+            "message": "Content blocked: secret_project_codename pattern detected",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "400",
+            "provider_specific_fields": dict(fields),
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://downstream-proxy.example.com/{route}").mock(return_value=httpx.Response(400, json=body))
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    return caught.value
+
+
+_DOWNSTREAM: Final = MappingProxyType(
+    {"api_base": "https://downstream-proxy.example.com/", "api_key": "sk-downstream-key"}
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("route", "call"),
+    [
+        (
+            "responses",
+            lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", **_DOWNSTREAM),
+        ),
+        (
+            "chat/completions",
+            lambda: litellm.completion(
+                model="litellm_proxy/gpt-5.5", messages=[{"role": "user", "content": "project bluebird"}], **_DOWNSTREAM
+            ),
+        ),
+    ],
+)
+async def test_a_chained_proxy_relays_which_downstream_guardrail_blocked_the_request(
+    route: str, call: Callable[[], object]
+) -> None:
+    rejection: Final = _downstream_proxy_rejection(route, call)
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "chained"})._handle_llm_api_exception(
+            e=rejection,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert relayed.value.to_dict()["provider_specific_fields"] == dict(_DOWNSTREAM_GUARDRAIL_FIELDS)
+
+
+_DOWNSTREAM_LEAKABLE_VALUES: Final = (
+    "guard-scan.internal.corp",
+    "/srv/secret/app/guard.py",
+    "10.0.4.17",
+    "abcd1234efgh5678",
+    "cs-0123456789",
+    "tok-0123456789abcdef",
+    "4815162342108",
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+async def test_a_chained_proxy_redacts_secrets_and_internal_details_from_relayed_guardrail_fields() -> None:
+    fields: Final = {
+        **_DOWNSTREAM_GUARDRAIL_FIELDS,
+        "exception": "connect to http://guard-scan.internal.corp:9000/v1/check failed at /srv/secret/app/guard.py",
+        "api_key": "abcd1234efgh5678",
+        "access_token": ["tok-0123456789abcdef"],
+        "scanner": {
+            "hosts": ["10.0.4.17:8080"],
+            "client_secret": "cs-0123456789",
+            "api_secret": 4815162342108,
+            "attempts": 2,
+        },
+    }
+    rejection: Final = _downstream_proxy_rejection(
+        "responses",
+        lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", **_DOWNSTREAM),
+        fields,
+    )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "chained"})._handle_llm_api_exception(
+            e=rejection,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    answered: Final = json.loads(json.dumps(relayed.value.to_dict()["provider_specific_fields"]))
+    assert {key: answered[key] for key in _DOWNSTREAM_GUARDRAIL_FIELDS} == dict(_DOWNSTREAM_GUARDRAIL_FIELDS)
+    assert answered["scanner"]["attempts"] == 2
+    assert [value for value in _DOWNSTREAM_LEAKABLE_VALUES if value in json.dumps(answered)] == []
+
+
+_VLLM_BACKEND: Final = MappingProxyType(
+    {"api_base": "https://vllm-backend.example.com/v1", "api_key": "sk-vllm-key"}
+)
+
+_VLLM_ROUTES: Final = (
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            messages=[{"role": "user", "content": "hi"}],
+            **_VLLM_BACKEND,
+        ),
+    ),
+    (
+        "completions",
+        lambda: litellm.text_completion(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            prompt="hi",
+            **_VLLM_BACKEND,
+        ),
+    ),
+    (
+        "responses",
+        lambda: litellm.responses(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            input="hi",
+            **_VLLM_BACKEND,
+        ),
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_relays_param_and_unwrapped_message_with_an_openai_type(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "object": "error",
+            "message": "max_tokens must be at least 1, got -5.",
+            "type": "BadRequestError",
+            "param": "max_tokens",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert (payload["param"], payload["type"], payload["code"]) == ("max_tokens", "invalid_request_error", "400")
+    assert "provider_specific_fields" not in payload
+    assert str(payload["message"]).endswith("max_tokens must be at least 1, got -5.")
+    assert '{"error"' not in str(payload["message"])
+    assert "{'error'" not in str(payload["message"])
+
+
+@pytest.mark.usefixtures("httpx_transport")
+async def test_azure_responses_400_relays_param_and_unwrapped_message() -> None:
+    body: Final = {
+        "error": {
+            "message": "Invalid 'max_output_tokens': integer below minimum value.",
+            "type": "invalid_request_error",
+            "param": "max_output_tokens",
+            "code": "integer_below_min_value",
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://azure-backend.example.com/openai/").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = litellm.responses(
+                model="azure/gpt-deployment",
+                input="hi",
+                api_base="https://azure-backend.example.com",
+                api_key="azure-key",
+                api_version="2025-04-01-preview",
+            )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "azure-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert (payload["param"], payload["type"], payload["code"]) == (
+        "max_output_tokens",
+        "invalid_request_error",
+        "400",
+    )
+    assert payload["provider_specific_fields"] == {"code": "integer_below_min_value"}
+    assert str(payload["message"]).endswith("Invalid 'max_output_tokens': integer below minimum value.")
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_redacts_secrets_and_internal_details_from_param_and_type(
+    route: str, call: Callable[[], object]
+) -> None:
+    leaks: Final = (
+        "sk-9876543210abcdef9876543210",
+        "guard-scan.internal.corp",
+        "/srv/secret/app/guard.py",
+    )
+    body: Final = {
+        "error": {
+            "message": f"invalid value for {' '.join(leaks)}",
+            "type": f"BadRequestError {' '.join(leaks)}",
+            "param": f"token_field {' '.join(leaks)}",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert payload["type"] == "invalid_request_error"
+    assert str(payload["param"]).startswith("token_field ")
+    for secret_or_internal in leaks:
+        assert secret_or_internal not in str(payload["param"])
+        assert secret_or_internal not in str(payload["message"])
+
+
+_CONTENT_FILTERS: Final = (
+    {"blocked": True, "source_type": "prompt", "content_filter_results": {"jailbreak": {"detected": True}}},
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_relays_the_error_fields_beyond_openais_four(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering the content management policy.",
+            "type": "invalid_request_error",
+            "param": "prompt",
+            "code": "content_filter",
+            "content_filters": list(_CONTENT_FILTERS),
+            "innererror": {"code": "ResponsibleAIPolicyViolation"},
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert json.loads(json.dumps(relayed.value.to_dict()["provider_specific_fields"])) == {
+        "code": "content_filter",
+        "content_filters": list(_CONTENT_FILTERS),
+        "innererror": {"code": "ResponsibleAIPolicyViolation"},
+    }
+
+
+_DICT_MESSAGE_ROUTES: Final = (
+    *(route for route in _VLLM_ROUTES if route[0] != "completions"),
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="mistral/mistral-small-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            **_VLLM_BACKEND,
+        ),
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _DICT_MESSAGE_ROUTES)
+async def test_openai_compatible_backend_error_with_a_structured_message_relays_its_body_as_json(
+    route: str, call: Callable[[], object]
+) -> None:
+    detail: Final = {"type": "greater_than_equal", "loc": ["body", "max_tokens"], "msg": "must be >= 0"}
+    body: Final = {
+        "object": "error",
+        "message": {"detail": [detail]},
+        "type": "invalid_request_message_error",
+        "param": None,
+        "code": None,
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(422, json=body)
+        )
+        with pytest.raises((litellm.BadRequestError, litellm.UnprocessableEntityError)) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "mistral-small"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    message: Final = str(relayed.value.to_dict()["message"])
+    relayed_body: Final = json.loads(message[message.index("{") : message.rindex("}") + 1])
+    assert relayed_body["message"] == {"detail": [detail]}
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_redacts_internal_hosts_used_as_keys_in_its_extra_fields(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "message": "every scanner is down",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": None,
+            "upstreams": {"10.0.4.17:8080": "down", "guard-scan.internal.corp": "down"},
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    answered: Final = json.dumps(relayed.value.to_dict()["provider_specific_fields"])
+    assert "upstreams" in answered
+    assert [leak for leak in ("10.0.4.17", "guard-scan.internal.corp") if leak in answered] == []
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_with_a_non_finite_number_in_its_extra_fields_still_answers_valid_json(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = (
+        b'{"error": {"message": "rejected", "type": "invalid_request_error", "param": "prompt", "code": null,'
+        b' "scores": {"toxicity": NaN, "bias": Infinity}}}'
+    )
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, content=body, headers={"content-type": "application/json"})
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    answered: Final = json.loads(json.dumps(relayed.value.to_dict(), allow_nan=False))
+    assert (relayed.value.code, answered["param"]) == ("400", "prompt")

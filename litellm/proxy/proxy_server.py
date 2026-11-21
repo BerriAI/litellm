@@ -505,8 +505,11 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    openai_error_param,
+    openai_error_type,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -12591,8 +12594,8 @@ async def completion(
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            type=openai_error_type(e, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)),
+            param=openai_error_param(e),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),

@@ -19,6 +19,7 @@ import click
 import fastapi.routing
 import httpx
 import pytest
+import respx
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -610,6 +611,48 @@ def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_au
 
     assert response.status_code == 400, response.text
     assert response.json()["error"]["param"] == "prompt", response.text
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_text_completion_backend_400_answers_with_an_openai_error_type_and_the_backend_param(
+    client_no_auth, monkeypatch
+):
+    from litellm import Router
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "vllm-qwen",
+                    "litellm_params": {
+                        "model": "hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+                        "api_base": "https://vllm-backend.example.com/v1",
+                        "api_key": "sk-vllm-key",
+                    },
+                }
+            ]
+        ),
+    )
+    backend_error: Final = {
+        "error": {
+            "object": "error",
+            "message": "max_tokens must be at least 1, got -5.",
+            "type": "BadRequestError",
+            "param": "max_tokens",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as backend:
+        _ = backend.post("https://vllm-backend.example.com/v1/completions").mock(
+            return_value=httpx.Response(400, json=backend_error)
+        )
+        response: Final = client_no_auth.post("/v1/completions", json={"model": "vllm-qwen", "prompt": "hi"})
+
+    error: Final = response.json()["error"]
+    assert (response.status_code, error["type"], error["param"]) == (400, "invalid_request_error", "max_tokens"), (
+        response.text
+    )
 
 
 @pytest.mark.parametrize(
