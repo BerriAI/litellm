@@ -10510,6 +10510,26 @@ def test_claude_routes_without_the_mcp_connector_send_only_the_text_of_an_mcp_tu
     assert MCP_HISTORY_DROP_WARNING % ("claude-haiku-5-5", route) in caplog.messages
 
 
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_log_no_mcp_warning_for_a_history_without_mcp_calls(
+    config_class, route, caplog
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        config_class().transform_request(
+            model="claude-haiku-5-5",
+            messages=[
+                {"role": "user", "content": "List the wiki pages of facebook/react."},
+                {"role": "assistant", "content": "The wiki has one page."},
+                {"role": "user", "content": "Which page covers the reconciler?"},
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+    assert MCP_HISTORY_DROP_WARNING % ("claude-haiku-5-5", route) not in caplog.messages
+
+
 def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_sent_them():
     errored_search: Final = {
         "type": "tool_search_tool_result",
