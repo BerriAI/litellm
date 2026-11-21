@@ -7,7 +7,9 @@ import pytest
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.mcp_server.events.access import (
+    AnyOf,
     EventGrant,
+    event_grant,
     grant_allows,
     holds_webhooks,
     intersect_grants,
@@ -76,6 +78,9 @@ def test_event_grants_keep_every_level_that_restricts_the_server(
         ((frozenset({"a", "b"}), frozenset({"b", "c"})), "b", True),
         ((frozenset({"a", "b"}), frozenset({"b", "c"})), "a", False),
         ((frozenset({"*"}), frozenset({"deploy.*"})), "build.failed", False),
+        (AnyOf(((frozenset({"a"}),), (frozenset({"b"}),))), "b", True),
+        (AnyOf(((frozenset({"a"}),), (frozenset({"b"}),))), "c", False),
+        (AnyOf(()), "a", False),
     ),
 )
 def test_grant_allows(grant: EventGrant, name: str, allowed: bool) -> None:
@@ -172,3 +177,47 @@ def test_a_custom_auth_token_shaped_like_a_key_hash_is_not_a_database_key() -> N
     assert stored_key_hash(hash_shaped) is None
     assert holds_webhooks(hash_shaped) is False
     assert principal_of(hash_shaped) == principal_of(UserAPIKeyAuth(user_id="u"))
+
+
+def _sources_of(*sources: UserAPIKeyAuth | None):  # noqa: ANN202  # test double
+    async def granting(_caller: UserAPIKeyAuth, _server_id: str) -> tuple[UserAPIKeyAuth, ...] | None:
+        return None if sources == (None,) else tuple(source for source in sources if source is not None)
+
+    return granting
+
+
+def _rules(by_team: dict[str | None, dict[str, list[str]] | None]):  # noqa: ANN202  # test double
+    async def levels(source: UserAPIKeyAuth) -> tuple[LiteLLM_ObjectPermissionTable | None, ...]:
+        rules: Final = by_team.get(source.team_id)
+        return (_level(rules) if rules is not None else None,)
+
+    return levels
+
+
+SUBJECT: Final = UserAPIKeyAuth(user_id="u1")
+TEAM_A: Final = UserAPIKeyAuth(user_id="u1", team_id="team-a")
+TEAM_B: Final = UserAPIKeyAuth(user_id="u1", team_id="team-b")
+
+
+@pytest.mark.parametrize(
+    ("granting", "rules", "expected"),
+    (
+        ((None,), {None: {"srv": ["a"]}}, (frozenset({"a"}),)),
+        (
+            (TEAM_A, TEAM_B),
+            {"team-a": {"srv": ["a"]}, "team-b": {"srv": ["b"]}},
+            AnyOf(((frozenset({"a"}),), (frozenset({"b"}),))),
+        ),
+        ((TEAM_A, TEAM_B), {"team-a": {"srv": ["a"]}, "team-b": None}, None),
+        ((TEAM_A,), {"team-a": {"srv": ["a"]}, None: {"srv": ["b"]}}, AnyOf(((frozenset({"a"}),),))),
+        ((), {}, AnyOf(())),
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_multi_source_caller_gets_the_union_of_what_its_granting_sources_allow(
+    granting: tuple[UserAPIKeyAuth | None, ...],
+    rules: dict[str | None, dict[str, list[str]] | None],
+    expected: EventGrant,
+) -> None:
+    grant: Final = await event_grant("srv", SUBJECT, _rules(rules), _sources_of(*granting))
+    assert grant == expected
