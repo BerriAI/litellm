@@ -13,7 +13,7 @@ from tests.unit.proxy.spend_counters_ledger_twin import (
     rust_redis_store,
 )
 from tests.unit.proxy.spend_tracking import test_spend_counter_batch as scenarios
-from tests.unit.proxy.spend_tracking.native_budgets_replica import RespRedis
+from tests.unit.proxy.spend_tracking.native_budgets_replica import LostSeedReplyRedis, RespRedis
 
 globals().update(ledger_scenarios(scenarios))
 
@@ -86,3 +86,43 @@ async def test_post_call_cold_counters_seed_from_the_mget_miss_without_a_second_
     assert seeds == [("SET", "spend:team:team", "4.0")]
     assert redis.values["spend:key:hashed"] == 1.5
     assert redis.values["spend:team:team"] == 4.5
+
+
+class _CachedSpend:
+    def __init__(self, spend: float) -> None:
+        self.spend: Final = spend
+
+    async def async_get_cache(self, key: str, **_: object) -> object:
+        return {"spend": self.spend}
+
+
+@pytest.mark.asyncio
+async def test_cold_seed_whose_reply_is_lost_leaves_no_counter_in_redis(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis: Final = LostSeedReplyRedis(values={}, counter="spend:end_user:eu")
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "user_api_key_cache", _CachedSpend(6.0))
+
+    with rust_redis_store(monkeypatch, redis, socket_timeout=0.5):
+        with pytest.raises(Exception, match="timeout"):
+            await ps._ensure_spend_counter_initialized(counter_key="spend:end_user:eu", source_cache_key="eu")
+
+    assert redis.count("EVAL") == 1
+    assert "spend:end_user:eu" not in redis.values
+
+
+@pytest.mark.asyncio
+async def test_post_call_cold_seed_whose_reply_is_lost_leaves_no_counter_in_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis: Final = LostSeedReplyRedis(values={}, counter="spend:end_user:eu")
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "user_api_key_cache", _CachedSpend(6.0))
+
+    with rust_redis_store(monkeypatch, redis, socket_timeout=0.5):
+        with pytest.raises(Exception, match="timeout"):
+            await ps.increment_spend_counters(
+                token=None, team_id=None, user_id=None, end_user_id="eu", response_cost=0.5
+            )
+
+    assert redis.count("EVAL") == 1
+    assert "spend:end_user:eu" not in redis.values
