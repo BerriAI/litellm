@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
-import { relativeTimeOptions } from "@/components/shared/date_range_presets";
+import { getUsageTimeRangeOption, relativeTimeOptions } from "@/components/shared/date_range_presets";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import PageVisibilitySettings from "./PageVisibilitySettings";
@@ -78,9 +78,7 @@ export default function UISettings() {
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
   const values = data?.values ?? {};
-  const usageRange =
-    relativeTimeOptions.find((option) => option.settingValue === values.usage_default_time_range)?.settingValue ??
-    "last_7_days";
+  const usageRange = getUsageTimeRangeOption(values.usage_default_time_range).settingValue;
   const usageRangeConfigOwned = data?.source?.usage_default_time_range === "config";
   const ariaConfigOwned = data?.source?.disable_aria === "config";
   const ariaAccessConfigOwned = data?.source?.aria_internal_user_access === "config";
