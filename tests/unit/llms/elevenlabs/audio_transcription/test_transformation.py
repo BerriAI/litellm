@@ -1,5 +1,8 @@
 import traceback
 from collections.abc import Iterator
+from email import policy
+from email.message import EmailMessage
+from email.parser import BytesParser
 from typing import Final
 
 import httpx
@@ -34,6 +37,68 @@ def _elevenlabs_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(litellm, "sync_transport", None, raising=False)
     yield
     client_cache.flush_cache()
+
+
+def _form_fields(request: httpx.Request) -> list[tuple[str, str]]:
+    head: Final = f"Content-Type: {request.headers['Content-Type']}\r\n\r\n".encode()
+    message: Final = BytesParser(_class=EmailMessage, policy=policy.HTTP).parsebytes(head + request.content)
+    assert isinstance(message, EmailMessage)
+    return [
+        (str(part.get_param("name", header="content-disposition")), str(part.get_content()))
+        for part in message.iter_parts()
+        if part.get_filename() is None
+    ]
+
+
+def _mock_transcription_endpoint(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(ELEVENLABS_TRANSCRIPTION_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok", "language_code": "en", "words": []})
+    )
+
+
+def _sent_fields(route: respx.Route) -> dict[str, list[str]]:
+    fields: Final = _form_fields(route.calls.last.request)
+    return {name: [value for field_name, value in fields if field_name == name] for name, _ in fields}
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({"keyterms": ["BOI report", "EIN"]}, {"keyterms": ["BOI report", "EIN"]}),
+        ({"keyterms": ["EIN"]}, {"keyterms": ["EIN"]}),
+        ({"diarize": True, "tag_audio_events": False}, {"diarize": ["true"], "tag_audio_events": ["false"]}),
+        ({"num_speakers": 2, "language": "en"}, {"language_code": ["en"], "num_speakers": ["2"]}),
+    ],
+    ids=["keyterms-multi", "keyterms-single", "bools", "scalars"],
+)
+def test_transcription_sends_each_param_as_its_own_multipart_text_part(
+    respx_mock: respx.MockRouter, params: dict[str, object], expected: dict[str, list[str]]
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+
+    litellm.transcription(model="elevenlabs/scribe_v2", file=b"fake audio", **params)
+
+    fields: Final = _sent_fields(route)
+    assert {name: values for name, values in fields.items() if name in expected} == expected
+    assert not [values for values in fields.values() if any("[" in value for value in values)]
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+async def test_router_deployment_keyterms_default_is_sent_as_repeated_parts(respx_mock: respx.MockRouter):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "scribe",
+                "litellm_params": {"model": "elevenlabs/scribe_v2", "api_key": "k", "keyterms": ["BOI report", "EIN"]},
+            }
+        ]
+    )
+
+    await router.atranscription(model="scribe", file=b"fake audio")
+
+    assert _sent_fields(route).get("keyterms") == ["BOI report", "EIN"]
 
 
 def _transform(payload: object) -> TranscriptionResponse:
@@ -216,8 +281,8 @@ class TestElevenLabsAudioTranscription:
                     "diarize" in form_data
                 ), f"diarize should be in form data. Got: {list(form_data.keys())}"
                 assert (
-                    form_data["diarize"] == "True"
-                ), f"Expected diarize='True', got {form_data['diarize']}"
+                    form_data["diarize"] == "true"
+                ), f"Expected diarize='true', got {form_data['diarize']}"
 
                 # Check that OpenAI language parameter is mapped correctly
                 assert (
