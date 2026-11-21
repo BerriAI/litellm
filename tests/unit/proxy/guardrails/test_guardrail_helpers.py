@@ -352,3 +352,73 @@ async def test_pre_call_rejects_missing_policy_pipeline_step(mode: str, guardrai
         await _pre_call(data, reject_unregistered=True)
     assert exc.value.status_code == 400
     assert guardrail_loaded_here not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("primary_fails", "fallback_missing", "strict", "stream", "authenticated", "expected"),
+    (
+        (False, True, True, False, True, "primary"),
+        (True, False, True, False, True, "backup"),
+        (True, True, True, False, True, None),
+        (True, True, True, True, True, None),
+        (True, True, False, False, True, "backup"),
+        (True, True, True, False, False, "backup"),
+    ),
+    ids=("unused", "known", "terminal", "stream", "flag_off", "sdk"),
+)
+async def test_strict_guardrails_validate_the_selected_fallback(
+    primary_fails: bool,
+    fallback_missing: bool,
+    strict: bool,
+    stream: bool,
+    authenticated: bool,
+    expected: str | None,
+    guardrail_loaded_here: str,
+) -> None:
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "unused",
+                    "mock_response": RuntimeError("primary unavailable") if primary_fails else "primary",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "unused",
+                    "guardrails": ["missing-backup-guard"] if fallback_missing else [guardrail_loaded_here],
+                    "mock_response": "backup",
+                },
+            },
+            {
+                "model_name": "last",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "unused", "mock_response": "last"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup", "last"]}],
+        num_retries=0,
+    )
+    token: Final = REQUEST_AUTH.set(UserAPIKeyAuth(api_key="test-key") if authenticated else None)
+    try:
+        with patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": strict}):
+            if expected is None:
+                with pytest.raises(HTTPException, match="missing-backup-guard") as exc:
+                    await router.acompletion(
+                        model="primary", messages=[{"role": "user", "content": "hello"}], stream=stream
+                    )
+                assert exc.value.status_code == 400
+            else:
+                result: Final = await router.acompletion(
+                    model="primary", messages=[{"role": "user", "content": "hello"}]
+                )
+                assert isinstance(result, litellm.ModelResponse)
+                assert result.choices[0].message.content == expected
+    finally:
+        REQUEST_AUTH.reset(token)

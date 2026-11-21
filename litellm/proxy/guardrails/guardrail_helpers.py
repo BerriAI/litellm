@@ -224,6 +224,18 @@ def reject_unregistered_request_guardrails(
     )
 
 
+def reject_unregistered_deployment_guardrails(guardrails: object) -> None:
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    if REQUEST_AUTH.get() is None:
+        return
+
+    from litellm.proxy.proxy_server import current_general_settings
+
+    if reject_unregistered_guardrails_enabled(current_general_settings()):
+        reject_unregistered_request_guardrails({"guardrails": guardrails})
+
+
 async def registered_guardrail_names(names: frozenset[str], prisma_client: "PrismaClient | None") -> frozenset[str]:
     loaded: Final = names & loaded_guardrail_names()
     missing: Final = names - loaded
