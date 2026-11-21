@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
@@ -52,6 +52,7 @@ def _response_total_tokens(kwargs: Mapping[str, object], response_obj: object) -
 
 
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
+_CACHED_REQUEST_COUNT: Final = TypeAdapter(object)
 
 
 def _is_websocket_passthrough_row(kwargs: Mapping[str, object]) -> bool:
@@ -310,10 +311,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if global_max_parallel_requests is not None:
             # get value from cache
             _key: Final = "global_max_parallel_requests"
-            current_global_requests = await self.internal_usage_cache.async_get_cache(
-                key=_key,
-                local_only=True,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            current_global_requests = _CACHED_REQUEST_COUNT.validate_python(
+                await self.internal_usage_cache.async_get_cache(
+                    key=_key,
+                    local_only=True,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
             )
             # check if below limit
             if current_global_requests is None:

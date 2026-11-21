@@ -18,7 +18,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from hashlib import sha256
-from itertools import count
 from pathlib import Path
 from typing import Final, LiteralString
 
@@ -37,7 +36,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows, write_rows
 from integration._support.database_relay import StatementCountingRelay, statement_counting_relay
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process, pool_limit_for_prisma
 from integration._support.scim import (
     GROUP_SCHEMA,
     PATCH_OP_SCHEMA,
@@ -58,8 +57,6 @@ from integration._support.scim import (
 )
 from psycopg import sql
 from pydantic import JsonValue
-
-from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, ConnectionBudget
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -269,11 +266,8 @@ def test_a_group_deleted_while_its_push_waits_on_a_member_row_waits_for_the_push
     gateway: Gateway,
     tmp_path: Path,
 ) -> None:
-    pool_limit: Final = next(
-        total for total in count(MIN_CONNECTION_LIMIT) if ConnectionBudget.split(total).python == 2
-    )
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["general_settings"]["database_connection_pool_limit"] = pool_limit
+    config["general_settings"]["database_connection_pool_limit"] = pool_limit_for_prisma(2)
     config_path: Final = tmp_path / "concurrent-roster.yaml"
     config_path.write_text(yaml.safe_dump(config))
     with (

@@ -40,7 +40,7 @@ _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 class InMemoryFile(io.BytesIO):
     def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
         super().__init__(content)
-        self.name = name
+        self.name: str = name
         self.content_type = content_type
 
 

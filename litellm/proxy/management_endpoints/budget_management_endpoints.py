@@ -42,7 +42,6 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
     keeps_budget_reset,
 )
-from litellm.proxy.common_utils.user_api_key_cache import app_budget_cache_key
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
@@ -59,6 +58,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 )
 from litellm.proxy.management_helpers.utils import validate_budget_windows_update
 from litellm.proxy.utils import PrismaClient, jsonify_object
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
@@ -141,6 +141,15 @@ async def _write_budget_update(
         return await tx.litellm_budgettable.update(
             where={"budget_id": budget_id}, data={**data, **window_data, **reset_data}
         )
+
+
+class _FieldWithDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+
+
+def _field_default(field: _FieldWithDefault) -> object:
+    return field.default
 
 
 async def new_budget(
@@ -314,7 +323,7 @@ async def update_budget(
         budget_obj_jsonified,
         budget_obj.budget_limits if isinstance(budget_obj, BudgetWriteRequest) else None,
     )
-    await evict_and_broadcast((app_budget_cache_key(budget_obj.budget_id),), user_api_key_cache)
+    await evict_and_broadcast((AuthObject.customer_app_budget(budget_obj.budget_id).key,), user_api_key_cache)
     members: Final = await CustomerMemberRepository(prisma_client).table.find_many(
         where={
             "OR": (
@@ -474,7 +483,7 @@ async def budget_settings(
                 field_description=field_info.description or "",
                 field_value=db_budget_row_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
-                field_default_value=field_info.default,
+                field_default_value=_field_default(field_info),
             )
             return_val.append(_response_obj)
 
