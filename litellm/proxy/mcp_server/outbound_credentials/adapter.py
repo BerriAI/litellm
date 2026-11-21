@@ -481,6 +481,8 @@ def validate_static_credential(
         return Ok(None)
     if any(_usable_credential_value(auth_type, name, value) for name, value in values):
         return Ok(None)
+    if allow_absent:
+        return Ok(None)
     return Error(CredError.of_misconfigured(f"{auth_type} requires a usable upstream credential"))
 
 
