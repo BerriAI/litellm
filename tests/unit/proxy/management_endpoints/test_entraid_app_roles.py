@@ -85,6 +85,25 @@ def test_proxy_admin_beats_every_other_role(app_roles):
     assert MicrosoftSSOHandler.get_user_role_from_app_roles(app_roles) == LitellmUserRoles.PROXY_ADMIN
 
 
+@pytest.mark.parametrize(
+    "app_roles, expected",
+    [
+        (["org_admin", "internal_user"], LitellmUserRoles.ORG_ADMIN),
+        (["internal_user", "org_admin"], LitellmUserRoles.ORG_ADMIN),
+        (["org_admin", "internal_user_viewer"], LitellmUserRoles.ORG_ADMIN),
+        (["proxy_admin_viewer", "org_admin"], LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+        (["org_admin", "proxy_admin_viewer"], LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+        (["proxy_admin", "org_admin"], LitellmUserRoles.PROXY_ADMIN),
+    ],
+)
+def test_org_admin_ranks_correctly_in_hierarchy(app_roles, expected):
+    """
+    org_admin should rank between proxy_admin_viewer and internal_user.
+    It beats internal_user roles but loses to proxy_admin roles.
+    """
+    assert MicrosoftSSOHandler.get_user_role_from_app_roles(app_roles) == expected
+
+
 def test_unrecognised_app_roles_are_ignored():
     """App roles that are not LitellmUserRoles values do not shadow ones that are."""
     app_roles = ["Some.Custom.Role", "msiam_access", "internal_user"]
