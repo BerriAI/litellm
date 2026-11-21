@@ -286,6 +286,13 @@ class TestComplexityRouterInit:
         assert router.config.tiers == DEFAULT_COMPLEXITY_CONFIG.tiers
         assert router.config is not DEFAULT_COMPLEXITY_CONFIG  # Not a singleton
 
+    @pytest.mark.usefixtures("local_model_cost_map")
+    def test_default_tiers_route_to_models_litellm_knows(self):
+        unknown: Final = {
+            tier: model for tier, model in DEFAULT_COMPLEXITY_CONFIG.tiers.items() if model not in litellm.model_cost
+        }
+        assert unknown == {}
+
     def test_init_with_default_model(self, mock_router_instance, basic_config):
         """Test initialization with default_model override."""
         router = ComplexityRouter(

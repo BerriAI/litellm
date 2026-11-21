@@ -492,8 +492,8 @@ DEFAULT_TOKEN_THRESHOLDS: Final[dict[str, int]] = {
 DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
     "SIMPLE": "gpt-4o-mini",
     "MEDIUM": "gpt-4o",
-    "COMPLEX": "claude-sonnet-4-20250514",
-    "REASONING": "claude-sonnet-4-20250514",
+    "COMPLEX": "claude-sonnet-5-5",
+    "REASONING": "claude-sonnet-5-5",
 }
 
 
