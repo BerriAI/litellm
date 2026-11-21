@@ -199,6 +199,41 @@ async def test_detail_serves_stored_metrics_of_a_guardrail_whose_definition_is_g
     ]
 
 
+@pytest.mark.parametrize(
+    ("in_database", "in_config", "defined_id", "provider"),
+    [
+        ([_db_row(guardrail_id="db-1", name="by-name", provider="aim")], [], "db-1", "aim"),
+        ([], [_yaml_guardrail(guardrail_id="yaml-1", name="by-name", provider="presidio")], "yaml-1", "presidio"),
+    ],
+    ids=["defined_in_the_database", "defined_in_config_yaml"],
+)
+@pytest.mark.asyncio
+async def test_detail_by_name_serves_the_defined_guardrail_with_runs_stored_under_its_name_and_its_id(
+    in_database: list[Any], in_config: list[Guardrail], defined_id: str, provider: str
+) -> None:
+    stored: Final = [
+        _metric("by-name", date="2026-04-24", requests=4, passed=4, blocked=0),
+        _metric(defined_id, date="2026-04-25", requests=6, passed=4, blocked=2),
+        _metric("other-guardrail", date="2026-04-25", requests=7, passed=0, blocked=7),
+    ]
+    prisma: Final = _prisma(metrics=stored)
+    prisma.db.litellm_guardrailstable.find_unique = AsyncMock(
+        side_effect=lambda where: next(
+            (row for row in in_database if all(getattr(row, k) == v for k, v in where.items())), None
+        )
+    )
+    prisma.db.litellm_dailyguardrailmetrics.find_many = AsyncMock(
+        side_effect=lambda where: [m for m in stored if m.guardrail_id in where["guardrail_id"]["in"]]
+    )
+    p1, p2 = _patches(prisma, _config_handler(*in_config))
+    with p1, p2:
+        resp: Final = await guardrails_usage_detail(
+            guardrail_id="by-name", start_date=START, end_date=END, user_api_key_dict=ADMIN
+        )
+    assert (resp.guardrail_id, resp.guardrail_name, resp.provider) == (defined_id, "by-name", provider)
+    assert (resp.requestsEvaluated, resp.failRate) == (10, 20.0)
+
+
 @pytest.mark.asyncio
 async def test_detail_does_not_surface_db_sourced_in_memory_entry():
     """A stale in-memory entry (source=db, gone from DB) must 404, not resurface."""

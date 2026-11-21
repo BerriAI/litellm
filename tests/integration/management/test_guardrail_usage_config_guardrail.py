@@ -168,6 +168,7 @@ def test_usage_detail_serves_the_stored_runs_of_a_guardrail_removed_from_config(
                     lambda body: body["requestsEvaluated"] == runs,
                     seconds=70,
                 )
+                assert before.get(f"/guardrails/usage/detail/{guardrail_name}", window) == stored
         removed: Final = _config_file(tmp_path / "removed", None)
         with owned_proxy(gateway, removed.parent, one_database, config=removed) as after:
             listed: Final = after.get("/v2/guardrails/list")["guardrails"]
