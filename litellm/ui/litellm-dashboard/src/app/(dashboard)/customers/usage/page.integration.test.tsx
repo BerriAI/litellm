@@ -574,8 +574,10 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(within(firstMember).getByText("Member standard")).toBeInTheDocument();
     expect(within(firstMember).getByText("66.7%")).toBeInTheDocument();
     expect(within(firstMember).getByRole("button", { name: "100 total tokens. View breakdown" })).toBeInTheDocument();
-    expect(within(firstMember).getByRole("cell", { name: "$20.00 No limit", exact: true })).toBeInTheDocument();
-    expect(within(firstMember).getByRole("cell", { name: "$10.00", exact: true })).toBeInTheDocument();
+    expect(within(firstMember).getByRole("cell", { name: "$20.00 No monthly limit", exact: true })).toBeInTheDocument();
+    expect(
+      within(firstMember).getByRole("cell", { name: "$10.00 total · No automatic reset", exact: true }),
+    ).toBeInTheDocument();
     expect(within(firstMember).getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute(
       "aria-valuetext",
       "66.7%",

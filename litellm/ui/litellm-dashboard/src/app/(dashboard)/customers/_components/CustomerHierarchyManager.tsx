@@ -36,7 +36,6 @@ import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
 import type { CustomerHierarchyScope } from "./customerHierarchyApi";
-import { customerBudgetLimit } from "./customerBudgetUsage";
 import { CustomerBudgetLimitCell, CustomerBudgetSortHeader } from "./CustomerBudgetColumn";
 
 type Hierarchy = ReturnType<typeof useCustomerHierarchy>;
@@ -253,7 +252,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
                         : "customerPortal.hierarchy.loading",
                     )}
                   </TableCell>
-                  <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} rateLimits={row.entity.rateLimits} />
+                  <CustomerBudgetLimitCell entity={row.entity} />
                   <TableCell colSpan={4} />
                 </>
               )}
