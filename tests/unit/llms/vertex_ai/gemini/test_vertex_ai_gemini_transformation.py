@@ -105,7 +105,7 @@ def test_gemini_tool_file_media_uses_cost_map_flags(
     model: Final = "gemini-4-argon"
     monkeypatch.setitem(
         litellm.model_cost,
-        model,
+        f"gemini/{model}",
         {
             "supports_part_media_resolution": part_resolution,
             "supports_media_in_tool_response": nested_media,
@@ -151,6 +151,39 @@ def test_gemini_tool_file_media_uses_cost_map_flags(
         ]
     )
     assert result[-1]["parts"] == expected
+
+
+def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    model: Final = "gemini-4-argon"
+    for provider, enabled in (("gemini", True), ("vertex_ai", False)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"{provider}/{model}",
+            {"supports_part_media_resolution": enabled, "supports_media_in_tool_response": enabled},
+        )
+    file: Final = "data:application/pdf;base64,JVBERg=="
+    media: Final = {"file_data": file, "format": "application/pdf", "resolution": "high"}
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "file", "file": media}]},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_report", "content": [{"type": "file", "file": media}]},
+    ]
+
+    result: Final = VertexGeminiConfig()._transform_messages(messages, model=model)
+
+    file_part: Final = {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}}
+    assert result[0]["parts"] == [file_part, {"text": " "}]
+    assert result[-1]["parts"] == [
+        {"function_response": {"id": "call_report", "name": "get_report", "response": {"content": ""}}},
+        file_part,
+    ]
 
 
 

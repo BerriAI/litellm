@@ -155,8 +155,14 @@ def _get_highest_media_resolution(current: str | None, new_detail: str | None) -
     return current
 
 
-def gemini_part_media_resolution(model: str | None, detail: str | None) -> Mapping[str, str] | None:
-    if model is None or detail is None or not gemini_media_capability(model, "supports_part_media_resolution"):
+def gemini_part_media_resolution(
+    model: str | None, detail: str | None, *, custom_llm_provider: str | None = None
+) -> Mapping[str, str] | None:
+    if (
+        model is None
+        or detail is None
+        or not gemini_media_capability(model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider)
+    ):
         return None
     return _convert_detail_to_media_resolution_enum(detail)
 
@@ -195,6 +201,7 @@ def _apply_gemini_metadata(
     model: str | None,
     media_resolution_enum: dict[str, str] | None,
     video_metadata: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
 ) -> PartType:
     """
     Apply media_resolution and video_metadata parameters to a Gemini part.
@@ -207,7 +214,9 @@ def _apply_gemini_metadata(
 
     part_dict: Final = dict(part)
 
-    if media_resolution_enum is not None and gemini_media_capability(model, "supports_part_media_resolution"):
+    if media_resolution_enum is not None and gemini_media_capability(
+        model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider
+    ):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -304,7 +313,7 @@ def _openai_messages_may_need_sync_media_fetch(
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     nested_inline_only: Final = custom_llm_provider == "gemini" and (
-        model is None or VertexGeminiConfig.supports_multimodal_function_responses(model)
+        model is None or VertexGeminiConfig.supports_multimodal_function_responses(model, custom_llm_provider)
     )
     for raw in messages:
         if (msg := _message_fields(raw)) is None:
@@ -498,6 +507,8 @@ def process_gemini_media(
     video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    *,
+    custom_llm_provider: str | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -573,7 +584,7 @@ def process_gemini_media(
                 )
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif image_url.startswith(GEMINI_FILES_API_URI_PREFIXES):
             # Gemini Files API URIs — the file is already uploaded to Google's
             # servers; pass the URI through as file_data without fetching it.
@@ -585,16 +596,16 @@ def process_gemini_media(
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif "https://" in image_url and (image_type := format or get_image_mime_type_from_url(image_url)) is not None:
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image: Final = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
@@ -608,6 +619,8 @@ def encode_gemini_media_source(
     model: str | None,
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    custom_llm_provider: str | None = None,
 ) -> PartType:
     part: Final = process_gemini_media(
         image_url=source.url,
@@ -617,6 +630,7 @@ def encode_gemini_media_source(
         vertex_credentials=vertex_credentials,
         media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
         video_metadata=source.video_metadata,
+        custom_llm_provider=custom_llm_provider,
     )
     return {**part, **encode_gemini_file_inspection_metadata(source.document_metadata, source.spreadsheet_metadata)}
 
@@ -785,6 +799,7 @@ def _gemini_history_media_part(
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     *,
+    custom_llm_provider: str | None,
     message_index: int | None = None,
     content_index: int | None = None,
 ) -> PartType | None:
@@ -816,7 +831,9 @@ def _gemini_history_media_part(
             raise Exception("Unknown file type. Please pass in a file_id or file_data")
         return None
     try:
-        return encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
+        return encode_gemini_media_source(
+            source, model, vertex_project, vertex_credentials, custom_llm_provider=custom_llm_provider
+        )
     except litellm.BadRequestError:
         raise
     except Exception as exc:
@@ -866,7 +883,7 @@ def gemini_convert_messages_with_history(
 
     forward_function_call_id: Final = VertexGeminiConfig.forward_gemini_function_call_id(model or "")
     supports_multimodal_function_responses: Final = model is None or (
-        VertexGeminiConfig.supports_multimodal_function_responses(model)
+        VertexGeminiConfig.supports_multimodal_function_responses(model, custom_llm_provider)
     )
 
     try:
@@ -889,6 +906,7 @@ def gemini_convert_messages_with_history(
                                 model,
                                 vertex_project,
                                 vertex_credentials,
+                                custom_llm_provider=custom_llm_provider,
                                 message_index=msg_i,
                                 content_index=element_idx,
                             )
@@ -938,7 +956,11 @@ def gemini_convert_messages_with_history(
                                 _parts.append(_part)
                             elif (
                                 media_part := _gemini_history_media_part(
-                                    element, model, vertex_project, vertex_credentials
+                                    element,
+                                    model,
+                                    vertex_project,
+                                    vertex_credentials,
+                                    custom_llm_provider=custom_llm_provider,
                                 )
                             ) is not None:
                                 _parts.append(media_part)
@@ -998,6 +1020,7 @@ def gemini_convert_messages_with_history(
                                         model=model,
                                         vertex_project=vertex_project,
                                         vertex_credentials=vertex_credentials,
+                                        custom_llm_provider=custom_llm_provider,
                                     )
                                     assistant_content.append(_part)
 
@@ -1296,7 +1319,9 @@ def transform_request_body(
         # For Gemini 2.x models, also add media_resolution to generation_config (global)
         # as a fallback, since some 2.x versions may not support per-part media_resolution.
         # Gemini 1.x does not support mediaResolution at all.
-        if "gemini-2" in model and not gemini_media_capability(model, "supports_part_media_resolution"):
+        if "gemini-2" in model and not gemini_media_capability(
+            model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider
+        ):
             max_media_resolution: Final = _extract_max_media_resolution_from_messages(messages)
             if max_media_resolution:
                 media_resolution_value: Final = _convert_detail_to_media_resolution_enum(max_media_resolution)

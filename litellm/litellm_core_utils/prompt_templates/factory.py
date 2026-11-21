@@ -1676,7 +1676,9 @@ def _gemini_tool_media_part(
                 if gemini_tool_media_needs_download(source)
                 else source
             )
-            part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
+            part: Final = encode_gemini_media_source(
+                encoded_source, model, vertex_project, vertex_credentials, custom_llm_provider=custom_llm_provider
+            )
             vertex_file_part: Final = (
                 part.get("file_data") if nested and custom_llm_provider in ("vertex_ai", "vertex_ai_beta") else None
             )
@@ -1689,7 +1691,7 @@ def _gemini_tool_media_part(
             return part
         inline: Final = convert_to_anthropic_image_obj(source.url, format=source.format)
         resolution: Final = (
-            gemini_part_media_resolution(model, source.detail)
+            gemini_part_media_resolution(model, source.detail, custom_llm_provider=custom_llm_provider)
             if custom_llm_provider == "gemini" and content.get("type") in ("file", "input_file")
             else None
         )

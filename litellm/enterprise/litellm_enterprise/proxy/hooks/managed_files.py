@@ -236,7 +236,20 @@ def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
             yield url
 
 
-def _gemini_tool_result_file_ids_from_responses_input(input_data: object) -> Iterator[str]:
+def _gemini_responses_input_file_id(fields: Mapping[str, object]) -> str | None:
+    from litellm.responses.litellm_completion_transformation.transformation import decode_responses_media
+
+    if fields.get("type") == "input_file" and isinstance(fields.get("file_id"), str) and fields.get("file_id"):
+        return None  # The standard Responses file ID lookup already covers explicit IDs.
+    try:
+        part: Final = decode_responses_media(fields)
+    except ValidationError:
+        return None
+    file_id: Final = _chat_message_file_id(part, "user")
+    return file_id if file_id is not None and file_id.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
+
+def _gemini_file_ids_from_responses_input(input_data: object) -> Iterator[str]:
     from litellm.responses.litellm_completion_transformation.transformation import (
         TOOL_CALL_OUTPUT_ITEM_TYPES,
         tool_output_to_chat_content,
@@ -248,6 +261,14 @@ def _gemini_tool_result_file_ids_from_responses_input(input_data: object) -> Ite
     for item in items:
         if (fields := as_str_mapping(item)) is None:
             continue
+        if (file_id := _gemini_responses_input_file_id(fields)) is not None:
+            yield file_id
+        if (content := as_object_list(fields.get("content"))) is not None:
+            for content_part in content:
+                if (part_fields := as_str_mapping(content_part)) is not None and (
+                    file_id := _gemini_responses_input_file_id(part_fields)
+                ) is not None:
+                    yield file_id
         if (
             not isinstance((item_type := fields.get("type")), str)
             or item_type not in TOOL_CALL_OUTPUT_ITEM_TYPES
@@ -1858,7 +1879,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             input_data = data.get("input")
             if input_data:
                 await self.check_file_ids_access(
-                    list(_gemini_tool_result_file_ids_from_responses_input(_keyed_get(data, "input"))),
+                    list(_gemini_file_ids_from_responses_input(_keyed_get(data, "input"))),
                     user_api_key_dict,
                     include_gemini_files_api_uris=True,
                 )

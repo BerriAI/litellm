@@ -1030,8 +1030,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._forward_gemini_function_call_id(model)
 
     @classmethod
-    def supports_multimodal_function_responses(cls, model: str) -> bool:
-        return gemini_media_capability(model, "supports_media_in_tool_response")
+    def supports_multimodal_function_responses(cls, model: str, custom_llm_provider: str | None = None) -> bool:
+        return gemini_media_capability(
+            model, "supports_media_in_tool_response", custom_llm_provider=custom_llm_provider
+        )
 
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
