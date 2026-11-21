@@ -30,6 +30,8 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .continuation import client_continuation_token
+
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
 FinishReason: TypeAlias = Literal["stop", "length", "tool_calls", "content_filter"]
 
@@ -339,6 +341,10 @@ def transform_interactions_response_to_chat_response(
         raw_status if isinstance(raw_status, str) else None,
         has_tool_calls=bool(extracted.tool_calls),
     )
+
+    continuation_token: Final = client_continuation_token(payload)
+    if continuation_token is not None:
+        msg.provider_specific_fields = {"continuation_token": continuation_token}
 
     return model_response.model_copy(
         update={

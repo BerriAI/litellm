@@ -531,3 +531,33 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
         "tool_choice": {"allowed_tools": {"mode": "any", "tools": ["get_weather"]}}
     }
     assert unbridged_exc.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "extra", "expected"),
+    (
+        ("gemini-4-neon", "gemini", {}, True),
+        ("gemini-4-neon", "vertex_ai", {}, True),
+        ("gemini-4.5-flash", "gemini", {}, True),
+        ("gemini-10-pro", "gemini", {}, True),
+        ("gemini-3.8-flash", "gemini", {}, False),
+        ("gemini-3-flash-preview", "vertex_ai", {}, False),
+        ("gemini-2.5-pro", "gemini", {}, False),
+        ("gemini-flash-latest", "gemini", {}, False),
+        ("gemini-40", "openai", {}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"use_interactions": False}}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"use_interactions": False}}}, False),
+        ("gemini-4-neon", "gemini", {"deployment_model_info": {"mode": "chat"}}, False),
+        ("gemini-4-neon", "gemini", {"skip_bridge": True}, False),
+    ),
+)
+def test_gemini_4_and_newer_route_to_interactions_by_default_and_older_models_do_not(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    provider: str,
+    extra: Mapping[str, object],
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+
+    assert should_route_to_interactions_api(model=model, custom_llm_provider=provider, **extra) is expected

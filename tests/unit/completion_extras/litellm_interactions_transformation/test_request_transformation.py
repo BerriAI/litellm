@@ -69,7 +69,7 @@ def test_explicit_store_and_previous_interaction_id_pass_through() -> None:
 
 
 def test_stateless_tool_loop_replays_signature_and_resolves_tool_name() -> None:
-    encoded_id: Final = encode_tool_call_id_with_signature("call_weather_1", "sig_base64_xyz")
+    encoded_id: Final = encode_tool_call_id_with_signature("call_weather_1", "c2lnX2Jhc2U2NF94eXo=")
     assistant_msg: Final = Message(
         role="assistant",
         content=None,
@@ -107,7 +107,7 @@ def test_stateless_tool_loop_replays_signature_and_resolves_tool_name() -> None:
 
     assert prepared.input_steps == [
         {"type": "user_input", "content": [{"type": "text", "text": "Weather in Tokyo?"}]},
-        {"type": "thought", "signature": "sig_base64_xyz"},
+        {"type": "thought", "signature": "c2lnX2Jhc2U2NF94eXo="},
         {
             "type": "function_call",
             "id": "call_weather_1",
@@ -408,7 +408,7 @@ def test_unsigned_assistant_preamble_and_tool_calls_order_model_output_before_fu
 
 
 def test_unsigned_thinking_summary_and_provider_thought_signatures_merge_onto_thought_step() -> None:
-    encoded_id: Final = encode_tool_call_id_with_signature("call_grep", "sig_from_tool_id")
+    encoded_id: Final = encode_tool_call_id_with_signature("call_grep", "c2lnX2Zyb21fdG9vbF9pZA==")
     merged_prepared: Final = transform_chat_to_interactions_request(
         messages=[
             {"role": "user", "content": "Search for main"},
@@ -449,7 +449,7 @@ def test_unsigned_thinking_summary_and_provider_thought_signatures_merge_onto_th
         {"type": "user_input", "content": [{"type": "text", "text": "Search for main"}]},
         {
             "type": "thought",
-            "signature": "sig_from_tool_id",
+            "signature": "c2lnX2Zyb21fdG9vbF9pZA==",
             "summary": [{"type": "text", "text": "need ripgrep"}],
         },
         {"type": "model_output", "content": [{"type": "text", "text": "Searching now."}]},

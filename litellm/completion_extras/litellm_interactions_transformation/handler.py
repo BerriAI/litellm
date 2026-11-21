@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Coroutine, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, NoReturn, Protocol, TypeAlias, runtime_checkable
 
@@ -34,6 +34,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ModelResponse
 
+from .continuation import JsonMapping, log_failed_hop, merge_hops, next_hop_body
 from .request_transformation import MediaFetcher, transform_chat_to_interactions_request
 from .response_transformation import transform_interactions_response_to_chat_response
 from .streaming_iterator import InteractionsChatStreamingIterator
@@ -421,6 +422,34 @@ async def _send_async_request(
     return pooled_resp
 
 
+_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError)
+
+
+def _interaction_of(response: httpx.Response) -> JsonMapping:
+    parsed: Final = _JSON_VALUE.validate_json(response.content)
+    return parsed if isinstance(parsed, dict) else MappingProxyType({})
+
+
+def _checked_hop_response(response: httpx.Response, custom_llm_provider: str) -> httpx.Response:
+    if response.status_code >= 400:
+        with contextlib.suppress(httpx.HTTPError):
+            _ = response.read()
+        raise _build_provider_http_error(
+            custom_llm_provider,
+            response.status_code,
+            _safe_response_text(response, f"HTTP {response.status_code}"),
+            dict(response.headers),
+        )
+    return response
+
+
+async def _checked_async_hop_response(response: httpx.Response, custom_llm_provider: str) -> httpx.Response:
+    if response.status_code >= 400:
+        with contextlib.suppress(httpx.HTTPError):
+            _ = await response.aread()
+    return _checked_hop_response(response, custom_llm_provider)
+
+
 class InteractionsToCompletionBridgeHandler:
     def __init__(
         self,
@@ -616,6 +645,16 @@ class InteractionsToCompletionBridgeHandler:
                 custom_llm_provider=custom_llm_provider,
                 sync_lines=raw_response.iter_lines(),
                 http_response=raw_response,
+                request_body=wire.body,
+                open_sync_hop=lambda hop_body: _checked_hop_response(
+                    _send_sync_request(
+                        client,
+                        wire=replace(wire, body=hop_body),
+                        timeout=timeout,
+                        ssl_verify=llm_map.get("ssl_verify"),
+                    ),
+                    custom_llm_provider,
+                ),
             )
             wrapper: Final = CustomStreamWrapper(
                 completion_stream=iterator,
@@ -639,8 +678,24 @@ class InteractionsToCompletionBridgeHandler:
             original_response=raw_response.text,
             additional_args={"complete_input_dict": wire.body},
         )
+        hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
+        while (hop_body := next_hop_body(wire.body, hops[-1], len(hops) - 1)) is not None:
+            try:
+                hop_response = _checked_hop_response(
+                    _send_sync_request(
+                        client,
+                        wire=replace(wire, body=hop_body),
+                        timeout=timeout,
+                        ssl_verify=llm_map.get("ssl_verify"),
+                    ),
+                    custom_llm_provider,
+                )
+                hops = (*hops, _interaction_of(hop_response))
+            except _HOP_FAILURES as hop_error:
+                log_failed_hop(hop_error)
+                break
         result: Final = transform_interactions_response_to_chat_response(
-            raw_response=_JSON_VALUE.validate_json(raw_response.content),
+            raw_response=merge_hops(hops),
             model=model,
             model_response=model_response,
         )
@@ -741,11 +796,26 @@ class InteractionsToCompletionBridgeHandler:
             )
 
         if wire.is_stream:
+
+            async def open_async_hop(hop_body: dict[str, object]) -> httpx.Response:  # mutable-ok: JSON request body
+                return await _checked_async_hop_response(
+                    await _send_async_request(
+                        client,
+                        wire=replace(wire, body=hop_body),
+                        timeout=timeout,
+                        custom_llm_provider=custom_llm_provider,
+                        ssl_verify=llm_map.get("ssl_verify"),
+                    ),
+                    custom_llm_provider,
+                )
+
             iterator: Final = InteractionsChatStreamingIterator(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 async_lines=raw_response.aiter_lines(),
                 http_response=raw_response,
+                request_body=wire.body,
+                open_async_hop=open_async_hop,
             )
             wrapper: Final = CustomStreamWrapper(
                 completion_stream=iterator,
@@ -769,8 +839,25 @@ class InteractionsToCompletionBridgeHandler:
             original_response=raw_response.text,
             additional_args={"complete_input_dict": wire.body},
         )
+        hops: tuple[JsonMapping, ...] = (_interaction_of(raw_response),)  # rebind-ok: grows by one hop per loop pass
+        while (hop_body := next_hop_body(wire.body, hops[-1], len(hops) - 1)) is not None:
+            try:
+                hop_response = await _checked_async_hop_response(
+                    await _send_async_request(
+                        client,
+                        wire=replace(wire, body=hop_body),
+                        timeout=timeout,
+                        custom_llm_provider=custom_llm_provider,
+                        ssl_verify=llm_map.get("ssl_verify"),
+                    ),
+                    custom_llm_provider,
+                )
+                hops = (*hops, _interaction_of(hop_response))
+            except _HOP_FAILURES as hop_error:
+                log_failed_hop(hop_error)
+                break
         result: Final = transform_interactions_response_to_chat_response(
-            raw_response=_JSON_VALUE.validate_json(raw_response.content),
+            raw_response=merge_hops(hops),
             model=model,
             model_response=model_response,
         )

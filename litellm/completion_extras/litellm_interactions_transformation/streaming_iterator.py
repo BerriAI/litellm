@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Final, NoReturn, TypeAlias
 
@@ -20,6 +20,7 @@ from litellm.exceptions import (
     RateLimitError,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -32,6 +33,7 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .continuation import client_continuation_token, log_failed_hop, merge_hop_usage, next_hop_body
 from .response_transformation import (
     FinishReason,
     map_interactions_status_to_finish_reason,
@@ -41,6 +43,10 @@ from .response_transformation import (
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
 LineStreamSync: TypeAlias = Iterator[str | bytes]
 LineStreamAsync: TypeAlias = AsyncIterator[str | bytes]
+HopBody: TypeAlias = dict[str, object]  # mutable-ok: JSON request body passed to HTTPHandler.post
+SyncHopOpener: TypeAlias = Callable[[HopBody], httpx.Response]
+AsyncHopOpener: TypeAlias = Callable[[HopBody], Awaitable[httpx.Response]]
+_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError)
 
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _EMPTY_JSON_MAP: Final[JsonMapping] = MappingProxyType({})
@@ -194,11 +200,22 @@ class InteractionsChatStreamingIterator:
         sync_lines: LineStreamSync | None = None,
         async_lines: LineStreamAsync | None = None,
         http_response: httpx.Response | None = None,
+        request_body: Mapping[str, object] | None = None,
+        open_sync_hop: SyncHopOpener | None = None,
+        open_async_hop: AsyncHopOpener | None = None,
     ) -> None:
         self._model: Final = model
         self._custom_llm_provider: Final = custom_llm_provider
-        self._sync_lines: Final = sync_lines
-        self._async_lines: Final = async_lines
+        self._sync_lines: LineStreamSync | None = sync_lines
+        self._async_lines: LineStreamAsync | None = async_lines
+        self._request_body: Final = request_body
+        self._open_sync_hop: Final = open_sync_hop
+        self._open_async_hop: Final = open_async_hop
+        self._pending_hop_body: HopBody | None = None
+        self._pending_hop_token: str | None = None
+        self._hop_usages: tuple[JsonValue, ...] = ()
+        self._step_index_offset: int = 0
+        self._highest_step_index: int = -1
         self.http_response: httpx.Response | None = http_response
         self._stream_id: str = f"chatcmpl-{uuid.uuid4()}"
         self._active_thought_step: int | None = None
@@ -271,9 +288,14 @@ class InteractionsChatStreamingIterator:
         self._record_tool_call_sig_state(slot, raw_id, consumed_sig)
         return encode_tool_call_id_with_signature(raw_id, consumed_sig)
 
-    def _handle_step_start(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
+    def _step_index_of(self, event: JsonMapping) -> int:
         raw_index: Final = event.get("index")
-        step_index: Final = raw_index if isinstance(raw_index, int) else 0
+        step_index: Final = (raw_index if isinstance(raw_index, int) else 0) + self._step_index_offset
+        self._highest_step_index = max(self._highest_step_index, step_index)
+        return step_index
+
+    def _handle_step_start(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
+        step_index: Final = self._step_index_of(event)
         raw_step: Final = event.get("step") or event.get("content")
         if not isinstance(raw_step, dict):
             return ()
@@ -341,8 +363,7 @@ class InteractionsChatStreamingIterator:
                 return ()
 
     def _handle_step_delta(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
-        raw_index: Final = event.get("index")
-        step_index: Final = raw_index if isinstance(raw_index, int) else 0
+        step_index: Final = self._step_index_of(event)
         raw_delta: Final = event.get("delta")
         if not isinstance(raw_delta, dict):
             return ()
@@ -471,9 +492,62 @@ class InteractionsChatStreamingIterator:
             raw_status if isinstance(raw_status, str) else None,
             has_tool_calls=bool(self._tool_slots_by_step),
         )
-        raw_usage: Final = interaction_map.get("usage") or event.get("usage")
-        usage: Final = transform_interactions_usage(raw_usage) if raw_usage is not None else None
-        return (self._build_chunk(Delta(), finish_reason=finish_reason, usage=usage),)
+        hop_usage: Final = interaction_map.get("usage") or event.get("usage")
+        self._hop_usages = (*self._hop_usages, hop_usage)
+        if self._request_body is not None and (self._open_sync_hop or self._open_async_hop) is not None:
+            hop_body: Final = next_hop_body(self._request_body, interaction_map, len(self._hop_usages) - 1)
+            if hop_body is not None:
+                self._pending_hop_body = hop_body
+                self._pending_hop_token = str(hop_body["continuation_token"])
+                return ()
+        return (self._final_chunk(finish_reason, client_continuation_token(interaction_map)),)
+
+    def _final_chunk(self, finish_reason: FinishReason, continuation_token: str | None) -> ModelResponseStream:
+        raw_usage: Final = merge_hop_usage(self._hop_usages)
+        return self._build_chunk(
+            Delta(provider_specific_fields={"continuation_token": continuation_token})
+            if continuation_token is not None
+            else Delta(),
+            finish_reason=finish_reason,
+            usage=transform_interactions_usage(raw_usage) if raw_usage is not None else None,
+        )
+
+    def _take_pending_hop(self) -> HopBody | None:
+        hop_body: Final = self._pending_hop_body
+        self._pending_hop_body = None
+        if hop_body is not None:
+            self._done = False
+            self._step_index_offset = self._highest_step_index + 1
+        return hop_body
+
+    def _end_after_failed_hop(self, error: Exception) -> None:
+        log_failed_hop(error)
+        self._done = True
+        self._buffer.append(self._final_chunk("length", self._pending_hop_token))
+
+    def _start_sync_hop(self, hop_body: HopBody) -> None:
+        if self._open_sync_hop is None:
+            return
+        try:
+            response: Final = self._open_sync_hop(hop_body)
+        except _HOP_FAILURES as error:
+            self._end_after_failed_hop(error)
+            return
+        self.close()
+        self.http_response = response
+        self._sync_lines = response.iter_lines()
+
+    async def _start_async_hop(self, hop_body: HopBody) -> None:
+        if self._open_async_hop is None:
+            return
+        try:
+            response: Final = await self._open_async_hop(hop_body)
+        except _HOP_FAILURES as error:
+            self._end_after_failed_hop(error)
+            return
+        await self.aclose()
+        self.http_response = response
+        self._async_lines = response.aiter_lines()
 
     def feed_line(self, raw_line: str | bytes) -> None:
         payload_str: Final = _extract_sse_payload(raw_line)
@@ -529,6 +603,9 @@ class InteractionsChatStreamingIterator:
 
     def __next__(self) -> ModelResponseStream:
         while not self._buffer:
+            if (hop_body := self._take_pending_hop()) is not None:
+                self._start_sync_hop(hop_body)
+                continue
             if self._done or self._sync_lines is None:
                 self.close()
                 raise StopIteration
@@ -536,8 +613,7 @@ class InteractionsChatStreamingIterator:
                 line = next(self._sync_lines)
             except StopIteration:
                 self._done = True
-                self.close()
-                raise
+                continue
             self.feed_line(line)
         return self._buffer.popleft()
 
@@ -546,6 +622,9 @@ class InteractionsChatStreamingIterator:
 
     async def __anext__(self) -> ModelResponseStream:
         while not self._buffer:
+            if (hop_body := self._take_pending_hop()) is not None:
+                await self._start_async_hop(hop_body)
+                continue
             if self._done or self._async_lines is None:
                 await self.aclose()
                 raise StopAsyncIteration
@@ -553,8 +632,7 @@ class InteractionsChatStreamingIterator:
                 line = await anext(self._async_lines)
             except StopAsyncIteration:
                 self._done = True
-                await self.aclose()
-                raise
+                continue
             try:
                 self.feed_line(line)
             except Exception:

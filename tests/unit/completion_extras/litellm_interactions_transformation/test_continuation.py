@@ -1,0 +1,212 @@
+import json
+from collections.abc import Callable, Mapping
+from typing import Final
+
+import httpx
+import pytest
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.utils import Choices, ModelResponse, StreamingChoices
+
+MESSAGES: Final = ({"role": "user", "content": "Write a long story"},)
+MODEL: Final = "gemini/gemini-4-neon"
+API_BASE: Final = "https://generativelanguage.googleapis.com"
+
+
+def _interaction(
+    text: str, status: str, token: str | None = None, interaction_id: str = "v1_first"
+) -> Mapping[str, object]:
+    return {
+        "id": interaction_id,
+        "status": status,
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}],
+        "usage": {
+            "total_input_tokens": 10,
+            "total_output_tokens": 5,
+            "total_tokens": 15,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 5}],
+        },
+        **({"continuation_token": token} if token is not None else {}),
+    }
+
+
+def _sse(interaction: Mapping[str, object]) -> httpx.Response:
+    steps: Final = interaction["steps"]
+    assert isinstance(steps, list)
+    text: Final = steps[0]["content"][0]["text"]
+    events: Final = (
+        {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+        {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": text}},
+        {
+            "event_type": "interaction.completed",
+            "interaction": {key: value for key, value in interaction.items() if key != "steps"},
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+
+def _scripted(
+    replies: tuple[httpx.Response, ...],
+) -> tuple[list[Mapping[str, object]], Callable[[httpx.Request], httpx.Response]]:
+    bodies: Final[list[Mapping[str, object]]] = []  # mutable-ok: transport spy
+    remaining: Final = list(replies)  # mutable-ok: scripted replies are consumed in order
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return remaining.pop(0)
+
+    return bodies, responder
+
+
+def _message_of(response: object) -> tuple[Choices, str | None]:
+    assert isinstance(response, ModelResponse)
+    choice: Final = response.choices[0]
+    assert isinstance(choice, Choices)
+    return choice, (choice.message.provider_specific_fields or {}).get("continuation_token")
+
+
+def test_unary_bridge_resends_with_the_continuation_token_until_the_answer_completes() -> None:
+    bodies, responder = _scripted(
+        (
+            httpx.Response(200, json=_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(200, json=_interaction("upon ", "requires_continuation", "tok-2", "v1_second")),
+            httpx.Response(200, json=_interaction("a time.", "completed", interaction_id="v1_third")),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        response: Final = litellm.completion(
+            model=MODEL, messages=list(MESSAGES), api_key="k", api_base=API_BASE, client=HTTPHandler(client=raw_client)
+        )
+
+    choice, token = _message_of(response)
+    assert choice.message.content == "Once upon a time."
+    assert choice.finish_reason == "stop"
+    assert token is None
+    assert [(body.get("continuation_token"), body.get("previous_interaction_id")) for body in bodies] == [
+        (None, None),
+        ("tok-1", "v1_first"),
+        ("tok-2", "v1_second"),
+    ]
+    assert bodies[1]["input"] == bodies[0]["input"]
+    usage: Final = response.usage  # pyright: ignore[reportAttributeAccessIssue]  # ModelResponse sets usage dynamically
+    assert (usage.prompt_tokens, usage.completion_tokens) == (30, 15)
+    assert usage.completion_tokens_details.text_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_async_unary_bridge_returns_the_partial_answer_and_token_when_a_hop_fails() -> None:
+    bodies, responder = _scripted(
+        (
+            httpx.Response(200, json=_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(503, json={"error": {"message": "overloaded"}}),
+        )
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as raw_client:
+        handler: Final = AsyncHTTPHandler()
+        handler.client = raw_client
+        response: Final = await litellm.acompletion(
+            model=MODEL, messages=list(MESSAGES), api_key="k", api_base=API_BASE, client=handler
+        )
+
+    choice, token = _message_of(response)
+    assert choice.message.content == "Once "
+    assert choice.finish_reason == "length"
+    assert token == "tok-1"
+    assert len(bodies) == 2
+
+
+def test_answer_cut_off_by_the_output_cap_is_not_resent_and_hands_the_token_to_the_caller() -> None:
+    bodies, responder = _scripted((httpx.Response(200, json=_interaction("Once ", "incomplete", "tok-cap")),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        client: Final = HTTPHandler(client=raw_client)
+        response: Final = litellm.completion(
+            model=MODEL, messages=list(MESSAGES), max_tokens=5, api_key="k", api_base=API_BASE, client=client
+        )
+
+    choice, token = _message_of(response)
+    assert choice.finish_reason == "length"
+    assert token == "tok-cap"
+    assert len(bodies) == 1
+
+
+def test_caller_continuation_token_is_forwarded_to_interactions() -> None:
+    bodies, responder = _scripted((httpx.Response(200, json=_interaction("a time.", "completed")),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        _ = litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            continuation_token="tok-cap",
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+
+    assert bodies[0]["continuation_token"] == "tok-cap"
+
+
+def _drain(stream: object) -> tuple[str, list[str], list[str], tuple[int, int] | None]:
+    chunks: Final = list(stream)  # pyright: ignore[reportArgumentType,reportUnknownArgumentType,reportUnknownVariableType]  # CustomStreamWrapper is iterable
+    choices: Final = [chunk.choices[0] for chunk in chunks if chunk.choices]
+    assert all(isinstance(choice, StreamingChoices) for choice in choices)
+    usages: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+    return (
+        "".join(choice.delta.content or "" for choice in choices),
+        [choice.finish_reason for choice in choices if choice.finish_reason],
+        [
+            token
+            for choice in choices
+            if (token := (choice.delta.provider_specific_fields or {}).get("continuation_token"))
+        ],
+        (usages[-1].prompt_tokens, usages[-1].completion_tokens) if usages else None,
+    )
+
+
+def test_streaming_bridge_continues_into_the_next_hop_as_one_stream() -> None:
+    bodies, responder = _scripted(
+        (
+            _sse(_interaction("Once ", "requires_continuation", "tok-1")),
+            _sse(_interaction("upon a time.", "completed", interaction_id="v1_second")),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        stream: Final = litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            stream=True,
+            stream_options={"include_usage": True},
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+        text, finish_reasons, tokens, usage = _drain(stream)
+
+    assert text == "Once upon a time."
+    assert finish_reasons == ["stop"]
+    assert tokens == []
+    assert usage == (20, 10)
+    assert (bodies[1]["continuation_token"], bodies[1]["previous_interaction_id"]) == ("tok-1", "v1_first")
+
+
+def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_fails() -> None:
+    _, responder = _scripted(
+        (
+            _sse(_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(503, json={"error": {"message": "overloaded"}}),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        stream: Final = litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            stream=True,
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+        text, finish_reasons, tokens, _ = _drain(stream)
+
+    assert text == "Once "
+    assert finish_reasons == ["length"]
+    assert tokens == ["tok-1"]

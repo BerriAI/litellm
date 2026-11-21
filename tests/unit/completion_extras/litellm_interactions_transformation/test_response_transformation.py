@@ -91,7 +91,7 @@ def test_stateless_openai_client_stripping_extra_fields_roundtrips_signature_cle
             {
                 "type": "function_call",
                 "id": "call_tokyo",
-                "signature": "fc_sig_tokyo",
+                "signature": "ZmNfc2lnX3Rva3lv",
                 "name": "get_weather",
                 "arguments": {"city": "Tokyo"},
             },
@@ -144,7 +144,7 @@ def test_stateless_openai_client_stripping_extra_fields_roundtrips_signature_cle
 
     assert turn2_prepared.input_steps == [
         {"type": "user_input", "content": [{"type": "text", "text": "Weather in Tokyo and Paris?"}]},
-        {"type": "thought", "signature": "fc_sig_tokyo"},
+        {"type": "thought", "signature": "ZmNfc2lnX3Rva3lv"},
         {
             "type": "function_call",
             "id": "call_tokyo",
@@ -176,7 +176,7 @@ def test_thought_step_signature_inherits_cleanly_when_function_call_omits_inline
     turn1_raw: Final = {
         "status": "requires_action",
         "steps": [
-            {"type": "thought", "signature": "argon_thought_sig_base64"},
+            {"type": "thought", "signature": "YXJnb25fdGhvdWdodF9zaWdfYmFzZTY0"},
             {
                 "type": "function_call",
                 "id": "call_bash_1",
@@ -196,7 +196,7 @@ def test_thought_step_signature_inherits_cleanly_when_function_call_omits_inline
     assert isinstance(choice, Choices)
     fn_calls: Final = [tc for tc in (choice.message.tool_calls or []) if isinstance(tc, ChatCompletionMessageToolCall)]
     assert len(fn_calls) == 1
-    assert fn_calls[0].id == "call_bash_1__thought__argon_thought_sig_base64"
+    assert fn_calls[0].id == "call_bash_1__thought__YXJnb25fdGhvdWdodF9zaWdfYmFzZTY0"
 
     stripped_assistant: Final = {
         "role": "assistant",
@@ -221,7 +221,7 @@ def test_thought_step_signature_inherits_cleanly_when_function_call_omits_inline
     )
     assert turn2_prepared.input_steps == [
         {"type": "user_input", "content": [{"type": "text", "text": "List files"}]},
-        {"type": "thought", "signature": "argon_thought_sig_base64"},
+        {"type": "thought", "signature": "YXJnb25fdGhvdWdodF9zaWdfYmFzZTY0"},
         {
             "type": "function_call",
             "id": "call_bash_1",
@@ -239,7 +239,7 @@ def test_thought_step_signature_inherits_cleanly_when_function_call_omits_inline
 
 def test_preamble_and_parallel_tool_calls_roundtrip_without_inverting_order_or_duplicating_signature() -> None:
     turn1_steps: Final = [
-        {"type": "thought", "signature": "argon_turn1_sig"},
+        {"type": "thought", "signature": "YXJnb25fdHVybjFfc2ln"},
         {"type": "model_output", "content": [{"type": "text", "text": "I will inspect the module and run pytest."}]},
         {"type": "function_call", "id": "call_view", "name": "bash", "arguments": {"cmd": "sed -n '1,40p' mod.py"}},
         {"type": "function_call", "id": "call_test", "name": "bash", "arguments": {"cmd": "pytest -q"}},
@@ -322,10 +322,10 @@ def test_preamble_and_parallel_tool_calls_roundtrip_without_inverting_order_or_d
 
 def test_interleaved_distinct_thought_signatures_roundtrip_across_preserved_and_stripped_clients() -> None:
     turn1_steps: Final = [
-        {"type": "thought", "signature": "sig_step_a", "summary": [{"type": "text", "text": "first thought"}]},
+        {"type": "thought", "signature": "c2lnX3N0ZXBfYQ==", "summary": [{"type": "text", "text": "first thought"}]},
         {"type": "model_output", "content": [{"type": "text", "text": "Checking both locations."}]},
         {"type": "function_call", "id": "call_a", "name": "bash", "arguments": {"cmd": "ls a"}},
-        {"type": "thought", "signature": "sig_step_b", "summary": [{"type": "text", "text": "second thought"}]},
+        {"type": "thought", "signature": "c2lnX3N0ZXBfYg==", "summary": [{"type": "text", "text": "second thought"}]},
         {"type": "function_call", "id": "call_b", "name": "bash", "arguments": {"cmd": "ls b"}},
     ]
     turn1_resp: Final = transform_interactions_response_to_chat_response(
@@ -342,8 +342,8 @@ def test_interleaved_distinct_thought_signatures_roundtrip_across_preserved_and_
     assert isinstance(choice, Choices)
     fn_calls: Final = [tc for tc in (choice.message.tool_calls or []) if isinstance(tc, ChatCompletionMessageToolCall)]
     assert len(fn_calls) == 2
-    assert fn_calls[0].id == "call_a__thought__sig_step_a"
-    assert fn_calls[1].id == "call_b__thought__sig_step_b"
+    assert fn_calls[0].id == "call_a__thought__c2lnX3N0ZXBfYQ=="
+    assert fn_calls[1].id == "call_b__thought__c2lnX3N0ZXBfYg=="
 
     preserved_turn2: Final = transform_chat_to_interactions_request(
         messages=[
@@ -388,10 +388,10 @@ def test_interleaved_distinct_thought_signatures_roundtrip_across_preserved_and_
     )
     assert stripped_turn2.input_steps == [
         {"type": "user_input", "content": [{"type": "text", "text": "Compare a and b"}]},
-        {"type": "thought", "signature": "sig_step_a"},
+        {"type": "thought", "signature": "c2lnX3N0ZXBfYQ=="},
         {"type": "model_output", "content": [{"type": "text", "text": "Checking both locations."}]},
         {"type": "function_call", "id": "call_a", "name": "bash", "arguments": {"cmd": "ls a"}},
-        {"type": "thought", "signature": "sig_step_b"},
+        {"type": "thought", "signature": "c2lnX3N0ZXBfYg=="},
         {"type": "function_call", "id": "call_b", "name": "bash", "arguments": {"cmd": "ls b"}},
         {"type": "function_result", "call_id": "call_a", "name": "bash", "result": [{"type": "text", "text": "a1\n"}]},
         {"type": "function_result", "call_id": "call_b", "name": "bash", "result": [{"type": "text", "text": "b1\n"}]},

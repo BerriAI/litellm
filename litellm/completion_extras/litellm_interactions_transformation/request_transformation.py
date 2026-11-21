@@ -1050,7 +1050,13 @@ def transform_chat_to_interactions_request(
         **({"store": effective_store} if effective_store is not None else {}),
         **{
             key: normalized_params[key]
-            for key in ("previous_interaction_id", "background", "environment", "response_modalities")
+            for key in (
+                "previous_interaction_id",
+                "continuation_token",
+                "background",
+                "environment",
+                "response_modalities",
+            )
             if normalized_params.get(key) is not None
         },
     }

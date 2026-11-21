@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
@@ -9,8 +10,8 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names
 from litellm.litellm_core_utils.allowed_tools_tool_choice import is_allowed_tools_tool_choice
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
@@ -34,6 +35,8 @@ from litellm.utils import ProviderConfigManager, get_model_info_helper, model_co
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
+_GEMINI_GENERATION: Final = re.compile(r"^gemini-(\d+)(?:[.-]|$)")
+_FIRST_GEMINI_GENERATION_ON_INTERACTIONS: Final = 4
 ROUTABLE_MODES: Final = frozenset({"chat", "responses", "interactions"})
 _INTERACTIONS_ELIGIBLE_PROVIDERS: Final = frozenset({"gemini", "vertex_ai", "vertex_ai_beta"})
 _INTERACTIONS_ALLOWED_OPENAI_PARAMS: Final = (
@@ -44,6 +47,7 @@ _INTERACTIONS_ALLOWED_OPENAI_PARAMS: Final = (
     "logprobs",
     "top_logprobs",
     "previous_interaction_id",
+    "continuation_token",
     "background",
     "environment",
     "response_json_schema",
@@ -367,6 +371,11 @@ def _is_interactions_eligible_target(
     return True
 
 
+def _is_gemini_4_or_newer(model: str) -> bool:
+    generation: Final = _GEMINI_GENERATION.match(model.rsplit("/", 1)[-1].lower())
+    return generation is not None and int(generation.group(1)) >= _FIRST_GEMINI_GENERATION_ON_INTERACTIONS
+
+
 def _explicit_use_interactions(optional_params: Mapping[str, object] | None) -> bool | None:
     if optional_params is None:
         return None
@@ -423,7 +432,7 @@ def should_route_to_interactions_api(
     if _shared_routing_mode(model, custom_llm_provider) == "interactions":
         return True
 
-    return bool(litellm.route_all_chat_gemini_to_interactions)
+    return bool(litellm.route_all_chat_gemini_to_interactions) or _is_gemini_4_or_newer(model)
 
 
 def resolve_bridge_allowed_openai_params(
@@ -538,6 +547,9 @@ def dispatch_interactions_bridge(
     )
     if stream_options is not None and "stream_options" not in cleaned_opt:
         cleaned_opt["stream_options"] = stream_options
+    continuation_token: Final = (str_keyed_mapping(raw_kwargs) or {}).get("continuation_token")
+    if continuation_token is not None:
+        cleaned_opt["continuation_token"] = continuation_token
     llm_map: Final = _merge_vertex_bridge_params(str_keyed_mapping(litellm_params), str_keyed_mapping(raw_kwargs))
     hdr_map: Final = str_keyed_mapping(headers)
     msg_seq: Final = _OBJECT_SEQ.validate_python(messages)
