@@ -15,6 +15,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -229,6 +230,14 @@ class EnkryptAIGuardrails(CustomGuardrail):
             verbose_proxy_logger.error("Error determining EnkryptAI guardrail status: %s", str(e))
             return "guardrail_failed_to_respond"
 
+    def _blocked(self, error_message: str) -> GuardrailRaisedException:
+        return GuardrailRaisedException(
+            guardrail_name=self.guardrail_name,
+            message=error_message,
+            should_wrap_with_default_message=False,
+            blocked_content=True,
+        )
+
     def _create_error_message(self, processed_result: EnkryptAIProcessedResult) -> str:
         """
         Create a detailed error message from processed guardrail results.
@@ -308,7 +317,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                     # If any attacks are detected, raise an error
                     if attacks_detected:
                         error_message = self._create_error_message(processed_result)
-                        raise ValueError(error_message)
+                        raise self._blocked(error_message)
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -354,7 +363,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                     # If any attacks are detected, raise an error
                     if attacks_detected:
                         error_message = self._create_error_message(processed_result)
-                        raise ValueError(error_message)
+                        raise self._blocked(error_message)
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -416,7 +425,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                         # If any attacks are detected, raise an error
                         if attacks_detected:
                             error_message = self._create_error_message(processed_result)
-                            raise ValueError(error_message)
+                            raise self._blocked(error_message)
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -442,7 +451,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
             GenericGuardrailAPIInputs - texts unchanged if passed, images unchanged
 
         Raises:
-            ValueError: If any attacks are detected
+            GuardrailRaisedException: If any attacks are detected
         """
         texts: Final = inputs.get("texts", [])
 
@@ -459,7 +468,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
             # If any attacks are detected, raise an error
             if attacks_detected:
                 error_message = self._create_error_message(processed_result)
-                raise ValueError(error_message)
+                raise self._blocked(error_message)
 
         return inputs
 

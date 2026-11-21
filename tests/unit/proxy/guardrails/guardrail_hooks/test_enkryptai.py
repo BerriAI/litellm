@@ -12,6 +12,8 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
+from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.enkryptai import EnkryptAIGuardrails
 from litellm.types.utils import Choices, Message
@@ -178,7 +180,7 @@ class TestEnkryptAIGuardrailHooks:
         with patch.object(
             enkryptai_guardrail.async_handler, "post", return_value=mock_response
         ):
-            with pytest.raises(ValueError, match='violation\\(s\\) detected') as exc_info:
+            with pytest.raises(GuardrailRaisedException, match='violation\\(s\\) detected') as exc_info:
                 await enkryptai_guardrail.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
                     cache=MagicMock(),
@@ -187,6 +189,7 @@ class TestEnkryptAIGuardrailHooks:
                 )
 
             assert "Guardrail failed" in str(exc_info.value)
+            assert is_guardrail_intervention(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_with_policy_header(
