@@ -52,7 +52,7 @@ def verify(secret_candidates: Sequence[bytes], headers: Mapping[str, str], body:
     webhook_id: Final = headers.get("webhook-id")
     timestamp: Final = headers.get("webhook-timestamp")
     signatures: Final = (headers.get("webhook-signature") or "").split()
-    if not webhook_id or not signatures or not (timestamp or "").isdigit():
+    if not webhook_id or not signatures or not timestamp or not (timestamp.isascii() and timestamp.isdigit()):
         return False
     if abs(now - int(timestamp or "0")) > _TOLERANCE_SECONDS:
         return False
@@ -61,4 +61,4 @@ def verify(secret_candidates: Sequence[bytes], headers: Mapping[str, str], body:
 
 
 def _matches_any(candidate: str, expected: tuple[str, ...]) -> bool:
-    return any(hmac.compare_digest(candidate, wanted) for wanted in expected)
+    return any(hmac.compare_digest(candidate.encode(), wanted.encode()) for wanted in expected)

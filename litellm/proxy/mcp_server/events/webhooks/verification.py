@@ -21,7 +21,7 @@ def echoed_challenge(response: CallbackResponse, challenge: str) -> bool:
         echoed: Final = _JSON_OBJECT.validate_json(response.body).get("challenge")
     except ValidationError:
         return False
-    return isinstance(echoed, str) and hmac.compare_digest(echoed, challenge)
+    return isinstance(echoed, str) and hmac.compare_digest(echoed.encode(), challenge.encode())
 
 
 async def verify_callback(

@@ -83,3 +83,15 @@ def test_a_delivery_missing_a_required_header_fails(missing: str) -> None:
     body: Final = b"{}"
     headers: Final = {key: value for key, value in _headers(body).items() if key != missing}
     assert not verify((KEY,), headers, body, NOW)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    (
+        {"webhook-id": "msg_1", "webhook-timestamp": "²³", "webhook-signature": "v1,AAAA"},
+        {"webhook-id": "msg_1", "webhook-timestamp": "9" * 400, "webhook-signature": "v1,AAAA"},
+        {"webhook-id": "msg_1", "webhook-timestamp": "1800000000", "webhook-signature": "v1,é"},
+    ),
+)
+def test_malformed_signature_headers_are_rejected_not_raised(headers: dict[str, str]) -> None:
+    assert verify((b"k" * 32,), headers, b"{}", 1_800_000_000) is False

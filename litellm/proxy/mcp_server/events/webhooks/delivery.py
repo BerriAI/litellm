@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Final, TypeAlias
 from urllib.parse import ParseResult, urlparse, urlunparse
 
+import anyio
 import httpx
 
 from litellm.litellm_core_utils.url_utils import (
@@ -18,6 +19,7 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Resu
 from litellm.types.mcp_server.events import CallbackFailure
 
 DELIVERY_TIMEOUT_SECONDS: Final = 5.0
+CALLBACK_DEADLINE_SECONDS: Final = 15.0
 _MAX_RESPONSE_BYTES: Final = 65536
 _MAX_ADDRESSES: Final = 3
 
@@ -105,6 +107,22 @@ async def post_callback(
     headers: Mapping[str, str],
     resolve: Resolver = _resolve,
     transport: httpx.AsyncBaseTransport | None = None,
+    deadline: float = CALLBACK_DEADLINE_SECONDS,
+) -> Result[CallbackResponse, CallbackFailure]:
+    """POST once, bounded end to end: DNS, every connection attempt and a slow body share one deadline."""
+    try:
+        with anyio.fail_after(deadline):
+            return await _post_pinned(url, body, headers, resolve, transport)
+    except TimeoutError:
+        return Error("timeout")
+
+
+async def _post_pinned(
+    url: str,
+    body: bytes,
+    headers: Mapping[str, str],
+    resolve: Resolver,
+    transport: httpx.AsyncBaseTransport | None,
 ) -> Result[CallbackResponse, CallbackFailure]:
     pinned: Final = await pin(url, resolve)
     if isinstance(pinned, Error):
@@ -137,6 +155,8 @@ async def _post_once(
         ) as response:
             received: Final = await _read_capped(response)
             return Ok(CallbackResponse(status=response.status_code, body=received))
+    except httpx.ConnectTimeout:
+        return None
     except httpx.TimeoutException:
         return Error("timeout")
     except httpx.ConnectError as error:

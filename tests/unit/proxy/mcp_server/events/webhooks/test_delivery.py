@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from typing import Final
 
+import anyio
 import httpx
 import pytest
 
@@ -209,3 +210,54 @@ async def test_a_failure_after_connecting_never_retries_another_address(error: h
 @pytest.mark.asyncio
 async def test_a_malformed_port_is_refused_without_resolving(url: str) -> None:
     assert await pin(url, _resolver("93.184.216.34")) == Error("connection_refused")  # pyright: ignore[reportArgumentType]  # test resolver
+
+
+@pytest.mark.asyncio
+async def test_a_connect_timeout_falls_through_to_the_next_address() -> None:
+    attempts: Final[list[str]] = []  # mutable-ok: records each connection attempt
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.host)
+        if request.url.host == "93.184.216.34":
+            raise httpx.ConnectTimeout("slow handshake")
+        return httpx.Response(204)
+
+    response: Final = await post_callback(
+        "https://hook.example/in",
+        b"{}",
+        {},
+        resolve=_resolver("93.184.216.34", "93.184.216.35"),  # pyright: ignore[reportArgumentType]  # test resolver
+        transport=httpx.MockTransport(handler),
+    )
+    assert (attempts, response) == (["93.184.216.34", "93.184.216.35"], Ok(CallbackResponse(status=204, body=b"")))
+
+
+@pytest.mark.asyncio
+async def test_a_callback_that_never_finishes_hits_the_overall_deadline() -> None:
+    async def slow_resolver(_host: str, _port: int) -> tuple[str, ...]:
+        await anyio.sleep(3600)
+        return ("93.184.216.34",)
+
+    response: Final = await post_callback(
+        "https://hook.example/in",
+        b"{}",
+        {},
+        resolve=slow_resolver,
+        deadline=0.01,  # pyright: ignore[reportArgumentType]  # test resolver
+    )
+    assert response == Error("timeout")
+
+
+@pytest.mark.parametrize(
+    ("body", "matches"),
+    (
+        (b'{"challenge": "abc"}', True),
+        (b'{"challenge": "\\u00e9"}', False),
+        (b'{"challenge": 7}', False),
+        (b"nope", False),
+    ),
+)
+def test_only_an_exact_echo_of_the_challenge_verifies_the_endpoint(body: bytes, matches: bool) -> None:
+    from litellm.proxy.mcp_server.events.webhooks.verification import echoed_challenge
+
+    assert echoed_challenge(CallbackResponse(status=200, body=body), "abc") is matches
