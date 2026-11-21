@@ -16806,6 +16806,7 @@
         "myUser": "我的成员信息",
         "virtualKeys": "虚拟密钥",
         "members": "成员",
+        "memberDefaults": "成员默认设置",
         "memberPermissions": "成员权限",
         "settings": "设置"
       },
@@ -16891,10 +16892,11 @@
         "softBudgetAlertingEmails": "预算预警阈值告警邮箱",
         "softBudgetAlertingEmailsHint": "达到预算预警阈值时接收告警的邮箱，用英文逗号分隔",
         "teamMemberSettings": {
-          "title": "团队成员设置",
+          "edit": "编辑默认设置",
           "description": "成员加入团队时应用的可选默认值，所有字段均可为成员单独覆盖。",
+          "allTeamModels": "团队的所有模型",
           "defaultModelAccess": "默认模型访问权限",
-          "defaultModelAccessHint": "可选。设置后，新成员默认仅能访问这些模型，必须是上方团队模型的子集。留空则所有成员可访问团队全部模型。",
+          "defaultModelAccessHint": "可选。设置后，新成员默认仅能访问这些模型。留空则所有成员可访问团队全部模型。",
           "defaultModelAccessPlaceholder": "留空表示所有成员均可访问团队全部模型",
           "defaultBudget": "默认预算（美元）",
           "defaultBudgetHint": "此团队中每位成员的默认费用预算。",
