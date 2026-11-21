@@ -119,7 +119,7 @@ def _find_traceparent(metadata: Mapping[str, object], kwargs: Mapping[str, objec
     return "", ""
 
 
-def _cache_tokens(usage: Mapping[str, object]) -> tuple[int, int]:
+def _cache_tokens(usage: _SupportsGet) -> tuple[int, int]:
     """(cache_read, cache_write) from a Usage dict: OpenAI prompt_tokens_details first, Anthropic fields as fallback."""
     details = require_attributes(usage.get("prompt_tokens_details") or MappingProxyType({}), _SupportsGet, "get")
     cache_read = _int(details.get("cached_tokens")) or _int(usage.get("cache_read_input_tokens"))
@@ -159,8 +159,10 @@ def spend_log_row_from_payload(
     payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, object]
 ) -> SpendLogRecord:
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
-    hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
-    usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})
+    hidden_params: Final[Mapping[str, object]] = payload.get("hidden_params") or MappingProxyType({})
+    usage: Final = require_attributes(
+        metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({}), _SupportsGet, "get"
+    )
     cache_read_tokens, cache_write_tokens = _cache_tokens(usage)
     trace_id, span_id = _find_traceparent(metadata, kwargs)
     response_id: Final = str(payload.get("id") or "")

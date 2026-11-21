@@ -4,7 +4,7 @@ Anthropic Token Counter implementation using the CountTokens API.
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from pydantic import JsonValue
 
@@ -50,7 +50,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, JsonValue]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,

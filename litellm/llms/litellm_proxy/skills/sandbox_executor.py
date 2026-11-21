@@ -6,13 +6,18 @@ Supports Docker, Podman, and Kubernetes backends.
 """
 
 import base64
+import json
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Final, Protocol, TypedDict
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _SandboxRunResult(Protocol):
@@ -49,6 +54,19 @@ class _SandboxExecution(TypedDict):
     files: ReadOnly[Sequence[_GeneratedFile]]
 
 
+def _decoded_listing(stdout: str) -> object:
+    try:
+        return _DECODED_JSON.validate_python(json.loads(stdout))
+    except json.JSONDecodeError:
+        return []
+
+
+def _listed_sandbox_paths(stdout: str) -> Iterator[str]:
+    for listed_path in iter_items(_decoded_listing(stdout)):
+        if listed_path:
+            yield require_attributes(listed_path, str, "replace")
+
+
 class SkillsSandboxExecutor:
     """
     Executes skill code in llm-sandbox Docker container.
@@ -81,7 +99,7 @@ class SkillsSandboxExecutor:
 
     def execute(
         self,
-        code: str,
+        code: object,
         skill_files: dict[str, bytes],
         requirements: str | None = None,
     ) -> _SandboxExecution:
@@ -269,17 +287,7 @@ print(json.dumps(files))
             result: Final = session.run(list_code)
 
             if result.exit_code == 0 and result.stdout:
-                import json
-
-                try:
-                    filepaths = json.loads(result.stdout.strip())
-                except json.JSONDecodeError:
-                    filepaths = []
-
-                for filepath in filepaths:
-                    if not filepath:
-                        continue
-
+                for filepath in _listed_sandbox_paths(result.stdout.strip()):
                     # Get relative path
                     rel_path = filepath.replace("/sandbox/", "")
 

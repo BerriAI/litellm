@@ -139,7 +139,7 @@ def apply_upstream_reported_usage(
     return reported
 
 
-def parse_upstream_reported_model(headers: httpx.Headers) -> str | None:
+def parse_upstream_reported_model(headers: Mapping[str, str]) -> str | None:
     """Read the model name an upstream reported, or ``None`` when it sent none.
 
     An empty or whitespace-only value counts as absent. A repeated header reads
