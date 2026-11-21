@@ -905,6 +905,7 @@ def attempt_call(
         kwargs[field] = {**as_dict(kwargs.get(field)), "model_group": fallback_model_group}
     match plan.kind:
         case "chat":
+            caller_sent_params: Final = tuple(kwargs)
             host = core.host  # rebind-ok: rebound as the Python router rebinds it
             drop_unsupported_classifier_reasoning_effort(deployment, requested, kwargs, host)
             params = (  # rebind-ok: rebound as the Python router rebinds it
@@ -925,6 +926,7 @@ def attempt_call(
                     "caching": caching,
                     "client": model_client(core, plan, deployment, kwargs),
                     **kwargs,
+                    "_caller_sent_params": caller_sent_params,
                 }
             )
             return AttemptCall(plan.host_op, final, kwargs, str(params.get("model")), group)
