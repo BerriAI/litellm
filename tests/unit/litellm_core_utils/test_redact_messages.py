@@ -24,13 +24,18 @@ from openai.types.responses.response_function_web_search import ResponseFunction
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM
+from litellm.constants import (
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+    REDACTED_BY_LITELLM,
+    WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
+    redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
@@ -1633,6 +1638,55 @@ def test_perform_redaction_drops_the_served_output_texts_from_the_callback_kwarg
     details: Final = {"litellm_params": {}, SERVED_OUTPUT_TEXTS_KEY: ("Card: <CREDIT_CARD>",)}
     perform_redaction(details, None)
     assert SERVED_OUTPUT_TEXTS_KEY not in details
+
+
+TTS_TEXT: Final = "Account 4417 closes on Friday"
+TTS_FRAME_TEXTS: Final = (" ", TTS_TEXT, "")
+
+
+def _tts_relay_payload(frame_texts: tuple[str, ...]) -> dict[str, object]:
+    return {
+        "url": "wss://api.elevenlabs.io/v1/text-to-speech/voice/stream-input",
+        "request_method": "WEBSOCKET",
+        "request_body": {
+            WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY: [{"text": text, "flush": False} for text in frame_texts],
+            "tools": [{"name": "lookup"}],
+        },
+        "response_body": [{"isFinal": True}],
+    }
+
+
+def _tts_relay_details(turn_off_message_logging: bool) -> dict[str, object]:
+    return {
+        "litellm_params": {},
+        "standard_callback_dynamic_params": {"turn_off_message_logging": turn_off_message_logging},
+        "passthrough_logging_payload": _tts_relay_payload(TTS_FRAME_TEXTS),
+    }
+
+
+@pytest.mark.parametrize("turn_off_message_logging", (True, False))
+def test_message_logging_off_keeps_websocket_tts_text_out_of_the_logged_passthrough_payload(
+    turn_off_message_logging: bool,
+) -> None:
+    details: Final = _tts_relay_details(turn_off_message_logging)
+
+    redact_message_input_output_from_logging(details, None)
+
+    assert details["passthrough_logging_payload"] == _tts_relay_payload(
+        (REDACTED_BY_LITELLM,) * len(TTS_FRAME_TEXTS) if turn_off_message_logging else TTS_FRAME_TEXTS
+    )
+
+
+def test_a_callback_opted_out_of_message_logging_gets_websocket_tts_text_redacted_only_in_its_copy() -> None:
+    details: Final = _tts_relay_details(turn_off_message_logging=False)
+    original: Final = copy.deepcopy(details)
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, CustomLogger(message_logging=False))
+
+    assert redacted["passthrough_logging_payload"] == _tts_relay_payload(
+        (REDACTED_BY_LITELLM,) * len(TTS_FRAME_TEXTS)
+    )
+    assert details == original
 
 
 @pytest.mark.parametrize("callback_only", (False, True))

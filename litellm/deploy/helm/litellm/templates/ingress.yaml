@@ -113,7 +113,7 @@
     (list "/cohere" "/gemini") (list "/google" "/gigachat") (list "/vertex_ai" "/vertex-ai")
     (list "/assemblyai" "/eu.assemblyai") (list "/fal_ai" "/deepgram") (list "/vllm" "/langfuse")
     (list "/mistral" "/typesafe") (list "/openrouter" "/nvidia_nim") (list "/groq" "/voyage")
-    (list "/cursor" "/milvus") (list "/tinyfish" "/openai_passthrough") (list "/watsonx")
+    (list "/cursor" "/milvus") (list "/tinyfish" "/openai_passthrough") (list "/watsonx" "/elevenlabs")
     (list "/health" "/metrics")
 -}}
 {{- $gatewayPrefixes := list -}}
@@ -138,6 +138,7 @@
   adding to it.
 */}}
 {{- $builtinPathKeys := list "/|Prefix" -}}
+{{- $builtinGatewayPrefixKeys := list -}}
 {{/*
   An ALB allows 100 listener rules and the AWS Load Balancer Controller makes
   one per Ingress path, so on alb each $gatewayPrefixGroups entry is one rule.
@@ -274,6 +275,7 @@ spec:
           {{- range $i, $group := $gatewayPrefixGroups }}
           {{- range $group }}
           {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Prefix" .) }}
+          {{- $builtinGatewayPrefixKeys = append $builtinGatewayPrefixKeys (printf "%s|Prefix" .) }}
           {{- end }}
           - path: {{ first $group }}
             pathType: Prefix
@@ -287,6 +289,7 @@ spec:
           {{- range (ternary list $gatewayPrefixes $albGrouping) }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
           {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
+          {{- $builtinGatewayPrefixKeys = append $builtinGatewayPrefixKeys (printf "%s|%s" . $pathType) }}
           - path: {{ . }}
             pathType: {{ $pathType }}
             backend:
@@ -360,9 +363,12 @@ spec:
           {{- if eq $extra.path "/" }}
           {{- fail (printf "ingress.extraPaths[%d]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture" $idx) }}
           {{- end }}
-          {{- if has (printf "%s|%s" $extra.path $pathType) $builtinPathKeys }}
+          {{- $extraKey := printf "%s|%s" $extra.path $pathType }}
+          {{- $routedToGatewayAlready := and (not (hasKey $extra "serviceName")) (eq $target.name $gatewayName) (has $extraKey $builtinGatewayPrefixKeys) }}
+          {{- if and (has $extraKey $builtinPathKeys) (not $routedToGatewayAlready) }}
           {{- fail (printf "ingress.extraPaths[%d]: path %s with pathType %s is already routed by this chart, and a duplicate would take it over rather than add to it" $idx $extra.path $pathType) }}
           {{- end }}
+          {{- if not $routedToGatewayAlready }}
           - path: {{ $extra.path | quote }}
             pathType: {{ $pathType }}
             backend:
@@ -370,6 +376,7 @@ spec:
                 name: {{ $target.name | quote }}
                 port:
                   {{- toYaml $port | nindent 18 }}
+          {{- end }}
           {{- end }}
           {{- if $monolith }}
           # --- Monolith: the proxy serves the UI, the data plane and the management API ---

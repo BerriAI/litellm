@@ -44,6 +44,21 @@ WebsocketUpstreamFrameKind: TypeAlias = Literal[
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class ForwardedClientText:
+    text: str
+    recorded: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RefusedClientText:
+    code: int
+    reason: str
+
+
+ClientTextDecision: TypeAlias = ForwardedClientText | RefusedClientText
+
+
 class BackgroundResponseSettlement(str, Enum):
     SETTLES = "settles"
 

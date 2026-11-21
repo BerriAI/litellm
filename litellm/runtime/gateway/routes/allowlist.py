@@ -104,6 +104,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/assemblyai/",
     "/eu.assemblyai/",
     "/deepgram/",
+    "/elevenlabs/",
     "/fal_ai/",
     "/langfuse/",
     "/vllm/",

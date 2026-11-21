@@ -62,7 +62,7 @@ tests:
           pattern: '^\[\{"field":"source-ip","sourceIpConfig":\{"values":\["10\.0\.0\.0/8"\]\}\},\{"field":"path-pattern",'
       - equal:
           path: metadata.annotations["alb.ingress.kubernetes.io/conditions.litellm-gateway-50"]
-          value: '[{"field":"source-ip","sourceIpConfig":{"values":["10.0.0.0/8"]}}]'
+          value: '[{"field":"source-ip","sourceIpConfig":{"values":["10.0.0.0/8"]}},{"field":"path-pattern","pathPatternConfig":{"values":["/elevenlabs","/elevenlabs/*"]}}]'
 
   - it: renders no dotted Exact or Prefix path for ingress-nginx, whose admission webhook rejects them
     set:
