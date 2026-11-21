@@ -12645,6 +12645,47 @@ async def test_openai_compatible_backend_400_relays_the_error_fields_beyond_open
     }
 
 
+@pytest.mark.usefixtures("httpx_transport")
+async def test_openai_compatible_backend_error_raised_mid_stream_relays_the_error_fields_beyond_openais_four() -> None:
+    body: Final = {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering the content management policy.",
+            "type": "invalid_request_error",
+            "param": "prompt",
+            "code": "content_filter",
+            "content_filters": list(_CONTENT_FILTERS),
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post("https://vllm-backend.example.com/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = _VLLM_ROUTES[0][1]()
+
+    class FailingUpstream:
+        def __aiter__(self) -> "FailingUpstream":
+            return self
+
+        async def __anext__(self) -> object:
+            raise caught.value
+
+    framed: Final[list[ProxyException]] = []
+    stream: Final = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=FailingUpstream(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+        request_data={"model": "qwen"},
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        serialize_chunk=lambda chunk: "data: x\n\n",
+        serialize_error=lambda error: framed.append(error) or "data: error\n\n",
+    )
+    _ = await stream.__anext__()
+
+    assert [json.loads(json.dumps(error.to_dict().get("provider_specific_fields"))) for error in framed] == [
+        {"code": "content_filter", "content_filters": list(_CONTENT_FILTERS)}
+    ]
+
+
 _DICT_MESSAGE_ROUTES: Final = (
     *(route for route in _VLLM_ROUTES if route[0] != "completions"),
     (

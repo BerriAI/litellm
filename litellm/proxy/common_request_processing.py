@@ -4592,6 +4592,8 @@ class ProxyBaseLLMRequestProcessing:
                 type=openai_error_type(e, stream_error_status),
                 param=openai_error_param(e),
                 code=stream_error_status,
+                provider_specific_fields=getattr(e, "provider_specific_fields", None)
+                or relayed_provider_specific_fields(e),
             )
             stream_completed = True
             error_frame: Final = serialize_error(proxy_exception)
