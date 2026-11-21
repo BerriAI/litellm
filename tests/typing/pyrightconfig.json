@@ -1,5 +1,5 @@
 {
-    "extends": "../../pyrightconfig.json",
+    "extends": "../../pyproject.toml",
     "include": ["openai_sdk_compat.py"],
     "exclude": [],
     "extraPaths": ["../.."],

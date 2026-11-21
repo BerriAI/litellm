@@ -4,7 +4,8 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -23,6 +24,7 @@ from litellm.types.llms.openai import AllMessageValues
 import time
 from unittest.mock import patch, MagicMock
 
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -84,73 +86,26 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
         assert mock_client.call_count == expected_call_count
 
 
-@pytest.mark.parametrize(
-    "stream",
-    [
-        True,
-        False,
-    ],
-)
-def test_unit_test_streaming_timeout(stream):
-    import os
-    from dotenv import load_dotenv
-    import litellm
-    from litellm.router import Router, RetryPolicy, AllowedFailsPolicy
+async def _timeout_sent_to_the_provider_call(router: Router, request_kwargs: Mapping[str, object]) -> object:
+    sent: Final[list[object]] = []
+    real_acompletion: Final = litellm.acompletion
 
-    litellm.set_verbose = True
+    async def spy(*args: object, **kwargs: object) -> object:
+        # A stream is bounded by the stream timeout litellm.acompletion is handed, any other call by its timeout
+        stream_timeout = kwargs.get("stream_timeout")
+        sent.append(
+            stream_timeout if kwargs.get("stream") is True and stream_timeout is not None else kwargs.get("timeout")
+        )
+        return await real_acompletion(*args, **kwargs)
 
-    model_list = [
-        {
-            "model_name": "llama3",
-            "litellm_params": {
-                "model": "watsonx/meta-llama/llama-3-1-8b-instruct",
-                "api_base": os.getenv("WATSONX_URL_US_SOUTH"),
-                "api_key": os.getenv("WATSONX_API_KEY"),
-                "project_id": os.getenv("WATSONX_PROJECT_ID_US_SOUTH"),
-                "timeout": 0.01,
-                "stream_timeout": 0.0000001,
-            },
-        },
-        {
-            "model_name": "bedrock-anthropic",
-            "litellm_params": {
-                "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
-                "timeout": 0.01,
-                "stream_timeout": 0.0000001,
-            },
-        },
-        {
-            "model_name": "llama3-fallback",
-            "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": os.getenv("OPENAI_API_KEY"),
-            },
-        },
-    ]
-
-    router = Router(model_list=model_list)
-
-    stream_timeout = 0.0000001
-    normal_timeout = 0.01
-
-    args = {
-        "kwargs": {"stream": stream},
-        "data": {"timeout": normal_timeout, "stream_timeout": stream_timeout},
-    }
-
-    assert router._get_stream_timeout(**args) == stream_timeout
-
-    assert router._get_non_stream_timeout(**args) == normal_timeout
-
-    stream_timeout_val = router._get_timeout(
-        kwargs={"stream": stream},
-        data={"timeout": normal_timeout, "stream_timeout": stream_timeout},
-    )
-
-    if stream:
-        assert stream_timeout_val == stream_timeout
-    else:
-        assert stream_timeout_val == normal_timeout
+    with patch.object(litellm, "acompletion", spy):
+        response = await router.acompletion(
+            model="openai-gpt-5.1", messages=[{"role": "user", "content": "hi"}], mock_response="ok", **request_kwargs
+        )
+        if request_kwargs.get("stream"):
+            _ = [chunk async for chunk in response]
+    assert len(sent) == 1
+    return sent[0]
 
 
 @pytest.mark.parametrize(
@@ -165,7 +120,8 @@ def test_unit_test_streaming_timeout(stream):
         ({"service_tier": "flex", "stream": True, "stream_timeout": 30}, 30),
     ],
 )
-def test_the_deployment_timeout_for_the_requests_service_tier_wins_over_its_general_timeout(
+@pytest.mark.asyncio
+async def test_the_deployment_timeout_for_the_requests_service_tier_wins_over_its_general_timeout(
     request_kwargs: dict[str, object], expected_timeout: float
 ) -> None:
     router: Final = Router(
@@ -183,12 +139,12 @@ def test_the_deployment_timeout_for_the_requests_service_tier_wins_over_its_gene
             }
         ]
     )
-    deployment_params: Final = router.model_list[0]["litellm_params"]
 
-    assert router._get_timeout(kwargs=request_kwargs, data=deployment_params) == expected_timeout
+    assert await _timeout_sent_to_the_provider_call(router, request_kwargs) == expected_timeout
 
 
-def test_a_stream_keeps_the_deployment_stream_timeout_when_only_the_request_timeout_map_names_its_tier() -> None:
+@pytest.mark.asyncio
+async def test_a_stream_keeps_the_deployment_stream_timeout_when_only_the_request_timeout_map_names_its_tier() -> None:
     router: Final = Router(
         model_list=[
             {
@@ -203,10 +159,9 @@ def test_a_stream_keeps_the_deployment_stream_timeout_when_only_the_request_time
             }
         ]
     )
-    deployment_params: Final = router.model_list[0]["litellm_params"]
 
-    assert router._get_timeout(kwargs={"service_tier": "flex", "stream": True}, data=deployment_params) == 30.0
-    assert router._get_timeout(kwargs={"service_tier": "flex"}, data=deployment_params) == 900.0
+    assert await _timeout_sent_to_the_provider_call(router, {"service_tier": "flex", "stream": True}) == 30.0
+    assert await _timeout_sent_to_the_provider_call(router, {"service_tier": "flex"}) == 900.0
 
 
 async def _drain_responses_stream(router: Router) -> None:
@@ -272,7 +227,6 @@ async def test_prompt_managed_stream_keeps_the_target_deployments_own_stream_tim
                 function_id="f",
             ),
         )
-
 
 
 @pytest.mark.asyncio
@@ -350,7 +304,9 @@ _INVOKE_ANSWER: Final = json.dumps(
 
 
 async def _streamed_chat_text(router: Router) -> str:
-    response: Final = await router.acompletion(model="claude", messages=[{"role": "user", "content": "hi"}], stream=True)
+    response: Final = await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], stream=True
+    )
     return "".join([chunk.choices[0].delta.content or "" async for chunk in response])
 
 
@@ -366,12 +322,26 @@ async def _streamed_messages_text(router: Router) -> str:
     return "".join(event["delta"]["text"] for event in events if event["type"] == "content_block_delta")
 
 
+@contextmanager
+def _slow_upstream(respx_mock: respx.MockRouter, served_by_rust: bool, answer: bytes = b"") -> Iterator[str | None]:
+    if not served_by_rust:
+        respx_mock.post(url__regex=r"https://(bedrock-runtime\.us-east-1\.amazonaws\.com|api\.openai\.com)/.*").mock(
+            side_effect=slow_upstream_answer(answer)
+        )
+        yield None
+        return
+    with recording_service() as server:
+        server.expected_requests = None
+        server.default_response = ResponseSpec(body=answer, delay=UPSTREAM_FIRST_BYTE_SECONDS)
+        yield server.base_url
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "answer", "streamed_text"),
+    ("model", "answer", "streamed_text", "served_by_rust"),
     [
-        ("bedrock/converse/anthropic.claude-sonnet-4-5-v1:0", CONVERSE_ANSWER, _streamed_chat_text),
-        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _INVOKE_ANSWER, _streamed_messages_text),
+        ("bedrock/converse/anthropic.claude-sonnet-4-5-v1:0", CONVERSE_ANSWER, _streamed_chat_text, False),
+        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _INVOKE_ANSWER, _streamed_messages_text, True),
     ],
     ids=["chat_completions", "anthropic_messages"],
 )
@@ -379,32 +349,32 @@ async def test_stream_a_deployment_hook_answers_in_one_piece_gets_the_longer_lim
     model: str,
     answer: bytes,
     streamed_text: Callable[[Router], Awaitable[str]],
+    served_by_rust: bool,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [_AnswersStreamsInOnePiece()])
-    respx_mock.post(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
-        side_effect=slow_upstream_answer(answer)
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "claude",
-                "litellm_params": {
-                    "model": model,
-                    "aws_access_key_id": "fake",
-                    "aws_secret_access_key": "fake",
-                    "aws_region_name": "us-east-1",
-                    "timeout": STREAM_TIMEOUT_SECONDS,
-                    "stream_timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
-                },
-            }
-        ],
-        num_retries=0,
-    )
+    with _slow_upstream(respx_mock, served_by_rust, answer) as api_base:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {
+                        "model": model,
+                        "api_base": api_base,
+                        "aws_access_key_id": "fake",
+                        "aws_secret_access_key": "fake",
+                        "aws_region_name": "us-east-1",
+                        "timeout": STREAM_TIMEOUT_SECONDS,
+                        "stream_timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
 
-    assert await streamed_text(router) == "hi"
+        assert await streamed_text(router) == "hi"
 
 
 class _FailureDetails(CustomLogger):
@@ -422,7 +392,11 @@ class _FailureDetails(CustomLogger):
 
 async def _drain_messages_stream(router: Router) -> None:
     response: Final = await router.aanthropic_messages(
-        model="native", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True, client_side_timeout=True
+        model="native",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        stream=True,
+        client_side_timeout=True,
     )
     _ = [chunk async for chunk in response]
 
@@ -434,50 +408,53 @@ async def _drain_native_responses_stream(router: Router) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "drain"),
+    ("model", "drain", "served_by_rust"),
     [
-        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _drain_messages_stream),
-        ("openai/gpt-4.1", _drain_native_responses_stream),
+        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _drain_messages_stream, True),
+        ("openai/gpt-4.1", _drain_native_responses_stream, False),
     ],
     ids=["anthropic_messages", "responses"],
 )
 async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the_deployment(
     model: str,
     drain: Callable[[Router], Awaitable[None]],
+    served_by_rust: bool,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     failure_details: Final = _FailureDetails()
     monkeypatch.setattr(litellm, "callbacks", [failure_details])
-    respx_mock.post(url__regex=r"https://(bedrock-runtime\.us-east-1\.amazonaws\.com|api\.openai\.com)/.*").mock(
-        side_effect=slow_upstream_answer()
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "native",
-                "litellm_params": {
-                    "model": model,
-                    "api_key": "fake",
-                    "aws_access_key_id": "fake",
-                    "aws_secret_access_key": "fake",
-                    "aws_region_name": "us-east-1",
-                },
-            }
-        ],
-        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
-        stream_timeout=STREAM_TIMEOUT_SECONDS,
-        num_retries=0,
-    )
+    with _slow_upstream(respx_mock, served_by_rust) as api_base:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "native",
+                    "litellm_params": {
+                        "model": model,
+                        "api_base": api_base,
+                        "api_key": "fake",
+                        "aws_access_key_id": "fake",
+                        "aws_secret_access_key": "fake",
+                        "aws_region_name": "us-east-1",
+                    },
+                }
+            ],
+            timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+            stream_timeout=STREAM_TIMEOUT_SECONDS,
+            num_retries=0,
+        )
 
-    with pytest.raises(litellm.Timeout):
-        await drain(router)
-    await asyncio.wait_for(failure_details.logged.wait(), timeout=10)
+        with pytest.raises(litellm.Timeout):
+            await drain(router)
+        await asyncio.wait_for(failure_details.logged.wait(), timeout=10)
 
     started: Final = failure_details.details.get("api_call_start_time")
     assert isinstance(started, datetime)
-    assert is_caller_timeout_408(failure_details.details, 408, ended=started + timedelta(seconds=STREAM_TIMEOUT_SECONDS))
+    assert is_caller_timeout_408(
+        failure_details.details, 408, ended=started + timedelta(seconds=STREAM_TIMEOUT_SECONDS)
+    )
+
 
 @pytest.mark.asyncio
 async def test_bedrock_timeout_preserves_the_provider_timeout_error(
@@ -489,9 +466,9 @@ async def test_bedrock_timeout_preserves_the_provider_timeout_error(
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     model_id: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-    route: Final = respx_mock.post(
-        url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*"
-    ).mock(side_effect=httpx.ReadTimeout("upstream timeout"))
+    route: Final = respx_mock.post(url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
+        side_effect=httpx.ReadTimeout("upstream timeout")
+    )
     router: Final = Router(
         model_list=[
             {
@@ -556,9 +533,7 @@ def test_stream_timeout_uses_the_configured_fallback(
     )
     chunks: Final = tuple(response)
 
-    assert tuple(chunk.choices[0].delta.content for chunk in chunks if chunk.choices[0].delta.content) == (
-        "fallback",
-    )
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks if chunk.choices[0].delta.content) == ("fallback",)
     request_bodies: Final = tuple(json.loads(call.request.content) for call in route.calls)
     assert route.call_count == 2
     assert tuple(body["model"] for body in request_bodies) == ("primary", "fallback")
@@ -598,9 +573,9 @@ async def test_anthropic_timeout_raises_for_sync_and_streaming(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post(
-        "https://api.anthropic.com/v1/messages"
-    ).mock(side_effect=httpx.ReadTimeout("scripted Anthropic timeout"))
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=httpx.ReadTimeout("scripted Anthropic timeout")
+    )
     request_kwargs: Final = {
         "model": "anthropic/claude-haiku-4-5-20251001",
         "messages": [{"role": "user", "content": "timeout contract"}],
@@ -634,9 +609,9 @@ def test_openai_router_timeout_raises_after_httpx_read_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post(
-        "https://api.openai.com/v1/chat/completions"
-    ).mock(side_effect=httpx.ReadTimeout("scripted OpenAI timeout"))
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=httpx.ReadTimeout("scripted OpenAI timeout")
+    )
     router: Final = Router(
         model_list=[
             {
@@ -665,9 +640,9 @@ def test_azure_router_timeout_raises_after_httpx_read_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post(
-        "https://azure.example.com/openai/deployments/gpt-4o-mini/chat/completions"
-    ).mock(side_effect=httpx.ReadTimeout("scripted Azure timeout"))
+    route: Final = respx_mock.post("https://azure.example.com/openai/deployments/gpt-4o-mini/chat/completions").mock(
+        side_effect=httpx.ReadTimeout("scripted Azure timeout")
+    )
     router: Final = Router(
         model_list=[
             {

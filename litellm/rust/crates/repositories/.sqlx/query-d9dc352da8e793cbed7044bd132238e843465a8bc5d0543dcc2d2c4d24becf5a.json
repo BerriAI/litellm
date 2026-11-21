@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_UserTable\"\nSET teams = array_append(COALESCE(teams, '{}'), $2),\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE user_id = $1\n  AND NOT ($2 = ANY (COALESCE(teams, '{}')))\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d9dc352da8e793cbed7044bd132238e843465a8bc5d0543dcc2d2c4d24becf5a"
+}
