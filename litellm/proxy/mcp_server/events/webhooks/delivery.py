@@ -4,7 +4,7 @@ import ssl
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, TypeAlias
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import ParseResult, urlparse, urlunparse
 
 import httpx
 
@@ -19,15 +19,20 @@ from litellm.types.mcp_server.events import CallbackFailure
 
 DELIVERY_TIMEOUT_SECONDS: Final = 5.0
 _MAX_RESPONSE_BYTES: Final = 65536
+_MAX_ADDRESSES: Final = 3
 
 Resolver: TypeAlias = Callable[[str, int], Awaitable[tuple[str, ...]]]
 
 
 @dataclass(frozen=True, slots=True)
 class PinnedUrl:
-    url: str
+    urls: tuple[str, ...]
     host_header: str
     hostname: str
+
+    @property
+    def url(self) -> str:
+        return self.urls[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,16 +67,20 @@ async def pin(
         return Error("connection_refused")
     if not allowlisted(hostname, port) and any(_is_blocked_ip(address) for address in addresses):
         return Error("connection_refused")
-    address: Final = addresses[0]
-    ip_host: Final = f"[{address}]" if ":" in address else address
-    netloc: Final = f"{ip_host}:{parsed.port}" if parsed.port is not None else ip_host
+    distinct: Final = tuple(dict.fromkeys(addresses))[:_MAX_ADDRESSES]
     return Ok(
         PinnedUrl(
-            url=urlunparse((parsed.scheme, netloc, parsed.path or "/", parsed.params, parsed.query, "")),
+            urls=tuple(_pinned_url(parsed.scheme, address, parsed.port, parsed) for address in distinct),
             host_header=_format_host_header(hostname, port, 443),
             hostname=hostname,
         )
     )
+
+
+def _pinned_url(scheme: str, address: str, port: int | None, parsed: ParseResult) -> str:
+    ip_host: Final = f"[{address}]" if ":" in address else address
+    netloc: Final = f"{ip_host}:{port}" if port is not None else ip_host
+    return urlunparse((scheme, netloc, parsed.path or "/", parsed.params, parsed.query, ""))
 
 
 def _verify_setting() -> bool | ssl.SSLContext | str:
@@ -91,31 +100,38 @@ async def post_callback(
     pinned: Final = await pin(url, resolve)
     if isinstance(pinned, Error):
         return Error(pinned.error)
+    async with httpx.AsyncClient(
+        verify=_verify_setting(),
+        follow_redirects=False,
+        timeout=DELIVERY_TIMEOUT_SECONDS,
+        trust_env=False,
+        transport=transport,
+    ) as client:
+        for target in pinned.ok.urls:
+            outcome = await _post_once(client, target, pinned.ok, body, headers)
+            if outcome is not None:
+                return outcome
+        return Error("connection_refused")
+
+
+async def _post_once(
+    client: httpx.AsyncClient, target: str, pinned: PinnedUrl, body: bytes, headers: Mapping[str, str]
+) -> Result[CallbackResponse, CallbackFailure] | None:
+    """None when no connection was made, so nothing was sent and the next address may be tried."""
     try:
-        async with (
-            httpx.AsyncClient(
-                verify=_verify_setting(),
-                follow_redirects=False,
-                timeout=DELIVERY_TIMEOUT_SECONDS,
-                trust_env=False,
-                transport=transport,
-            ) as client,
-            client.stream(
-                "POST",
-                pinned.ok.url,
-                content=body,
-                headers={**headers, "host": pinned.ok.host_header},
-                extensions={"sni_hostname": pinned.ok.hostname},
-            ) as response,
-        ):
+        async with client.stream(
+            "POST",
+            target,
+            content=body,
+            headers={**headers, "host": pinned.host_header},
+            extensions={"sni_hostname": pinned.hostname},
+        ) as response:
             received: Final = await _read_capped(response)
             return Ok(CallbackResponse(status=response.status_code, body=received))
     except httpx.TimeoutException:
         return Error("timeout")
     except httpx.ConnectError as error:
-        return Error(
-            "tls_error" if isinstance(error.__cause__, ssl.SSLError) or "SSL" in str(error) else "connection_refused"
-        )
+        return Error("tls_error") if isinstance(error.__cause__, ssl.SSLError) or "SSL" in str(error) else None
     except httpx.HTTPError:
         return Error("connection_refused")
 

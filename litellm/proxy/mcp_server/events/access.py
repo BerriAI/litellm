@@ -3,8 +3,9 @@ import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final, TypeAlias
 
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 EventGrant: TypeAlias = frozenset[str] | None
 
@@ -13,9 +14,26 @@ _TOKEN_HASH: Final = re.compile(r"[0-9a-f]{64}")
 _JWT_TOKEN_PREFIX: Final = "hashed-jwt-"
 
 
-def stored_key_hash(caller: UserAPIKeyAuth | None) -> str | None:
+def _master_key_hash() -> str | None:
+    from litellm.proxy.proxy_server import master_key
+    from litellm.proxy.utils import hash_token
+
+    return hash_token(master_key) if isinstance(master_key, str) else None
+
+
+def stored_key_hash(
+    caller: UserAPIKeyAuth | None, master_key_hash: Callable[[], str | None] = _master_key_hash
+) -> str | None:
     token: Final = caller.token if caller is not None else None
-    return token if token is not None and _TOKEN_HASH.fullmatch(token) else None
+    if token is None:
+        return None
+    if (
+        token == LITELLM_PROXY_MASTER_KEY_ALIAS
+        and caller is not None
+        and caller.user_role == LitellmUserRoles.PROXY_ADMIN
+    ):
+        return master_key_hash()
+    return token if _TOKEN_HASH.fullmatch(token) else None
 
 
 def _digest(value: str) -> str:

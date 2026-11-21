@@ -5,7 +5,7 @@ from typing import Final
 import pytest
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.mcp_server.events.access import (
     EventGrant,
     grant_allows,
@@ -134,3 +134,24 @@ def test_only_callers_the_worker_can_reauthorize_exactly_hold_webhooks(
     caller: UserAPIKeyAuth | None, holds: bool
 ) -> None:
     assert holds_webhooks(caller) is holds
+
+
+_MASTER_HASH: Final = "f" * 64
+
+
+def _master_hash() -> str:
+    return _MASTER_HASH
+
+
+@pytest.mark.parametrize(
+    ("caller", "key_hash"),
+    (
+        (UserAPIKeyAuth(api_key="litellm_proxy_master_key", user_role=LitellmUserRoles.PROXY_ADMIN), _MASTER_HASH),
+        (UserAPIKeyAuth(api_key="litellm_proxy_master_key", user_role=LitellmUserRoles.INTERNAL_USER), None),
+        (UserAPIKeyAuth(api_key="sk-a", user_role=LitellmUserRoles.PROXY_ADMIN), hash_token("sk-a")),
+    ),
+)
+def test_the_master_key_is_stored_as_its_own_hash_only_for_the_proxy_admin(
+    caller: UserAPIKeyAuth, key_hash: str | None
+) -> None:
+    assert stored_key_hash(caller, _master_hash) == key_hash

@@ -41,7 +41,9 @@ def test_only_https_urls_with_a_host_are_callbacks(url: str, https: bool) -> Non
 async def test_pinning_connects_to_the_resolved_ip_and_keeps_the_hostname() -> None:
     pinned: Final = await pin("https://hook.example:8443/path?q=1", _resolver("93.184.216.34"))  # pyright: ignore[reportArgumentType]  # test resolver
     assert pinned == Ok(
-        PinnedUrl(url="https://93.184.216.34:8443/path?q=1", host_header="hook.example:8443", hostname="hook.example")
+        PinnedUrl(
+            urls=("https://93.184.216.34:8443/path?q=1",), host_header="hook.example:8443", hostname="hook.example"
+        )
     )
 
 
@@ -138,3 +140,63 @@ async def test_a_large_response_body_is_read_only_up_to_the_cap() -> None:
 )
 def test_status_categories(status: int, failure: CallbackFailure | None) -> None:
     assert failure_for_status(status) == failure
+
+
+@pytest.mark.parametrize(
+    ("failing", "posted_to", "outcome"),
+    (
+        (
+            {"[2606:2800:220:1:248:1893:25c8:1946]"},
+            ["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"],
+            Ok(CallbackResponse(status=204, body=b"")),
+        ),
+        (
+            {"[2606:2800:220:1:248:1893:25c8:1946]", "93.184.216.34"},
+            ["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"],
+            Error("connection_refused"),
+        ),
+        (set(), ["2606:2800:220:1:248:1893:25c8:1946"], Ok(CallbackResponse(status=204, body=b""))),
+    ),
+)
+@pytest.mark.asyncio
+async def test_an_unreachable_address_falls_through_to_the_next_resolved_one(
+    failing: set[str], posted_to: list[str], outcome: object
+) -> None:
+    attempts: Final[list[str]] = []  # mutable-ok: records each connection attempt
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.host)
+        host: Final = f"[{request.url.host}]" if ":" in request.url.host else request.url.host
+        if host in failing:
+            raise httpx.ConnectError("refused")
+        return httpx.Response(204)
+
+    response: Final = await post_callback(
+        "https://hook.example/in",
+        b"{}",
+        {},
+        resolve=_resolver("2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"),  # pyright: ignore[reportArgumentType]  # test resolver
+        transport=httpx.MockTransport(handler),
+    )
+    assert (attempts, response) == (posted_to, outcome)
+
+
+@pytest.mark.parametrize(
+    "error", (httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED]"), httpx.RemoteProtocolError("reset mid-body"))
+)
+@pytest.mark.asyncio
+async def test_a_failure_after_connecting_never_retries_another_address(error: httpx.HTTPError) -> None:
+    attempts: Final[list[str]] = []  # mutable-ok: records each connection attempt
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.host)
+        raise error
+
+    await post_callback(
+        "https://hook.example/in",
+        b"{}",
+        {},
+        resolve=_resolver("93.184.216.34", "93.184.216.35"),  # pyright: ignore[reportArgumentType]  # test resolver
+        transport=httpx.MockTransport(handler),
+    )
+    assert attempts == ["93.184.216.34"]
