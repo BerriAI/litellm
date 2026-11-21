@@ -773,6 +773,11 @@ def _streamed_input_index(event: Mapping[str, object]) -> int | None:
     return _block_index(event)
 
 
+def _started_tool_use(event: Mapping[str, object]) -> Mapping[str, object] | None:
+    block: Final = as_str_mapping(event.get("content_block")) if event.get("type") == "content_block_start" else None
+    return block if block is not None and block.get("type") == "tool_use" else None
+
+
 def _with_tool_input_as_delta(
     event: Mapping[str, object], streamed_input_indexes: frozenset[int]
 ) -> tuple[Mapping[str, object], ...]:
@@ -780,10 +785,8 @@ def _with_tool_input_as_delta(
 
     A client takes a ``tool_use`` start's ``input`` as the call's input unless input deltas replace it.
     """
-    block: Final = as_str_mapping(event.get("content_block")) if event.get("type") == "content_block_start" else None
-    tool_input: Final = (
-        as_str_mapping(block.get("input")) if block is not None and block.get("type") == "tool_use" else None
-    )
+    block: Final = _started_tool_use(event)
+    tool_input: Final = as_str_mapping(block.get("input")) if block is not None else None
     if block is None or not tool_input:
         return (event,)
     start: Final = {**event, "content_block": {**block, "input": dict[str, object]()}}
@@ -793,10 +796,12 @@ def _with_tool_input_as_delta(
     return start, {"type": "content_block_delta", "index": event.get("index"), "delta": input_delta}
 
 
+def _streamed_input_indexes(events: Sequence[Mapping[str, object]]) -> frozenset[int]:
+    return frozenset(index for event in events if (index := _streamed_input_index(event)) is not None)
+
+
 def _canonical_sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    streamed_input_indexes: Final = frozenset(
-        index for event in events if (index := _streamed_input_index(event)) is not None
-    )
+    streamed_input_indexes: Final = _streamed_input_indexes(events)
     canonical_events: Final = chain.from_iterable(
         _with_tool_input_as_delta(event, streamed_input_indexes) for event in events
     )
@@ -847,6 +852,20 @@ def assemble_anthropic_sse_stream(
     if isinstance(model, str) and model:
         assembled.model = model
     return assembled
+
+
+def _replaces_its_start_input(event: Mapping[str, object], streamed_input_indexes: frozenset[int]) -> bool:
+    block: Final = _started_tool_use(event)
+    tool_input: Final = as_str_mapping(block.get("input")) if block is not None else None
+    return bool(tool_input) and _block_index(event) in streamed_input_indexes
+
+
+def anthropic_sse_assembles_every_block(all_chunks: Sequence[object]) -> bool:
+    events: Final = _parsed_sse_events(_joined_sse_stream(all_chunks) or "")
+    streamed_input_indexes: Final = _streamed_input_indexes(events)
+    return all(block.get("type") == "text" for block in _unfinished_blocks(events).values()) and not any(
+        _replaces_its_start_input(event, streamed_input_indexes) for event in events
+    )
 
 
 def _names_its_own_type(name: str, data: Mapping[str, object] | None) -> bool:

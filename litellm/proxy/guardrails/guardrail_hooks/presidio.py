@@ -51,6 +51,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_assembles_every_block,
     anthropic_sse_chunks_from_response,
     anthropic_sse_chunks_of_events,
     anthropic_sse_error_data,
@@ -188,6 +189,23 @@ async def _masked_error_data(data: str, mask: Callable[[str], Awaitable[str]]) -
         return await mask(data)
     masked_error: Final = await _masked_json_strings(error, mask)
     return data if masked_error == error else json.dumps(masked_error)
+
+
+def _decoded_json_text(text: str) -> str:
+    try:
+        value: Final = _JSON_VALUE.validate_json(text)
+    except ValidationError:
+        return text
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _json_text_processor(process: Callable[[str], Awaitable[str]]) -> Callable[[str], Awaitable[str]]:
+    async def processed(text: str) -> str:
+        decoded: Final = _decoded_json_text(text)
+        result: Final = await process(decoded)
+        return text if result == decoded else result
+
+    return processed
 
 
 async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
@@ -1442,6 +1460,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Handles all choices and tool calls.
         """
         pii_processed_text: Final = self._pii_text_processor(request_data, mode)
+        pii_processed_arguments: Final = _json_text_processor(pii_processed_text)
         for choice in response.choices:
             message: Message | None = getattr(choice, "message", None)
             if message is None:
@@ -1460,20 +1479,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         continue
                     item["text"] = await pii_processed_text(text_value)
 
-            await self._process_server_tool_calls_for_pii(message, pii_processed_text)
+            await self._process_server_tool_calls_for_pii(message, pii_processed_arguments)
 
             # 2. Process tool calls
             for tool_call in attribute_items(message, "tool_calls"):
                 function = attribute_or_none(tool_call, "function")
                 args = attribute_or_none(function, "arguments") if function else None
                 if isinstance(args, str):
-                    _write_attribute(function, "arguments", await pii_processed_text(args))
+                    _write_attribute(function, "arguments", await pii_processed_arguments(args))
 
             # 3. Process legacy function calls
             function_call = attribute_or_none(message, "function_call")
             legacy_args = attribute_or_none(function_call, "arguments") if function_call else None
             if isinstance(legacy_args, str):
-                _write_attribute(function_call, "arguments", await pii_processed_text(legacy_args))
+                _write_attribute(function_call, "arguments", await pii_processed_arguments(legacy_args))
         return response
 
     @staticmethod
@@ -1632,7 +1651,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             raise self._unreadable_stream_refusal()
         unmasked: Final = assembled.model_dump_json()
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
-        if masked_error_data == error_data and assembled.model_dump_json() == unmasked:
+        if (
+            masked_error_data == error_data
+            and assembled.model_dump_json() == unmasked
+            and anthropic_sse_assembles_every_block(chunks)
+        ):
             return chunks
         return anthropic_sse_chunks_from_response(assembled, chunks, error_events=masked_error_events)
 

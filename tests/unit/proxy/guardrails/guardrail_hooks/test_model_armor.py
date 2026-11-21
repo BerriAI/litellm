@@ -4189,6 +4189,18 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
             ),
             id="anthropic-sse-reusing-a-block-index",
         ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"tool_use","id":"toolu_1","name":"pay",'
+                b'"input":{"card":"4111-1111-1111-1111"}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[3:],
+            ),
+            id="anthropic-sse-with-a-tool-start-input-its-streamed-input-replaces",
+        ),
         pytest.param(None, id="responses-stream-without-completed-event"),
         pytest.param("created", id="responses-stream-cut-off-after-response-created"),
     ],
