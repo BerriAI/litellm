@@ -138,6 +138,22 @@ pub(crate) async fn router(
     Ok((router, shaping))
 }
 
+/// The router `config` describes with no host behind its build, for a test that asks it only what
+/// its settings and model groups say.
+#[cfg(test)]
+pub(crate) fn unhosted(config: &Config) -> Router {
+    let (settings, dynamic) = RouterConfig::from_settings(&config.router_settings).unwrap();
+    let model_list = entries(config)
+        .into_iter()
+        .map(|entry| serde_json::from_value(Value::Object(entry)).unwrap())
+        .collect();
+    let settings = RouterConfig {
+        model_list,
+        ..settings
+    };
+    Router::new(settings, dynamic).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use litellm_config::Config;

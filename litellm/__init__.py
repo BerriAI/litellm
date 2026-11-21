@@ -512,9 +512,13 @@ public_model_groups_links: dict[str, str | dict[str, object]] = {}
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 if TYPE_CHECKING:
     from .harness.evaluation import (
+        AgentInput as AgentInput,
+        AgentOutput as AgentOutput,
         CheckResult as CheckResult,
         CommandCheck as CommandCheck,
+        EvalAgent as EvalAgent,
         EvalCheck as EvalCheck,
+        EvalOutput as EvalOutput,
         EvalRun as EvalRun,
         EvalScorecard as EvalScorecard,
         EvalStatus as EvalStatus,
@@ -524,6 +528,7 @@ if TYPE_CHECKING:
         JudgeCheck as JudgeCheck,
         PredicateCheck as PredicateCheck,
         aagent_eval as aagent_eval,
+        aagent_eval_attempt as aagent_eval_attempt,
         agent_eval as agent_eval,
     )
 

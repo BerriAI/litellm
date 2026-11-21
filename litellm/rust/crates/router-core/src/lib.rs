@@ -83,6 +83,7 @@
 //! - [`cache`] / [`health`]: the shared routing cache, cooldowns and usage.
 //! - [`select`]: resolve, filter chain, simple-shuffle.
 //! - [`call`]: retries and fallbacks.
+//! - [`reach`]: the groups a name can be served by and the host steps each one asks for.
 //! - [`eligibility`]: the endpoints a deployment refuses to serve.
 //! - [`precall`]: the `enable_pre_call_checks` filter.
 //! - [`model_info`]: model info merged from the cost map, asked of the host at query time.
@@ -108,6 +109,7 @@ pub mod outcome;
 pub mod precall;
 pub mod prerouting;
 pub mod ptu;
+pub mod reach;
 pub mod registry;
 pub mod resolve;
 pub mod retry;
@@ -143,6 +145,7 @@ pub use crate::{
     },
     outcome::{OutcomeCallbacks, OutcomeWrite},
     prerouting::{PreRoute, PreRouted},
+    reach::{HostStep, Reached},
     registry::{ChangeSet, Deployment, DeploymentSpec, Registry, RegistryVersion},
     select::{Randomness, SeededRandomness, ThreadRandomness},
     settings::Settings,

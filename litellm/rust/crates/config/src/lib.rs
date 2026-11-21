@@ -20,7 +20,9 @@ pub use auth::{
 pub use environment::{Environment, Flag};
 pub use error::Error;
 pub use layer::Origins;
-pub use litellm_router_types::{LitellmParams, RouterSettings, Spelled};
+pub use litellm_router_types::{
+    LitellmParams, RouterSettings, RoutingGroupSpec, RoutingStrategy, Spelled,
+};
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
 pub use pass_through::{PassThroughEndpoint, PassThroughGuardrail};
