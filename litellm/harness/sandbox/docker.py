@@ -10,38 +10,14 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from litellm.constants import HARNESS_SNAPSHOT_SKIP_DIRS
 from litellm.harness.errors import SandboxError
 from litellm.harness.sandbox.base import CompletedRun
 from litellm.harness.sandbox.local import SubprocessHandle, collect_output
-from litellm.harness.sandbox.snapshot import HARNESS_SNAPSHOT_MAX_FILE_BYTES
+from litellm.harness.sandbox.snapshot import parse_sha256sum, remote_snapshot_script
 
 DOCKER_HOST_ALIAS: Final = "host.docker.internal"
-_SHA256_HEX_LEN: Final = 64
 _WRITE_SCRIPT: Final = 'mkdir -p "$(dirname "$1")" && cat > "$1"'
 _WHICH_SCRIPT: Final = 'command -v "$1"'
-
-
-def _snapshot_script() -> str:
-    prune = " -o ".join(f"-name '{name}'" for name in sorted(HARNESS_SNAPSHOT_SKIP_DIRS))
-    return (
-        'cd "$1" && find . -type d \\( '
-        + prune
-        + " \\) -prune -o -type f -size -"
-        + f"{HARNESS_SNAPSHOT_MAX_FILE_BYTES + 1}c"
-        + " -exec sha256sum {} +"
-    )
-
-
-def parse_sha256sum(output: str) -> Mapping[str, str]:
-    """Parse `sha256sum` lines ("<hex>  ./rel/path") into {rel/path: hex}."""
-    return MappingProxyType(
-        {
-            line[_SHA256_HEX_LEN + 2 :].removeprefix("./"): line[:_SHA256_HEX_LEN]
-            for line in output.splitlines()
-            if len(line) > _SHA256_HEX_LEN + 2
-        }
-    )
 
 
 class DockerSandbox:
@@ -243,7 +219,7 @@ class DockerSandbox:
         return path
 
     async def snapshot(self) -> Mapping[str, str]:
-        code, out, err = await self._exec_capture(("sh", "-c", _snapshot_script(), "sh", self.workdir))
+        code, out, err = await self._exec_capture(("sh", "-c", remote_snapshot_script(), "sh", self.workdir))
         if code != 0:
             raise SandboxError(f"snapshot failed: {err.decode(errors='replace').strip()}")
         return parse_sha256sum(out.decode("utf-8", errors="replace"))
