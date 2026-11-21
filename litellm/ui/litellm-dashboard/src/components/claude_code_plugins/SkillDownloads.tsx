@@ -18,17 +18,20 @@ interface SkillDownloadsProps {
 
 export function SkillDownloads({ skill, accessToken }: SkillDownloadsProps) {
   const { t, i18n } = useTranslation();
-  const fetchDownloadHistory = async (cursor: string | null = null): Promise<readonly PluginDownloadEvent[]> => {
+  const fetchDownloadHistory = async (
+    cursor: string | null = null,
+  ): Promise<readonly (readonly PluginDownloadEvent[])[]> => {
     const page = await apiClient.get<PluginDownloadsResponse>(
       `/skill-hub/skills/${encodeURIComponent(skill.name)}/downloads`,
       { accessToken, query: { limit: 100, cursor } },
     );
-    if (page.next_cursor === null) return page.downloads;
-    return [...page.downloads, ...(await fetchDownloadHistory(page.next_cursor))];
+    if (page.next_cursor === null) return [page.downloads];
+    return [page.downloads, ...(await fetchDownloadHistory(page.next_cursor))];
   };
   const exportCsv = useMutation({
     mutationFn: async () => {
-      const events = await fetchDownloadHistory();
+      const pages = await fetchDownloadHistory();
+      const events = pages.flatMap((page) => page);
       downloadBlob(new Blob([buildSkillDownloadsCsv(events)], { type: "text/csv;charset=utf-8" }), `${skill.name}.csv`);
     },
   });

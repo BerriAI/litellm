@@ -1,11 +1,14 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { focusManager } from "@tanstack/react-query";
+import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getProxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import SkillDetail, { skillHubDetail } from "./skill_detail";
 import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse, SkillHubSkill } from "./types";
+
+vi.mock("@/components/EntityUsageExport/utils", () => ({ downloadBlob: vi.fn() }));
 
 const digest = "a".repeat(64);
 const archivePath = `/claude-code/plugins/my-skill/archive/${digest}.zip`;
@@ -82,9 +85,6 @@ afterEach(() => {
 });
 
 it("exports fresh history across all pages without loading them into the table", async () => {
-  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-  URL.createObjectURL = vi.fn(() => "blob:csv");
-  URL.revokeObjectURL = vi.fn();
   renderHub();
   skillRequestMock.mockResolvedValueOnce(Response.json(page([event])));
   fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
@@ -97,7 +97,7 @@ it("exports fresh history across all pages without loading them into the table",
     Response.json(page([{ ...event, id: "2", user_email: "second@example.test" }])),
   );
   pending.resolve(Response.json(page([event], 2, event.id)));
-  await waitFor(() => expect(click).toHaveBeenCalledOnce());
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
   expect(skillRequestMock).toHaveBeenNthCalledWith(
     2,
     downloadsUrl.replace("limit=25", "limit=100"),
@@ -110,8 +110,8 @@ it("exports fresh history across all pages without loading them into the table",
     `${downloadsUrl.replace("limit=25", "limit=100")}&cursor=${event.id}`,
     expect.anything(),
   );
-  expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe("my-skill.csv");
-  const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+  expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "my-skill.csv");
+  const blob = vi.mocked(downloadBlob).mock.calls[0][0];
   const content = await new Promise<string>((resolve) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
@@ -122,12 +122,10 @@ it("exports fresh history across all pages without loading them into the table",
     `${event.id},2026-10-01T10:00:00.000Z,reader@example.test,reader-id,Engineering,development,1.2.0`,
     "2,2026-10-01T10:00:00.000Z,second@example.test,reader-id,Engineering,development,1.2.0",
   ]);
-  expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:csv");
   expect(screen.queryByRole("cell", { name: "second@example.test" })).not.toBeInTheDocument();
 });
 
 it("does not produce a partial CSV when a later page fails and allows retry", async () => {
-  URL.createObjectURL = vi.fn(() => "blob:csv");
   renderHub();
   skillRequestMock.mockResolvedValueOnce(Response.json(page()));
   fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
@@ -136,15 +134,13 @@ it("does not produce a partial CSV when a later page fails and allows retry", as
   skillRequestMock.mockResolvedValueOnce(Response.json({ detail: "Unavailable" }, { status: 500 }));
   fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not export download history. Try again.");
-  expect(URL.createObjectURL).not.toHaveBeenCalled();
+  expect(downloadBlob).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Download CSV" })).toBeEnabled();
 });
 
 it.each(["legacy", "portable"])(
   "retries a private %s ZIP download through the configured auth header and local route",
   async (kind) => {
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
-    URL.createObjectURL = vi.fn(() => "blob:skill-download");
     setGlobalLitellmHeaderName("X-LiteLLM-Key");
     const expectedUrl = kind === "portable" ? `${getProxyBaseUrl()}/skill-hub/skills/my-skill/archive` : url;
     renderHub(kind === "legacy" ? { download_url: url, content_url: null } : {});
@@ -156,13 +152,13 @@ it.each(["legacy", "portable"])(
     fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
     expect(screen.getByRole("button", { name: "Downloading…" })).toBeDisabled();
     expect(await screen.findByRole("alert")).toHaveTextContent("Archive not found");
-    expect(click).not.toHaveBeenCalled();
+    expect(downloadBlob).not.toHaveBeenCalled();
     skillRequestMock.mockResolvedValueOnce(
       new Response("zip-bytes", { headers: { "Content-Type": "application/zip" } }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
-    await waitFor(() => expect(click).toHaveBeenCalledOnce());
-    expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe("my-skill.zip");
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+    expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "my-skill.zip");
     expect(skillRequestMock).toHaveBeenLastCalledWith(
       expectedUrl,
       expect.objectContaining({
