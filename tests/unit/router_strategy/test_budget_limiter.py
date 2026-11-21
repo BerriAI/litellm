@@ -669,3 +669,61 @@ async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirma
     await second._push_in_memory_increments_to_redis()
     assert float(await client.get("provider_spend:openai:1d")) == 0.5
     await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limiter_kwargs", "spend_key", "expected_fragment"),
+    [
+        (
+            {"provider_budget_config": {"openai": {"budget_limit": 5.0, "time_period": "1h"}}},
+            "provider_spend:openai:1h",
+            "Exceeded budget for provider openai: 5.0 >= 5.0",
+        ),
+        (
+            {
+                "provider_budget_config": None,
+                "model_list": [
+                    {
+                        "model_name": "gpt-4o",
+                        "litellm_params": {"model": "openai/gpt-4o", "max_budget": 2.0, "budget_duration": "1d"},
+                        "model_info": {"id": "dep-1"},
+                    }
+                ],
+            },
+            "deployment_spend:dep-1:1d",
+            "Exceeded budget for deployment model_name: gpt-4o",
+        ),
+    ],
+    ids=["provider_budget", "deployment_budget"],
+)
+async def test_crossed_budget_rejection_is_not_flagged_as_product_bug(
+    disable_budget_sync: None,
+    limiter_kwargs: dict[str, object],
+    spend_key: str,
+    expected_fragment: str,
+) -> None:
+    """Intentional router budget rejections must carry an HTTP status so they do not trigger the bug-report banner."""
+    from litellm.litellm_core_utils.bug_report import should_report_bug
+    from litellm.types.router import RouterBudgetLimitError, RouterErrors
+
+    limiter: Final = RouterBudgetLimiting(dual_cache=DualCache(), **limiter_kwargs)
+    await limiter.dual_cache.async_set_cache(key=spend_key, value=5.0)
+    deployment: Final = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "openai/gpt-4o", "custom_llm_provider": "openai"},
+        "model_info": {"id": "dep-1"},
+    }
+
+    with pytest.raises(RouterBudgetLimitError) as raised:
+        await limiter.async_filter_deployments(
+            model="gpt-4o",
+            healthy_deployments=[deployment],
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert isinstance(raised.value, ValueError)
+    assert str(raised.value).startswith(f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: ")
+    assert expected_fragment in str(raised.value)
+    assert raised.value.status_code == 429
+    assert should_report_bug(raised.value) is False
