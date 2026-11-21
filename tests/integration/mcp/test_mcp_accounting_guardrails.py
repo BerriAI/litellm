@@ -1,10 +1,13 @@
+import asyncio
 import json
 import uuid
 from collections.abc import Generator, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -29,11 +32,14 @@ from integration._support.mcp import (
     mcp_peer,
     register_mcp,
     scripted_peer,
+    slow_tool,
     text_result,
     tool_calls,
 )
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -228,6 +234,7 @@ import os
 import httpx
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 SINK = "{sink}/native"
 
@@ -252,7 +259,45 @@ async def _post(record):
         await client.post(SINK, json=record)
 
 
-class HookRecorder(CustomLogger):
+class ResponseHeaderRecorder(CustomLogger):
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: dict[str, str] | None = None,
+    ) -> dict[str, str] | None:
+        headers = request_headers or {{}}
+        mode = headers.get("x-integration-callback")
+        trace = headers.get("x-integration-trace")
+        await _post(
+            {{
+                "stage": "response_headers",
+                "pid": os.getpid(),
+                "model": data.get("model"),
+                "user_api_key": (data.get("metadata") or {{}}).get("user_api_key"),
+                "caller": user_api_key_dict.api_key,
+                "trace": trace,
+                "response": None if response is None else response.model_dump(mode="json"),
+            }}
+        )
+        if mode == "raise":
+            raise RuntimeError("response headers callback failed")
+        if mode == "none":
+            return None
+        if mode == "echo":
+            return {{"x-custom-header": str(trace)}}
+        if mode == "unsafe":
+            return {{
+                "x-custom-header": "custom-value",
+                "content-type": "text/plain",
+                "set-cookie": "callback=1",
+                "access-control-allow-origin": "*",
+            }}
+        return {{"x-custom-header": "custom-value"}}
+
+
+class HookRecorder(ResponseHeaderRecorder):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         await _post(_record("pre", data, call_type))
 
@@ -292,6 +337,7 @@ class SinkGuardrail(CustomGuardrail):
 
 
 recorder = HookRecorder()
+headers_only = ResponseHeaderRecorder()
 """
 
 
@@ -691,3 +737,403 @@ def test_an_adapter_returning_the_wrong_number_of_texts_fails_closed_before_the_
             ("call_mcp_tool", "failure"),
         ], rows
         assert _tool_metadata(rows[1])["arguments"] == {"record": COUNT_MISMATCH}, rows[1]
+
+
+_V2_HEADERS_CODE: Final = """\
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, Patch, on
+
+
+class ResponseHeaders(CustomLoggerV2):
+    @on(Hook.response_headers, writes={Field.response_headers})
+    async def headers(self, view: object, ctx: CallContext[None]) -> Patch:
+        return Patch().merge(Field.response_headers, {"x-v2-header": "v2-value"})
+
+
+litellm.callbacks.append(ResponseHeaders())
+loaded = CustomLogger()
+"""
+
+
+@pytest.fixture(scope="module")
+def v2_headers_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("v2-response-headers")
+    (directory / "v2_headers.py").write_text(_V2_HEADERS_CODE)
+    base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **base,
+        "litellm_settings": {**object_value(base["litellm_settings"]), "callbacks": ["v2_headers.loaded"]},
+    }
+    path: Final = directory / "config.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path) as proxy:
+        yield proxy
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCall:
+    key: str
+    alias: str
+    name: str
+    result: dict[str, JsonValue]
+    headers: Mapping[str, httpx.Headers]
+
+
+class ResponseHeadersByMethod:
+    def __init__(self) -> None:
+        self.seen: Mapping[str, httpx.Headers] = MappingProxyType({})
+
+    async def remember(self, response: httpx.Response) -> None:
+        if response.request.method == "POST":
+            method: Final = json.loads(response.request.content).get("method")
+            self.seen = MappingProxyType({**self.seen, method: response.headers})
+
+
+def _native_lookup(gateway: Gateway, scenario: Scenario, peer: McpPeer, record: str) -> NativeCall:
+    alias: Final = "hdr" + uuid.uuid4().hex[:8]
+    identity: Final = register_mcp(scenario, peer, alias)
+    key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+    responses: Final = ResponseHeadersByMethod()
+
+    async def run() -> NativeCall:
+        client: Final = httpx.AsyncClient(
+            headers={"x-litellm-api-key": key, "x-mcp-servers": alias, "x-integration-trace": alias},
+            timeout=30,
+            trust_env=False,
+            event_hooks={"response": [responses.remember]},
+        )
+        url: Final = str(gateway.client.base_url).rstrip("/") + "/mcp"
+        async with streamable_http_client(url, http_client=client) as streams:
+            async with ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+                name: Final = next(tool.name for tool in (await session.list_tools()).tools if "lookup" in tool.name)
+                result: Final = await session.call_tool(name, {"record": record})
+                dumped: Final = JSON_OBJECT.validate_python(result.model_dump(mode="json"))
+                return NativeCall(key, alias, name, dumped, responses.seen)
+
+    return asyncio.run(run())
+
+
+def _raw_native_call(gateway: Gateway, call: NativeCall, record: str) -> httpx.Response:
+    return gateway.client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": call.name, "arguments": {"record": record}},
+        },
+        headers={"x-litellm-api-key": call.key, "Accept": "application/json, text/event-stream"},
+    )
+
+
+def test_native_tool_call_carries_callback_response_headers_and_the_result_a_gateway_without_the_callback_returns(
+    hooks_rig: HooksRig, gateway: Gateway
+) -> None:
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as hooked, gateway.scenario() as plain:
+        hooks_rig.sunk()
+        with_callback: Final = _native_lookup(hooks_rig.sibling, hooked, peer, "r-1")
+        sunk: Final = hooks_rig.sunk()
+        without_callback: Final = _native_lookup(gateway, plain, peer, "r-1")
+        raw_with: Final = _raw_native_call(hooks_rig.sibling, with_callback, "r-1")
+        raw_without: Final = _raw_native_call(gateway, without_callback, "r-1")
+    assert with_callback.headers["tools/call"].get("x-custom-header") == "custom-value", with_callback.headers
+    assert "x-custom-header" not in without_callback.headers["tools/call"], without_callback.headers
+    assert "x-custom-header" not in with_callback.headers["tools/list"], with_callback.headers
+    assert "x-custom-header" not in with_callback.headers["initialize"], with_callback.headers
+    assert with_callback.result == without_callback.result, with_callback.result
+    assert _texts(with_callback.result["content"]) == ["found"], with_callback.result
+    assert raw_with.headers.get("x-custom-header") == "custom-value", raw_with.headers
+    assert raw_with.content == raw_without.content, raw_with.text
+    saw: Final = _only(_native(sunk, "response_headers"))
+    assert saw["model"] == f"MCP: {with_callback.name}", saw
+    assert saw["user_api_key"] == saw["caller"] == _digest(with_callback.key), saw
+    assert saw["trace"] == with_callback.alias, saw
+    assert saw["response"] == with_callback.result, saw
+
+
+def test_native_tool_call_the_gateway_rejects_carries_callback_response_headers_and_the_callback_sees_no_response(
+    hooks_rig: HooksRig,
+) -> None:
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as scenario:
+        hooks_rig.sunk()
+        blocked: Final = _native_lookup(hooks_rig.sibling, scenario, peer, COUNT_MISMATCH)
+        sunk: Final = hooks_rig.sunk()
+        assert tool_calls(peer.drain()) == (), "the blocked call reached the peer"
+    assert blocked.headers["tools/call"].get("x-custom-header") == "custom-value", blocked.headers
+    assert blocked.result["is_error"] is True, blocked.result
+    assert "the redaction cannot be mapped back" in str(blocked.result["content"]), blocked.result
+    saw: Final = _only(_native(sunk, "response_headers"))
+    assert (saw["model"], saw["response"]) == (f"MCP: {blocked.name}", None), saw
+    assert saw["user_api_key"] == saw["caller"] == _digest(blocked.key), saw
+
+
+def test_native_tool_call_carries_the_response_headers_a_v2_callback_merges(v2_headers_gateway: Gateway) -> None:
+    with scripted_peer(_lookup_tool()) as peer, v2_headers_gateway.scenario() as scenario:
+        called: Final = _native_lookup(v2_headers_gateway, scenario, peer, "r-1")
+    assert _texts(called.result["content"]) == ["found"], called.result
+    assert called.headers["tools/call"].get("x-v2-header") == "v2-value", called.headers
+    assert "x-v2-header" not in called.headers["tools/list"], called.headers
+
+
+def test_native_tool_call_with_a_body_past_the_routing_peek_carries_callback_response_headers(
+    hooks_rig: HooksRig, gateway: Gateway
+) -> None:
+    record: Final = "r" * 5000
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as hooked, gateway.scenario() as plain:
+        with_callback: Final = _native_lookup(hooks_rig.sibling, hooked, peer, record)
+        without_callback: Final = _native_lookup(gateway, plain, peer, record)
+        sent: Final = tuple(call["body"]["params"]["arguments"] for call in tool_calls(peer.drain()))
+    assert sent == ({"record": record}, {"record": record}), sent
+    assert with_callback.headers["tools/call"].get("x-custom-header") == "custom-value", with_callback.headers
+    assert with_callback.result == without_callback.result, with_callback.result
+    assert _texts(with_callback.result["content"]) == ["found"], with_callback.result
+
+
+NATIVE_ENTRY_POINTS: Final[tuple[EntryPoint, ...]] = ("mcp", "server_mcp", "root")
+
+
+@dataclass(frozen=True, slots=True)
+class LookupServer:
+    key: str
+    alias: str
+    identity: str
+
+
+def _lookup_server(scenario: Scenario, peer: McpPeer) -> LookupServer:
+    alias: Final = "hdr" + uuid.uuid4().hex[:8]
+    identity: Final = register_mcp(scenario, peer, alias)
+    return LookupServer(scenario.key(object_permission={"mcp_servers": [identity]}), alias, identity)
+
+
+def _lookup_response(
+    gateway: Gateway,
+    server: LookupServer,
+    entry: EntryPoint,
+    headers: Mapping[str, str] = MappingProxyType({}),
+    tool: str = "lookup",
+    key: str | None = None,
+) -> httpx.Response:
+    caller: Final = McpCaller(gateway, key or server.key, entry, server.alias, headers)
+    return caller.rpc("tools/call", {"name": f"{server.alias}-{tool}", "arguments": {"record": "r-1"}})
+
+
+def _lookup_outcome(response: httpx.Response) -> tuple[int, str | None, bool]:
+    if response.status_code != 200:
+        return response.status_code, None, True
+    lines: Final = tuple(line[5:] for line in response.text.splitlines() if line.startswith("data:"))
+    body: Final = JSON_OBJECT.validate_json(lines[-1] if lines else response.content)
+    if "result" not in body:
+        return 200, json.dumps(body.get("error")), True
+    result: Final = object_value(body["result"])
+    texts: Final = _texts(result["content"])
+    return 200, str(texts[0]) if texts else None, bool(result.get("isError"))
+
+
+def _traced(sunk: tuple[Sunk, ...], trace: str) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(record for record in _native(sunk, "response_headers") if record["trace"] == trace)
+
+
+@pytest.mark.parametrize("entry", NATIVE_ENTRY_POINTS)
+def test_tool_call_carries_callback_response_headers_on_every_native_streamable_entry_point(
+    hooks_rig: HooksRig, entry: EntryPoint
+) -> None:
+    trace: Final = "entry-" + uuid.uuid4().hex
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as scenario:
+        server: Final = _lookup_server(scenario, peer)
+        hooks_rig.sunk()
+        peer.drain()
+        called: Final = _lookup_response(hooks_rig.sibling, server, entry, {"x-integration-trace": trace})
+        listed: Final = McpCaller(hooks_rig.sibling, server.key, entry, server.alias).list_tools()
+        sunk: Final = hooks_rig.sunk()
+        assert len(tool_calls(peer.drain())) == 1, "the peer did not serve exactly one tools/call"
+    assert _lookup_outcome(called) == (200, "found", False), called.text
+    assert called.headers.get("x-custom-header") == "custom-value", (called.headers, called.text)
+    assert f"{server.alias}-lookup" in listed.tools, listed.raw
+    saw: Final = _only(_native(sunk, "response_headers"))
+    assert (saw["trace"], saw["caller"]) == (trace, _digest(server.key)), saw
+    assert _texts(object_value(saw["response"])["content"]) == ["found"], saw
+
+
+@pytest.mark.parametrize("entry", NATIVE_ENTRY_POINTS)
+@pytest.mark.parametrize(
+    ("mode", "expected"), (("raise", None), ("none", None), ("echo", "trace"), ("unsafe", "custom-value"))
+)
+def test_native_tool_call_returns_the_same_result_whatever_the_response_headers_callback_does(
+    hooks_rig: HooksRig, gateway: Gateway, entry: EntryPoint, mode: str, expected: str | None
+) -> None:
+    trace: Final = f"{mode}-" + uuid.uuid4().hex
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as hooked, gateway.scenario() as plain:
+        with_callback: Final = _lookup_server(hooked, peer)
+        without_callback: Final = _lookup_server(plain, peer)
+        hooks_rig.sunk()
+        called: Final = _lookup_response(
+            hooks_rig.sibling, with_callback, entry, {"x-integration-trace": trace, "x-integration-callback": mode}
+        )
+        control: Final = _lookup_response(gateway, without_callback, entry)
+        after: Final = _lookup_response(hooks_rig.sibling, with_callback, entry)
+        sunk: Final = hooks_rig.sunk()
+    assert _lookup_outcome(called) == _lookup_outcome(control) == (200, "found", False), called.text
+    assert called.content == control.content, called.text
+    assert called.headers.get("x-custom-header") == (trace if expected == "trace" else expected), called.headers
+    assert called.headers.get("content-type") == control.headers.get("content-type"), called.headers
+    assert "set-cookie" not in called.headers and "access-control-allow-origin" not in called.headers, called.headers
+    assert after.headers.get("x-custom-header") == "custom-value", (after.headers, after.text)
+    assert len(_traced(sunk, trace)) == 1, sunk
+
+
+@pytest.mark.parametrize("entry", NATIVE_ENTRY_POINTS)
+@pytest.mark.parametrize("failure", ("unknown-tool", "tool-error", "slow-tool"))
+def test_native_tool_call_that_fails_or_stalls_upstream_carries_callback_response_headers_and_the_plain_outcome(
+    hooks_rig: HooksRig, gateway: Gateway, entry: EntryPoint, failure: str
+) -> None:
+    trace: Final = f"{failure}-" + uuid.uuid4().hex
+    tool: Final = {
+        "unknown-tool": _lookup_tool(),
+        "tool-error": ScriptedTool("lookup", lambda _: {**text_result("upstream refused"), "isError": True}),
+        "slow-tool": slow_tool("lookup", 1),
+    }[failure]
+    name: Final = "missing" if failure == "unknown-tool" else "lookup"
+    with scripted_peer(tool) as peer, hooks_rig.sibling.scenario() as hooked, gateway.scenario() as plain:
+        with_callback: Final = _lookup_server(hooked, peer)
+        without_callback: Final = _lookup_server(plain, peer)
+        hooks_rig.sunk()
+        called: Final = _lookup_response(hooks_rig.sibling, with_callback, entry, {"x-integration-trace": trace}, name)
+        control: Final = _lookup_response(gateway, without_callback, entry, tool=name)
+        sunk: Final = hooks_rig.sunk()
+    status, text, failed = _lookup_outcome(called)
+    control_status, control_text, control_failed = _lookup_outcome(control)
+    assert (status, failed) == (control_status, control_failed) == (200, failure != "slow-tool"), called.text
+    assert str(text).replace(with_callback.alias, "") == str(control_text).replace(without_callback.alias, ""), (
+        called.text,
+        control.text,
+    )
+    assert called.headers.get("x-custom-header") == "custom-value", (called.headers, called.text)
+    saw: Final = _only(_traced(sunk, trace))
+    assert saw["model"] == f"MCP: {with_callback.alias}-{name}", saw
+    assert (saw["response"] is None) == (failure == "unknown-tool"), saw
+
+
+@pytest.mark.parametrize("entry", NATIVE_ENTRY_POINTS)
+def test_native_tool_call_with_an_unknown_key_is_refused_without_running_the_response_headers_callback(
+    hooks_rig: HooksRig, gateway: Gateway, entry: EntryPoint
+) -> None:
+    trace: Final = "unauthenticated-" + uuid.uuid4().hex
+    stranger: Final = "sk-" + uuid.uuid4().hex
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as hooked, gateway.scenario() as plain:
+        with_callback: Final = _lookup_server(hooked, peer)
+        without_callback: Final = _lookup_server(plain, peer)
+        hooks_rig.sunk()
+        peer.drain()
+        refused: Final = _lookup_response(
+            hooks_rig.sibling, with_callback, entry, {"x-integration-trace": trace}, key=stranger
+        )
+        control: Final = _lookup_response(gateway, without_callback, entry, key=stranger)
+        sunk: Final = hooks_rig.sunk()
+        assert tool_calls(peer.drain()) == (), "an unauthenticated call reached the peer"
+    assert refused.status_code == control.status_code == 401, (refused.text, control.text)
+    assert "x-custom-header" not in refused.headers, refused.headers
+    assert _traced(sunk, trace) == (), sunk
+
+
+@pytest.mark.parametrize("entry", NATIVE_ENTRY_POINTS)
+def test_native_listing_with_a_body_past_the_routing_peek_stays_free_of_callback_response_headers(
+    hooks_rig: HooksRig, entry: EntryPoint
+) -> None:
+    trace: Final = "listing-" + uuid.uuid4().hex
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as scenario:
+        server: Final = _lookup_server(scenario, peer)
+        hooks_rig.sunk()
+        listed: Final = McpCaller(
+            hooks_rig.sibling, server.key, entry, server.alias, {"x-integration-trace": trace}
+        ).rpc("tools/list", {"_meta": {"padding": "p" * 5000}})
+        sunk: Final = hooks_rig.sunk()
+    assert listed.status_code == 200 and f"{server.alias}-lookup" in listed.text, listed.text
+    assert "x-custom-header" not in listed.headers, listed.headers
+    assert _traced(sunk, trace) == (), sunk
+
+
+@dataclass(frozen=True, slots=True)
+class Burst:
+    trace: str
+    entry: EntryPoint
+    response: httpx.Response
+
+
+def _burst(gateway: Gateway, server: LookupServer, tag: str, size: int) -> tuple[Burst, ...]:
+    def one(index: int) -> Burst:
+        trace: Final = f"{tag}-{index}-{uuid.uuid4().hex}"
+        entry: Final = NATIVE_ENTRY_POINTS[index % len(NATIVE_ENTRY_POINTS)]
+        headers: Final = {"x-integration-trace": trace, "x-integration-callback": "echo"}
+        return Burst(trace, entry, _lookup_response(gateway, server, entry, headers))
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        return tuple(pool.map(one, range(size)))
+
+
+def _bad(burst: tuple[Burst, ...], header: bool) -> list[tuple[str, int, str | None, str]]:
+    return [
+        (call.entry, call.response.status_code, call.response.headers.get("x-custom-header"), call.response.text)
+        for call in burst
+        if _lookup_outcome(call.response) != (200, "found", False)
+        or call.response.headers.get("x-custom-header") != (call.trace if header else None)
+    ]
+
+
+def test_concurrent_tool_calls_on_two_workers_each_carry_the_header_their_own_callback_run_returned(
+    hooks_rig: HooksRig,
+) -> None:
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.gateway.scenario() as scenario:
+        server: Final = _lookup_server(scenario, peer)
+        hooks_rig.sunk()
+        peer.drain()
+        burst: Final = _burst(hooks_rig.gateway, server, "burst", 32)
+        sunk: Final = hooks_rig.sunk()
+        assert len(tool_calls(peer.drain())) == 32, "the peer did not serve each burst call once"
+    assert _bad(burst, header=True) == []
+    assert [len(_traced(sunk, call.trace)) for call in burst] == [1] * 32, sunk
+
+
+def test_tool_calls_keep_their_results_through_a_callback_sink_outage_and_a_worker_kill(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_guardrail_sink) as reserved:
+        sink_url: Final = reserved.url
+    (tmp_path / "hook_recorder.py").write_text(_RECORDER_CODE.format(sink=sink_url))
+    base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                **base,
+                "litellm_settings": {
+                    **object_value(base["litellm_settings"]),
+                    "callbacks": ["hook_recorder.headers_only"],
+                },
+            }
+        )
+    )
+    port: Final = int(sink_url.rsplit(":", 1)[1])
+    with (
+        scripted_peer(_lookup_tool()) as peer,
+        owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        server: Final = _lookup_server(scenario, peer)
+        peer.drain()
+        outage: Final = _burst(owned.gateway, server, "outage", 24)
+        assert _bad(outage, header=False) == []
+        with wire_server(_guardrail_sink, port=port) as sink:
+            recovered: Final = _burst(owned.gateway, server, "recovered", 24)
+            workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
+            owned.kill_worker(min(workers))
+            survived: Final = _burst(owned.gateway, server, "survived", 24)
+            sunk: Final = tuple(
+                Sunk(request.target, JSON_OBJECT.validate_json(request.body)) for request in sink.drain()
+            )
+        assert len(tool_calls(peer.drain())) == 72, "the peer did not serve each burst call once"
+    assert _bad(recovered, header=True) == []
+    assert _bad(survived, header=True) == []
+    assert [len(_traced(sunk, call.trace)) for call in (*recovered, *survived)] == [1] * 48, sunk
+    assert [len(_traced(sunk, call.trace)) for call in outage] == [0] * 24, sunk

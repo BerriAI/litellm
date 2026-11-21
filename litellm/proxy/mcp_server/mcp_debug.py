@@ -147,6 +147,32 @@ def record_auth_resolution(server_id: str, source: AuthResolution) -> None:
             diagnostics.record(server_id, source)
 
 
+MCP_CALLBACK_RESPONSE_HEADERS_SCOPE_KEY: Final = "litellm.mcp.callback_response_headers"
+
+
+def active_callback_response_headers() -> MCPCallbackResponseHeaders | None:
+    from litellm.proxy.mcp_server.mcp_context import get_active_mcp_request_ctx
+
+    request: Final[object] = getattr(get_active_mcp_request_ctx(), "request", None)
+    holder: Final[object] = (
+        request.scope.get(MCP_CALLBACK_RESPONSE_HEADERS_SCOPE_KEY) if isinstance(request, HTTPConnection) else None
+    )
+    return holder if isinstance(holder, MCPCallbackResponseHeaders) else None
+
+
+class MCPCallbackResponseHeaders:
+    def __init__(self) -> None:
+        self.data: Mapping[str, object] | None = None
+        self.response: object = None
+        self._headers: Mapping[str, str] = MappingProxyType({})
+
+    def record_headers(self, headers: Mapping[str, str]) -> None:
+        self._headers = headers
+
+    def headers(self) -> Mapping[str, str]:
+        return self._headers
+
+
 class MCPAuthDiagnostics:
     def __init__(self) -> None:
         self._outcomes: tuple[tuple[str, AuthResolution], ...] = ()

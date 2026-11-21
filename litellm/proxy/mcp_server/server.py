@@ -72,7 +72,9 @@ from litellm.proxy.mcp_server.mcp_context import (  # noqa: F401  # legacy modul
 )
 from litellm.proxy.mcp_server.mcp_debug import (
     MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
+    MCP_CALLBACK_RESPONSE_HEADERS_SCOPE_KEY,
     MCPAuthDiagnostics,
+    MCPCallbackResponseHeaders,
     MCPDebug,
 )
 from litellm.proxy.mcp_server.oauth_utils import (
@@ -2636,6 +2638,22 @@ if MCP_AVAILABLE:
                 scope[MCP_AUTH_DIAGNOSTICS_SCOPE_KEY] = diagnostics
                 send = MCPDebug.wrap_send_with_debug_headers(
                     send, _debug_headers, diagnostics.headers, request_method=scope.get("method")
+                )
+            import litellm
+            from litellm.integrations.custom_logger_v2.enums import Hook
+            from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
+            from litellm.proxy.utils import ProxyLogging
+
+            callback_capabilities: Final = ProxyLogging.callback_capabilities()
+            may_be_tool_call: Final = is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+            if may_be_tool_call and (
+                callback_capabilities.has_post_call_response_headers
+                or hook_subscribers(Hook.response_headers, litellm.callbacks, admit=Admit.every_entry).has_v2
+            ):
+                callback_headers: Final = MCPCallbackResponseHeaders()
+                scope[MCP_CALLBACK_RESPONSE_HEADERS_SCOPE_KEY] = callback_headers  # rebind-ok: the tool call reads it
+                send = MCPDebug.wrap_send_with_debug_headers(  # rebind-ok: the SDK transport must send through it
+                    send, {}, callback_headers.headers, request_method=scope.get("method")
                 )
 
             # Ensure session managers are initialized

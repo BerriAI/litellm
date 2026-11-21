@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
-from typing import Any, Final, NoReturn, TypeAlias, overload
+from typing import TYPE_CHECKING, Any, Final, NoReturn, TypeAlias, overload
 
 import anyio
 from fastapi import HTTPException
@@ -55,6 +55,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     MCP_TOOL_LISTING_TIMEOUT,
+    UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import (
@@ -110,6 +111,7 @@ from litellm.proxy.mcp_server.interactions import (
     target_digest,
 )
 from litellm.proxy.mcp_server.legacy_callbacks import get_scope_response
+from litellm.proxy.mcp_server.mcp_debug import MCPCallbackResponseHeaders, active_callback_response_headers
 from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
     MCPServerManager,
     ResourceListingFailed,
@@ -177,6 +179,9 @@ from litellm.types.mcp import (
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging
 
 __all__ = (
     "_MCP_CREDENTIAL_REQUEST_FIELDS",
@@ -3583,6 +3588,28 @@ async def _discover_tools_listing(
         return ListToolsResult(tools=[])
 
 
+async def _record_callback_response_headers(
+    holder: MCPCallbackResponseHeaders | None,
+    context: OperationContext,
+    params: CallToolRequestParams,
+    proxy_logging: "ProxyLogging",
+) -> None:
+    if holder is None:
+        return
+    headers: Final = await proxy_logging.post_call_response_headers_hook(  # pyright: ignore[reportUnknownMemberType]  # the hook takes a bare dict
+        data={
+            **(holder.data or {"name": params.name, "arguments": params.arguments}),
+            "model": f"MCP: {params.name}",
+        },
+        user_api_key_dict=context.user_api_key_auth or UserAPIKeyAuth(),
+        response=holder.response,
+        request_headers=dict(context.raw_headers or {}),
+    )
+    holder.record_headers(
+        {name: value for name, value in headers.items() if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
+    )
+
+
 async def _execute_mcp_server_tool_call(
     context: OperationContext, params: CallToolRequestParams, host_progress_callback: ProgressCallback | None = None
 ) -> CallToolResult | InputRequiredResult:
@@ -3609,6 +3636,7 @@ async def _execute_mcp_server_tool_call(
 
     verbose_logger.debug("MCP mcp_server_tool_call - User API Key Auth from context: %s", user_api_key_auth)
 
+    callback_headers: Final = active_callback_response_headers()
     try:
         # Inside this try so virtual-tool errors convert to isError
         # CallToolResult instead of raising out of the protocol handler.
@@ -3626,6 +3654,8 @@ async def _execute_mcp_server_tool_call(
             incoming_bearer_token=context.incoming_bearer_token,
         )
         if virtual_tool_result is not None:
+            if callback_headers is not None:
+                callback_headers.response = virtual_tool_result
             return virtual_tool_result
 
         # Create a body date for logging
@@ -3668,6 +3698,8 @@ async def _execute_mcp_server_tool_call(
         else:
             data = body_data
 
+        if callback_headers is not None:
+            callback_headers.data = data
         response: Final = await call_mcp_tool(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
@@ -3743,6 +3775,8 @@ async def _execute_mcp_server_tool_call(
             is_error=True,
         )
 
+    if callback_headers is not None:
+        callback_headers.response = response
     return response
 
 
@@ -4157,7 +4191,13 @@ class GatewayOperations:
                     context, params or PaginatedRequestParams(), self._host_progress_callback
                 )
             case CallToolRequest(params=params):
-                return await _execute_mcp_server_tool_call(context, params, self._host_progress_callback)
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
+                result: Final = await _execute_mcp_server_tool_call(context, params, self._host_progress_callback)
+                await _record_callback_response_headers(
+                    active_callback_response_headers(), context, params, proxy_logging_obj
+                )
+                return result
             case ListPromptsRequest(params=params):
                 return await _execute_list_prompts(
                     context, params or PaginatedRequestParams(), self._host_progress_callback
