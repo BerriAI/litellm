@@ -915,6 +915,25 @@ describe("AddModelForm", () => {
       expect(testConnectionRequest).not.toHaveBeenCalled();
     };
 
+    it("tests a model in Responses mode when selected", async () => {
+      const { user, clickTestConnect } = await renderForm();
+      await pickProvider(user, /OpenAI/);
+      fillApiKey("OpenAI API Key");
+      await pickModel(user, "gpt-4");
+      await user.click(screen.getByRole("combobox", { name: "Mode" }));
+      await user.click(await screen.findByRole("option", { name: "Responses - /v1/responses" }));
+
+      await clickTestConnect();
+
+      expect(await screen.findByTestId("connection-success-msg")).toBeInTheDocument();
+      expect(testConnectionRequest).toHaveBeenCalledWith(
+        "test-access-token",
+        expect.objectContaining({ model: "gpt-4" }),
+        expect.objectContaining({ mode: "responses" }),
+        "responses",
+      );
+    });
+
     it("shows the inline required errors instead of testing a fresh form", async () => {
       const { clickTestConnect } = await renderForm();
 
