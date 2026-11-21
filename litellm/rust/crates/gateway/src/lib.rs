@@ -24,6 +24,7 @@ use axum::Router;
 
 use litellm_config::Config;
 use litellm_env::{Lookup, ProcessEnvironment};
+use litellm_gateway_inference::RoutingCache;
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution,
     media::PublicDnsResolver,
@@ -55,21 +56,19 @@ pub(crate) fn environment_secrets(
 pub async fn build_inference(
     config: &Config,
     resources: &Resources,
-    redis: &RedisClients,
+    routing: RoutingCache,
 ) -> Result<Arc<Gateway>, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
-    Ok(Arc::new(
-        Gateway::new(
-            resources.core.clone(),
-            resources.http.clone(),
-            resources.secrets.clone(),
-            router,
-            shaping,
-            host::NativeHost,
-        )?
-        .with_routing(redis::routing(redis, resources.environment.as_ref())?),
-    ))
+    Ok(Arc::new(Gateway::new(
+        resources.core.clone(),
+        resources.http.clone(),
+        resources.secrets.clone(),
+        router,
+        shaping,
+        routing,
+        host::NativeHost,
+    )?))
 }
 
 pub fn install_crypto_provider() {

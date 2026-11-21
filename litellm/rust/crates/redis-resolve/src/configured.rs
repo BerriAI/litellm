@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use litellm_config::{RedisSettings, RouterRedis, Spelled, Value};
+use litellm_config::{RedisSettings, RouterRedis, Value};
 use litellm_env::Lookup;
 use litellm_redis_types::{ProviderHandle, Resolution};
 use litellm_secrets::SecretResolver;
@@ -126,7 +126,8 @@ impl ConfiguredRedis {
 
     /// `redis_cache_for` in `litellm/router_python_host.py`: a `redis_url`, or a `redis_host` with a
     /// `redis_port`, names the router's Redis, and `cache_kwargs` are further `RedisCache` keywords
-    /// that replace the named ones.
+    /// that replace the named ones. `RedisCache` drops a null only for a parameter it names, each of
+    /// which `Cache` names too, and passes any other null on.
     pub(crate) fn router(settings: &RouterRedis) -> Option<Self> {
         let RouterRedis {
             redis_url,
@@ -139,24 +140,20 @@ impl ConfiguredRedis {
         if redis_url.is_none() && (redis_host.is_none() || redis_port.is_none()) {
             return None;
         }
-        let str_of = |written: &Spelled<i64>| match written {
-            Spelled::Value(number) => number.to_string(),
-            Spelled::Text(text) => text.clone(),
-        };
         let named = [
             (
                 Kwarg::Url,
                 redis_url.as_ref().map(|url| url.expose().to_owned()),
             ),
             (Kwarg::Host, redis_host.clone()),
-            (Kwarg::Port, redis_port.as_ref().map(str_of)),
+            (Kwarg::Port, redis_port.as_ref().map(ToString::to_string)),
             (
                 Kwarg::Password,
                 redis_password
                     .as_ref()
                     .map(|password| password.expose().to_owned()),
             ),
-            (Kwarg::Db, redis_db.as_ref().map(str_of)),
+            (Kwarg::Db, redis_db.as_ref().map(ToString::to_string)),
         ]
         .into_iter()
         .filter_map(|(kwarg, value)| Some((kwarg.name().to_owned(), Value::String(value?))));
@@ -165,7 +162,7 @@ impl ConfiguredRedis {
         });
         Some(Self {
             fields: named.chain(keywords).collect(),
-            nulls: Nulls::Dropped,
+            nulls: Nulls::KeptUnlessNamedByCache,
             credential_provider: None,
         })
     }

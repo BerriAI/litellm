@@ -1022,3 +1022,27 @@ fn router_settings_name_a_redis_by_a_url_or_a_host_with_a_port(
         named
     );
 }
+
+#[rstest]
+#[case::one_redis_cache_does_not_name_hides_the_environment("db: null", 6380, 0)]
+#[case::one_redis_cache_names_reads_the_environment("port: null", 6400, 3)]
+fn a_null_cache_kwarg_overrides_the_environment_only_where_redis_cache_passes_it_on(
+    #[case] keyword: &str,
+    #[case] port: u16,
+    #[case] db: i64,
+) {
+    let config = Config::from_yaml(&format!(
+        "router_settings:\n  redis_host: router\n  redis_port: 6380\n  cache_kwargs:\n    {keyword}"
+    ))
+    .unwrap();
+    let configured = ConfiguredRedis::router(&config.router_settings.redis).unwrap();
+    let environment = HashMap::from([
+        ("REDIS_PORT".to_owned(), "6400".to_owned()),
+        ("REDIS_DB".to_owned(), "3".to_owned()),
+    ]);
+
+    let Target::Standalone(host) = resolution(&configured, &environment).unwrap().target else {
+        panic!("expected a standalone target");
+    };
+    assert_eq!((host.port, host.db), (port, db));
+}

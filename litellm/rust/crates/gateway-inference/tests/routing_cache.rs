@@ -237,6 +237,7 @@ async fn health_states_the_health_checks_wrote_are_read_without_their_reason(
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn success_and_failure_counts_stay_in_the_gateway_that_counted_them() {
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
@@ -261,9 +262,10 @@ async fn success_and_failure_counts_stay_in_the_gateway_that_counted_them() {
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_gateway_without_redis_answers_from_memory() {
-    let routing = RoutingCache::default();
+    let routing = RoutingCache::new(None, RouterTiers::default());
     let cooldown = cooling_down_now();
     let ttl = Duration::from_secs(30);
 

@@ -31,7 +31,8 @@ impl AppState {
         resources: &Resources,
     ) -> Result<Self, Error> {
         let redis = crate::redis::connect(config, resources).await?;
-        let inference = crate::build_inference(config, resources, &redis).await?;
+        let routing = crate::redis::routing(&redis, environment);
+        let inference = crate::build_inference(config, resources, routing).await?;
         let database = db::connect(config, &resources.secrets).await?;
         let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {

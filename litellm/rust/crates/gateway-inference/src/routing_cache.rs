@@ -5,8 +5,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use litellm_redis_store::{
-    Error, Number, Remote, Send, TierPolicy,
-    deployment_health::DeploymentHealth,
+    Error, Number, Remote, RouterTiers, Send,
+    deployment_health::{DeploymentHealth, HealthState as StoredHealth},
     router_cooldowns::{Cooldown, RouterCooldowns},
     router_usage::{COUNTER_TTL, Counter, Kind, RouterUsage, Scope},
 };
@@ -14,31 +14,6 @@ use litellm_router_core::{
     HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow,
     health::CooldownValue,
 };
-
-/// The tier settings the router's stores read, as `router_tiers` gives them to the Python host.
-#[derive(Clone, Copy, Debug)]
-pub struct RouterTiers {
-    pub cooldowns: TierPolicy,
-    pub usage: TierPolicy,
-    pub default_in_memory_ttl: Option<Duration>,
-}
-
-/// `DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS`, `DualCache`'s default `redis_batch_cache_expiry`
-/// and `DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE`, with no `default_in_memory_ttl`.
-impl Default for RouterTiers {
-    fn default() -> Self {
-        let policy = |refresh_after| TierPolicy {
-            refresh_after,
-            tracked_reads: 1000,
-            default_in_memory_ttl: None,
-        };
-        Self {
-            cooldowns: policy(Duration::from_secs(1)),
-            usage: policy(Duration::from_secs(10)),
-            default_in_memory_ttl: None,
-        }
-    }
-}
 
 /// The deployments' routing state: cooldowns, usage and health checks in memory, shared through
 /// the router's Redis when there is one, and this process's own success and failure counts, which
@@ -53,17 +28,11 @@ pub struct RoutingCache {
 impl RoutingCache {
     pub fn new(remote: Option<Remote>, tiers: RouterTiers) -> Self {
         Self {
-            cooldowns: Arc::new(RouterCooldowns::new(remote.clone(), tiers.cooldowns)),
-            usage: RouterUsage::new(remote.clone(), tiers.usage),
+            cooldowns: Arc::new(RouterCooldowns::new(remote.clone(), tiers.cooldowns())),
+            usage: RouterUsage::new(remote.clone(), tiers.usage()),
             health: DeploymentHealth::new(remote, tiers.default_in_memory_ttl),
             outcomes: InMemoryRouterCache::default(),
         }
-    }
-}
-
-impl Default for RoutingCache {
-    fn default() -> Self {
-        Self::new(None, RouterTiers::default())
     }
 }
 
@@ -102,7 +71,14 @@ fn read(cooldown: Cooldown) -> CooldownValue {
     }
 }
 
-pub(crate) fn counter(window: &UsageWindow, kind: Kind) -> Counter {
+fn health(state: StoredHealth) -> HealthState {
+    HealthState {
+        is_healthy: state.is_healthy,
+        timestamp: state.timestamp.as_f64(),
+    }
+}
+
+fn counter(window: &UsageWindow, kind: Kind) -> Counter {
     Counter {
         scope: Scope::GlobalRouter,
         deployment_id: window.deployment_id.clone(),
@@ -206,15 +182,7 @@ impl RouterCache for RoutingCache {
             .unwrap_or_default()
             .0
             .into_iter()
-            .map(|(id, state)| {
-                (
-                    id,
-                    HealthState {
-                        is_healthy: state.is_healthy,
-                        timestamp: state.timestamp.as_f64(),
-                    },
-                )
-            })
+            .map(|(id, state)| (id, health(state)))
             .collect())
     }
 

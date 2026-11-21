@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_redis_store::TierPolicy;
+use litellm_redis_store::RouterTiers;
 use pyo3::prelude::*;
 
 use crate::{
@@ -16,32 +16,16 @@ const MEMORY_TTL: FieldSpec<Option<Duration>> =
     FieldSpec::new("default_in_memory_ttl", optional_seconds);
 
 /// The tier values this Python process runs with, from its environment and `litellm` globals.
-#[derive(Debug)]
-pub(crate) struct RouterTierPolicies {
-    pub(crate) cooldowns: TierPolicy,
-    pub(crate) usage: TierPolicy,
-    pub(crate) default_in_memory_ttl: Option<Duration>,
-}
-
-pub(crate) fn router_tier_policies(py: Python<'_>) -> PyResult<RouterTierPolicies> {
+pub(crate) fn router_tier_policies(py: Python<'_>) -> PyResult<RouterTiers> {
     Ok(project(&PythonSettings::RouterTiers.read(py)?)?)
 }
 
-fn project(snapshot: &Snapshot<'_>) -> Result<RouterTierPolicies, ProjectionError> {
-    let tracked_reads = snapshot.read(&TRACKED_READS)?;
-    let default_in_memory_ttl = snapshot.read(&MEMORY_TTL)?;
-    Ok(RouterTierPolicies {
-        cooldowns: TierPolicy {
-            refresh_after: snapshot.read(&COOLDOWN_REFRESH)?,
-            tracked_reads,
-            default_in_memory_ttl,
-        },
-        usage: TierPolicy {
-            refresh_after: snapshot.read(&USAGE_REFRESH)?,
-            tracked_reads,
-            default_in_memory_ttl,
-        },
-        default_in_memory_ttl,
+fn project(snapshot: &Snapshot<'_>) -> Result<RouterTiers, ProjectionError> {
+    Ok(RouterTiers {
+        cooldown_refresh: snapshot.read(&COOLDOWN_REFRESH)?,
+        usage_refresh: snapshot.read(&USAGE_REFRESH)?,
+        tracked_reads: snapshot.read(&TRACKED_READS)?,
+        default_in_memory_ttl: snapshot.read(&MEMORY_TTL)?,
     })
 }
 
@@ -77,7 +61,7 @@ mod tests {
     use super::project;
     use crate::python_settings::PythonSettings;
 
-    fn projected(py: Python<'_>, fields: &str) -> Result<super::RouterTierPolicies, String> {
+    fn projected(py: Python<'_>, fields: &str) -> Result<litellm_redis_store::RouterTiers, String> {
         let locals = PyDict::new(py);
         let source = std::ffi::CString::new(format!(
             "import types\nsettings = types.SimpleNamespace({fields})"
@@ -99,13 +83,14 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                policies.cooldowns.refresh_after,
-                Duration::from_millis(2500)
+                policies,
+                litellm_redis_store::RouterTiers {
+                    cooldown_refresh: Duration::from_millis(2500),
+                    usage_refresh: Duration::from_secs(30),
+                    tracked_reads: 42,
+                    default_in_memory_ttl: None,
+                }
             );
-            assert_eq!(policies.usage.refresh_after, Duration::from_secs(30));
-            assert_eq!(policies.cooldowns.tracked_reads, 42);
-            assert_eq!(policies.usage.tracked_reads, 42);
-            assert_eq!(policies.cooldowns.default_in_memory_ttl, None);
         });
     }
 
@@ -119,16 +104,16 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                policies.cooldowns.default_in_memory_ttl,
-                Some(Duration::from_millis(7500))
-            );
-            assert_eq!(
-                policies.usage.default_in_memory_ttl,
-                Some(Duration::from_millis(7500))
-            );
-            assert_eq!(
-                policies.default_in_memory_ttl,
-                Some(Duration::from_millis(7500))
+                (
+                    policies.cooldowns().default_in_memory_ttl,
+                    policies.usage().default_in_memory_ttl,
+                    policies.default_in_memory_ttl,
+                ),
+                (
+                    Some(Duration::from_millis(7500)),
+                    Some(Duration::from_millis(7500)),
+                    Some(Duration::from_millis(7500)),
+                )
             );
         });
     }

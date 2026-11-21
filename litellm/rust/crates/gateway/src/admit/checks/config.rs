@@ -103,6 +103,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         default_max_retries,
         default_allowed_fails,
         default_cooldown_time_seconds,
+        default_cooldown_redis_read_interval_seconds: _,
+        default_max_redis_batch_cache_size: _,
     } = environment;
     set!(
         "",

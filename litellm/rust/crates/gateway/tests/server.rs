@@ -39,7 +39,10 @@ async fn inference_for(config: &Config) -> Arc<Gateway> {
     litellm_gateway::build_inference(
         config,
         &Resources::build(config).unwrap(),
-        &litellm_gateway::RedisClients::default(),
+        litellm_gateway_inference::RoutingCache::new(
+            None,
+            litellm_gateway_inference::RouterTiers::default(),
+        ),
     )
     .await
     .unwrap()

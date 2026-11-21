@@ -29,9 +29,10 @@ use litellm_secrets::source::SecretSource;
 
 pub use error::{BodyError, Ended, Error};
 pub use headers::ExposedHeader;
+pub use litellm_redis_store::RouterTiers;
 pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 pub use routing::Host;
-pub use routing_cache::{RouterTiers, RoutingCache};
+pub use routing_cache::RoutingCache;
 
 pub struct Gateway<H> {
     host: H,
@@ -55,13 +56,6 @@ impl<H: Host> Gateway<H> {
         }
     }
 
-    pub fn with_routing(self, routing: RoutingCache) -> Self {
-        Self {
-            routing: Arc::new(routing),
-            ..self
-        }
-    }
-
     /// The deployments' routing state, which the host hands router-core.
     pub fn routing(&self) -> &RoutingCache {
         &self.routing
@@ -78,6 +72,7 @@ impl<H: Host> Gateway<H> {
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
         shaping: HashMap<String, MessagesShaping>,
+        routing: RoutingCache,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
@@ -85,7 +80,7 @@ impl<H: Host> Gateway<H> {
         Ok(Self {
             host,
             cache: None,
-            routing: Arc::default(),
+            routing: Arc::new(routing),
             shaping,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
