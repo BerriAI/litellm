@@ -268,6 +268,8 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_CustomerMemberTable",
         "LiteLLM_CustomerBudgetIncreaseRequest",
         "LiteLLM_AppTable",
+        "LiteLLM_AppGroupTable",
+        "LiteLLM_AppGroupCustomerOrgTable",
         "LiteLLM_AppCustomerOrgTable",
         "LiteLLM_AppCustomerMemberTable",
         "LiteLLM_CredentialsTable",

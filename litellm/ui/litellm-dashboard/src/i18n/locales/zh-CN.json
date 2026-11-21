@@ -9270,6 +9270,7 @@
     },
     "inheritedBudgetHint": {
       "scopes": {
+        "key": "密钥",
         "team": "团队",
         "teamMember": "团队成员",
         "organization": "组织",
@@ -9277,6 +9278,18 @@
       },
       "memberAlias": "{{team}} 中的 {{member}}",
       "intro": "此密钥未单独设置预算，但其费用仍计入以下预算："
+    },
+    "appliedBudgets": {
+      "title": "适用的预算",
+      "explainer": "每个限额单独检查，任意一个达到上限时请求即被阻止。",
+      "empty": "此密钥没有预算限制。费用会被记录，但不会被阻止。",
+      "thisKey": "此密钥",
+      "closestToLimit": "最接近上限",
+      "spendOfLimit": "${{spend}} / ${{limit}}",
+      "limitOnly": "上限 ${{limit}}",
+      "percentUsed": "已使用 {{percent}}%",
+      "resetsEvery": "每 {{duration}} 重置",
+      "noReset": "不重置"
     },
     "multiSelect": {
       "placeholder": "选择选项",
@@ -14762,7 +14775,6 @@
         "success": "成功"
       },
       "header": {
-        "backTo": "返回 {{label}}",
         "requestId": "请求 ID",
         "provider": "提供商",
         "copied": "已复制！",
@@ -16806,6 +16818,7 @@
         "myUser": "我的成员信息",
         "virtualKeys": "虚拟密钥",
         "members": "成员",
+        "memberDefaults": "成员默认设置",
         "memberPermissions": "成员权限",
         "settings": "设置"
       },
@@ -16891,10 +16904,11 @@
         "softBudgetAlertingEmails": "预算预警阈值告警邮箱",
         "softBudgetAlertingEmailsHint": "达到预算预警阈值时接收告警的邮箱，用英文逗号分隔",
         "teamMemberSettings": {
-          "title": "团队成员设置",
+          "edit": "编辑默认设置",
           "description": "成员加入团队时应用的可选默认值，所有字段均可为成员单独覆盖。",
+          "allTeamModels": "团队的所有模型",
           "defaultModelAccess": "默认模型访问权限",
-          "defaultModelAccessHint": "可选。设置后，新成员默认仅能访问这些模型，必须是上方团队模型的子集。留空则所有成员可访问团队全部模型。",
+          "defaultModelAccessHint": "可选。设置后，新成员默认仅能访问这些模型。留空则所有成员可访问团队全部模型。",
           "defaultModelAccessPlaceholder": "留空表示所有成员均可访问团队全部模型",
           "defaultBudget": "默认预算（美元）",
           "defaultBudgetHint": "此团队中每位成员的默认费用预算。",
@@ -21008,6 +21022,10 @@
       "appTab": "按应用的组织预算组",
       "newOrganizationsJoin": "新组织默认加入",
       "newOrganizationsHelp": "除非您另行选择，新组织将使用此预算组。选择“不限”时不会添加组织级上限。",
+      "newAppsUse": "新应用默认使用",
+      "newAppsHelp": "除非您另行选择，新应用将使用此预算组。选择“不限”时不会添加应用整体上限。",
+      "newAppGroupsUse": "新应用组默认使用",
+      "newAppGroupsHelp": "除非您另行选择，新应用组将使用此预算组。选择“不限”时不会添加应用组共享上限。",
       "atCap": "达到上限时",
       "atCapLabel": "第 {{index}} 组达到上限时",
       "pauseUntilReset": "暂停至重置",
@@ -21390,6 +21408,10 @@
       "withinMonthlyBudget": "未超出每月限额",
       "monthlyLimitAmount": "每月上限：{{amount}}",
       "yearlyLimitAmount": "年度限额：{{amount}}",
+      "totalLimitAmount": "{{amount}} 总限额",
+      "noAutomaticReset": "不自动重置",
+      "noMonthlyLimit": "无每月限额",
+      "noYearlyLimit": "无年度限额",
       "limitAmount": "上限 {{amount}}",
       "budgetRemaining": "剩余 {{amount}}",
       "budgetOver": "超出 {{amount}}",

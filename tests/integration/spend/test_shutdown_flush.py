@@ -467,7 +467,7 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_writ
 ) -> None:
     with (
         _legacy_spend_queue_proxy_with_one_seeded_row(
-            gateway, tmp_path, pool_limit=pool_limit_for_prisma(2)
+            gateway, tmp_path, pool_limit=pool_limit_for_prisma(2, rust_spend_log_writer=False)
         ) as shutdown,
         psycopg.connect(os.environ["DATABASE_URL"]) as models,
         psycopg.connect(os.environ["DATABASE_URL"]) as memberships,

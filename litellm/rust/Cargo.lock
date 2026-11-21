@@ -3546,6 +3546,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-auth-store"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "jiff",
+ "litellm-db",
+ "litellm-db-testing",
+ "litellm-error",
+ "litellm-gateway-auth-core",
+ "litellm-python-compat",
+ "litellm-redis-store",
+ "litellm-repositories",
+ "litellm-secret-value",
+ "rstest",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
@@ -4088,6 +4110,7 @@ dependencies = [
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-config-load",
+ "litellm-core-utils",
  "litellm-db",
  "litellm-db-resolve",
  "litellm-env",
@@ -4097,8 +4120,10 @@ dependencies = [
  "litellm-gateway-inference",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-messages",
  "litellm-license",
  "litellm-llms",
+ "litellm-llms-types",
  "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-redis-client",
@@ -4106,13 +4131,16 @@ dependencies = [
  "litellm-redis-resolve",
  "litellm-redis-testing",
  "litellm-redis-types",
+ "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
+ "litellm-yaml",
  "rstest",
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "strum",
  "tempfile",
  "thiserror 2.0.21",
@@ -4136,6 +4164,7 @@ dependencies = [
  "rstest",
  "serde",
  "sha2 0.10.9",
+ "strum",
  "subtle",
  "thiserror 2.0.21",
  "tokio",
@@ -4195,7 +4224,6 @@ name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "bytes",
  "futures-util",
  "litellm-auth",
@@ -4203,21 +4231,23 @@ dependencies = [
  "litellm-cache-response",
  "litellm-core-utils",
  "litellm-error",
+ "litellm-framer",
+ "litellm-gateway",
  "litellm-gateway-auth",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
  "litellm-inference",
- "litellm-inference-chat",
  "litellm-inference-messages",
  "litellm-inference-ocr",
- "litellm-inference-responses",
- "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
- "litellm-router",
+ "litellm-python-compat",
+ "litellm-router-core",
+ "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
+ "parking_lot",
  "rstest",
  "serde",
  "serde_json",
@@ -4226,6 +4256,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
+ "tower-http",
+ "tracing",
  "wiremock",
 ]
 
@@ -4670,6 +4702,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-auth-store",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks",
@@ -4841,6 +4874,7 @@ name = "litellm-redis-store"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "jiff",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-circuit-breaker",
@@ -4851,12 +4885,14 @@ dependencies = [
  "litellm-tracing",
  "parking_lot",
  "rstest",
+ "serde",
  "sha2 0.10.9",
  "strum",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
  "uuid",
+ "veil",
 ]
 
 [[package]]
@@ -4898,21 +4934,6 @@ dependencies = [
  "tracing",
  "uuid",
  "veil",
-]
-
-[[package]]
-name = "litellm-router"
-version = "0.1.0"
-dependencies = [
- "litellm-config",
- "litellm-inference",
- "litellm-inference-messages",
- "litellm-llms",
- "litellm-model-catalog",
- "litellm-python-compat",
- "litellm-router-types",
- "rstest",
- "serde_json",
 ]
 
 [[package]]

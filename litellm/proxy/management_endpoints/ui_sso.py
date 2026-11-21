@@ -154,6 +154,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
@@ -1269,14 +1270,17 @@ async def google_login(
     # No SSO: sign in on the dashboard login page. return_to is kept in the same one-shot cookie the
     # SSO branch uses and honoured by /login/resume, which a browser that is already signed in goes
     # to directly, since the login page would send it to the dashboard and drop the return_to.
-    from litellm.proxy.mcp_server.byok_oauth_endpoints import session_identity_from_cookie
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import get_authenticated_browser_user_id
 
     base_url: Final = get_custom_url(str(request.base_url)).rstrip("/")
-    signed_in: Final = session_identity_from_cookie(request)[0] is not None
+    signed_in: Final = await get_authenticated_browser_user_id(request) is not None
     login_response: Final = RedirectResponse(
         url=f"{base_url}/login/resume" if signed_in and return_to is not None else f"{base_url}/ui/login",
         status_code=303,
     )
+    if return_to is not None and not signed_in:
+        login_response.delete_cookie("token")
+        login_response.delete_cookie("token", path=f"{get_server_root_path().rstrip('/')}/ui")
     _persist_return_to_cookie(login_response, return_to, request)
     return login_response
 
@@ -2240,11 +2244,12 @@ async def _sync_user_role_from_jwt_role_map(
             data={"user_role": mapped_role.value},
         )
         user_info.user_role = mapped_role.value
-        await user_api_key_cache.async_set_cache(
-            key=user_info.user_id,
-            value=user_info,
-            model_type=LiteLLM_UserTable,
-        )
+        if user_info.user_id is not None:
+            await user_api_key_cache.async_set_cache(
+                key=AuthObject.user(user_info.user_id),
+                value=user_info,
+                model_type=LiteLLM_UserTable,
+            )
 
 
 def apply_user_info_values_to_sso_user_defined_values(

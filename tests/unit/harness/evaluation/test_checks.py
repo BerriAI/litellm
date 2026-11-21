@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -8,7 +9,19 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
-from litellm import EvalStatus, EvalTarget, EvalTask, JudgeCheck, PredicateCheck, aagent_eval
+from litellm import (
+    AgentInput,
+    AgentOutput,
+    EvalAgent,
+    EvalScorecard,
+    EvalStatus,
+    EvalTarget,
+    EvalTask,
+    JudgeCheck,
+    PredicateCheck,
+    aagent_eval,
+    aagent_eval_attempt,
+)
 from litellm.harness.options import ToolLoopOptions
 from litellm.harness.types import Harness, Usage
 from litellm.types.utils import ModelResponse
@@ -26,7 +39,33 @@ def _agent_response() -> ModelResponse:
     )
 
 
-async def test_should_use_gateway_cost_headers_when_reporting_agent_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+async def _evaluate(
+    task: EvalTask,
+    target: EvalTarget | EvalAgent,
+    *,
+    single_attempt: bool,
+    api_base: str,
+    api_key: str,
+    metadata: Mapping[str, object] | None = None,
+) -> EvalScorecard:
+    if not single_attempt:
+        return await aagent_eval((task,), (target,), metadata=metadata, api_base=api_base, api_key=api_key)
+    run: Final = await aagent_eval_attempt(
+        task,
+        target,
+        trial=3,
+        suite_id="caller-suite",
+        metadata=metadata,
+        api_base=api_base,
+        api_key=api_key,
+    )
+    return EvalScorecard("caller-suite", (run,))
+
+
+@pytest.mark.parametrize("single_attempt", (False, True))
+async def test_should_use_gateway_cost_headers_when_reporting_agent_usage(
+    monkeypatch: pytest.MonkeyPatch, single_attempt: bool
+) -> None:
     requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -52,15 +91,17 @@ async def test_should_use_gateway_cost_headers_when_reporting_agent_usage(monkey
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         monkeypatch.setattr(litellm, "aclient_session", client)
-        report: Final = await aagent_eval(
-            (EvalTask("answer", "Answer", check=PredicateCheck(lambda result: bool(result.text))),),
-            (EvalTarget(Harness.TOOL_LOOP, "litellm_proxy/eval-agent", label="candidate"),),
+        report: Final = await _evaluate(
+            EvalTask("answer", "Answer", check=PredicateCheck(lambda result: bool(result.text))),
+            EvalTarget(Harness.TOOL_LOOP, "litellm_proxy/eval-agent", label="candidate"),
+            single_attempt=single_attempt,
             metadata={"experiment": "unit-eval"},
             api_base="https://gateway.example/v1",
             api_key="transport-only",
         )
 
     assert report.runs[0].status is EvalStatus.PASS
+    assert report.runs[0].trial == (3 if single_attempt else 1)
     assert report.runs[0].cost == 0.4
     assert report.runs[0].usage == Usage(input_tokens=11, output_tokens=7, calls=1)
     assert report.summaries[0].cost == 0.4
@@ -72,7 +113,7 @@ async def test_should_use_gateway_cost_headers_when_reporting_agent_usage(monkey
         "agent_eval_run": report.runs[0].run_id,
         "agent_eval_task": "answer",
         "agent_eval_target": "candidate",
-        "agent_eval_trial": 1,
+        "agent_eval_trial": report.runs[0].trial,
     }
     assert requests.empty()
 
@@ -86,8 +127,10 @@ async def test_should_use_gateway_cost_headers_when_reporting_agent_usage(monkey
         ("This is not a JSON verdict.", EvalStatus.ERROR),
     ),
 )
+@pytest.mark.parametrize("single_attempt", (False, True))
+@pytest.mark.parametrize("custom_agent", (False, True))
 async def test_should_grade_with_an_explicit_judge_and_preserve_its_separate_usage(
-    monkeypatch: pytest.MonkeyPatch, verdict: str, expected_status: EvalStatus
+    monkeypatch: pytest.MonkeyPatch, verdict: str, expected_status: EvalStatus, single_attempt: bool, custom_agent: bool
 ) -> None:
     requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
 
@@ -114,16 +157,25 @@ async def test_should_grade_with_an_explicit_judge_and_preserve_its_separate_usa
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         monkeypatch.setattr(litellm, "aclient_session", client)
-        report: Final = await aagent_eval(
-            (EvalTask("quality", "Answer", check=JudgeCheck("Follow the rubric", "openai/eval-judge")),),
-            (
-                EvalTarget(
-                    Harness.TOOL_LOOP,
-                    "openai/eval-agent",
-                    label="candidate",
-                    options=ToolLoopOptions(completion_kwargs={"mock_response": _agent_response()}),
-                ),
-            ),
+
+        class CustomAgent(EvalAgent):
+            async def run(self, task: AgentInput) -> AgentOutput:
+                return AgentOutput("The answer meets the rubric.", cost=0.0, usage=Usage(), events=())
+
+        target: Final = (
+            CustomAgent("candidate")
+            if custom_agent
+            else EvalTarget(
+                Harness.TOOL_LOOP,
+                "openai/eval-agent",
+                label="candidate",
+                options=ToolLoopOptions(completion_kwargs={"mock_response": _agent_response()}),
+            )
+        )
+        report: Final = await _evaluate(
+            EvalTask("quality", "Answer", check=JudgeCheck("Follow the rubric", "openai/eval-judge")),
+            target,
+            single_attempt=single_attempt,
             metadata={"experiment": "unit-eval", "agent_eval_trial": "cannot-override"},
             api_base="https://judge.example/v1",
             api_key="transport-only",
@@ -147,7 +199,7 @@ async def test_should_grade_with_an_explicit_judge_and_preserve_its_separate_usa
         "agent_eval_run": run.run_id,
         "agent_eval_task": "quality",
         "agent_eval_target": "candidate",
-        "agent_eval_trial": 1,
+        "agent_eval_trial": run.trial,
         "agent_eval_stage": "judge",
     }
     payload: Final = _OBJECT.validate_json(request.content)
@@ -163,8 +215,9 @@ async def test_should_grade_with_an_explicit_judge_and_preserve_its_separate_usa
 
 
 @pytest.mark.parametrize("failure", ("provider", "timeout"))
+@pytest.mark.parametrize("single_attempt", (False, True))
 async def test_should_report_unknown_judge_cost_after_provider_errors(
-    monkeypatch: pytest.MonkeyPatch, failure: str
+    monkeypatch: pytest.MonkeyPatch, failure: str, single_attempt: bool
 ) -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         if failure == "timeout":
@@ -174,15 +227,14 @@ async def test_should_report_unknown_judge_cost_after_provider_errors(
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         monkeypatch.setattr(litellm, "aclient_session", client)
         monkeypatch.setattr(litellm, "num_retries", 0)
-        report: Final = await aagent_eval(
-            (EvalTask("quality", "Answer", check=JudgeCheck("Follow the rubric", "openai/eval-judge")),),
-            (
-                EvalTarget(
-                    Harness.TOOL_LOOP,
-                    "openai/eval-agent",
-                    options=ToolLoopOptions(completion_kwargs={"mock_response": _agent_response()}),
-                ),
+        report: Final = await _evaluate(
+            EvalTask("quality", "Answer", check=JudgeCheck("Follow the rubric", "openai/eval-judge")),
+            EvalTarget(
+                Harness.TOOL_LOOP,
+                "openai/eval-agent",
+                options=ToolLoopOptions(completion_kwargs={"mock_response": _agent_response()}),
             ),
+            single_attempt=single_attempt,
             api_base="https://unavailable-judge.example/v1",
             api_key="transport-only",
         )
@@ -194,7 +246,10 @@ async def test_should_report_unknown_judge_cost_after_provider_errors(
     assert run.check is not None
     assert run.check.error is not None
     assert run.check.judge_cost is None
+    assert run.check.judge_usage is None
     assert not report.summaries[0].metrics_complete
     assert report.summaries[0].errors == 1
     assert report.summaries[0].cost == run.result.cost
-    assert "Known subtotals" in report.to_markdown()
+    assert report.summaries[0].judge_cost is None
+    assert report.summaries[0].judge_usage is None
+    assert "unavailable" in report.to_markdown()

@@ -13592,7 +13592,7 @@ class TestMemberAutoRouterInference:
         from litellm.models.organization import LiteLLM_OrganizationTable
         from litellm.models.team_membership import LiteLLM_TeamMembership
         from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
-        from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+        from litellm.redis.stores.auth_cache import AuthObject
 
         self.teams.rows["router-team"] = self.team.model_copy(
             update={
@@ -13602,7 +13602,7 @@ class TestMemberAutoRouterInference:
         )
         if ceiling == "member":
             await self.cache.async_set_cache(
-                key=team_membership_reservation_cache_key(user_id="router-member", team_id="router-team"),
+                key=AuthObject.team_membership_reservation(user_id="router-member", team_id="router-team"),
                 value=LiteLLM_TeamMembership(
                     user_id="router-member",
                     team_id="router-team",
@@ -13612,7 +13612,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "organization":
             await self.cache.async_set_cache(
-                key="org_id:router-org",
+                key=AuthObject.org("router-org"),
                 value=LiteLLM_OrganizationTable(
                     organization_id="router-org",
                     budget_id="org-budget",
@@ -13624,7 +13624,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "project":
             await self.cache.async_set_cache(
-                key="project_id:router-project",
+                key=AuthObject.project("router-project"),
                 value=LiteLLM_ProjectTableCachedObj(
                     project_id="router-project",
                     team_id="router-team",
@@ -13650,7 +13650,7 @@ class TestMemberAutoRouterInference:
     async def test_access_group_grants_are_cached_and_revoked(
         self, group_owner: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+        from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
             access_group_id="router-group",

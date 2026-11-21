@@ -5042,6 +5042,8 @@ class _Driver:
                     self._level_errors.get(at + 1),
                     self._walk.hop_kwargs(event),
                 )
+                if event.get("succeeded") is not True:
+                    self._walk.log_failed_hop(event, self._level_errors.get(at + 1))
                 if (
                     event.get("succeeded") is not True
                     and id(self._level_errors.get(at + 1)) not in self._recorded_blocked
@@ -5815,7 +5817,9 @@ class _Driver:
 
     def failed(self, step: Mapping[str, object]) -> BaseException:
         try:
-            return self._failure(step)
+            failure: Final = self._failure(step)
+            self._walk.log_client_seen(failure)
+            return failure
         finally:
             self.clear_errors()
 

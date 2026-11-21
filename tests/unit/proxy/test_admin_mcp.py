@@ -25,6 +25,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlStats,
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import PerRequestRootPathMiddleware
+from litellm.redis.stores.auth_cache import AuthObject
 
 
 class KeyRequest(BaseModel):
@@ -543,7 +544,7 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
 
     cache: Final = UserApiKeyCache()
     for user_id, user in users.items():
-        cache.set_cache(user_id, user)
+        cache.set_cache(AuthObject.user(user_id), user)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", UserInfoDatabase())
     monkeypatch.setattr(proxy_server, "general_settings", {
