@@ -173,6 +173,23 @@ async def test_a_batch_on_an_uploaded_file_still_falls_back_to_the_next_order_le
 
 
 @pytest.mark.asyncio
+async def test_a_batch_on_the_next_order_level_keeps_the_callers_metadata_for_the_provider(
+    make_core: MakeCore, host: _NamedHost
+) -> None:
+    """A batch's ``metadata`` is forwarded to the provider and stored on the batch, so the router's own
+    model group goes in ``litellm_metadata`` on every hop."""
+    tiered: Final = [deployment("a", "a1", order=1), deployment("a", "a2", order=2)]
+    core: Final = _failing_a(make_core, host, tiered)
+
+    await _async(core, "acreate_batch")(model="a", input_file_id="file-1", metadata={"caller": "nightly-job"}, **_BATCH)
+
+    hop: Final = host.calls_to("acreate_batch")[-1]
+    assert host.deployments_called("acreate_batch") == ["a1", "a2"]
+    assert hop.kwargs["metadata"] == {"caller": "nightly-job"}
+    assert hop.kwargs["litellm_metadata"]["model_group"] == "a"  # pyright: ignore[reportIndexIssue]
+
+
+@pytest.mark.asyncio
 async def test_a_file_upload_moves_to_the_next_order_level(make_core: MakeCore, host: _NamedHost) -> None:
     tiered: Final = [deployment("a", "a1", order=1), deployment("a", "a2", order=2)]
     core: Final = _failing_a(make_core, host, tiered)

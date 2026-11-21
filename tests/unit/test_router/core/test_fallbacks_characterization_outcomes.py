@@ -342,6 +342,27 @@ async def test_a_fallback_target_the_check_rejects_is_skipped(
     assert seen == ["b", "c"]
 
 
+@pytest.mark.asyncio
+async def test_a_legacy_llm_router_access_check_still_runs_with_a_deprecation_warning(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    seen: list[str] = []
+
+    async def legacy(*, model: str, request_kwargs: Mapping[str, object], llm_router: object) -> bool:
+        seen.append(model)
+        return model != "b"
+
+    core = build(make_core, fallbacks=[{"a": ["b", "c"]}], fallback_access_check=legacy)
+    host.answer("openai/a", rate_limit())
+
+    with pytest.warns(DeprecationWarning, match="llm_router"):
+        response = await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a", "c"]
+    assert headers(response)["x-litellm-model-group"] == "c"
+    assert seen == ["b", "c"]
+
+
 def test_sync_completion_runs_the_fallback_access_check(make_core: MakeCore, host: ScriptedHost) -> None:
     seen: list[str] = []
     core = build(make_core, fallbacks=[{"a": ["b", "c"]}], fallback_access_check=denying("b", seen))
