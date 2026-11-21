@@ -2105,7 +2105,7 @@ class _PreCallOptionalParamsCapture(CustomLogger):
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_completion_passes_num_retries_to_optional_params_as_max_retries(
+def test_completion_disables_provider_sdk_retries_when_num_retries_is_set(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     capture: Final = _PreCallOptionalParamsCapture()
@@ -2131,7 +2131,7 @@ def test_completion_passes_num_retries_to_optional_params_as_max_retries(
         api_key="sk-openai-test",
     )
 
-    assert capture.max_retries == (10,)
+    assert capture.max_retries == (0,)
     assert response.choices[0].message.content == "ok"
 
 
