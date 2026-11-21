@@ -13,16 +13,18 @@ use std::sync::Arc;
 use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_gateway_auth::{Auth, Preauthenticated};
-use litellm_gateway_inference::JsonObject;
+use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
+use litellm_gateway_auth_core::authz::Layer;
+use litellm_gateway_inference::{JsonObject, routing};
 use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
 use crate::{
-    AppState,
+    AppState, Gateway,
     host::{self, NativeRows},
 };
+use checks::Fields;
 pub use checks::Reason;
 
 /// Why the gateway does not serve a request the way the Python proxy would.
@@ -77,6 +79,9 @@ pub struct Admit {
     /// served and what a call served there asks of its host.
     router: Router,
     auth: Auth<NativeRows>,
+    /// The native app's inference, which tells whether a caller may call the model it asks for.
+    /// `None` leaves every caller with a model list to Python.
+    inference: Option<Arc<Gateway>>,
 }
 
 const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
@@ -127,6 +132,7 @@ impl Admit {
                 .map(|_| STORE_MODEL_IN_DB.into()),
             auth: state.auth(config),
             aliased,
+            inference: Some(state.inference.clone()),
             ..Self::built(config, state.inference.router.clone(), deployed)
         }
     }
@@ -145,7 +151,20 @@ impl Admit {
             stored_models: None,
             deployed,
             aliased: Vec::new(),
+            inference: None,
         }
+    }
+
+    /// A caller whose model lists do not reach the model it asks for goes to Python, which
+    /// answers the refusal itself. The native route asks the same question of the same router,
+    /// and the auth core answers both.
+    fn model_access(&self, caller: &Authenticated<NativeRows>, fields: &Fields) -> Option<Reason> {
+        let model = fields.get("model")?.as_str()?;
+        let allowed = match &self.inference {
+            Some(inference) => routing::allows(inference, caller, model),
+            None => host::layers(caller).all(|Layer::Key(models)| models.is_empty()),
+        };
+        (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
@@ -177,6 +196,13 @@ impl Admit {
             ));
         };
         if let Some(reason) = checks::BODY.iter().find_map(|check| check(&self, &fields)) {
+            return Err(refused(parts, body, reason));
+        }
+        let denied = authenticated
+            .as_ref()
+            .ok()
+            .and_then(|caller| self.model_access(caller, &fields));
+        if let Some(reason) = denied {
             return Err(refused(parts, body, reason));
         }
         parts.extensions.insert(JsonObject(fields));

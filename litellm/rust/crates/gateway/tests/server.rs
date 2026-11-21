@@ -1307,6 +1307,15 @@ async fn behind_the_auth_cache(
     litellm_settings: &str,
     upstream: &MockServer,
 ) -> axum::response::Response {
+    asking_behind_the_auth_cache(cached, litellm_settings, upstream, "claude").await
+}
+
+async fn asking_behind_the_auth_cache(
+    cached: Option<Value>,
+    litellm_settings: &str,
+    upstream: &MockServer,
+    model: &str,
+) -> axum::response::Response {
     let redis = litellm_redis_testing::RedisServer::start().await.unwrap();
     if let Some(cached) = cached {
         let hash = litellm_gateway_auth_core::Token::new(VIRTUAL_KEY)
@@ -1321,8 +1330,9 @@ async fn behind_the_auth_cache(
     let closed_port = database.local_addr().unwrap().port();
     drop(database);
     let config = Config::from_yaml(&format!(
-        "model_list:\n{}general_settings:\n  master_key: gateway-key\n  database_url: postgresql://app@127.0.0.1:{closed_port}/proxy\n  database_connection_timeout: 0.5\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\nlitellm_settings:\n{litellm_settings}",
+        "model_list:\n{}{}general_settings:\n  master_key: gateway-key\n  database_url: postgresql://app@127.0.0.1:{closed_port}/proxy\n  database_connection_timeout: 0.5\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\nlitellm_settings:\n{litellm_settings}",
         deployment("claude", "claude-a", upstream),
+        deployment("claude-down", "claude-down", upstream),
         redis.port()
     ))
     .unwrap();
@@ -1337,7 +1347,7 @@ async fn behind_the_auth_cache(
         .header("authorization", format!("Bearer {VIRTUAL_KEY}"))
         .header("content-type", "application/json")
         .body(Body::from(
-            json!({"model": "claude", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
                 .to_string(),
         ))
         .unwrap();
@@ -1398,4 +1408,33 @@ async fn a_key_the_auth_cache_does_not_answer_is_read_from_the_database(
     let response = behind_the_auth_cache(cached, litellm_settings, &upstream).await;
 
     assert_eq!(response.status().as_u16(), 503);
+}
+
+#[rstest]
+#[case::a_model_on_its_list("claude", 200, 1)]
+#[case::a_model_off_its_list("claude-down", 403, 0)]
+#[tokio::test]
+async fn a_virtual_key_with_a_model_list_reaches_only_the_models_it_lists(
+    #[case] asked: &str,
+    #[case] status: u16,
+    #[case] sent: u64,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .expect(sent)
+        .mount(&upstream)
+        .await;
+    let mut cached = python_cached_key();
+    cached["models"] = json!(["claude"]);
+
+    let response = asking_behind_the_auth_cache(
+        Some(cached),
+        "  enable_redis_auth_cache: true\n",
+        &upstream,
+        asked,
+    )
+    .await;
+
+    assert_eq!(response.status().as_u16(), status);
 }

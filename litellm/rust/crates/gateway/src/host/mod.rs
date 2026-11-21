@@ -14,12 +14,24 @@ pub use router::{NativeRouterHost, answers};
 use std::sync::Arc;
 
 use litellm_gateway_auth::Authenticated;
+use litellm_gateway_auth_core::{Caller, authz::Layer};
 use litellm_gateway_inference::{
     CallType,
     routing::{Host, RouteAttempt},
 };
 
 use crate::{Gateway, callbacks, callbacks::Callbacks};
+
+/// The model lists the native host read for `identity`: a key's own, and none for the master
+/// key. A key that names a team, an owner or anything else that carries a list was declined when
+/// it was authenticated.
+pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item = Layer<'_>> {
+    let key = match &**identity {
+        Caller::MasterKey => None,
+        Caller::Key(key) => Some(Layer::Key(key.key.row.models())),
+    };
+    key.into_iter()
+}
 
 /// The host the gateway's routes are served through.
 #[derive(Default)]
@@ -38,6 +50,13 @@ impl Host for NativeHost {
     type Hooks = callbacks::Call;
     type Rows = NativeRows;
 
+    fn layers<'a>(
+        &self,
+        identity: &'a Authenticated<NativeRows>,
+    ) -> impl Iterator<Item = Layer<'a>> {
+        layers(identity)
+    }
+
     fn hooks(&self, _identity: &Authenticated<NativeRows>, call_type: CallType) -> callbacks::Call {
         self.callbacks.begin(call_type)
     }
@@ -45,9 +64,13 @@ impl Host for NativeHost {
     fn router_host<'a, A: RouteAttempt>(
         &'a self,
         gateway: &'a Gateway,
-        _identity: &'a Authenticated<NativeRows>,
+        identity: &'a Authenticated<NativeRows>,
         route: &'a A,
     ) -> NativeRouterHost<'a, A> {
-        NativeRouterHost { gateway, route }
+        NativeRouterHost {
+            gateway,
+            identity,
+            route,
+        }
     }
 }
