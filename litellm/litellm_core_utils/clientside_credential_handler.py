@@ -11,11 +11,13 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
+from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.utils import server_owned_wif_litellm_params
 
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
@@ -83,6 +85,49 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 UPSTREAM_BOUND_PARAMS: Final = frozenset((*clientside_credential_keys, *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE))
+PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
+    "custom_llm_provider",
+    "client",
+    "headers",
+    "litellm_credential_name",
+}
+
+
+_TRANSPORT_PARAMS: Final = frozenset(
+    {"headers", "extra_headers", "default_headers", "extra_body", "client", "custom_llm_provider"}
+)
+CALLER_CREDENTIAL_PARAMS: Final = PROVIDER_BOUND_PARAMS - _TRANSPORT_PARAMS
+_CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names()
+_HEADER_CARRIERS: Final = ("headers", "extra_headers", "default_headers")
+
+
+def _names_a_credential_header(headers: object) -> bool:
+    named: Final = as_str_mapping(headers)
+    return named is not None and any(str(name).lower() in _CREDENTIAL_HEADER_NAMES for name in named)
+
+
+def _client_headers(client: object) -> tuple[object, ...]:
+    return (
+        attribute_or_none(client, "default_headers"),
+        attribute_or_none(client, "headers"),
+        attribute_or_none(attribute_or_none(client, "client"), "headers"),
+    )
+
+
+def carries_caller_credentials(kwargs: Mapping[str, object]) -> bool:
+    return (
+        any(kwargs[key] is not None for key in kwargs.keys() & CALLER_CREDENTIAL_PARAMS)
+        or any(_names_a_credential_header(kwargs.get(carrier)) for carrier in _HEADER_CARRIERS)
+        or any(_names_a_credential_header(headers) for headers in _client_headers(kwargs.get("client")))
+    )
+
+
+def request_for_provider(
+    kwargs: Mapping[str, object], provider: str | None, credentials_sent_for: frozenset[str]
+) -> Mapping[str, object]:
+    if provider is not None and provider in credentials_sent_for:
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key not in PROVIDER_BOUND_PARAMS}
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

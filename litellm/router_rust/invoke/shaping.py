@@ -431,24 +431,26 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
+def provider_of_deployment(deployment_params: Mapping[str, object]) -> str | None:
+    declared_provider: Final = deployment_params.get("custom_llm_provider")
+    if isinstance(declared_provider, str):
+        return declared_provider
+    declared_model: Final = deployment_params.get("model")
+    return inferred_provider(declared_model if isinstance(declared_model, str) else None)
+
+
 def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> str | None:
     """The caller's ``Authorization`` a credential-isolating provider sends instead of the deployment's key."""
     from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 
-    declared_provider: Final = deployment_params.get("custom_llm_provider")
-    declared_model: Final = deployment_params.get("model")
-    deployment_provider: Final = (
-        declared_provider
-        if isinstance(declared_provider, str)
-        else inferred_provider(declared_model if isinstance(declared_model, str) else None)
-    )
+    deployment_provider: Final = provider_of_deployment(deployment_params)
     if deployment_provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
         return None
     header: Final = kwargs.get("provider_specific_header")
     return ProviderSpecificHeaderUtils.forwarded_authorization(header, deployment_provider)
 
 
-def serves_caller_credentials(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> bool:
+def authenticates_as_caller(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> bool:
     """Whether the attempt authenticates with what its caller sent: a client-side credential field that carries a
     value (``api_key: null`` leaves the deployment's own auth in use), or a forwarded ``Authorization``."""
     return (

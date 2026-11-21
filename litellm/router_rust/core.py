@@ -56,12 +56,14 @@ from litellm.litellm_core_utils.attempt_settlement import (
     routed_attempt,
 )
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.clientside_credential_handler import carries_caller_credentials, request_for_provider
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
     lax_bool,
     without,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.routing_common_utils import (
     format_content_policy_fallback_hint,
     format_fallback_outcome_message,
@@ -118,7 +120,12 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout, serves_caller_credentials
+from litellm.router_rust.invoke.shaping import (
+    Shaping,
+    authenticates_as_caller,
+    non_stream_timeout,
+    provider_of_deployment,
+)
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -257,6 +264,7 @@ from litellm.router_utils.dynamic_queue_router import (
     parse_dynamic_queue,
 )
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
+from litellm.router_utils.fallback_event_handlers import get_pre_routing_selection
 from litellm.router_utils.kubernetes_pod_discovery import (
     KubernetesPodDiscovery,
     async_resolve_pods_after_bound,
@@ -3060,6 +3068,7 @@ class RustCore(
         *,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        credential_scope: frozenset[str] | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
         """Drive ``call`` to its ``done`` or ``failed`` step, answering every step on the host.
         ``cut_deployment`` is the attempt whose stream failed, for a recovery call, and
@@ -3067,7 +3076,14 @@ class RustCore(
         ``fresh`` is a call from the top, through the retry and fallback wrappers, and
         ``passthrough`` serves an attempt whose pick failed."""
         driver: Final = _Driver(
-            self, plan, prepared, cut_deployment, stream_failure, fresh=fresh, passthrough=passthrough
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            fresh=fresh,
+            passthrough=passthrough,
+            credential_scope=credential_scope,
         )
         try:
             return await self._run_steps(driver, call)
@@ -3137,8 +3153,18 @@ class RustCore(
         stream_failure: tuple[int, BaseException] | None = None,
         *,
         fresh: bool = False,
+        credential_scope: frozenset[str] | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
-        driver: Final = _Driver(self, plan, prepared, cut_deployment, stream_failure, sync=True, fresh=fresh)
+        driver: Final = _Driver(
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            sync=True,
+            fresh=fresh,
+            credential_scope=credential_scope,
+        )
         try:
             return self._run_sync_steps(driver, call)
         except BaseException:
@@ -3222,12 +3248,18 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        credential_scope: frozenset[str] | None = None,
     ) -> object:
         """The fallback walk for a stream that failed before content: the fallback's response with the
         router's headers, or the error the walk ended on."""
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = await self._run(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            credential_scope=credential_scope,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
@@ -3240,23 +3272,36 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        credential_scope: frozenset[str] | None = None,
     ) -> object:
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = self._run_sync(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            credential_scope=credential_scope,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
         return driver.finish(step)
 
     async def retry_stream(
-        self, op: str, request: Mapping[str, object], origin: Mapping[str, object], failure: BaseException
+        self,
+        op: str,
+        request: Mapping[str, object],
+        origin: Mapping[str, object],
+        failure: BaseException,
+        credential_scope: frozenset[str] | None = None,
     ) -> "tuple[object, int, int] | BaseException":
         """A same-group retry of a stream that failed before content: the retried response (without the
         router's headers) with the retry count and budget, or the newest failure (``failure`` itself
         when no retry ran)."""
         call: Final = self._recovery_call("retry", op, request, origin, failure)
-        driver, step = await self._run(plan_for(op), call, request, origin.get("deployment_id"))
+        driver, step = await self._run(
+            plan_for(op), call, request, origin.get("deployment_id"), credential_scope=credential_scope
+        )
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
@@ -3454,7 +3499,7 @@ class RustCore(
     def queues_on(self, request: Mapping[str, object]) -> Callable[[Mapping[str, object]], bool]:
         def queues(deployment: Mapping[str, object]) -> bool:
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
-            return not serves_caller_credentials(request, deployment) and not self.per_user_deployment(deployment_id)
+            return not authenticates_as_caller(request, deployment) and not self.per_user_deployment(deployment_id)
 
         return queues
 
@@ -4040,6 +4085,11 @@ def _lookup_error(kind: object, model: str, default_deployment: object) -> BaseE
     return None
 
 
+def _serves_the_primary(step: Mapping[str, object]) -> bool:
+    depth: Final = step.get("fallback_depth")
+    return not isinstance(depth, int) or depth == 0
+
+
 def _origin_level(origin: Mapping[str, object]) -> int:
     level: Final = origin.get("level")
     return level if isinstance(level, int) else 0
@@ -4562,6 +4612,7 @@ class _Driver:
         sync: bool = False,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        credential_scope: frozenset[str] | None = None,
     ) -> None:
         self._core: Final = core
         self._sync: Final = sync
@@ -4578,6 +4629,7 @@ class _Driver:
         self._base_level: Final = stream_failure[0] if stream_failure is not None else 0
         # How many fallback hops deep the walk is: the "Successful fallback" lines a served hop logs.
         self._fallback_depth: int = 0
+        self._credential_scope: frozenset[str] | None = credential_scope
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
         )
@@ -5073,7 +5125,7 @@ class _Driver:
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step),
+            self._attempt_request(step, deployment),
             deployment,
             group=requested,
             requested=requested,
@@ -5144,6 +5196,7 @@ class _Driver:
             routed=routed if isinstance(routed, str) else None,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
+            credential_scope=self._credential_scope,
         )
 
     def _failed(
@@ -5356,15 +5409,15 @@ class _Driver:
         if passthrough is None:
             raise RuntimeError("router-core asked for an unrouted attempt the host did not offer")
         name: Final = str(step.get("model"))
-        params: Final = as_str_mapping(step.get("params"))
         self._attempts += 1
         self._attempt_started = datetime.now()  # noqa: DTZ005  # see _call
         try:
-            answered: Final = await passthrough(self._request if params is None else {**self._request, **params}, name)
+            sent: Final = self._hop_request(step, partial(inferred_provider, name))
+            answered: Final = await passthrough(sent, name)
         except Exception as error:  # noqa: BLE001  # handed to the Rust call loop like any attempt failure
             return {**self._failed(step, {}, None, error), "recorded": True}
         self._last_response = answered
-        self._served = (name, self._request)
+        self._served = (name, sent)
         return {"ok": True, "total_tokens": total_tokens(answered)}
 
     async def attempt(self, step: Mapping[str, object]) -> Mapping[str, object]:
@@ -5400,7 +5453,7 @@ class _Driver:
             return None
         if self._plan.sync or self._plan.kind != "chat" or call.kwargs.get("stream"):
             return None
-        if not self._core.queues_on(self._attempt_request(step))(deployment):
+        if not self._core.queues_on(self._attempt_request(step, deployment))(deployment):
             return None
         own_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
         admitted: Final = await request_queue.admit(capacity, call.model_name, partial(self._cooldown_left_s, own_id))
@@ -5412,10 +5465,46 @@ class _Driver:
             )
         return None
 
-    def _attempt_request(self, step: Mapping[str, object]) -> Mapping[str, object]:
-        """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
+    def _attempt_request(self, step: Mapping[str, object], deployment: Mapping[str, object]) -> Mapping[str, object]:
+        return self._hop_request(
+            step, partial(provider_of_deployment, as_str_mapping(deployment.get("litellm_params")) or {})
+        )
+
+    def _hop_request(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
         params: Final = as_str_mapping(step.get("params"))
-        return self._request if params is None else {**self._request, **params}
+        request: Final = self._request_for(step, provider)
+        return request if params is None else {**request, **params}
+
+    def _request_for(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
+        if not carries_caller_credentials(self._request):
+            return self._request
+        if _serves_the_primary(step):
+            _ = self._settled_credential_scope(get_pre_routing_selection(self._request) or _routed_model(self._request))
+            return self._request
+        return request_for_provider(
+            self._request, provider(), self._settled_credential_scope(_routed_model(self._request))
+        )
+
+    def _settled_credential_scope(self, requested: object) -> frozenset[str]:
+        if self._credential_scope is None:
+            self._credential_scope = self._providers_serving(requested)
+        return self._credential_scope
+
+    def _providers_serving(self, model: object) -> frozenset[str]:
+        if not isinstance(model, str):
+            return frozenset()
+        providers: Final = (
+            provider_of_deployment(as_str_mapping(row.get("litellm_params")) or {})
+            for row in self._requested_deployments(model)
+        )
+        served: Final = frozenset(provider for provider in providers if provider is not None)
+        if served:
+            return served
+        named: Final = inferred_provider(model)
+        return frozenset(() if named is None else (named,))
+
+    def _requested_deployments(self, model: str) -> Sequence[Mapping[str, object]]:
+        return self._core._routable(model, self._request)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None
@@ -5669,7 +5758,6 @@ class _Driver:
         ends the chain outside any hop's ``try``, as a chain's own failure: the level raises what it
         would have (``async_function_with_fallbacks_common_utils`` catches it), and its note or an
         order path reads the error as the next level's."""
-        from litellm.router_utils.fallback_event_handlers import get_pre_routing_selection
         from litellm.types.router import FallbackSkipReason
 
         ctx: Final = RoutingContext(self._core)  # pyright: ignore[reportArgumentType]  # the checks read registry() and settings()
