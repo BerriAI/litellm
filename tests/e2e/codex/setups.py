@@ -19,6 +19,7 @@ GPT_ON_BEDROCK_RUNTIME: Final = f"bedrock/global.openai.{GPT}"
 GPT_ON_AZURE_OPENAI: Final = f"azure/{GPT}"
 GPT_ON_OPENAI: Final = f"openai/{GPT}"
 CLAUDE_ON_BEDROCK: Final = f"bedrock/us.anthropic.{CLAUDE}"
+GPT_ON_BEDROCK_RUNTIME_US_PROFILE: Final = f"bedrock/us.openai.{GPT}"
 _BEDROCK_REGION: Final = "us-east-1"
 
 type SetupId = Literal["bedrock_mantle", "bedrock_runtime", "azure_openai", "openai", "claude_bedrock"]
@@ -50,6 +51,11 @@ def _drives(provider: Provider, model: str) -> pytest.MarkDecorator:
     )
 
 
+_NO_RUNTIME_ACCESS_IN_CI: Final = pytest.mark.skip(
+    reason="Stage IAM lacks bedrock:InvokeModel on the default Bedrock Runtime project"
+)
+
+
 SETUPS: Final = (
     pytest.param(
         Deployment(
@@ -69,7 +75,7 @@ SETUPS: Final = (
         id="bedrock_runtime",
         marks=(
             _drives(Provider.BEDROCK, GPT_ON_BEDROCK_RUNTIME),
-            pytest.mark.skip(reason="Stage IAM lacks bedrock:InvokeModel on the default Bedrock Runtime project"),
+            _NO_RUNTIME_ACCESS_IN_CI,
         ),
     ),
     pytest.param(
@@ -101,6 +107,17 @@ SETUPS: Final = (
         id="claude_bedrock",
         marks=_drives(Provider.BEDROCK, CLAUDE_ON_BEDROCK),
     ),
+)
+
+
+BEDROCK_RUNTIME_US_PROFILE: Final = pytest.param(
+    Deployment(
+        LiteLLMParamsBody(model=GPT_ON_BEDROCK_RUNTIME_US_PROFILE, aws_region_name=_BEDROCK_REGION),
+        RateBucket.BEDROCK_CONVERSE,
+        real_model_name=GPT,
+    ),
+    id="bedrock_runtime_us_profile",
+    marks=(_drives(Provider.BEDROCK, GPT_ON_BEDROCK_RUNTIME_US_PROFILE), _NO_RUNTIME_ACCESS_IN_CI),
 )
 
 
