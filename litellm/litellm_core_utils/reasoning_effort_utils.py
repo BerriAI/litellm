@@ -1,16 +1,31 @@
-from typing import Literal
+import reprlib
+from typing import Final, Literal
 
+from pydantic import TypeAdapter
+
+import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 OpenAIStyleReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
+_DROP_WARNING: Final = "Dropping %s=%s for model=%r (drop_params=True) because %s"
+_NON_NUMERIC_BUDGET_REASON: Final = "it is not a number. Send budget_tokens as an integer to set a reasoning level."
+OPAQUE_VALUE: Final = TypeAdapter(object)
+
+
+def warn_dropped_reasoning(param: str, value: object, model: str, reason: str) -> None:
+    verbose_logger.warning(_DROP_WARNING, param, reprlib.repr(value), model, reason)
+
 
 def reasoning_effort_from_thinking_budget(
-    budget_tokens: int,
+    budget_tokens: float,
 ) -> OpenAIStyleReasoningEffort:
     """Bucket an Anthropic ``thinking.budget_tokens`` into an OpenAI-style
     ``reasoning_effort`` using the shared ``DEFAULT_REASONING_EFFORT_*_THINKING_BUDGET``
@@ -24,3 +39,23 @@ def reasoning_effort_from_thinking_budget(
     if budget_tokens >= DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET:
         return "low"
     return "minimal"
+
+
+def reasoning_effort_from_thinking(
+    thinking: object, *, model: str, drop_params: bool
+) -> OpenAIStyleReasoningEffort | UnsupportedParamsError | None:
+    fields: Final = as_str_mapping(thinking)
+    if fields is None or fields.get("type") != "enabled":
+        return None
+    budget: Final = fields.get("budget_tokens", 0)
+    if isinstance(budget, (int, float)) and not isinstance(budget, bool):
+        return reasoning_effort_from_thinking_budget(budget)
+    if drop_params or litellm.drop_params is True:
+        warn_dropped_reasoning("thinking.budget_tokens", budget, model, _NON_NUMERIC_BUDGET_REASON)
+        return None
+    return UnsupportedParamsError(
+        message=(
+            f"thinking.budget_tokens must be a number, got {type(budget).__name__}. To drop it, set "
+            "`litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
+        )
+    )
