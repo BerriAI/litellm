@@ -69,12 +69,19 @@ def router_reranker(
     """Reranks through the router after the same key rate-limit, budget and guardrail pre-call hooks /rerank runs."""
 
     async def rerank(query: str, documents: Sequence[str]) -> Sequence[RerankScore]:
+        from litellm.proxy.litellm_pre_call_utils import (
+            move_guardrails_to_metadata,  # pyright: ignore[reportUnknownVariableType]  # it takes an untyped request dict
+        )
+
         request: Final = {
             "model": rerank_model,
             "query": query,
             "documents": list(documents),
             "metadata": embedding_spend_metadata(user_api_key_dict),
         }
+        await move_guardrails_to_metadata(
+            data=request, _metadata_variable_name="metadata", user_api_key_dict=user_api_key_dict
+        )
         processed: Final = _RerankRequest.model_validate(
             await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # its overloads take an untyped dict
                 user_api_key_dict=user_api_key_dict, data=request, call_type="arerank"

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -188,6 +188,34 @@ async def test_the_rerank_model_sees_the_query_as_the_guardrails_rewrote_it() ->
     sent: Final = router.arerank.await_args.kwargs
     assert sent["query"] == "[MASKED]"
     assert sent["metadata"]["guardrail"] == "masked"
+
+
+def _pii_guardrail(
+    user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, Mapping[str, object]], call_type: str
+) -> Mapping[str, Mapping[str, object]]:
+    assigned: Final = data["metadata"].get("guardrails")
+    if isinstance(assigned, list) and "pii-mask" in assigned:
+        raise HTTPException(status_code=400, detail="blocked by pii-mask")
+    return data
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_assigned_to_the_calling_key_runs_on_the_rerank_call() -> None:
+    caller: Final = UserAPIKeyAuth(api_key="hashed-caller-key", metadata={"guardrails": ["pii-mask"]})
+    router = _rerank_router()
+    key_limits = MagicMock()
+    key_limits.pre_call_hook = AsyncMock(side_effect=_pii_guardrail)
+
+    with (
+        patch(  # test-quality-ok: key guardrails are gated on this proxy global, as on /rerank
+            "litellm.proxy.proxy_server.premium_user", True
+        ),
+        pytest.raises(HTTPException) as raised,
+    ):
+        await rerank_order(QUERY, DOCUMENTS, router_reranker(router, "rerank-2.5", caller, key_limits))
+
+    assert raised.value.detail == "blocked by pii-mask"
+    router.arerank.assert_not_awaited()
 
 
 @pytest.mark.asyncio
