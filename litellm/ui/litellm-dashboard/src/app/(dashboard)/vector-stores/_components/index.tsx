@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { useTranslation } from "react-i18next";
 import { Database, RefreshCw } from "lucide-react";
@@ -135,122 +135,118 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   }, [accessToken]);
 
   return selectedVectorStoreId ? (
-    <div className="w-full h-full">
-      <VectorStoreInfoView
-        vectorStoreId={selectedVectorStoreId}
-        onClose={handleCloseInfo}
-        accessToken={accessToken}
-        is_admin={isAdminRole(userRole || "")}
-        editVectorStore={editVectorStore}
-      />
-    </div>
+    <VectorStoreInfoView
+      vectorStoreId={selectedVectorStoreId}
+      onClose={handleCloseInfo}
+      accessToken={accessToken}
+      is_admin={isAdminRole(userRole || "")}
+      editVectorStore={editVectorStore}
+    />
   ) : (
-    <Page>
-      <PageContent>
-        <PageHeader>
-          <PageHeaderTitle>
-            <Database />
-            {t("vectorStores.page.title")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>{t("vectorStores.page.description")}</PageHeaderDescription>
-          <PageHeaderControls className="flex-wrap">
-            {activeTab === "manage" && canCreateVectorStores && (
-              <Button onClick={() => setIsCreateModalVisible(true)}>{t("vectorStores.page.addVectorStore")}</Button>
-            )}
-            {lastRefreshed && (
-              <p className="text-sm text-muted-foreground">
-                {t("vectorStores.page.lastRefreshed", { time: lastRefreshed })}
-              </p>
-            )}
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label={t("vectorStores.page.refresh")}
-              onClick={handleRefreshClick}
-            >
-              <RefreshCw className="size-4" />
-            </Button>
-          </PageHeaderControls>
-        </PageHeader>
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Database />
+          {t("vectorStores.page.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("vectorStores.page.description")}</PageHeaderDescription>
+        <PageHeaderControls className="flex-wrap">
+          {activeTab === "manage" && canCreateVectorStores && (
+            <Button onClick={() => setIsCreateModalVisible(true)}>{t("vectorStores.page.addVectorStore")}</Button>
+          )}
+          {lastRefreshed && (
+            <p className="text-sm text-muted-foreground">
+              {t("vectorStores.page.lastRefreshed", { time: lastRefreshed })}
+            </p>
+          )}
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label={t("vectorStores.page.refresh")}
+            onClick={handleRefreshClick}
+          >
+            <RefreshCw className="size-4" />
+          </Button>
+        </PageHeaderControls>
+      </PageHeader>
 
-        <Tabs
-          defaultValue={defaultTab}
-          onValueChange={(value) => {
-            setActiveTab(value);
-            onTabChange(value);
-          }}
-          className="gap-6"
-        >
-          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none p-0">
-            {canCreateVectorStores && (
-              <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
-                {t("vectorStores.page.tabs.create")}
-              </TabsTrigger>
-            )}
-            <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.manage")}
-            </TabsTrigger>
-            <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.test")}
-            </TabsTrigger>
-            {isProxyAdminRole(userRole || "") && (
-              <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
-                {t("vectorStores.page.tabs.indexes")}
-              </TabsTrigger>
-            )}
-          </TabsList>
-
+      <Tabs
+        defaultValue={defaultTab}
+        onValueChange={(value) => {
+          setActiveTab(value);
+          onTabChange(value);
+        }}
+        className="gap-6"
+      >
+        <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none p-0">
           {canCreateVectorStores && (
-            <TabsContent keepMounted={hasVisited("create")} value="create">
-              <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
-            </TabsContent>
+            <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
+              {t("vectorStores.page.tabs.create")}
+            </TabsTrigger>
           )}
-
-          <TabsContent keepMounted={hasVisited("manage")} value="manage">
-            <VectorStoreTable
-              data={vectorStores}
-              isLoading={isLoadingVectorStores}
-              onView={handleView}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-            />
-          </TabsContent>
-
-          <TabsContent keepMounted={hasVisited("test")} value="test">
-            <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
-          </TabsContent>
-
+          <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
+            {t("vectorStores.page.tabs.manage")}
+          </TabsTrigger>
+          <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
+            {t("vectorStores.page.tabs.test")}
+          </TabsTrigger>
           {isProxyAdminRole(userRole || "") && (
-            <TabsContent keepMounted={hasVisited("indexes")} value="indexes">
-              <IndexesTab accessToken={accessToken} vectorStores={vectorStores} onViewVectorStore={handleView} />
-            </TabsContent>
+            <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
+              {t("vectorStores.page.tabs.indexes")}
+            </TabsTrigger>
           )}
-        </Tabs>
+        </TabsList>
 
-        {/* Create Vector Store Modal */}
-        <VectorStoreForm
-          isVisible={isCreateModalVisible}
-          onCancel={() => setIsCreateModalVisible(false)}
-          onSuccess={handleCreateSuccess}
-          accessToken={accessToken}
-          credentials={credentials}
-        />
+        {canCreateVectorStores && (
+          <TabsContent keepMounted={hasVisited("create")} value="create">
+            <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
+          </TabsContent>
+        )}
 
-        {/* Delete Confirmation Modal */}
-        <DeleteResourceModal
-          isOpen={isDeleteModalOpen}
-          title={t("vectorStores.page.deleteModal.title")}
-          message={t("vectorStores.page.deleteModal.message")}
-          resourceInformationTitle={t("vectorStores.page.deleteModal.resourceTitle")}
-          resourceInformation={[
-            { label: t("vectorStores.page.deleteModal.vectorStoreId"), value: vectorStoreToDelete, code: true },
-          ]}
-          onCancel={() => setIsDeleteModalOpen(false)}
-          onOk={confirmDelete}
-          confirmLoading={isDeleting}
-        />
-      </PageContent>
-    </Page>
+        <TabsContent keepMounted={hasVisited("manage")} value="manage">
+          <VectorStoreTable
+            data={vectorStores}
+            isLoading={isLoadingVectorStores}
+            onView={handleView}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+          />
+        </TabsContent>
+
+        <TabsContent keepMounted={hasVisited("test")} value="test">
+          <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
+        </TabsContent>
+
+        {isProxyAdminRole(userRole || "") && (
+          <TabsContent keepMounted={hasVisited("indexes")} value="indexes">
+            <IndexesTab accessToken={accessToken} vectorStores={vectorStores} onViewVectorStore={handleView} />
+          </TabsContent>
+        )}
+      </Tabs>
+
+      {/* Create Vector Store Modal */}
+      <VectorStoreForm
+        isVisible={isCreateModalVisible}
+        onCancel={() => setIsCreateModalVisible(false)}
+        onSuccess={handleCreateSuccess}
+        accessToken={accessToken}
+        credentials={credentials}
+      />
+
+      {/* Delete Confirmation Modal */}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title={t("vectorStores.page.deleteModal.title")}
+        message={t("vectorStores.page.deleteModal.message")}
+        resourceInformationTitle={t("vectorStores.page.deleteModal.resourceTitle")}
+        resourceInformation={[
+          { label: t("vectorStores.page.deleteModal.vectorStoreId"), value: vectorStoreToDelete, code: true },
+        ]}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        onOk={confirmDelete}
+        confirmLoading={isDeleting}
+      />
+    </PageContent>
   );
 };
 

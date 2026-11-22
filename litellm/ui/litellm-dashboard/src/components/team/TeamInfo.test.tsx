@@ -586,7 +586,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByText("guardrail2")).toBeInTheDocument();
     });
 
-    it("should display policies in overview when present", async () => {
+    it("shows legacy top-level policies when metadata has no policy list", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           policies: ["policy1"],
@@ -598,9 +598,7 @@ describe("TeamInfoView", () => {
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
-      await waitFor(() => {
-        expect(screen.getByText("Policies")).toBeInTheDocument();
-      });
+      expect(await screen.findByText("policy1")).toBeVisible();
     });
 
     it("should display team member budget information when present", async () => {
@@ -902,6 +900,52 @@ describe("TeamInfoView", () => {
 
   describe("settings and editing", () => {
     const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "label" });
+
+    it("shows saved team policies and clears the last one", async () => {
+      const user = userEvent.setup({ delay: null });
+      const teamInfo = vi.mocked(networking.teamInfoCall);
+      teamInfo.mockResolvedValue(createMockTeamData({ metadata: { policies: ["review-policy"] } }));
+      vi.mocked(networking.getPolicyInfoWithGuardrails).mockResolvedValue({ resolved_guardrails: [] });
+      vi.mocked(networking.teamUpdateCall).mockImplementation(async () => {
+        teamInfo.mockResolvedValue(createMockTeamData({ metadata: { policies: [] } }));
+        return { data: {} as networking.Team, team_id: "test-team" };
+      });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText("review-policy")).toBeVisible();
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+      const policyChip = await settings.findByLabelText("review-policy");
+      expect(policyChip).toBeVisible();
+      await user.click(within(policyChip).getByRole("button"));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      await screen.findByRole("button", { name: /edit settings/i });
+
+      expect(networking.teamUpdateCall).toHaveBeenCalledWith("test-token", expect.objectContaining({ policies: [] }));
+      await user.click(screen.getByRole("tab", { name: "Overview" }));
+      expect(screen.queryByText("review-policy")).not.toBeInTheDocument();
+    });
+
+    it("shows team logging integrations without offering key-only callback controls", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: { logging: [{ callback_name: "langfuse", callback_type: "success", callback_vars: {} }] },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText("Langfuse")).toBeVisible();
+      expect(screen.queryByText("Disabled Callbacks")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      expect(screen.queryByText("Disabled Callbacks")).not.toBeInTheDocument();
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByRole("button", { name: "Add Integration" })).toBeVisible();
+      expect(screen.queryByText("Disabled Callbacks")).not.toBeInTheDocument();
+    });
 
     it("should offer the policies field and load it for a caller with the viewPolicies capability", async () => {
       const user = userEvent.setup({ delay: null });
@@ -2266,6 +2310,7 @@ describe("TeamInfoView - member defaults editor", () => {
     expect(payload.team_member_tpm_limit).toBe(11);
     expect(payload.team_member_rpm_limit).toBe(22);
     expect(payload.default_team_member_models).toEqual(["gpt-4"]);
+    expect(payload).not.toHaveProperty("team_member_rollover_max_budget");
   });
 
   it("sends a null team_member_budget_duration when Default Budget Duration is set to never reset", async () => {
@@ -2336,6 +2381,29 @@ describe("TeamInfoView - member defaults editor", () => {
     const payload = await save(user);
 
     expect(payload.team_member_budget).toBe(12.5);
+  });
+
+  it.each([
+    ["90", 90],
+    ["", null],
+  ])("saves an edited rollover cap of %s from Member Defaults", async (input, expected) => {
+    const user = userEvent.setup({ delay: null });
+    const savedBudget = {
+      max_budget: 42,
+      rollover_max_budget: 84,
+      budget_duration: "30d",
+      tpm_limit: 11,
+      rpm_limit: 22,
+    };
+    await openEditor(user, savedBudget);
+
+    const cap = await screen.findByLabelText("Member Rollover Cap (USD)");
+    expect(cap).toHaveValue(84);
+    fireEvent.change(cap, { target: { value: input } });
+    const payload = await save(user);
+
+    expect(payload.team_member_rollover_max_budget).toBe(expected);
+    expect(payload.team_member_budget).toBe(42);
   });
 
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
@@ -3041,10 +3109,12 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(payload.model_tpm_limit).toStrictEqual({ "gpt-4": 30 });
   });
 
-  it("leaves stored policies out of the update body for a caller without the viewPolicies capability", async () => {
+  it("preserves saved policies when the caller cannot edit them", async () => {
     const user = userEvent.setup({ delay: null });
     can.mockReturnValue(false);
-    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"], policies: ["pci"] }));
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], metadata: { policies: ["review-policy"] } }),
+    );
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
     renderWithProviders(<TeamInfoView {...props} />);
@@ -3057,6 +3127,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
     expect(payload).toHaveProperty("team_alias");
     expect(wireBody(payload)).not.toHaveProperty("policies");
+    expect(payload.metadata).toMatchObject({ policies: ["review-policy"] });
   });
 
   it("blocks the save on an empty team name and names the rule", async () => {

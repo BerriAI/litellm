@@ -2667,6 +2667,23 @@ def test_a_json_schema_row_with_defs_holds_no_key_bigquery_refuses() -> None:
     ] == {"type": "object", "properties": {"capital": city, "largest": city}, "required": ["capital", "largest"]}
 
 
+
+def test_a_json_schema_row_builds_with_a_const_beside_a_union_whose_branch_is_a_ref() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"source": {"anyOf": [{"$ref": "#/$defs/Ledger"}, {"type": "null"}], "const": "ledger-7"}},
+        "$defs": {"Ledger": {"type": "string", "enum": ["ledger-7", "ledger-9"]}},
+    }
+    (row,) = _wrap_entries(
+        [
+            _chat_entry(
+                "gemini-2.5-flash",
+                {"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": schema}}},
+            )
+        ]
+    )
+    assert not any("$" in key for key in _keys_anywhere(row))
+
 _GEMINI_DEPLOYMENT: Final = MappingProxyType({"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-2.5-flash"})
 _ANNOTATED_ANSWER_SCHEMA: Final = MappingProxyType(
     {
