@@ -2,19 +2,144 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Final
 
+import pytest
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture
 from setup.observe import Observation, evaluate, junit_properties
 from setup.performance_test_case import Limit, Ramp, ramped
 from setup.plan import build_plan
-from setup.ramp import StepReading, send_offsets, step_properties, sustained_rps
+from setup.podcpu import GatewayCpuSampler, PodMetricsList
+from setup.ramp import StepReading, render_steps, send_offsets, step_properties, sustained_rps
 from setup.series import Sample, Series
 from setup.telemetry import GatewayTelemetry, HistogramTotals
 from setup.wire import WireRecord
 
 NO_RSS: Final = RssCapture(readings=(), failures=())
+
+
+def _cpu_metrics(end: float, window: str = "20s", rate: str = "2") -> PodMetricsList:
+    return PodMetricsList.model_validate(
+        {
+            "items": [
+                {
+                    "metadata": {"name": "gateway"},
+                    "timestamp": datetime.fromtimestamp(1000.0 + end, tz=UTC),
+                    "window": window,
+                    "containers": [{"usage": {"cpu": rate}}],
+                }
+            ]
+        }
+    )
+
+
+def test_ramp_cpu_windows_are_split_by_overlap_and_missing_coverage_stays_missing() -> None:
+    ramp: Final = Ramp(first_rps=1.0, last_rps=2.0, step_rps=1.0, step_seconds=10.0, held_p99_seconds=5.0)
+    records: Final = tuple(
+        _record(seq, 1000.0 + (seq - 1 if seq <= 10 else 10.0 + (seq - 11) / 2), 0.1) for seq in range(1, 31)
+    )
+    responses: Final = iter((_cpu_metrics(0.0), _cpu_metrics(20.0)))
+    times: Final = iter((1000.0, 1020.0))
+    sampler: Final = GatewayCpuSampler(
+        "gateway",
+        "perf",
+        "token",
+        "ca.pem",
+        read_metrics=lambda: next(responses, None),
+        clock=lambda: next(times),
+        settle_timeout_s=0.0,
+    )
+    sampler.start()
+    sampler.stop()
+    observation: Final = Observation(
+        records=records,
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=20.0,
+        ramp=ramp,
+        gateway_cpu_seconds=sampler.seconds,
+        cpu_series=sampler.series,
+    )
+    first, second = observation.steps()
+
+    assert sampler.seconds == 40.0
+    assert first.cpu_seconds_per_request == 2.0
+    assert second.cpu_seconds_per_request == 1.0
+    assert sampler.series.between(1005.0, 1015.0) == (20.0,)
+    assert sampler.series.between(990.0, 1000.0) is None
+    assert sampler.series.between(1020.0, 1030.0) is None
+
+    missing_times: Final = iter((1000.0, 1020.0))
+    missing: Final = GatewayCpuSampler(
+        "gateway",
+        "perf",
+        "token",
+        "ca.pem",
+        read_metrics=lambda: None,
+        clock=lambda: next(missing_times),
+        settle_timeout_s=0.0,
+    )
+    missing.start()
+    missing.stop()
+    assert all(step.cpu_seconds_per_request is None for step in replace(observation, cpu_series=missing.series).steps())
+
+
+@pytest.mark.parametrize(
+    ("first_end", "next_start", "cpu", "first_cpu", "first_coverage", "second_coverage"),
+    ((9.25, 10.25, 60.5, 2.0, 0.925, 0.975), (8.0, 9.5, 62.5, None, 0.85, 1.0)),
+)
+def test_ramp_steps_bridge_boundary_gaps_and_apply_their_own_coverage_gate(
+    first_end: float,
+    next_start: float,
+    cpu: float,
+    first_cpu: float | None,
+    first_coverage: float,
+    second_coverage: float,
+) -> None:
+    responses: Final = iter((_cpu_metrics(first_end, f"{first_end}s"), _cpu_metrics(20.0, f"{20 - next_start}s", "4")))
+    times: Final = iter((1000.0, 1020.0))
+    sampler: Final = GatewayCpuSampler(
+        "gateway",
+        "perf",
+        "token",
+        "ca.pem",
+        read_metrics=lambda: next(responses, None),
+        clock=lambda: next(times),
+        settle_timeout_s=0.0,
+    )
+    sampler.start()
+    sampler.stop()
+    records: Final = tuple(
+        _record(seq, 1000.0 + (seq - 1 if seq <= 10 else 10.0 + (seq - 11) / 2), 0.1) for seq in range(1, 31)
+    )
+    observation: Final = Observation(
+        records=records,
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=20.0,
+        ramp=Ramp(first_rps=1.0, last_rps=2.0, step_rps=1.0, step_seconds=10.0, held_p99_seconds=5.0),
+        gateway_cpu_seconds=sampler.seconds,
+        cpu_series=sampler.series,
+    )
+    first, second = observation.steps()
+    properties: Final = dict(step_properties((first, second)))
+
+    assert sampler.seconds == cpu
+    assert first.cpu_seconds_per_request == first_cpu
+    assert second.cpu_seconds_per_request == 2.0
+    assert first.cpu_seconds_per_request_coverage == first_coverage
+    assert second.cpu_seconds_per_request_coverage == second_coverage
+    assert properties.get("perf_ramp_step_1_cpu_seconds_per_request") == first_cpu
+    assert properties["perf_ramp_step_1_cpu_seconds_per_request_coverage"] == first_coverage
+    assert properties["perf_ramp_step_2_cpu_seconds_per_request_coverage"] == second_coverage
+    assert f"{first_coverage:.4f}" in render_steps((first, second))[1]
+    assert math.isclose(sum(sampler.series.between(1009.4, 1020.0) or ()), 42.4)
 
 
 def test_send_offsets_put_each_step_s_requests_inside_its_window_in_plan_order() -> None:
@@ -120,7 +245,7 @@ def test_a_floor_fails_when_the_second_step_s_latency_breaks_it_and_the_properti
     assert not evaluate(replace(case, limits=(Limit("sustained_rps", min=10),)), observation)[1]
 
 
-def test_each_step_reads_the_pod_s_cpu_redis_latency_and_connections_from_its_own_window() -> None:
+def test_each_step_reads_cpu_and_redis_latency_from_its_own_window() -> None:
     ramp: Final = Ramp(first_rps=10.0, last_rps=20.0, step_rps=10.0, step_seconds=100.0, held_p99_seconds=2.0)
     records: Final = tuple(
         _record(seq, 1000.0 + offset, 1.5) for seq, offset in enumerate(send_offsets(ramp, seed=1), start=1)
@@ -139,11 +264,6 @@ def test_each_step_reads_the_pod_s_cpu_redis_latency_and_connections_from_its_ow
         wall_seconds=200.0,
         ramp=ramp,
         cpu_series=Series(samples=tuple(Sample(at=started + at, value=5.0) for at in (10.0, 60.0, 110.0, 160.0))),
-        connection_series=Series(
-            samples=tuple(
-                Sample(at=started + at, value=n) for at, n in ((1.0, 12), (50.0, 18), (150.0, 25), (199.0, 20))
-            )
-        ),
         telemetry_series=Series(samples=redis),
     )
     first, second = observation.steps()
@@ -152,9 +272,7 @@ def test_each_step_reads_the_pod_s_cpu_redis_latency_and_connections_from_its_ow
         first.cpu_seconds_per_request, 10.0 / first_completed
     )
     assert first.redis_latency_mean_seconds is not None and math.isclose(first.redis_latency_mean_seconds, 0.01)
-    assert first.postgres_peak_connections == 18
     assert second.redis_latency_mean_seconds is not None and math.isclose(second.redis_latency_mean_seconds, 0.4)
-    assert second.postgres_peak_connections == 25
     assert first.time_to_first_token_p99 is None
     names: Final = {name for name, _ in step_properties((first, second)) if name.startswith("perf_ramp_step_10_")}
     assert names == {
@@ -164,5 +282,4 @@ def test_each_step_reads_the_pod_s_cpu_redis_latency_and_connections_from_its_ow
         "perf_ramp_step_10_gateway_added_p50",
         "perf_ramp_step_10_cpu_seconds_per_request",
         "perf_ramp_step_10_redis_latency_mean_seconds",
-        "perf_ramp_step_10_postgres_peak_connections",
     }

@@ -16,12 +16,18 @@ describe("skill install commands", () => {
   it("quotes the public index name without executing shell substitutions", () => {
     const name = "review' $(printf injected) `printf injected`";
     const command = buildSkillInstallCommand({ ...options, global: true, publicSkill: { name } });
-    const result = spawnSync("bash", ["-c", `npx() { printf '%s\\n' "$DISABLE_TELEMETRY" "$@"; }; ${command}`], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      "bash",
+      ["-c", `npx() { printf '%s\\n' "$DISABLE_TELEMETRY" "$INSTALL_INTERNAL_SKILLS" "$@"; }; ${command}`],
+      {
+        encoding: "utf8",
+        env: { ...process.env, INSTALL_INTERNAL_SKILLS: "0" },
+      },
+    );
     expect(result.status).toBe(0);
     expect(result.stdout.trim().split("\n")).toEqual([
       "1",
+      "0",
       "skills@1.7.6",
       "add",
       options.gatewayUrl,
@@ -33,8 +39,12 @@ describe("skill install commands", () => {
     ]);
   });
 
-  it.each(["success", "fail"])("executes a private install with safe credentials and cleanup on %s", (outcome) => {
-    const command = buildSkillInstallCommand({ ...options, agent: "claude-code", global: true })!;
+  it.each([
+    ["success", false],
+    ["success", true],
+    ["fail", true],
+  ] as const)("installs the internal root with safe credentials and cleanup: %s, global=%s", (outcome, global) => {
+    const command = buildSkillInstallCommand({ ...options, agent: "claude-code", global })!;
     const result = spawnSync(
       "python3",
       [fileURLToPath(new URL("./skillInstall.fixture.py", import.meta.url)), outcome],
@@ -48,16 +58,21 @@ describe("skill install commands", () => {
     const expected = {
       status: outcome === "success" ? 0 : 22,
       header: "X-LiteLLM-Key: Bearer private-fixture-key\n",
+      downloadInternalSkills: null,
       secretLeaked: false,
       temporaryRemoved: true,
-      retained: outcome === "success" ? "fixture skill" : null,
+      retained:
+        outcome === "success"
+          ? "---\nname: declared-fixture-skill\ndescription: Fixture skill\nmetadata:\n  internal: true\n---\nfixture skill\n"
+          : null,
       telemetry: outcome === "success" ? "1" : null,
     };
     const receipt = JSON.parse(result.stdout) as typeof expected & { installArgs: string[] | null };
     expect(receipt).toMatchObject(expected);
     expect(receipt.installArgs).toEqual(
-      outcome === "success" ? expect.arrayContaining(["--skill", "review", "-a", "claude-code", "-g"]) : null,
+      outcome === "success" ? expect.arrayContaining(["-a", "claude-code", "--copy", "--yes"]) : null,
     );
+    expect(receipt.installArgs?.includes("-g") ?? false).toBe(outcome === "success" && global);
   });
 
   it.each([

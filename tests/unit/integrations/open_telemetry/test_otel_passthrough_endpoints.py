@@ -6,7 +6,6 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
@@ -28,7 +27,7 @@ def _real_user_api_key_dict(parent_span):
 
 
 def _proxy_logging():
-    return ProxyLogging(user_api_key_cache=UserApiKeyCache(DualCache()))
+    return ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
 
 def _drive_passthrough_failure(*, exception, user_api_key_dict):

@@ -4664,15 +4664,18 @@ class TestMoyaiUrlSetting:
 
 
 @pytest.mark.parametrize("setting,initial_value,submitted,default", (
-    ("usage_default_time_range", None, "today", "last_7_days"),
-    ("usage_default_time_range", None, "last_7_days", "last_7_days"),
-    ("usage_default_time_range", None, "last_30_days", "last_7_days"),
-    ("usage_default_time_range", None, "month_to_date", "last_7_days"),
-    ("usage_default_time_range", None, "year_to_date", "last_7_days"),
+    ("usage_default_time_range", None, "today", "month_to_date"),
+    ("usage_default_time_range", None, "last_7_days", "month_to_date"),
+    ("usage_default_time_range", None, "last_30_days", "month_to_date"),
+    ("usage_default_time_range", "last_7_days", "month_to_date", "month_to_date"),
+    ("usage_default_time_range", None, "year_to_date", "month_to_date"),
     ("disable_aria", None, False, False),
     ("disable_aria", None, True, False),
     ("disable_aria", False, True, False),
     ("disable_aria", True, False, False),
+    ("aria_internal_user_access", None, "none", "own_usage"),
+    ("aria_internal_user_access", None, "own_usage", "own_usage"),
+    ("aria_internal_user_access", "none", "own_and_team_usage", "own_usage"),
 ))
 def test_ui_setting_round_trips_without_overwriting_other_settings(
     mock_auth: None, monkeypatch: pytest.MonkeyPatch, setting: str,
@@ -4716,7 +4719,7 @@ def test_ui_setting_round_trips_without_overwriting_other_settings(
 
 
 @pytest.mark.parametrize("submitted", ["invalid", None, 7])
-@pytest.mark.parametrize("setting", ("usage_default_time_range", "disable_aria"))
+@pytest.mark.parametrize("setting", ("usage_default_time_range", "disable_aria", "aria_internal_user_access"))
 def test_ui_setting_rejects_invalid_values_without_writing(
     mock_auth: None, monkeypatch: pytest.MonkeyPatch, submitted: object, setting: str,
 ) -> None:
@@ -4741,7 +4744,7 @@ def test_ui_setting_rejects_invalid_values_without_writing(
 
 
 @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
-@pytest.mark.parametrize("setting,value", (("usage_default_time_range", "month_to_date"), ("disable_aria", True)))
+@pytest.mark.parametrize("setting,value", (("usage_default_time_range", "month_to_date"), ("disable_aria", True), ("aria_internal_user_access", "none")))
 def test_ui_setting_cannot_be_changed_by_non_admins(
     mock_auth: None, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles, setting: str, value: str | bool,
 ) -> None:
@@ -4768,6 +4771,7 @@ def test_ui_setting_cannot_be_changed_by_non_admins(
     ("usage_default_time_range", "today", "month_to_date"),
     ("disable_aria", False, True),
     ("disable_aria", True, False),
+    ("aria_internal_user_access", "own_and_team_usage", "none"),
 ))
 def test_ui_setting_reports_config_precedence(
     mock_auth: None, monkeypatch: pytest.MonkeyPatch, setting: str, stored: str | bool, configured: str | bool,

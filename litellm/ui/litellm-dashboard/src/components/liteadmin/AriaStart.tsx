@@ -36,7 +36,7 @@ export function AriaStart({
 }) {
   const { t } = useTranslation();
   const usageDescription =
-    access.mode === "usage" && access.scope.type === "user"
+    access.mode === "usage" && access.scope.type !== "global"
       ? t("aria.start.descriptionUser")
       : t("aria.start.descriptionGateway");
   const description = access.mode === "admin" ? t("aria.start.descriptionAdmin") : usageDescription;

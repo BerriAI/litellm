@@ -50,6 +50,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     """
 
     _route: ClassVar[str] = "gemini"
+    _removes_undeclared_thinking_levels: ClassVar[bool] = True
 
     temperature: float | None = None
     max_output_tokens: int | None = None

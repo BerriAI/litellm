@@ -4627,16 +4627,13 @@ def test_token_type_cost_breakdown_bills_cache_tokens_at_the_provider_speed_mult
 GEMINI_4_ARGON_TOKEN_PRICE_KEYS: Final = (
     "input_cost_per_token",
     "input_cost_per_token_batches",
-    "input_cost_per_token_flex",
     "input_cost_per_token_priority",
     "output_cost_per_token",
     "output_cost_per_token_batches",
-    "output_cost_per_token_flex",
     "output_cost_per_token_priority",
     "output_cost_per_reasoning_token",
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_batches",
-    "cache_read_input_token_cost_flex",
     "cache_read_input_token_cost_priority",
 )
 

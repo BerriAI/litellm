@@ -190,7 +190,7 @@ class Session:
         return run_sync(self._inner.history(), "history")
 
     @property
-    def cost(self) -> float:
+    def cost(self) -> float | None:
         return self._inner.cost
 
     @property

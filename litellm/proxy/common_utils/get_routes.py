@@ -9,6 +9,7 @@ from starlette.routing import BaseRoute
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 
 class NamedEndpoint(Protocol):
@@ -27,7 +28,7 @@ class GetRoutes:
     @staticmethod
     def get_app_routes(
         route: BaseRoute,
-        endpoint_route: NamedEndpoint,
+        endpoint_route: object,
     ) -> list[RouteInfo]:
         """
         Get routes for a regular route.
@@ -36,7 +37,11 @@ class GetRoutes:
             "path": getattr(route, "path", None),
             "methods": getattr(route, "methods", None),
             "name": getattr(route, "name", None),
-            "endpoint": (endpoint_route.__name__ if getattr(route, "endpoint", None) else None),
+            "endpoint": (
+                require_attributes(endpoint_route, NamedEndpoint, "__name__").__name__
+                if getattr(route, "endpoint", None)
+                else None
+            ),
         }
         return [route_info]
 
