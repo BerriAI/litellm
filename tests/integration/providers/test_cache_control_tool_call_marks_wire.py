@@ -413,9 +413,7 @@ _GEMINI_CACHE_WRITE: Final = [
 @pytest.mark.parametrize(
     ("calls", "expected"),
     (
-        pytest.param(
-            marked_calls(), [("POST", "/models/gemini-3.8-flash:generateContent")], id="tool-calls-fill-the-cap"
-        ),
+        pytest.param(marked_calls(), _GEMINI_CACHE_WRITE, id="tool-calls-fill-the-cap"),
         pytest.param([tool_call(city) for city in CITIES], _GEMINI_CACHE_WRITE, id="unmarked-tool-calls"),
     ),
 )

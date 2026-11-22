@@ -10,6 +10,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media, inline_remote_media
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -19,6 +20,7 @@ from litellm.llms.openai.openai import AllMessageValues
 from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
+from ..gemini.transformation import should_inline_remote_media
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     cached_messages_end_on_supported_turn,
@@ -30,6 +32,7 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+_cache_inlines_web_media: Final = should_inline_remote_media("gemini")
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -371,8 +374,8 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
 
-        tools: Final = optional_params.pop("tools", None)
-        tool_choice: Final = optional_params.pop("tool_choice", None)
+        tools: Final = optional_params.get("tools")
+        tool_choice: Final = optional_params.get("tool_choice")
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -409,68 +412,75 @@ class ContextCachingEndpoints(VertexBase):
         generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name: Final = self.check_cache(
-            cache_key=generated_cache_key,
-            client=client,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header,
-            model=model,
-        )
-        if google_cache_name:
-            return non_cached_messages, optional_params, google_cache_name
 
-        ## TRANSFORM REQUEST
-        cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
-            model=model,
-            messages=cached_messages,
-            cache_key=generated_cache_key,
-            custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            drop_params=drop_params,
-        )
+        def lookup_or_create() -> str | None:
+            google_cache_name: Final = self.check_cache(
+                cache_key=generated_cache_key,
+                client=client,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=vertex_auth_header,
+                model=model,
+            )
+            if google_cache_name:
+                return google_cache_name
 
-        cached_content_request_body["tools"] = tools
-        if tool_choice is not None:
-            cached_content_request_body["toolConfig"] = tool_choice
+            ## TRANSFORM REQUEST
+            cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
+                model=model,
+                messages=inline_remote_media(cached_messages, should_inline=_cache_inlines_web_media),
+                cache_key=generated_cache_key,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                drop_params=drop_params,
+            )
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": cached_content_request_body,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
+            cached_content_request_body["tools"] = tools
+            if tool_choice is not None:
+                cached_content_request_body["toolConfig"] = tool_choice
+
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": cached_content_request_body,
+                    "api_base": url,
+                    "headers": headers,
+                },
+            )
+
+            try:
+                response: Final = client.post(
+                    url=url,
+                    headers=headers,
+                    json=cached_content_request_body,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                error_code: Final = err.response.status_code
+                raise VertexAIError(status_code=error_code, message=err.response.text)
+            except httpx.TimeoutException:
+                raise VertexAIError(status_code=408, message="Timeout error occurred.")
+
+            raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+            _record_cache_creation_tokens(logging_obj, raw_response_cached)
+            return raw_response_cached.get("name")
 
         try:
-            response: Final = client.post(
-                url=url,
-                headers=headers,
-                json=cached_content_request_body,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException:
-            raise VertexAIError(status_code=408, message="Timeout error occurred.")
-
-        raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
-        _record_cache_creation_tokens(logging_obj, raw_response_cached)
-        return (
-            non_cached_messages,
-            optional_params,
-            raw_response_cached.get("name"),
-        )
+            cache_name: Final = lookup_or_create()
+        except litellm.ImageFetchError as err:
+            verbose_logger.debug("Gemini context caching via %s failed: %s. Skipping context caching.", url, err)
+            return messages, optional_params, None
+        optional_params.pop("tools", None)
+        optional_params.pop("tool_choice", None)
+        return non_cached_messages, optional_params, cache_name
 
     async def async_check_and_create_cache(
         self,
@@ -532,8 +542,8 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
 
-        tools: Final = optional_params.pop("tools", None)
-        tool_choice: Final = optional_params.pop("tool_choice", None)
+        tools: Final = optional_params.get("tools")
+        tool_choice: Final = optional_params.get("tool_choice")
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -565,69 +575,76 @@ class ContextCachingEndpoints(VertexBase):
         generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name: Final = await self.async_check_cache(
-            cache_key=generated_cache_key,
-            client=client,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header,
-            model=model,
-        )
 
-        if google_cache_name:
-            return non_cached_messages, optional_params, google_cache_name
+        async def lookup_or_create() -> str | None:
+            google_cache_name: Final = await self.async_check_cache(
+                cache_key=generated_cache_key,
+                client=client,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=vertex_auth_header,
+                model=model,
+            )
 
-        ## TRANSFORM REQUEST
-        cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
-            model=model,
-            messages=cached_messages,
-            cache_key=generated_cache_key,
-            custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            drop_params=drop_params,
-        )
+            if google_cache_name:
+                return google_cache_name
 
-        cached_content_request_body["tools"] = tools
-        if tool_choice is not None:
-            cached_content_request_body["toolConfig"] = tool_choice
+            ## TRANSFORM REQUEST
+            cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
+                model=model,
+                messages=await async_inline_remote_media(cached_messages, should_inline=_cache_inlines_web_media),
+                cache_key=generated_cache_key,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                drop_params=drop_params,
+            )
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": cached_content_request_body,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
+            cached_content_request_body["tools"] = tools
+            if tool_choice is not None:
+                cached_content_request_body["toolConfig"] = tool_choice
+
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": cached_content_request_body,
+                    "api_base": url,
+                    "headers": headers,
+                },
+            )
+
+            try:
+                response: Final = await client.post(
+                    url=url,
+                    headers=headers,
+                    json=cached_content_request_body,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                error_code: Final = err.response.status_code
+                raise VertexAIError(status_code=error_code, message=err.response.text)
+            except httpx.TimeoutException:
+                raise VertexAIError(status_code=408, message="Timeout error occurred.")
+
+            raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+            _record_cache_creation_tokens(logging_obj, raw_response_cached)
+            return raw_response_cached.get("name")
 
         try:
-            response: Final = await client.post(
-                url=url,
-                headers=headers,
-                json=cached_content_request_body,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException:
-            raise VertexAIError(status_code=408, message="Timeout error occurred.")
-
-        raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
-        _record_cache_creation_tokens(logging_obj, raw_response_cached)
-        return (
-            non_cached_messages,
-            optional_params,
-            raw_response_cached.get("name"),
-        )
+            cache_name: Final = await lookup_or_create()
+        except litellm.ImageFetchError as err:
+            verbose_logger.debug("Gemini context caching via %s failed: %s. Skipping context caching.", url, err)
+            return messages, optional_params, None
+        optional_params.pop("tools", None)
+        optional_params.pop("tool_choice", None)
+        return non_cached_messages, optional_params, cache_name
 
     def get_cache(self):
         pass

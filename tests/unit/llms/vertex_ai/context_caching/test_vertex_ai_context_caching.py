@@ -1,3 +1,4 @@
+import base64
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
@@ -8,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
@@ -2516,6 +2518,26 @@ def _recording_gemini_client(calls: list[httpx.Request]) -> HTTPHandler:
     return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_recording_gemini_route(calls))))
 
 
+async def _gemini_calls(messages: list[AllMessageValues], use_async: bool) -> list[httpx.Request]:
+    calls: Final[list[httpx.Request]] = []
+    transport: Final = httpx.MockTransport(_recording_gemini_route(calls))
+    if use_async:
+        await litellm.acompletion(
+            model="gemini/gemini-flash-latest",
+            messages=messages,
+            api_key="test-key",
+            client=AsyncHTTPHandler(transport=transport),
+        )
+    else:
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            messages=messages,
+            api_key="test-key",
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+    return calls
+
+
 def _cached_conversation_with_tool_arguments(arguments: str) -> list[Mapping[str, object]]:
     return [
         {
@@ -2588,13 +2610,12 @@ async def test_a_strict_request_rejects_tool_call_arguments_even_when_a_lenient_
         await complete({**request, "drop_params": False}, calls)
 
 
-def test_a_mark_on_the_latest_turn_sends_the_whole_conversation_uncached_in_order(
-    local_model_cost_map: None,
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_mark_on_the_latest_turn_sends_the_whole_conversation_uncached_in_order(
+    local_model_cost_map: None, use_async: bool
 ) -> None:
-    calls: Final[list[httpx.Request]] = []
-    litellm.completion(
-        model="gemini/gemini-flash-latest",
-        messages=[
+    calls: Final = await _gemini_calls(
+        [
             {"role": "system", "content": "You are terse."},
             {"role": "user", "content": "What's the weather in Tokyo today?"},
             {"role": "assistant", "content": "Sunny."},
@@ -2605,8 +2626,7 @@ def test_a_mark_on_the_latest_turn_sends_the_whole_conversation_uncached_in_orde
                 ],
             },
         ],
-        api_key="test-key",
-        client=_recording_gemini_client(calls),
+        use_async,
     )
 
     generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
@@ -2614,3 +2634,124 @@ def test_a_mark_on_the_latest_turn_sends_the_whole_conversation_uncached_in_orde
     assert "cachedContent" not in generated
     assert generated["system_instruction"] == {"parts": [{"text": "You are terse."}]}
     assert [content["role"] for content in generated["contents"]] == ["user", "model", "user"]
+
+
+_SERVED_IMAGE: Final = b"\x89PNG\r\n\x1a\nserved"
+
+
+def _serve_images(monkeypatch: pytest.MonkeyPatch, status_code: int) -> list[str]:
+    fetched: Final[list[str]] = []
+
+    def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetched.append(url)
+        return httpx.Response(
+            status_code, content=_SERVED_IMAGE, headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
+
+    async def async_serve(client: object, url: str, **kwargs: object) -> httpx.Response:
+        return serve(client, url, **kwargs)
+
+    monkeypatch.setattr(image_handling, "safe_get", serve)
+    monkeypatch.setattr(image_handling, "async_safe_get", async_serve)
+    return fetched
+
+
+@pytest.fixture
+def served_images(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    return _serve_images(monkeypatch, 200)
+
+
+@pytest.fixture
+def missing_images(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    return _serve_images(monkeypatch, 404)
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_image_before_the_mark_reaches_the_gemini_cache_inlined(
+    local_model_cost_map, served_images: list[str], use_async: bool
+) -> None:
+    image_url: Final = f"https://images.example.com/button-{use_async}.png"
+    calls: Final = await _gemini_calls(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What does this button say?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+            {"role": "assistant", "content": "Deploy."},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Background notes. " * 3000, "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "assistant", "content": "Noted."},
+            {"role": "user", "content": "What color was the button?"},
+        ],
+        use_async,
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert served_images == [image_url]
+    assert created["contents"][0]["parts"][1] == {
+        "inline_data": {"data": base64.b64encode(_SERVED_IMAGE).decode(), "mime_type": "image/png"}
+    }
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert [content["role"] for content in generated["contents"]] == ["model", "user"]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_image_the_proxy_cannot_fetch_leaves_the_vertex_request_uncached_with_its_tools(
+    local_model_cost_map, missing_images: list[str], use_async: bool
+) -> None:
+    image_url: Final = f"https://images.example.com/missing-{use_async}.png"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What does this button say?"},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        },
+        {"role": "assistant", "content": "Deploy."},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Background notes. " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "What color was the button?"},
+    ]
+    tools: Final = [{"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]}]
+    optional_params: Final[dict[str, object]] = {"tools": tools}
+    calls: Final[list[httpx.Request]] = []
+    transport: Final = httpx.MockTransport(_recording_gemini_route(calls))
+    request: Final = {
+        "messages": messages,
+        "optional_params": optional_params,
+        "api_key": "",
+        "api_base": None,
+        "model": "gemini-2.5-flash",
+        "timeout": 30.0,
+        "logging_obj": MagicMock(),
+        "custom_llm_provider": "vertex_ai",
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "vertex_auth_header": "test-token",
+    }
+
+    result: Final = (
+        await ContextCachingEndpoints().async_check_and_create_cache(client=AsyncHTTPHandler(transport=transport), **request)
+        if use_async
+        else ContextCachingEndpoints().check_and_create_cache(
+            client=HTTPHandler(client=httpx.Client(transport=transport)), **request
+        )
+    )
+
+    assert result == (messages, {"tools": tools}, None)
+    assert missing_images == [image_url]
+    assert [call.method for call in calls if call.url.path.endswith("/cachedContents")] == ["GET"]

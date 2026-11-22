@@ -120,7 +120,7 @@ def separate_cached_messages(
 
     Returns:
         Tuple containing:
-        - cached_messages: List of cached messages.
+        - cached_messages: Every message up to the end of the first cached block.
         - non_cached_messages: List of non-cached messages.
     """
     cached_messages: list[AllMessageValues] = []
