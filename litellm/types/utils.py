@@ -2078,6 +2078,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         setattr(self, key, value)
 
 
+class UnreportedUsage(Usage):
+    pass
+
+
 class StreamingChoices(OpenAIObject):
     def __init__(
         self,
@@ -4385,6 +4389,7 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
+    GRADIUM = "gradium"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
@@ -4437,6 +4442,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"

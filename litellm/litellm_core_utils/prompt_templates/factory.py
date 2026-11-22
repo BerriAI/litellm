@@ -8,6 +8,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
@@ -20,6 +21,9 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -32,7 +36,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
-from litellm.types.files import get_file_extension_from_mime_type
+from litellm.types.files import get_file_extension_from_mime_type, get_file_mime_type_from_extension
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import CachePointBlock
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
@@ -1199,23 +1203,40 @@ def infer_protocol_value(
     return "unknown"
 
 
+def _parsed_gemini_function_call(name: str, arguments: object) -> VertexFunctionCall:
+    text: Final = arguments.decode() if isinstance(arguments, (bytes, bytearray)) else arguments
+    if text == "":  # pass empty dict, if arguments is empty string - prevents call from failing
+        return VertexFunctionCall(name=name, args={"type": "object"})
+    if text is not None and not isinstance(text, str):
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON string, got {type(text).__name__}")
+    args: Final = _DECODED_JSON.validate_python(
+        parse_tool_call_arguments(text, tool_name=name, context="Gemini tool invoke")
+    )
+    mapping: Final = as_str_mapping(args)
+    if args is not None and mapping is None:
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON object, got {type(args).__name__}")
+    return VertexFunctionCall(name=name, args=None if mapping is None else dict(mapping))
+
+
+def _gemini_function_call(name: str, arguments: object, *, drop_params: bool) -> VertexFunctionCall:
+    try:
+        return _parsed_gemini_function_call(name, arguments)
+    except ValueError:
+        if not drop_params:
+            raise
+        return VertexFunctionCall(name=name, args={})
+
+
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
     tool_call_id: str | None = None,
+    *,
+    drop_params: bool = False,
 ) -> VertexFunctionCall | None:
-    name: Final = function_call_params.get("name", "") or ""
-    arguments: Final = function_call_params.get("arguments", "")
-    if (
-        isinstance(arguments, str) and len(arguments) == 0
-    ):  # pass empty dict, if arguments is empty string - prevents call from failing
-        arguments_dict = {
-            "type": "object",
-        }
-    else:
-        arguments_dict = json.loads(arguments)
-    function_call: Final = VertexFunctionCall(
-        name=name,
-        args=arguments_dict,
+    function_call: Final = _gemini_function_call(
+        function_call_params.get("name", "") or "",
+        function_call_params.get("arguments", ""),
+        drop_params=drop_params,
     )
     if tool_call_id:
         clean_id: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
@@ -1325,6 +1346,8 @@ def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
     model: str | None = None,
     forward_function_call_id: bool = False,
+    custom_llm_provider: str | None = None,
+    drop_params: bool = False,
 ) -> list[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1382,6 +1405,7 @@ def convert_to_gemini_tool_call_invoke(
                     gemini_function_call: VertexFunctionCall | None = _gemini_tool_call_invoke_helper(
                         function_call_params=tool["function"],
                         tool_call_id=(tool.get("id") if forward_function_call_id else None),
+                        drop_params=drop_params,
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {"function_call": gemini_function_call}
@@ -1401,7 +1425,9 @@ def convert_to_gemini_tool_call_invoke(
                             f"function_call missing. Received tool call with 'type': 'function'. No function call in argument - {tool}"
                         )
         elif function_call is not None:
-            gemini_function_call = _gemini_tool_call_invoke_helper(function_call_params=function_call)
+            gemini_function_call = _gemini_tool_call_invoke_helper(
+                function_call_params=function_call, drop_params=drop_params
+            )
             if gemini_function_call is not None:
                 part_dict_function: Final[VertexPartType] = {"function_call": gemini_function_call}
 
@@ -1427,7 +1453,11 @@ def convert_to_gemini_tool_call_invoke(
                 )
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
+        raise litellm.BadRequestError(
+            message=f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}",
+            model=model or "",
+            llm_provider=custom_llm_provider or "vertex_ai",
+        ) from e
 
 
 def _json_children(node: JsonValue) -> Iterable[JsonValue]:
@@ -2190,6 +2220,10 @@ def anthropic_process_openai_file_message(
     raise Exception(f"Either file_data or file_id must be present in the file message: {message}")
 
 
+_S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
+    {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
+)
+_CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
 _EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
@@ -3639,6 +3673,7 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
+from litellm.types.llms.bedrock import S3Location as BedrockS3Location
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
@@ -3811,10 +3846,8 @@ class BedrockImageProcessor:
         return valid_extensions[0]
 
     @staticmethod
-    def _create_bedrock_block(image_bytes: str, mime_type: str, image_format: str) -> BedrockContentBlock:
+    def _create_bedrock_block(source: BedrockSourceBlock, mime_type: str, image_format: str) -> BedrockContentBlock:
         """Create appropriate Bedrock content block based on mime type."""
-        _blob: Final = BedrockSourceBlock(bytes=image_bytes)
-
         document_types: Final = ["application", "text"]
         is_document: Final = any(mime_type.startswith(doc_type) for doc_type in document_types)
 
@@ -3824,12 +3857,10 @@ class BedrockImageProcessor:
         HASH_SAMPLE_BYTES: Final = 64 * 1024  # hash up to 64 KB of data
 
         if is_document:
-            # --- Prepare normalized bytes for hashing (without modifying original) ---
-            if isinstance(image_bytes, str):
-                # Remove whitespace/newlines so base64 variations hash identically
-                normalized = "".join(image_bytes.split()).encode("utf-8")
-            else:
-                normalized = image_bytes
+            s3_location: Final = source.get("s3Location")
+            hashed_content: Final = s3_location["uri"] if s3_location is not None else source.get("bytes") or ""
+            # Remove whitespace/newlines so base64 variations hash identically
+            normalized: Final = "".join(hashed_content.split()).encode("utf-8")
 
             # --- Use only the first 64 KB for speed ---
             if len(normalized) <= HASH_SAMPLE_BYTES:
@@ -3849,20 +3880,75 @@ class BedrockImageProcessor:
             # --- Return content block ---
             return BedrockContentBlock(
                 document=BedrockDocumentBlock(
-                    source=_blob,
+                    source=source,
                     format=image_format,
                     name=document_name,
                 )
             )
         elif is_video:
-            return BedrockContentBlock(video=BedrockVideoBlock(source=_blob, format=image_format))
+            return BedrockContentBlock(
+                video=BedrockVideoBlock(
+                    source=source, format=_CONVERSE_VIDEO_FORMAT_NAMES.get(image_format, image_format)
+                )
+            )
         else:
-            return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))
+            return BedrockContentBlock(image=BedrockImageBlock(source=source, format=image_format))
+
+    @staticmethod
+    def _s3_key_mime_type(uri: str) -> str | None:
+        extension: Final = PurePosixPath(uri).suffix.removeprefix(".").lower()
+        if not extension:
+            return None
+        config: Final = litellm.AmazonConverseConfig()
+        if extension in config.get_supported_image_types():
+            return f"image/{extension}"
+        if extension in config.get_supported_video_types():
+            return f"video/{extension}"
+        try:
+            return get_file_mime_type_from_extension(extension)
+        except ValueError:
+            return None
 
     @classmethod
-    def process_image_sync(cls, image_url: str, format: str | None = None) -> BedrockContentBlock:
+    def _create_s3_block(cls, uri: str, format: str | None, bucket_owner: str | None) -> BedrockContentBlock:
+        declared_type: Final = format or cls._s3_key_mime_type(uri)
+        if declared_type is None:
+            raise litellm.BadRequestError(
+                message=f"Cannot tell the media type of {uri} from its file extension. "
+                "Set the part's `format` to its MIME type, e.g. `image/png`.",
+                model="",
+                llm_provider="bedrock",
+            )
+        mime_type: Final = declared_type.partition(";")[0].strip().lower()
+        if mime_type.startswith("audio/"):
+            raise litellm.BadRequestError(
+                message=f"Bedrock Converse does not accept {uri} as {mime_type}. "
+                "Audio is not one of its image, document, or video formats.",
+                model="",
+                llm_provider="bedrock",
+            )
+        try:
+            subtype: Final = mime_type.partition("/")[2]
+            image_format: Final = cls.validate_format(mime_type, _S3_MIME_SUBTYPE_FORMATS.get(subtype, subtype))
+        except ValueError as e:
+            raise litellm.BadRequestError(
+                message=f"Bedrock Converse does not accept {uri} as {mime_type}. {e}",
+                model="",
+                llm_provider="bedrock",
+            ) from e
+        s3_location: Final = (
+            BedrockS3Location(uri=uri) if bucket_owner is None else BedrockS3Location(uri=uri, bucketOwner=bucket_owner)
+        )
+        return cls._create_bedrock_block(BedrockSourceBlock(s3Location=s3_location), mime_type, image_format)
+
+    @classmethod
+    def process_image_sync(
+        cls, image_url: str, format: str | None = None, bucket_owner: str | None = None
+    ) -> BedrockContentBlock:
         """Synchronous image processing."""
 
+        if is_s3_uri(image_url):
+            return cls._create_s3_block(image_url, format, bucket_owner)
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
@@ -3876,12 +3962,16 @@ class BedrockImageProcessor:
             image_format = mime_type.split("/")[1]
 
         image_format = cls.validate_format(mime_type, image_format)
-        return cls._create_bedrock_block(img_bytes, mime_type, image_format)
+        return cls._create_bedrock_block(BedrockSourceBlock(bytes=img_bytes), mime_type, image_format)
 
     @classmethod
-    async def process_image_async(cls, image_url: str, format: str | None) -> BedrockContentBlock:
+    async def process_image_async(
+        cls, image_url: str, format: str | None = None, bucket_owner: str | None = None
+    ) -> BedrockContentBlock:
         """Asynchronous image processing."""
 
+        if is_s3_uri(image_url):
+            return cls._create_s3_block(image_url, format, bucket_owner)
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
@@ -3895,7 +3985,7 @@ class BedrockImageProcessor:
             image_format = mime_type.split("/")[1]
 
         image_format = cls.validate_format(mime_type, image_format)
-        return cls._create_bedrock_block(img_bytes, mime_type, image_format)
+        return cls._create_bedrock_block(BedrockSourceBlock(bytes=img_bytes), mime_type, image_format)
 
 
 def _convert_to_bedrock_tool_call_invoke(
@@ -4021,13 +4111,15 @@ def _convert_to_bedrock_tool_call_invoke(
 def _append_bedrock_tool_result_media_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
     processed_block: BedrockContentBlock,
-    content: dict,
+    content: Mapping[str, object],
     content_type: str,
 ) -> None:
     if "image" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(image=processed_block["image"]))
     elif "document" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(document=processed_block["document"]))
+    elif "video" in processed_block and "s3Location" in processed_block["video"]["source"]:
+        tool_result_content_blocks.append(BedrockToolResultContentBlock(video=processed_block["video"]))
     else:
         verbose_logger.warning(
             "Bedrock Converse: unrecognized BedrockContentBlock keys %s for %s tool-result block %s; dropping.",
@@ -4037,9 +4129,23 @@ def _append_bedrock_tool_result_media_block(
         )
 
 
+def _s3_bucket_owner(media: object, url: str) -> str | None:
+    fields: Final = as_str_mapping(media)
+    owner: Final = fields.get("bucket_owner") if fields is not None else None
+    if owner is None or (isinstance(owner, str) and owner):
+        return owner
+    if not is_s3_uri(url):
+        return None
+    raise litellm.BadRequestError(
+        message=f"`bucket_owner` for {url} must be the AWS account id as a non-empty string, not {owner!r}.",
+        model="",
+        llm_provider="bedrock",
+    )
+
+
 def _append_bedrock_tool_result_image_url_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
-    content: dict,
+    content: ChatCompletionImageObject,
 ) -> None:
     format: str | None = None
     if isinstance(content["image_url"], dict):
@@ -4050,17 +4156,18 @@ def _append_bedrock_tool_result_image_url_block(
     processed_block: Final = BedrockImageProcessor.process_image_sync(
         image_url=image_url,
         format=format,
+        bucket_owner=_s3_bucket_owner(content["image_url"], image_url),
     )
     _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "image_url")
 
 
 def _append_bedrock_tool_result_file_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
-    content: dict,
+    content: ChatCompletionFileObject,
 ) -> None:
     # Match the user-message path (_process_file_message): accept either
     # file_data (base64 data URI) or file_id (server-side reference / URL).
-    file_obj: Final = content.get("file") or {}
+    file_obj: Final = content.get("file") or ChatCompletionFileObjectFile()
     file_data: Final = file_obj.get("file_data")
     file_id: Final = file_obj.get("file_id")
     if file_data is None and file_id is None:
@@ -4069,9 +4176,11 @@ def _append_bedrock_tool_result_file_block(
             model="",
             llm_provider="bedrock",
         )
+    url: Final = cast(str, file_id or file_data)
     processed_block: Final = BedrockImageProcessor.process_image_sync(
-        image_url=cast(str, file_id or file_data),
+        image_url=url,
         format=file_obj.get("format"),
+        bucket_owner=_s3_bucket_owner(file_obj, url),
     )
     _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "file")
 
@@ -4609,6 +4718,53 @@ def _as_thinking_block(item: object) -> ChatCompletionThinkingBlock | ChatComple
             return None
 
 
+def _non_string_guarded_text(item: object, model: str, llm_provider: str) -> BadRequestError:
+    return BadRequestError(
+        message=f"Bedrock Converse needs a string `text` in every guarded_text part, got {item!r}",
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+def _guard_content_blocks(item: object, sends_guarded_parts: bool) -> tuple[BedrockContentBlock, ...]:
+    match item:
+        case {"type": "guarded_text", "text": str() as text} if sends_guarded_parts and text.strip():
+            return (BedrockContentBlock(guardContent={"text": {"text": text}}),)
+        case _:
+            return ()
+
+
+def _rstripped_guard_content(block: BedrockContentBlock) -> BedrockContentBlock:
+    match block:
+        case {"guardContent": {"text": {"text": str() as text}}}:
+            return BedrockContentBlock(guardContent={"text": {"text": text.rstrip()}})
+        case _:
+            return block
+
+
+def _assistant_turn_with_its_final_guard_content_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlock:
+    if message["role"] != "assistant":
+        return message
+    blocks: Final = message["content"]
+    last_text_index: Final = max(
+        (index for index, block in enumerate(blocks) if "text" in block or "guardContent" in block), default=None
+    )
+    return BedrockMessageBlock(
+        role="assistant",
+        content=[
+            _rstripped_guard_content(block) if index == last_text_index else block for index, block in enumerate(blocks)
+        ],
+    )
+
+
+def _user_guard_content_block(item: object, model: str, llm_provider: str) -> BedrockContentBlock:
+    match item:
+        case {"text": str() as text}:
+            return BedrockContentBlock(guardContent={"text": {"text": text}})
+        case _:
+            raise _non_string_guarded_text(item, model, llm_provider)
+
+
 class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
@@ -4656,6 +4812,7 @@ class BedrockConverseMessagesProcessor:
         assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
         deployment_model: str | None = None,
         base_model: str | None = None,
+        sends_guarded_assistant_parts: bool = True,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
@@ -4689,9 +4846,7 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "guarded_text":
-                                # Wrap guarded_text in guardContent block
-                                _part = BedrockContentBlock(guardContent={"text": {"text": element["text"]}})
-                                _parts.append(_part)
+                                _parts.append(_user_guard_content_block(element, model, llm_provider))
                             elif element["type"] in ("grounding_source", "query"):
                                 # Contextual grounding tags are guardrail metadata; the
                                 # model only needs the underlying text, so render them
@@ -4706,7 +4861,9 @@ class BedrockConverseMessagesProcessor:
                                 else:
                                     image_url = element["image_url"]
                                 _part = await BedrockImageProcessor.process_image_async(
-                                    image_url=image_url, format=format
+                                    image_url=image_url,
+                                    format=format,
+                                    bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "file":
@@ -4844,12 +5001,22 @@ class BedrockConverseMessagesProcessor:
                                 if element.get("text", "").strip():
                                     assistants_part = BedrockContentBlock(text=element["text"])
                                     assistants_parts.append(assistants_part)
+                            elif guard_blocks := _guard_content_blocks(element, sends_guarded_assistant_parts):
+                                assistants_parts.extend(guard_blocks)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
                                 else:
                                     image_url = element["image_url"]
-                                assistants_part = await BedrockImageProcessor.process_image_async(image_url=image_url)
+                                assistants_part = await BedrockImageProcessor.process_image_async(
+                                    image_url=image_url,
+                                    format=(
+                                        element["image_url"].get("format")
+                                        if isinstance(element["image_url"], dict)
+                                        else None
+                                    ),
+                                    bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
+                                )
                                 assistants_parts.append(assistants_part)
                                 # Add cache point block for assistant content elements
                         _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
@@ -4901,7 +5068,15 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+        converse_messages: Final = _ensure_document_messages_have_text(
+            _rename_duplicate_bedrock_document_names(contents)
+        )
+        if not (to_claude and converse_messages):
+            return converse_messages
+        return [
+            *converse_messages[:-1],
+            _assistant_turn_with_its_final_guard_content_rstripped(converse_messages[-1]),
+        ]
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -4986,7 +5161,10 @@ class BedrockConverseMessagesProcessor:
                 llm_provider="bedrock",
             )
         format: Final = file_message.get("format")
-        return BedrockImageProcessor.process_image_sync(image_url=cast(str, file_id or file_data), format=format)
+        url: Final = cast(str, file_id or file_data)
+        return BedrockImageProcessor.process_image_sync(
+            image_url=url, format=format, bucket_owner=_s3_bucket_owner(file_message, url)
+        )
 
     _process_file_message = process_file_message
 
@@ -5010,7 +5188,10 @@ class BedrockConverseMessagesProcessor:
                 model="",
                 llm_provider="bedrock",
             )
-        return await BedrockImageProcessor.process_image_async(image_url=cast(str, file_id or file_data), format=format)
+        url: Final = cast(str, file_id or file_data)
+        return await BedrockImageProcessor.process_image_async(
+            image_url=url, format=format, bucket_owner=_s3_bucket_owner(file_message, url)
+        )
 
     @staticmethod
     def _process_document_message(element: dict) -> BedrockContentBlock:
@@ -5085,6 +5266,7 @@ def _bedrock_converse_messages_pt(
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
     deployment_model: str | None = None,
     base_model: str | None = None,
+    sends_guarded_assistant_parts: bool = True,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -5125,9 +5307,7 @@ def _bedrock_converse_messages_pt(
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "guarded_text":
-                            # Wrap guarded_text in guardContent block
-                            _part = BedrockContentBlock(guardContent={"text": {"text": element["text"]}})
-                            _parts.append(_part)
+                            _parts.append(_user_guard_content_block(element, model, llm_provider))
                         elif element["type"] in ("grounding_source", "query"):
                             # Contextual grounding tags are guardrail metadata; the
                             # model only needs the underlying text, so render them as
@@ -5144,6 +5324,7 @@ def _bedrock_converse_messages_pt(
                             _part = BedrockImageProcessor.process_image_sync(
                                 image_url=image_url,
                                 format=format,
+                                bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
                             )
                             _parts.append(_part)
                         elif element["type"] == "file":
@@ -5284,12 +5465,22 @@ def _bedrock_converse_messages_pt(
                             if element.get("text", "").strip():
                                 assistants_part = BedrockContentBlock(text=element["text"])
                                 assistants_parts.append(assistants_part)
+                        elif guard_blocks := _guard_content_blocks(element, sends_guarded_assistant_parts):
+                            assistants_parts.extend(guard_blocks)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
                             else:
                                 image_url = element["image_url"]
-                            assistants_part = BedrockImageProcessor.process_image_sync(image_url=image_url)
+                            assistants_part = BedrockImageProcessor.process_image_sync(
+                                image_url=image_url,
+                                format=(
+                                    element["image_url"].get("format")
+                                    if isinstance(element["image_url"], dict)
+                                    else None
+                                ),
+                                bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
+                            )
                             assistants_parts.append(assistants_part)
                         # Add cache point block for assistant content elements
                         _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
@@ -5334,7 +5525,10 @@ def _bedrock_converse_messages_pt(
                 llm_provider=llm_provider,
             )
 
-    return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    converse_messages: Final = _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    if not (to_claude and converse_messages):
+        return converse_messages
+    return [*converse_messages[:-1], _assistant_turn_with_its_final_guard_content_rstripped(converse_messages[-1])]
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:

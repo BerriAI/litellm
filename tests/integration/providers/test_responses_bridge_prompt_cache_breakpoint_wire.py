@@ -448,8 +448,16 @@ def test_anthropic_sdk_cache_control_sends_no_mark_to_a_deployment_that_does_not
     _anthropic_text(message, marker)
     request: Final = pcb.posted(bridge.wire, marker)
     body: Final = _wire_body(request)
-    assert body["instructions"] == "Answer briefly\nStable rules", body
+    assert "instructions" not in body, body
     assert body["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Answer briefly"},
+                {"type": "input_text", "text": "Stable rules"},
+            ],
+        },
         {
             "type": "message",
             "role": "user",
@@ -457,7 +465,7 @@ def test_anthropic_sdk_cache_control_sends_no_mark_to_a_deployment_that_does_not
                 {"type": "input_text", "text": pcb.prompt(marker)},
                 {"type": "input_text", "text": "and nothing else"},
             ],
-        }
+        },
     ], body
     assert b"cache_control" not in request.body and b"prompt_cache_breakpoint" not in request.body, request.body
 
@@ -538,6 +546,51 @@ def test_anthropic_sdk_cache_control_on_an_assistant_turn_is_dropped(bridge: _Br
     assert pcb.content_of(pcb.input_items(request), "assistant") == [
         {"type": "output_text", "text": "earlier answer"}
     ], "OpenAI accepts a breakpoint on output_text but writes no cache for it (live gpt-5.6, 2026-10-12)"
+
+
+_CHAT_MODEL_BRIDGED_FOR_TOOLS: Final = "openai/gpt-6.1-sol"
+_LOOKUP_TOOL: Final[openai.types.chat.ChatCompletionToolParam] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    ("deployment_params", "expected_system"),
+    [
+        (_OPTED_IN, {"type": "input_text", "text": "Stable rules", "prompt_cache_breakpoint": pcb.EXPLICIT}),
+        ({}, {"type": "input_text", "text": "Stable rules"}),
+    ],
+    ids=["reads-breakpoints", "does-not-read-breakpoints"],
+)
+def test_openai_sdk_chat_cache_control_with_a_tool_and_reasoning_reaches_the_responses_wire_as_a_breakpoint(
+    bridge: _Bridge, deployment_params: Mapping[str, JsonValue], expected_system: Mapping[str, JsonValue]
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    system: Final[dict[str, JsonValue]] = {
+        "role": "system",
+        "content": [{"type": "text", "text": "Stable rules", "cache_control": {"type": "ephemeral"}}],
+    }
+    with (
+        bridge.gateway.scenario() as scenario,
+        openai.OpenAI(api_key=bridge.gateway.key, base_url=_v1(bridge.gateway), max_retries=0) as client,
+    ):
+        model: Final = scenario.model(
+            model=_CHAT_MODEL_BRIDGED_FOR_TOOLS, api_base=bridge.api_base, **deployment_params
+        )
+        completion: Final = client.chat.completions.create(
+            model=model,
+            messages=[system, {"role": "user", "content": pcb.prompt(marker)}],
+            tools=[_LOOKUP_TOOL],
+            reasoning_effort="low",
+            extra_body=dict(pcb.NO_CACHE),
+        )
+    assert completion.choices[0].message.content == rv.answer(marker), completion
+    request: Final = pcb.posted(bridge.wire, marker)
+    body: Final = _wire_body(request)
+    assert [tool["name"] for tool in rv.ITEMS.validate_python(body["tools"])] == ["lookup"], body
+    assert pcb.content_of(pcb.input_items(request), "system") == [expected_system], body
+    assert b"cache_control" not in request.body, request.body
 
 
 def test_native_responses_request_never_enters_the_bridge(bridge: _Bridge) -> None:
