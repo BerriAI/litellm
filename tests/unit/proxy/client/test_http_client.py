@@ -1,12 +1,10 @@
 """Tests for the HTTP client."""
 
 import json
+from typing import Final
 
 import pytest
 import requests
-
-
-
 import responses
 
 from litellm.proxy.client.http_client import HTTPClient
@@ -42,6 +40,23 @@ def test_request_get(client):
     assert len(responses.calls) == 1
     assert responses.calls[0].request.url == "http://localhost:4000/models"
     assert responses.calls[0].request.headers["Authorization"] == "Bearer test-key"
+
+
+@pytest.mark.parametrize("timeout", [0.25, (0.25, 0.5), None])
+@responses.activate
+def test_request_timeout_override_preserves_client_default(timeout: float | tuple[float, float] | None) -> None:
+    client: Final = HTTPClient(base_url="http://localhost:4000", timeout=7)
+    for expected_timeout, query in ((7, ""), (timeout, "?probe=timeout"), (7, "")):
+        responses.add(
+            responses.GET,
+            f"http://localhost:4000/models{query}",
+            json={"models": []},
+            match=[responses.matchers.request_kwargs_matcher({"timeout": expected_timeout})],
+        )
+
+    assert client.request("GET", "/models") == {"models": []}
+    assert client.request("GET", "/models", timeout=timeout, params={"probe": "timeout"}) == {"models": []}
+    assert client.request("GET", "/models") == {"models": []}
 
 
 @responses.activate
@@ -95,6 +110,7 @@ def test_request_with_custom_headers(client):
         "/models",
         headers=custom_headers,
     )
+    assert response == {"models": []}
 
     # Check request headers
     assert len(responses.calls) == 1
@@ -134,7 +150,7 @@ def test_request_invalid_json(client):
     )
 
     # Check that request raises exception
-    with pytest.raises(requests.exceptions.JSONDecodeError) as exc_info:
+    with pytest.raises(requests.exceptions.JSONDecodeError):
         client.request("GET", "/models")
 
 
