@@ -3720,7 +3720,7 @@ class Logging(LiteLLMLoggingBaseClass):
     _update_completion_start_time = update_completion_start_time
 
     def normalize_endpoint_logging_result(self, result: object) -> object:
-        call_type: Final[object] = self.call_type
+        call_type: Final = self.payload_call_type()
         if call_type == CallTypes.anthropic_messages.value:
             return self._anthropic_messages_logged_response(result=result)
         if call_type in (CallTypes.generate_content.value, CallTypes.agenerate_content.value):

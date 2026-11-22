@@ -754,6 +754,93 @@ def test_sync_generate_content_adapter_success_is_logged_once_on_the_request(
     assert _litellm_error_messages(_litellm_errors) == []
 
 
+_RESPONSES_BODY: Final = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "m",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "144", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+}
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_to_a_responses_api_model_is_logged_and_priced_once(
+    _httpx_transport: None, _litellm_errors: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    logged: Final = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "responses-group",
+                "litellm_params": {
+                    "model": "openai/responses/m",
+                    "api_base": "http://upstream.test/v1",
+                    "api_key": "k",
+                    "input_cost_per_token": _INPUT_COST_PER_TOKEN,
+                    "output_cost_per_token": _OUTPUT_COST_PER_TOKEN,
+                },
+            }
+        ]
+    )
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/responses").mock(return_value=httpx.Response(200, json=_RESPONSES_BODY))
+        await router.agenerate_content(
+            model="responses-group",
+            contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+            litellm_call_id=_ADAPTER_CALL_ID,
+        )
+    await await_until(lambda: bool(logged.events), message="the adapter's success callback ran")
+
+    assert logged.events == [("success", "acompletion", _ADAPTER_CALL_ID, "responses-group")]
+    assert logged.response_costs == [pytest.approx(3 * _INPUT_COST_PER_TOKEN + 1 * _OUTPUT_COST_PER_TOKEN)]
+    assert _litellm_error_messages(_litellm_errors) == []
+
+
+class _StreamingDeploymentHookCallTypes(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_types: list[object] = []
+
+    async def async_post_call_streaming_deployment_hook(
+        self, request_data: dict[str, object], response_chunk: object, call_type: object
+    ) -> object | None:
+        self.call_types.append(call_type)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_stream_tells_deployment_hooks_the_chat_call_type(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.types.utils import CallTypes
+
+    hook: Final = _StreamingDeploymentHookCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream=True))
+        await _drain(
+            await _adapter_router().agenerate_content_stream(
+                model="grok-group", contents=[{"role": "user", "parts": [{"text": "Hello"}]}]
+            )
+        )
+
+    assert hook.call_types
+    assert set(hook.call_types) == {CallTypes.acompletion}
+
+
 @pytest.mark.asyncio
 async def test_generate_content_adapter_runs_sync_callbacks_once_on_async_requests(
     _httpx_transport: None, _litellm_errors: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
