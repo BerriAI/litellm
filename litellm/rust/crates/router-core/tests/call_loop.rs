@@ -3839,6 +3839,85 @@ async fn a_web_search_call_the_azure_chat_deployment_cannot_take_never_goes_to_i
 }
 
 #[rstest]
+#[case::beside_a_batch_only_one(json!([
+    {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+    {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
+]))]
+#[case::alone(json!([
+    {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+]))]
+#[tokio::test]
+async fn a_chat_call_keeps_an_unhealthy_azure_chat_deployment_as_it_would_alone(
+    #[case] model_list: serde_json::Value,
+) {
+    let config: RouterConfig = serde_json::from_value(
+        json!({"model_list": model_list, "enable_health_check_routing": true}),
+    )
+    .unwrap();
+    let host = Arc::new(ScriptedHost::default());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    host.cache.inner.set_health_states(HashMap::from([
+        (
+            "c1".to_owned(),
+            HealthState {
+                is_healthy: false,
+                timestamp: now,
+            },
+        ),
+        (
+            "b2".to_owned(),
+            HealthState {
+                is_healthy: true,
+                timestamp: now,
+            },
+        ),
+    ]));
+    let picked = router(config, json!({}), host)
+        .select(&Op::from("acompletion"), &request())
+        .await;
+    assert!(
+        matches!(&picked, Ok(deployment) if deployment.id == "c1"),
+        "{picked:?}"
+    );
+}
+
+#[rstest]
+#[case::beside_a_batch_only_one(json!([
+    {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+    {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
+]))]
+#[case::alone(json!([
+    {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+]))]
+#[tokio::test]
+async fn weighted_failover_of_a_chat_call_never_counts_the_batch_only_peer_as_left(
+    #[case] model_list: serde_json::Value,
+) {
+    let config: RouterConfig =
+        serde_json::from_value(json!({"model_list": model_list, "enable_weighted_failover": true}))
+            .unwrap();
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let raised = router(config, json!({"num_retries": 0}), host.clone())
+        .call(Op::from("acompletion"), request())
+        .await;
+    assert!(
+        matches!(&raised, Err(Error::Attempt { failure, .. }) if failure.is_a("InternalServerError")),
+        "{raised:?}"
+    );
+    assert_eq!(host.selected(), vec!["c1".to_owned()]);
+    assert!(
+        !host
+            .events
+            .lock()
+            .iter()
+            .any(|e| matches!(e, RouterEvent::Fallback { .. })),
+    );
+}
+
+#[rstest]
 #[tokio::test]
 async fn an_endpoint_a_deployment_refuses_routes_to_the_others() {
     let config = with_first_info(json!({

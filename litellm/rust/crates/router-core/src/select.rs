@@ -73,7 +73,7 @@ pub struct Candidates {
     pub name: String,
     pub model_group: String,
     pub kind: ResolveKind,
-    /// Every deployment the caller may use (after the team filter).
+    /// Every deployment the caller may use (after the team filter), less the batch-only ones it skips.
     pub all: Vec<Arc<Deployment>>,
     pub healthy: Vec<Arc<Deployment>>,
     /// The call skips the group's batch-only deployments, decided before a capability filter
@@ -404,6 +404,11 @@ impl<H: RouterHost> Call<'_, H> {
             });
         }
         let skip_batch_only = skips_batch_only(request, &all);
+        let listed =
+            request.pass_through == Some(PassThrough::Listed) && !resolution.kind.is_single();
+        if !resolution.kind.is_single() && !listed {
+            all = without_batch_only_deployments(skip_batch_only, all);
+        }
         // `filter_web_search_deployments` runs before `request_deployments` is read, so every later
         // stage sees the group without the deployments it dropped.
         if request.web_search && !inputs.count_only && !resolution.kind.is_single() {
@@ -438,8 +443,6 @@ impl<H: RouterHost> Call<'_, H> {
                 all = capable;
             }
         }
-        let listed =
-            request.pass_through == Some(PassThrough::Listed) && !resolution.kind.is_single();
         if listed {
             all.retain(|d| uses_pass_through(d));
             if all.is_empty() {
@@ -518,9 +521,6 @@ impl<H: RouterHost> Call<'_, H> {
             .and_then(serde_json::Value::as_array)
         {
             healthy.retain(|d| !excluded.iter().any(|id| id.as_str() == Some(d.id.as_str())));
-        }
-        if !resolution.kind.is_single() && !listed {
-            healthy = without_batch_only_deployments(skip_batch_only, healthy);
         }
         let request_order = request.target_order.filter(|_| !inputs.fallback_hop);
         // `async_callback_filter_deployments` runs after the cooldown and blocked filters on every

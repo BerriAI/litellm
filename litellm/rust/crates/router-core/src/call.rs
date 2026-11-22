@@ -719,10 +719,15 @@ impl<H: RouterHost> Call<'_, H> {
             .into_iter()
             .filter(|d| d.listed_for_team(listing_team))
             .collect();
-        let ids: Vec<String> = members.iter().map(|d| d.id.clone()).collect();
+        let skip_batch_only = skips_batch_only(request, &members);
+        let ids: Vec<String> = members
+            .iter()
+            .filter(|d| !skip_batch_only || !d.serves_only_batches())
+            .map(|d| d.id.clone())
+            .collect();
         let cooling = self
             .health()
-            .cooling(&ids, !skips_batch_only(request, &members))
+            .cooling(&ids, !skip_batch_only)
             .await
             .unwrap_or_default();
         let remaining = ids

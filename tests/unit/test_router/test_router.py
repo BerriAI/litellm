@@ -7923,6 +7923,14 @@ async def _create_batches(router: Router, model_group: str, attempts: int) -> No
         )
 
 
+async def _batch_create_refused(router: Router, model_group: str) -> bool:
+    try:
+        await _create_batches(router, model_group, attempts=1)
+    except litellm.RateLimitError:
+        return True
+    return False
+
+
 def _azure_chat_row_with_provider_param() -> dict[str, object]:
     row: Final = _azure_sku_deployment("gpt-mixed", "chat-sku", "chat")
     return {**row, "litellm_params": {**row["litellm_params"], "model": "chat-sku", "custom_llm_provider": "azure"}}
@@ -8447,15 +8455,16 @@ async def test_a_logged_rate_limit_moves_only_batch_calls_off_a_mixed_azure_chat
 
 
 class _ChatDeploymentAtItsLimit(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, deployment_id: str = "chat-sku") -> None:
         super().__init__()
+        self.deployment_id: Final = deployment_id
         self.refusals: int = 0
 
     async def async_pre_call_check(self, deployment: Mapping[str, object], parent_otel_span: object) -> None:
         model_info: Final = deployment.get("model_info")
-        if isinstance(model_info, Mapping) and model_info.get("id") == "chat-sku":
+        if isinstance(model_info, Mapping) and model_info.get("id") == self.deployment_id:
             self.refusals += 1
-            raise litellm.RateLimitError(message="rpm exceeded", llm_provider="azure", model="chat-sku")
+            raise litellm.RateLimitError(message="rpm exceeded", llm_provider="azure", model=self.deployment_id)
 
 
 @pytest.mark.asyncio
@@ -8495,6 +8504,37 @@ async def test_a_pre_call_rate_limit_refusal_moves_only_batch_calls_off_a_mixed_
                 await call(router)
 
     assert refuser.refusals == expected_chat_refusals
+
+
+@pytest.mark.asyncio
+async def test_a_pre_call_refusal_of_a_batch_create_moves_batch_creates_to_the_azure_batch_only_peer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-batch", "batch-sku", "batch", id="batch-sku"),
+            {
+                "model_name": "gpt-batch",
+                "litellm_params": {"model": "openai/gpt-batch", "api_key": "sk-dummy"},
+                "model_info": {"id": "openai-batch", "mode": "batch"},
+            },
+        ],
+        num_retries=0,
+        cooldown_time=3600,
+    )
+    refuser: Final = _ChatDeploymentAtItsLimit("openai-batch")
+
+    with (
+        patch.object(litellm, "callbacks", [refuser]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        respx_mock.route(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        refused: Final = [await _batch_create_refused(router, "gpt-batch") for _ in range(20)]
+
+    assert (refuser.refusals, sum(refused)) == (1, 1)
 
 
 @pytest.mark.asyncio

@@ -329,7 +329,7 @@ _FAILURE_KINDS: Final = (
     "CallerCredentialRateLimitError",
 )
 _DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError"})
-_BATCH_API_KINDS: Final = frozenset({"cancel_batch", "create_file"})
+_BATCH_API_KINDS: Final = frozenset({"batch", "cancel_batch", "create_file"})
 _BATCH_API_HANDLERS: Final = frozenset(
     {
         "afile_content",
