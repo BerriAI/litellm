@@ -7,7 +7,11 @@
 //! erased. A document Nace cannot download by link is uploaded through a one-time upload
 //! grant first, and the uploaded file is deleted when the call ends, whatever its outcome.
 
-use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::LazyLock,
+    time::Duration,
+};
 
 use fancy_regex::Regex;
 
@@ -57,9 +61,12 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_USER_AGENT: &str = "litellm";
 const OUTPUT_PARAM: &str = "output";
 const INCLUDE_IMAGE_BASE64_PARAM: &str = "include_image_base64";
+const PAGE_RANGES_PARAM: &str = "page_ranges";
+const PAGES_PARAM: &str = "pages";
 const RESERVED_PARAMS: &[&str] = &["source", "corpus_sources", "parse_mode", "parser"];
 const SUPPORTED_PARAMS: &[&str] = &[
-    "page_ranges",
+    PAGE_RANGES_PARAM,
+    PAGES_PARAM,
     "figures",
     "diagrams",
     "ocr",
@@ -145,6 +152,10 @@ enum Refusal {
         "`page_ranges` must be a list of {{\"start\", \"end\"}} integers with 1 <= start <= end"
     )]
     PageRanges,
+    #[error("`pages` must be a list of non-negative integers")]
+    Pages,
+    #[error("pass either `pages` or `page_ranges`, not both")]
+    PagesConflict,
     #[error(
         "pass `password` as the top-level option, not in `extra_body`, so that the logging callbacks mask it"
     )]
@@ -261,7 +272,7 @@ struct JobError {
 }
 
 /// One entry of the request's `page_ranges`, 1-based and inclusive.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct PageRange {
     start: i64,
     end: i64,
@@ -321,13 +332,20 @@ impl BaseOcrConfig for NaceParseConfig {
             Some(Value::Object(output)) => output.clone(),
             Some(_) => return Err(Error::request_field(OUTPUT_PARAM, Refusal::OutputShape)),
         };
+        let mapped_pages = pages_to_ranges(non_default_params.get(PAGES_PARAM))?;
         Ok(NaceParseParams {
             parse_mode,
             output: page_split_output(output),
             options: non_default_params
                 .select(SUPPORTED_PARAMS)
                 .into_iter()
-                .filter(|(name, _)| name != OUTPUT_PARAM && name != INCLUDE_IMAGE_BASE64_PARAM)
+                .filter(|(name, _)| {
+                    !matches!(
+                        name.as_str(),
+                        OUTPUT_PARAM | INCLUDE_IMAGE_BASE64_PARAM | PAGES_PARAM
+                    )
+                })
+                .chain(mapped_pages.map(|ranges| (PAGE_RANGES_PARAM.to_owned(), json!(ranges))))
                 .collect(),
         })
     }
@@ -1152,24 +1170,67 @@ fn truncated_content(job: &ParseJob) -> Result<Option<&str>, Error> {
         })
 }
 
-/// The request's `page_ranges`, as the body sends them: `extra_body` wins over the param. Empty
-/// when the request has none, in which case Nace parses every page.
 fn requested_page_ranges(params: &CallArguments) -> Result<Vec<PageRange>, Error> {
-    let ranges = match params
+    let pages = params.get(PAGES_PARAM).filter(|value| !value.is_null());
+    let ranges = params
+        .get(PAGE_RANGES_PARAM)
+        .filter(|value| !value.is_null());
+    if pages.is_some() && ranges.is_some() {
+        return Err(Error::request_field(PAGES_PARAM, Refusal::PagesConflict));
+    }
+    let mapped_pages = pages_to_ranges(pages)?;
+    let top_level_ranges = ranges.map(parse_page_ranges).transpose()?;
+    if let Some(overrides) = params
         .get("extra_body")
-        .and_then(|body| body.get("page_ranges"))
-        .or_else(|| params.get("page_ranges"))
+        .and_then(|body| body.get(PAGE_RANGES_PARAM))
     {
-        None | Some(Value::Null) => return Ok(Vec::new()),
-        Some(ranges) => Vec::<PageRange>::deserialize(ranges).ok(),
-    };
-    ranges
+        return parse_page_ranges(overrides);
+    }
+    Ok(top_level_ranges.or(mapped_pages).unwrap_or_default())
+}
+
+fn parse_page_ranges(value: &Value) -> Result<Vec<PageRange>, Error> {
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    Vec::<PageRange>::deserialize(value)
+        .ok()
         .filter(|ranges| {
             ranges
                 .iter()
                 .all(|range| 1 <= range.start && range.start <= range.end)
         })
-        .ok_or_else(|| Error::request_field("page_ranges", Refusal::PageRanges))
+        .ok_or_else(|| Error::request_field(PAGE_RANGES_PARAM, Refusal::PageRanges))
+}
+
+fn pages_to_ranges(value: Option<&Value>) -> Result<Option<Vec<PageRange>>, Error> {
+    let invalid = || Error::request_field(PAGES_PARAM, Refusal::Pages);
+    let pages = match value {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(pages)) if pages.is_empty() => return Ok(None),
+        Some(Value::Array(pages)) => pages,
+        Some(_) => return Err(invalid()),
+    };
+    let pages = pages
+        .iter()
+        .map(|page| {
+            page.as_i64()
+                .filter(|index| *index >= 0)
+                .and_then(|index| index.checked_add(1))
+                .ok_or_else(invalid)
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let mut ranges: Vec<PageRange> = Vec::new();
+    for page in pages {
+        match ranges.last_mut() {
+            Some(last) if last.end.checked_add(1) == Some(page) => last.end = page,
+            _ => ranges.push(PageRange {
+                start: page,
+                end: page,
+            }),
+        }
+    }
+    Ok(Some(ranges))
 }
 
 /// The page numbers Nace parses for `ranges`: in page order and once each, as Nace sorts and
@@ -1610,6 +1671,78 @@ mod tests {
     }
 
     #[rstest]
+    #[case::single(json!({"pages": [0]}), Some(json!([{"start": 1, "end": 1}])))]
+    #[case::sorted_merged_and_deduped(
+        json!({"pages": [4, 0, 3, 0, 1]}),
+        Some(json!([{"start": 1, "end": 2}, {"start": 4, "end": 5}]))
+    )]
+    #[case::largest_index(
+        json!({"pages": [i64::MAX - 1]}),
+        Some(json!([{"start": i64::MAX, "end": i64::MAX}]))
+    )]
+    #[case::empty(json!({"pages": []}), None)]
+    #[case::null(json!({"pages": null}), None)]
+    #[case::null_ranges(
+        json!({"pages": [0], "page_ranges": null}),
+        Some(json!([{"start": 1, "end": 1}]))
+    )]
+    #[case::extra_body_overrides(
+        json!({"pages": [0], "extra_body": {"page_ranges": [{"start": 4, "end": 5}]}}),
+        Some(json!([{"start": 4, "end": 5}]))
+    )]
+    #[case::extra_body_null(
+        json!({"pages": [0], "extra_body": {"page_ranges": null}}),
+        Some(Value::Null)
+    )]
+    fn pages_are_mapped_to_the_effective_page_ranges(
+        #[case] options: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        let call = arguments(options);
+        let params = NaceParseConfig.map_ocr_params(&call, "parse-low").unwrap();
+        let request = params.request(NaceSource::Url {
+            url: "https://example.com/report.pdf".into(),
+            file_name: "report.pdf".into(),
+        });
+        let body = compose_body(
+            &call,
+            &request,
+            NaceParseConfig.get_supported_ocr_params("parse-low"),
+        )
+        .unwrap();
+        assert_eq!(body.get(PAGES_PARAM), None);
+        assert_eq!(body.get(PAGE_RANGES_PARAM), expected.as_ref());
+        assert_eq!(
+            requested_page_ranges(&call).unwrap(),
+            serde_json::from_value::<Option<Vec<PageRange>>>(expected.unwrap_or(Value::Null))
+                .unwrap()
+                .unwrap_or_default()
+        );
+    }
+
+    #[rstest]
+    #[case::negative(json!({"pages": [-1]}))]
+    #[case::whole_float(json!({"pages": [1.0]}))]
+    #[case::fractional(json!({"pages": [0.5]}))]
+    #[case::string_element(json!({"pages": ["0"]}))]
+    #[case::string(json!({"pages": "0,2"}))]
+    #[case::boolean(json!({"pages": [true]}))]
+    #[case::null_element(json!({"pages": [null]}))]
+    #[case::overflow(json!({"pages": [i64::MAX]}))]
+    #[case::unsigned_overflow(json!({"pages": [u64::MAX]}))]
+    #[case::number(json!({"pages": 0}))]
+    #[case::conflict(json!({"pages": [0], "page_ranges": [{"start": 1, "end": 1}]}))]
+    #[case::empty_conflict(json!({"pages": [], "page_ranges": []}))]
+    #[case::invalid_with_override(json!({"pages": [-1], "extra_body": {"page_ranges": null}}))]
+    fn invalid_pages_are_refused_before_the_upload(#[case] options: Value) {
+        let error = NaceParseConfig
+            .map_ocr_params(&arguments(options), "parse-low")
+            .unwrap_err();
+        assert!(matches!(&error, Error::RequestField { path, .. } if path == "pages"));
+        assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[rstest]
     #[case::string(json!({"extra_body": "page_ranges=1"}))]
     #[case::list(json!({"extra_body": [1, 2]}))]
     fn an_extra_body_that_is_not_an_object_is_refused_before_the_upload(#[case] options: Value) {
@@ -1643,7 +1776,7 @@ mod tests {
         assert_eq!(Value::Object(params.output), expected);
     }
 
-    /// Only the Nace options are mapped. Other top-level options such as `pages` still go to
+    /// Other top-level options such as `image_limit` still go to
     /// Nace on a host that passes them, which Nace refuses as unknown fields.
     /// The top-level `include_image_base64` is accepted and never sent.
     #[test]
@@ -1653,7 +1786,7 @@ mod tests {
                 &arguments(json!({
                     "page_ranges": [{"start": 1, "end": 2}],
                     "ocr": {"languages": ["en"]},
-                    "pages": [0],
+                    "image_limit": 2,
                     "include_image_base64": true
                 })),
                 "parse-low",

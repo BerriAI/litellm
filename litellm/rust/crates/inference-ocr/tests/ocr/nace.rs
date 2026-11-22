@@ -854,6 +854,7 @@ fn page_texts(response: &LiteLLMOcrResponse) -> Vec<(i64, &str)> {
 #[case::extra_body(
     json!({"extra_body": {"page_ranges": [{"start": 1, "end": 1}, {"start": 4, "end": 5}]}})
 )]
+#[case::pages(json!({"pages": [4, 0, 3, 0]}))]
 #[tokio::test]
 async fn selected_pages_keep_their_document_page_numbers(#[case] options: Value) {
     let result = parsed(
@@ -878,11 +879,39 @@ async fn selected_pages_keep_their_document_page_numbers(#[case] options: Value)
     .await
     .unwrap();
 
+    let requests = received(&upstream).await;
+    assert_eq!(requests[0].url.path(), "/v1/documents/parse");
+    let body = requests[0].json();
+    assert_eq!(
+        body["page_ranges"],
+        json!([{"start": 1, "end": 1}, {"start": 4, "end": 5}])
+    );
+    assert_eq!(body.get("pages"), None);
     assert_eq!(
         page_texts(&response),
         [(0, "Cover"), (3, "Terms"), (4, "Delivery note")]
     );
     assert_eq!(response.pages[1].extra_fields["blocks"][0]["id"], "blk_4_1");
+    assert_eq!(response.usage_info.unwrap().pages_processed, Some(3));
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_empty_page_list_lets_nace_parse_the_whole_document() {
+    let upstream = upstream([succeeded(url_source()), job_deleted()]).await;
+
+    let response = perform(with_source(
+        nace_request("nace/parse-low", &upstream.uri(), json!({"pages": []})),
+        PUBLIC_PDF,
+    ))
+    .await
+    .unwrap();
+
+    let requests = received(&upstream).await;
+    assert_eq!(requests[0].url.path(), "/v1/documents/parse");
+    let body = requests[0].json();
+    assert_eq!(body.get("pages"), None);
+    assert_eq!(body.get("page_ranges"), None);
     assert_eq!(response.usage_info.unwrap().pages_processed, Some(3));
 }
 

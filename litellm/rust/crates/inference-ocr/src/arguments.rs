@@ -130,6 +130,7 @@ mod tests {
             nace.iter()
                 .any(|spec| spec.name == "page_ranges" && !spec.secret)
         );
+        assert!(nace.iter().any(|spec| spec.name == "pages" && !spec.secret));
     }
 
     #[rstest]
