@@ -221,12 +221,16 @@ def build_stream_exception(
 _NO_STEP: Final[JsonMapping] = MappingProxyType({})
 
 
-def _merged_value(known: JsonValue | None, update: JsonValue) -> JsonValue:
+def _merged_leaf(known: JsonValue | None, update: JsonValue) -> JsonValue:
     if isinstance(known, list) and isinstance(update, list):
-        return [*known, *(item for item in update if item not in known)]
-    if isinstance(known, dict) and isinstance(update, dict):
-        return {**known, **{key: _merged_value(known.get(key), value) for key, value in update.items()}}
+        return list({json.dumps(item, sort_keys=True): item for item in (*known, *update)}.values())
     return update if update or known is None else known
+
+
+def _merged_value(known: JsonValue | None, update: JsonValue) -> JsonValue:
+    if isinstance(known, dict) and isinstance(update, dict):
+        return {**known, **{key: _merged_leaf(known.get(key), value) for key, value in update.items()}}
+    return _merged_leaf(known, update)
 
 
 def _merged_step(known: JsonMapping, update: JsonMapping) -> JsonMapping:
