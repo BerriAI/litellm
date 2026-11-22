@@ -457,21 +457,27 @@ def _tool_scan_source(tool: Mapping[str, object]) -> AllAnthropicToolsValues:
 
 
 def _apply_tool_field_edits(original: object, before: object, after: object) -> object:
-    if before == after:
-        return original
-    source: Final = as_str_mapping(original)
-    prior: Final = as_str_mapping(before)
-    returned: Final = as_str_mapping(after)
-    if source is None or prior is None or returned is None:
-        return after
-    return {
-        **{key: value for key, value in source.items() if key not in prior or key in returned},
-        **{
-            key: _apply_tool_field_edits(source.get(key), prior.get(key), value)
+    result: Final = {"value": original}
+    pending: Final = [(result, "value", original, before, after)]
+    while pending:
+        target, field, source_value, prior_value, returned_value = pending.pop()
+        if prior_value == returned_value:
+            target[field] = source_value
+            continue
+        source = as_str_mapping(source_value)
+        prior = as_str_mapping(prior_value)
+        returned = as_str_mapping(returned_value)
+        if source is None or prior is None or returned is None:
+            target[field] = returned_value
+            continue
+        merged = {key: value for key, value in source.items() if key not in prior or key in returned}
+        target[field] = merged
+        pending.extend(
+            (merged, key, source.get(key), prior.get(key), value)
             for key, value in returned.items()
             if key not in prior or prior[key] != value
-        },
-    }
+        )
+    return result["value"]
 
 
 def _rewrite_original_tool(
