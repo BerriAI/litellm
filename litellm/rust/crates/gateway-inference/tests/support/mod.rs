@@ -1,7 +1,7 @@
 // Shared across integration-test targets; each target uses a different subset.
 #![allow(dead_code)]
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Router,
@@ -10,13 +10,17 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
-use litellm_gateway_inference::{Deployment, Gateway, router};
+use litellm_callbacks::ErasedCallback;
+use litellm_gateway::{Callbacks, Gateway, host::NativeHost};
+use litellm_gateway_inference::{RouterTiers, RoutingCache, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 
-use serde_json::Value;
+use litellm_router_core::{DeploymentSpec, RouterConfig};
+use litellm_router_types::RouterSettings;
+use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
@@ -88,25 +92,38 @@ pub fn app_with_shaping(
     shaping: Value,
 ) -> Router {
     deployment_app(
-        Deployment {
-            litellm_params: serde_json::from_value(litellm_params).unwrap(),
-            shaping: serde_json::from_value(shaping).unwrap(),
-            ..test_deployment(model, api_base)
-        },
+        test_params(model, api_base)
+            .into_iter()
+            .chain(litellm_params.as_object().cloned().unwrap_or_default())
+            .collect(),
+        shaping,
         litellm_gateway_auth::Permissions::All,
         None,
         None,
     )
 }
 
-fn test_deployment(model: &str, api_base: &str) -> Deployment {
-    Deployment {
-        model: model.into(),
-        api_base: Some(api_base.into()),
-        api_key: Some("test-key".into()),
-        timeout: Some(Duration::from_secs(5)),
-        ..Default::default()
-    }
+/// The app with `callbacks` run around each call, in the order given.
+pub fn app_with_callbacks(
+    model: &str,
+    api_base: &str,
+    callbacks: Vec<Arc<dyn ErasedCallback>>,
+) -> Router {
+    hosted_app(
+        test_params(model, api_base),
+        Value::Object(Map::new()),
+        litellm_gateway_auth::Permissions::All,
+        None,
+        None,
+        NativeHost::new(Arc::new(Callbacks::new(callbacks).unwrap())),
+    )
+}
+
+fn test_params(model: &str, api_base: &str) -> Map<String, Value> {
+    json!({"model": model, "api_base": api_base, "api_key": "test-key", "timeout": 5})
+        .as_object()
+        .cloned()
+        .unwrap()
 }
 
 fn configured_app(
@@ -117,7 +134,8 @@ fn configured_app(
     principal: Option<litellm_gateway_auth::Principal>,
 ) -> Router {
     deployment_app(
-        test_deployment(model, api_base),
+        test_params(model, api_base),
+        Value::Object(Map::new()),
         permissions,
         cache,
         principal,
@@ -125,20 +143,58 @@ fn configured_app(
 }
 
 fn deployment_app(
-    deployment: Deployment,
+    litellm_params: Map<String, Value>,
+    shaping: Value,
     permissions: litellm_gateway_auth::Permissions,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
+    hosted_app(
+        litellm_params,
+        shaping,
+        permissions,
+        cache,
+        principal,
+        NativeHost::default(),
+    )
+}
+
+fn hosted_app(
+    litellm_params: Map<String, Value>,
+    shaping: Value,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+    host: NativeHost,
 ) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
     let resources = CoreResources::new(pool);
+    let (config, dynamic) = RouterConfig::from_settings(&RouterSettings::default()).unwrap();
+    let models = litellm_router_core::Router::new(
+        RouterConfig {
+            model_list: vec![DeploymentSpec {
+                model_name: "public/model".into(),
+                litellm_params,
+                ..DeploymentSpec::default()
+            }],
+            ..config
+        },
+        dynamic,
+    )
+    .unwrap();
+    let id = models.registry().group("public/model").unwrap()[0]
+        .id
+        .clone();
     let gateway = Gateway::new(
         resources,
         http,
         secrets,
-        [("public/model".into(), deployment)].into_iter().collect(),
+        models,
+        HashMap::from([(id, serde_json::from_value(shaping).unwrap())]),
+        RoutingCache::new(None, RouterTiers::default()),
+        host,
     )
     .unwrap();
     let gateway = match cache {
@@ -160,10 +216,9 @@ async fn test_identity(
     next: axum::middleware::Next,
 ) -> Response {
     let auth = litellm_gateway_auth::Auth::new(
-        Arc::new(litellm_gateway_auth::MasterKeyAuthenticator::new(
-            Some(SecretValue::new("test-inbound-key")),
-            Arc::new(NoSecrets),
-        )),
+        Arc::new(litellm_gateway_auth::MasterKeyAuthenticator::new(Some(
+            SecretValue::new("test-inbound-key"),
+        ))),
         Arc::new(TestPermissions(permissions, principal)),
         Arc::new(litellm_gateway_auth::NoAdditionalPolicy),
         Arc::new(litellm_gateway_auth::SystemClock),

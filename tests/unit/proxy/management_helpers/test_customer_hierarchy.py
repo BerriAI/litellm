@@ -3,7 +3,7 @@ import json
 import sqlite3
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
@@ -11,24 +11,27 @@ from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from prisma import Json
-from prisma.errors import DataError, RawQueryError
+from prisma.errors import DataError, RawQueryError, TransactionExpiredError
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchy,
+    CustomerHierarchyStore,
     ErrorCode,
     Failure,
     budget_row_values,
     effective_member_budget,
     related_budget,
 )
+from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     CustomerMember,
     MemberCreate,
     OrganizationCreate,
+    OrganizationPatch,
     Team,
     TeamCreate,
 )
@@ -89,11 +92,24 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
 
 
 class Table:
-    def __init__(self, id_field: str, database: "Database", *, create_error: DataError | None = None) -> None:
+    def __init__(
+        self,
+        id_field: str,
+        database: "Database",
+        *,
+        create_error: DataError | None = None,
+        hydration_limit: int | None = None,
+        read_limit: int | None = None,
+        delete_error: Exception | None = None,
+    ) -> None:
         self.id_field = id_field
         self.database = database
         self.create_error = create_error
         self.rows: Mapping[str, Record] = {}
+        self.hydration_limit = hydration_limit
+        self.read_limit = read_limit
+        self.read_count = 0
+        self.delete_error = delete_error
 
     async def include(self, row: Record, include: Mapping[str, object] | None) -> Record:
         if not include:
@@ -177,6 +193,9 @@ class Table:
         skip: int = 0,
         take: int | None = None,
     ) -> tuple[Record, ...]:
+        self.read_count += 1
+        if self.read_limit is not None and self.read_count > self.read_limit:
+            raise TransactionExpiredError("Transaction exhausted its query budget")
         matches: Final = tuple(row for row in self.rows.values() if self.matches(row, where or {}))
         ordered: Final = reduce(
             lambda rows, key: tuple(
@@ -190,12 +209,16 @@ class Table:
             matches,
         )
         selected: Final = ordered[skip : skip + take] if take is not None else ordered[skip:]
+        if include and self.hydration_limit is not None:
+            assert len(selected) <= self.hydration_limit
         return tuple([await self.include(row, include) for row in selected])
 
     async def count(self, where: Mapping[str, object] | None = None) -> int:
         return len(await self.find_many(where=where))
 
     async def delete(self, where: Mapping[str, object]) -> Record | None:
+        if self.delete_error is not None:
+            raise self.delete_error
         row_id: Final = TypeAdapter(str).validate_python(where[self.id_field])
         row: Final = self.rows.get(row_id)
         self.rows = {key: value for key, value in self.rows.items() if key != row_id}
@@ -279,19 +302,37 @@ class Database:
         source: "Database | None" = None,
         *,
         team_create_error: DataError | None = None,
+        hydration_limit: int | None = None,
+        member_read_limit: int | None = None,
+        organization_delete_error: Exception | None = None,
     ) -> None:
         self.litellm_customerorganizationtable = (
-            Table("customer_org_id", self) if source is None else source.litellm_customerorganizationtable
+            Table("customer_org_id", self, delete_error=organization_delete_error)
+            if source is None
+            else source.litellm_customerorganizationtable
         )
         self.litellm_customerteamtable = (
-            Table("customer_team_id", self, create_error=team_create_error)
+            Table(
+                "customer_team_id",
+                self,
+                create_error=team_create_error,
+                hydration_limit=hydration_limit,
+            )
             if source is None
             else source.litellm_customerteamtable
         )
         self.litellm_customermembertable = (
-            Table("customer_member_id", self) if source is None else source.litellm_customermembertable
+            Table(
+                "customer_member_id",
+                self,
+                hydration_limit=hydration_limit,
+                read_limit=member_read_limit,
+            )
+            if source is None
+            else source.litellm_customermembertable
         )
         self.litellm_budgettable = Table("budget_id", self) if source is None else source.litellm_budgettable
+        self.litellm_config = Table("param_name", self) if source is None else source.litellm_config
         self.litellm_budgetwindowspend = (
             Table("entity_id", self) if source is None else source.litellm_budgetwindowspend
         )
@@ -306,7 +347,7 @@ class Database:
 
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
-            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_id"),
+            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_template_id"),
             "customer_organizations": (self.litellm_customerorganizationtable, "budget_id"),
             "customer_teams": (self.litellm_customerteamtable, "budget_id"),
             "customer_members": (self.litellm_customermembertable, "budget_id"),
@@ -330,7 +371,58 @@ class Database:
         self.held_locks = (*self.held_locks, lock)
         return ()
 
+    def budget_sort_rows(self, query: str, args: Sequence[object]) -> Sequence[Mapping[str, object]]:
+        table: Final = (
+            self.litellm_customerteamtable
+            if '"LiteLLM_CustomerTeamTable"' in query
+            else self.litellm_customermembertable
+        )
+        fields: Final = (
+            table.id_field,
+            "parent_org_id",
+            "alias",
+            "created_at",
+            "budget_id",
+            "budget_override_id",
+            "budget_override_expires_at",
+            "parent_team_ids",
+        )
+        with sqlite3.connect(":memory:") as connection:
+            connection.row_factory = sqlite3.Row
+            name: Final = (
+                "LiteLLM_CustomerTeamTable"
+                if table is self.litellm_customerteamtable
+                else "LiteLLM_CustomerMemberTable"
+            )
+            connection.execute(f'CREATE TABLE "{name}" ({", ".join(fields)})')
+            connection.executemany(
+                f'INSERT INTO "{name}" VALUES ({", ".join("?" for _ in fields)})',
+                tuple(
+                    tuple(
+                        json.dumps(row.model_dump().get(field))
+                        if field == "parent_team_ids"
+                        else None
+                        if row.model_dump().get(field) is None
+                        else str(row.model_dump()[field])
+                        for field in fields
+                    )
+                    for row in table.rows.values()
+                ),
+            )
+            sql: Final = (
+                query.replace(
+                    "parent_team_ids @> ARRAY[$2]::text[]",
+                    "EXISTS (SELECT 1 FROM json_each(parent_team_ids) WHERE value = $2)",
+                )
+                .replace("::text", "")
+                .replace("ILIKE $3", "LIKE $3 ESCAPE '\\' COLLATE NOCASE")
+            )
+            parameters: Final = {str(index): None if arg is None else str(arg) for index, arg in enumerate(args, 1)}
+            return tuple(dict(row) for row in connection.execute(sql, parameters))
+
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if " AS entity_id" in query:
+            return self.budget_sort_rows(query, args)
         if "set_config('lock_timeout'" in query:
             return ()
         if "pg_advisory_xact_lock" in query:
@@ -391,6 +483,7 @@ class Database:
             self.litellm_customerteamtable,
             self.litellm_customermembertable,
             self.litellm_budgettable,
+            self.litellm_config,
             self.litellm_verificationtoken,
             self.litellm_projecttable,
         )
@@ -555,23 +648,163 @@ def test_budget_windows_reject_invalid_caps(request_type: type[BaseModel], maxim
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]) -> None:
+@pytest.mark.parametrize("first,second", (("1mo", "1mo"), ("2d", "2d")))
+def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel], first: str, second: str) -> None:
     with pytest.raises(ValidationError):
         request_type.model_validate(
             {
                 "budget_limits": [
-                    {"budget_duration": "1mo", "max_budget": 0},
-                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": first, "max_budget": 0},
+                    {"budget_duration": second, "max_budget": 10},
                 ]
             }
         )
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-@pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1y", "1h"))
+@pytest.mark.parametrize("duration", ("", "0s", "-1d", "1y", "1.5h",
+                                    "999999999999999999999d", "999999999999999999999h", "999999999999999999999s"))
 def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseModel], duration: str) -> None:
-    with pytest.raises(ValidationError, match="literal_error"):
+    with pytest.raises(ValidationError):
         request_type.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": 0}]})
+
+
+@pytest.mark.parametrize("duration", ("30s", "15m", "2h", "6d", "2w", "30d", "daily"))
+def test_additional_budget_windows_keep_the_submitted_duration_without_changing_the_scalar(duration: str) -> None:
+    budget: Final = Budget(max_budget=50, budget_duration="daily",
+                          budget_limits=(BudgetLimit(budget_duration=duration, max_budget=0),))
+    assert (budget.max_budget, budget.budget_duration) == (50, "daily")
+    assert tuple(limit.budget_duration for limit in budget.budget_limits or ()) == (duration,)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", (1, 3))
+@pytest.mark.parametrize("shared", (False, True))
+async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: int, shared: bool) -> None:
+    database: Final = Database()
+    store: Final = CustomerHierarchyStore(cast("Prisma", database), NOW, premium_user=True)
+    policy: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=10),))
+    budget_id: Final = await store.create_budget(policy, "admin")
+    original: Final = database.litellm_budgettable.rows[budget_id].model_dump()["budget_limits"]
+    later: Final = CustomerHierarchyStore(cast("Prisma", database), NOW + timedelta(days=elapsed), premium_user=True)
+    patch: Final = Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=20),))
+    updated_id: Final = await later.private_budget_patch(
+        budget_id, OrganizationPatch(budget=patch), "admin", shared_ids=(budget_id,) if shared else ()
+    )
+    assert updated_id is not None and (updated_id != budget_id) is shared
+    assert database.litellm_budgettable.rows[updated_id].model_dump()["budget_limits"] == [
+        {**limit, "max_budget": 20} for limit in original
+    ]
+    current: Final = NOW + timedelta(days=elapsed)
+    before: Final = customer_window_counters(
+        "customer_member", "member", tuple(BudgetLimit.model_validate(limit) for limit in original), now=current
+    )[0]
+    after: Final = customer_window_counters(
+        "customer_member",
+        "member",
+        tuple(
+            BudgetLimit.model_validate(limit)
+            for limit in database.litellm_budgettable.rows[updated_id].model_dump()["budget_limits"]
+        ),
+        now=current,
+    )[0]
+    assert after.counter_key == before.counter_key
+    assert after.window_start == before.window_start
+    assert after.reset_at == before.reset_at
+
+
+class ResetAdvancingBudgetTable(Table):
+    def __init__(self, database: Database) -> None:
+        super().__init__("budget_id", database)
+        self.locked = False
+
+    def advance_reset(self, budget_id: str) -> None:
+        row: Final = self.rows[budget_id]
+        windows: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(
+            row.model_dump()["budget_limits"]
+        )
+        self.rows = {
+            **self.rows,
+            budget_id: row.model_copy(
+                update={"budget_limits": [{**window, "reset_at": (NOW + timedelta(days=2)).isoformat()}
+                                          for window in windows]}
+            ),
+        }
+
+    async def find_unique(
+        self, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Record | None:
+        snapshot: Final = await super().find_unique(where, include)
+        if snapshot is not None and not self.locked:
+            self.advance_reset(str(where["budget_id"]))
+        return snapshot
+
+
+class ResetAdvancingDatabase(Database):
+    def __init__(self) -> None:
+        super().__init__()
+        self.budget_rows: Final = ResetAdvancingBudgetTable(self)
+        self.litellm_budgettable = self.budget_rows
+        self.in_transaction = False
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if query.startswith('SELECT budget_limits FROM "LiteLLM_BudgetTable"') and "FOR UPDATE" in query:
+            assert self.in_transaction, "Budget row locks must cover the edit transaction"
+            budget_id: Final = str(args[0])
+            self.budget_rows.advance_reset(budget_id)
+            self.budget_rows.locked = True
+            return ({"budget_limits": self.budget_rows.rows[budget_id].model_dump()["budget_limits"]},)
+        return await super().query_raw(query, *args)
+
+    @asynccontextmanager
+    async def tx(self) -> AsyncIterator["ResetAdvancingDatabase"]:
+        async with super().tx():
+            self.in_transaction = True
+            try:
+                yield self
+            finally:
+                self.budget_rows.locked = False
+                self.in_transaction = False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ("edit", "clear-null", "clear-empty", "scalar"))
+async def test_customer_budget_edit_preserves_a_racing_reset(change: str) -> None:
+    database: Final = ResetAdvancingDatabase()
+    hierarchy: Final = CustomerHierarchy(
+        cast("Prisma", database), premium_user=True, clock=lambda: NOW
+    )  # cast-ok: deterministic Prisma protocol fixture
+    organization: Final = await hierarchy.create_organization(
+        OrganizationCreate(
+            customer_org_id="org",
+            budget=Budget(
+                max_budget=50,
+                budget_limits=(BudgetLimit(budget_duration="2d", max_budget=10, reset_at=NOW),),
+            ),
+        ),
+        "admin",
+    )
+    assert not isinstance(organization, Failure)
+    assert organization.budget_id is not None
+    edits: Final = {
+        "edit": Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=20),)),
+        "clear-null": Budget(budget_limits=None),
+        "clear-empty": Budget(budget_limits=()),
+        "scalar": Budget(max_budget=75),
+    }
+    result: Final = await hierarchy.update_organization(
+        "org", OrganizationPatch(budget=edits[change]), "admin"
+    )
+    assert not isinstance(result, Failure)
+    stored: Final = database.budget_rows.rows[organization.budget_id].model_dump()
+    expected_windows: Final = (
+        None if change == "clear-null" else [] if change == "clear-empty" else [
+            {"budget_duration": "2d", "max_budget": 20 if change == "edit" else 10,
+             "reset_at": (NOW + timedelta(days=2)).isoformat()}
+        ]
+    )
+    assert (stored["max_budget"], stored["budget_limits"]) == (
+        75 if change == "scalar" else 50, expected_windows
+    )
 
 
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:
@@ -620,9 +853,10 @@ def test_member_temporary_increase_is_added_to_its_inherited_maximum(expiry: dat
     assert resolved == Budget(max_budget=expected)
 
 
-def test_a_budget_row_without_windows_writes_budget_limits_as_prisma_json_null() -> None:
-    values: Final = budget_row_values({"max_budget": 1.0, "budget_limits": None, "model_tpm_limit": None})
+@pytest.mark.parametrize("column", ("budget_limits", "model_tpm_limit", "model_rpm_limit"))
+def test_null_budget_json_fields_are_encoded_as_prisma_json_null(column: str) -> None:
+    values: Final = budget_row_values({"max_budget": 1.0, column: None})
     assert values["max_budget"] == 1.0
-    assert isinstance(values["budget_limits"], Json)
-    assert values["budget_limits"].data is None
-    assert "model_tpm_limit" not in values
+    encoded: Final = values[column]
+    assert isinstance(encoded, Json)
+    assert encoded.data is None

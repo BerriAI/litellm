@@ -15,6 +15,9 @@ from litellm.litellm_core_utils.env_utils import (
 )
 
 MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
+PREFIX_BLOCK_HASHES_BLOCK_SIZE: Final = get_env_int_in_range(
+    "LITELLM_PREFIX_BLOCK_HASHES_BLOCK_SIZE", 512, minimum=1, maximum=sys.maxsize
+)
 OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
@@ -131,6 +134,7 @@ S3_PREFIX_DIGEST_CHARS: Final = 16
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
 MAX_FILE_LIST_LIMIT: Final = 10000
+MAX_IMAGE_FAN_OUT_REQUESTS: Final = get_env_int("MAX_IMAGE_FAN_OUT_REQUESTS", 10)
 ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
@@ -574,6 +578,12 @@ TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
     minimum=1,
     maximum=256,
 )
+PREFIX_BLOCK_HASHES_MAX_CHARS: Final = get_env_int_in_range(
+    "LITELLM_PREFIX_BLOCK_HASHES_MAX_CHARS",
+    default=min(65_536, TOKEN_COUNTER_MAX_EXACT_CHARS),
+    minimum=1,
+    maximum=TOKEN_COUNTER_MAX_EXACT_CHARS,
+)
 MAX_TILE_WIDTH: Final = get_env_int("MAX_TILE_WIDTH", 512)
 MAX_TILE_HEIGHT: Final = get_env_int("MAX_TILE_HEIGHT", 512)
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = get_env_float("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000)
@@ -706,9 +716,11 @@ STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
-STREAM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+VLLM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+STREAM_FINISH_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, "provider_specific_fields")
 STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
-VLLM_CHOICE_FIELDS: Final = STREAM_FINISH_CHOICE_FIELDS + STREAM_CHUNK_CHOICE_FIELDS
+PROVIDER_FINISH_REASONS_HIDDEN_PARAM: Final = "provider_finish_reasons"
+VLLM_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, *STREAM_CHUNK_CHOICE_FIELDS)
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -982,6 +994,22 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
     "store",
 ]
 
+OPENAI_CHAT_COMPLETION_TRANSPORT_PARAMS: Final = frozenset(
+    {
+        "api_base",
+        "api_key",
+        "api_version",
+        "deployment_id",
+        "organization",
+        "base_url",
+        "default_headers",
+        "timeout",
+        "request_timeout",
+        "max_retries",
+        "extra_headers",
+    }
+)
+
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
     "languages",
@@ -1096,6 +1124,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
+    "https://api.resetdata.ai/api/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
@@ -1103,6 +1132,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
+    "https://api.lab.vispark.in/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
@@ -1158,6 +1188,7 @@ openai_compatible_providers: Final[list[str]] = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
+    "resetdata",
     "featherless_ai",
     "nscale",
     "nebius",
@@ -1184,6 +1215,7 @@ openai_compatible_providers: Final[list[str]] = [
     "pinstripes",  # Pinstripes - JSON-configured provider
     "openinfer",
     "darkbloom",
+    "vispark",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
@@ -1220,6 +1252,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "poe",
     "chutes",
     "v0",
+    "vispark",
     "lambda_ai",
     "hyperbolic",
     "wandb",
@@ -1686,6 +1719,8 @@ LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
+SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY: Final = "_session_deployment_affinity_conversation"
+REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
@@ -1695,6 +1730,7 @@ VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadat
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_usage_based_routing_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+ROUTE_CALL_TYPE_METADATA_KEY: Final = "route_call_type"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
@@ -1778,6 +1814,7 @@ AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: Final = "/speech/"
 AZURE_SPEECH_BATCH_PATH_PREFIX: Final = "/speechtotext/"
 AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:transcribe"
 OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX: Final = "/opensearch"
+CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX: Final = "/cursor-cli"
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
@@ -2329,6 +2366,9 @@ USAGE_MODEL_TOP_KEYS_MAX: Final[int] = 100
 USAGE_CACHE_LEAKAGE_KEYS_DEFAULT: Final[int] = 20
 USAGE_CACHE_LEAKAGE_KEYS_MAX: Final[int] = 100
 USAGE_EXPORT_BATCH_SIZE: Final[int] = 1000
+CALLBACK_CONFIG_METADATA_SLOTS: Final[frozenset[str]] = frozenset(
+    {"logging", "callback_settings", "secret_manager_settings"}
+)
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
@@ -2364,6 +2404,7 @@ MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "model_batch_enqueued_tok
 MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
 MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
 MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"
+MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: Final = "model_limit_max_borrow_multiple"
 ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
     MAX_BATCH_FILE_RECORDS_KEY,

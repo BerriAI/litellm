@@ -1,0 +1,94 @@
+# A request names a model group, and the router picks the deployment after the request is admitted.
+# So one deployment the native app does not serve sends its whole group to Python, and so does a
+# fallback to such a group, even while the group that falls back never fails.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        rpm: 300
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        rpm: 100
+    - model_name: claude
+      litellm_params:
+        model: azure_ai/claude-haiku-5-5
+        api_key: provider-key
+        api_base: https://claude.services.ai.azure.com/anthropic
+    - model_name: gpt
+      litellm_params:
+        model: openai/gpt-5.5
+        api_key: provider-key
+    - model_name: gpt
+      litellm_params:
+        model: openai/gpt-5.5
+        api_key: provider-key
+    - model_name: mixed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: mixed
+      litellm_params:
+        model: openai/gpt-5.5
+        api_key: provider-key
+    - model_name: claude-then-claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-then-gpt
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-then-mixed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - claude-then-claude: [claude]
+      - claude-then-gpt: [gpt]
+      - claude-then-mixed: [mixed]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a group whose every deployment is served
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a group whose every deployment is on another provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: gpt, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model of provider openai
+
+  - name: a group with one deployment on another provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: mixed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model of provider openai
+
+  - name: a served group that falls back to a served group
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-then-claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a served group that falls back to a group on another provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-then-gpt, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to gpt: model_list.litellm_params.model of provider openai'
+
+  - name: a served group that falls back to a group with one deployment on another provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-then-mixed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to mixed: model_list.litellm_params.model of provider openai'

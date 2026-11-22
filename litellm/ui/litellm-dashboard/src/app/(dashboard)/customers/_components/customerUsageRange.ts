@@ -92,7 +92,7 @@ export const customerDateSelection = (params: DateParams, now = new Date()) => {
   }
   const custom = params.from && params.to ? customerRangeParser.parse(`${params.from}..${params.to}`) : null;
   if (custom) return { dateValue: custom, preset: null };
-  return { dateValue: customerPresetRange("month", now), preset: "month" };
+  return { dateValue: customerPresetRange("MTD", now), preset: "MTD" };
 };
 
 export const customerDatePatch = (value: DateRangePickerValue, preset: string | null) => {

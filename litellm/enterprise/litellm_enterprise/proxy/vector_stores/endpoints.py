@@ -18,6 +18,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     LiteLLM_ManagedVectorStoresTable,
@@ -59,9 +60,19 @@ class ManagedVectorStoreTable(Protocol):
     async def update(self, where: Mapping[str, str | None], data: Mapping[str, object]) -> ManagedVectorStoreRow: ...
 
 
+class _ManagedVectorStoreDatabase(Protocol):
+    @property
+    def litellm_managedvectorstorestable(self) -> ManagedVectorStoreTable: ...
+
+
+class _ManagedVectorStoreClient(Protocol):
+    @property
+    def db(self) -> _ManagedVectorStoreDatabase: ...
+
+
 def managed_vector_store_table(prisma_client: "PrismaClient") -> ManagedVectorStoreTable:
     """The Prisma table actions for managed vector stores, behind a typed surface."""
-    return prisma_client.db.litellm_managedvectorstorestable
+    return require_attributes(prisma_client, _ManagedVectorStoreClient, "db").db.litellm_managedvectorstorestable
 
 
 ########################################################
