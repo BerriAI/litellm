@@ -5,7 +5,10 @@ import pytest
 from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.bases.anthropic import CLAUDE_SONNET_5_5_TEST_CASE
+from integration.translation.chat_completions.bases.anthropic import (
+    CLAUDE_FABLE_5_2_TEST_CASE,
+    CLAUDE_SONNET_5_5_TEST_CASE,
+)
 from integration.translation.runner import assert_translation
 
 CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_0: Final = (
@@ -39,6 +42,173 @@ CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_1: Final = (
     "RSbPH552/fk7wxPgFY/HeETIMHA6lTWfcyM7r7EJaA2nqVjoC+7UP8Xid2+uX8yaT02c18EqvhhwbD6GuoIUIOFXPMct1EdxpGYeqg1BRrAM"
     "ciJCkxRTyJ4ySotKH8dwW7r6xk+ZppOoU3suJBLRH+mSqh1JLp2vSoIEezxk4+gviPA79H5I+WfN0D8R8irrnfiUGLpsO1utDIeLE9GqmEEv"
     "2GTYRu5xn9KfzxgB"
+)
+
+CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_0: Final = (
+    "CAQSsgcKEAgUGAI4AUIIdGhpbmtpbmcSDK4WSoZIm7QNm+BZzRoMwZqHaAaP76vmHfGaIjBX3OT+Ohmme6Sha99F7jW5W7p1"
+    "enZuHGsG/1ewTgLxiNFKPDGsTcO8yQ+DtaDidB0qzwYusqlnMowjY50891jOvjJk2W3uENw9hEd3wOfa+xd2X2srPqgxS7l7"
+    "SSrf1h+fgZP5sVzSDbJ1yobc/j7JoL5jelvTp4i3YxHrY/ccniPrPI0HV+hGCNA/DRlyJtcNW6mFw5nBlg1eH4kXiqTgOzWh"
+    "K7+YSFxXBB+1enxtdADRjsXtspn5pLv/DcFXek2GAj7Ra7JwRU5UbGYLsGTXCzvXwQIDoRJN06olcuKPEoacrwD1mZoOJ8ut"
+    "uxu9KwIY0XTUcTU0sQaOX3A1mN+TQVITT3LyzUB7m8r1bD/K/cXkJeP7i1a7g7OIrA5J/TBDm5w0Ml9xEOlqL3jKgGRtC05O"
+    "RT9OU3h0eOXpcykJABMzSc9JpSsbxSTfQRGEWdOhgLq+SE9ky6cJCX12mmUYpeYG7S7LsDcWFHVgVxOISzLnNNwTg9Xzic4Z"
+    "mMbQC6Qj2OjPTLHQN3rY6fJr64wZNwHolx6/QZJRjdUJvZcdSTtsWvB9vmpPWkpHpAKxFq5uLFx+YbPgpYs+VE+v5xomXViO"
+    "3bV6APVPGN1ECijyMuyBEbTwAscZn41phVVkjDCkS7u6B/3/QTPNhVmy/cCfM8qN0LCv9o3ylYbW/gpAVQ0yfaRq0WpikFnv"
+    "NMje9RQF/WOggaDofCWdWtq55MNUly19jO1jEEi8tWd/SHRPXKDOpph/geEbxiuaj68MsiUpzV4MA17JkmsaO3bnhgoUCaoi"
+    "y/5EFK8n+rToyZdXfaWisEAiNb5mjhEKy6TTE2DSaV6hlw6VNuV3+n5ON7htkhq/RHnsUZdtloPNsz8eDOmR6DZxAmwz32hi"
+    "UMhro+DWwocZ2ze0aASt7xJKJUHfAX0pugbShBTRSKdGlygbA9JCnf2kVmRYaxp/LajAOUoohEyiefxI1xNxQ/b0xSXbjXX6"
+    "pdaZUEU+WkuxmTAJtJgAIxHz3UWpO7Y/PFgnzXc7OzdBTejdqOYEeE+1yPqPi+/rZBt++ZTgsXvhT1WqXXeyG3c8FYiWqiSb"
+    "Fm3ex6v4f70JQVTant3pdHWw6FpMk9RvIVcbtIzgIpKaWY1W6992g/Gu7C4hTIJ3+tBvbu2DUxvj/MBWkk+cm2hR+dQXtQdb"
+    "ilqi94QRoYvd/MU3n89FGAE="
+)
+
+CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_1: Final = (
+    "CAQSwgcKEQgUGAI4AUIJbmFycmF0aW9uEgyckacZMfU8hgGjgzIaDAFm5ny0GaReIi+0JSIwKz51PXNTYCtXKk+dnSOod/Ja"
+    "Fj27hTHQ7omIEZoh11vU9RwPe9Hmdizv+Jqfyo9UKt4GbA1v7gDzcIDYcFseYUN1WO50iEs9f1KYKmBJzfBFUG8G7/OO3n/u"
+    "JGzli//oHhU9We6VA3NRUbSKAd96UmqopmT54elxIx9E7KjRTWZ4rGDndvcYs02IeQ6GhU+lDXQ1oO/F9oat549LMxBNxDmT"
+    "ZUgz4KHJX+90FuknIkrupM2Eqjs/KA1ge48kCB3rYSR8jigylzOkrAoK5OTu9I2S2+k4j5j6bnW08p1MdKVfY7cNJ9a7/UAW"
+    "74ccyLWULKPsobL+Y+cherspYu6QxcUA79diy+4/Vc7JPMyh2VFU+6Pc9c3LLPKd4nOfrISRklxx4GLtbv3zKvw9w9oUqRXn"
+    "LCMeJALerCkpb+yI7REbm/LX8IDtj/UoWB1Xi9kG92EmVGDPTZMLFfpZ673lzuMK2UIpj7SZELEnC0dtvUc9RzAA3rVS/DRS"
+    "OrjGl+gPpbFb8jVBfh+QkVIvq89W+RsgAbencNqJSarNt2vI+vOfDvPKuXE33d/8vZLOI0014t0XvPzrN56yEN+642v0EKPk"
+    "LmbfiwGCTGzPvbOzH7O3p231hqiYcFyu8Ioq45uGitf1LbqwLH+dY5A6aHhH0PDojVEkX1jI5DroT+I1GgQa0R9vYfZBVJbQ"
+    "fZ5Vda2kVurLyk2BX7wfUXZTDA8yBl7mqhwLuBKyiKPfuAWsMCaZ0zqzVvwFjM9ConQJhDwlFwc7YPLAMLeaK6wQZnQiICGQ"
+    "RvVIxVqssdI69pKHYn9o8wMZu5Ewpup34LOh8ya0J4t4eLHhGCwOv1nGPjBN4uRBOh/nogqLDqFRg0xaiy5dcybirOB6UoSJ"
+    "aE7YbeK7qIew/wDub9mh/kwVHAPAtnpIislKZZKDICOBvYVf14PsD7O4Ila82x3TFC/GDX2VTCeFvH7wS/Hk5chH+lxEhDco"
+    "ncCrhgtQqRL8dwqGuCXi1tYnz/1DvzHLbKJaazTA19x4WM2w5TwmAPRu43X7uKgsMvOGAb8Qd4C6ZwjarpXktD9L6BRG7PDw"
+    "UueHMsqiJEgasoxLBjpcinAh9ioYgPqWQQPUX3tHftsi8qsZPbePDqHLCj5Im7bfVtlwTgqX7Vn0Se7okCjcv2z/XP8DmtUQ"
+    "yIwcg85/j534X9F7/RI2biTmilGSLjR1A5EIxNC0+xgB"
+)
+
+CLAUDE_FABLE_5_2_CACHE_HIT_TEST_CASE: Final = replace(
+    CLAUDE_FABLE_5_2_TEST_CASE,
+    scenario="prompt_cache_hit",
+    mock_provider_response={
+        **CLAUDE_FABLE_5_2_TEST_CASE.mock_provider_response,
+        "id": "msg_011ChJEkhhpNNBQg9zJaNGkM",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'll read shop/validation.py first, starting with the range around the function at line 18, and "
+                    "I'm keeping the tests out of this step since the user only asked for the validation file.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm reading shop/validation.py next, where validate_quantity is defined at line 18, including "
+                    "the imports and helpers that affect zero, negative and non-integer quantities.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_1,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_017wbMgRWDnQBGMDQEmNLq4n",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 876,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 273,
+            "output_tokens_details": {"thinking_tokens": 95},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **CLAUDE_FABLE_5_2_TEST_CASE.expected_litellm_response,
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 2,
+                            "caller": {"type": "direct"},
+                            "function": {
+                                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
+                                "name": "read_file",
+                            },
+                            "id": "toolu_017wbMgRWDnQBGMDQEmNLq4n",
+                            "type": "function",
+                        }
+                    ],
+                    "reasoning_content": (
+                        "I'll read shop/validation.py first, starting with the range around the function at line 18, and "
+                        "I'm keeping the tests out of this step since the user only asked for the validation file.\n\nI'm "
+                        "reading shop/validation.py next, where validate_quantity is defined at line 18, including the "
+                        "imports and helpers that affect zero, negative and non-integer quantities.\n\n"
+                    ),
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": (
+                                "I'll read shop/validation.py first, starting with the range around the function at line 18, and "
+                                "I'm keeping the tests out of this step since the user only asked for the validation file.\n\n"
+                            ),
+                            "signature": CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_0,
+                        },
+                        {
+                            "type": "thinking",
+                            "thinking": (
+                                "I'm reading shop/validation.py next, where validate_quantity is defined at line 18, including "
+                                "the imports and helpers that affect zero, negative and non-integer quantities.\n\n"
+                            ),
+                            "signature": CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_1,
+                        },
+                    ],
+                    "provider_specific_fields": {
+                        "citations": None,
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "I'll read shop/validation.py first, starting with the range around the function at line 18, and "
+                                    "I'm keeping the tests out of this step since the user only asked for the validation file.\n\n"
+                                ),
+                                "signature": CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_0,
+                            },
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "I'm reading shop/validation.py next, where validate_quantity is defined at line 18, including "
+                                    "the imports and helpers that affect zero, negative and non-integer quantities.\n\n"
+                                ),
+                                "signature": CLAUDE_FABLE_5_2_CACHE_HIT_THINKING_SIGNATURE_1,
+                            },
+                        ],
+                    },
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 273,
+            "prompt_tokens": 880,
+            "total_tokens": 1153,
+            "completion_tokens_details": {"reasoning_tokens": 95, "text_tokens": 178},
+            "prompt_tokens_details": {
+                "cached_tokens": 876,
+                "text_tokens": 4,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 876,
+            "inference_geo": "global",
+            "speed": "standard",
+            "service_tier": "standard",
+        },
+    },
 )
 
 CLAUDE_SONNET_5_5_CACHE_HIT_TEST_CASE: Final = replace(
@@ -223,7 +393,9 @@ CLAUDE_SONNET_5_5_CACHE_HIT_TEST_CASE: Final = replace(
 
 
 @pytest.mark.parametrize(
-    "case", [CLAUDE_SONNET_5_5_CACHE_HIT_TEST_CASE], ids=[CLAUDE_SONNET_5_5_CACHE_HIT_TEST_CASE.id]
+    "case",
+    [CLAUDE_FABLE_5_2_CACHE_HIT_TEST_CASE, CLAUDE_SONNET_5_5_CACHE_HIT_TEST_CASE],
+    ids=[CLAUDE_FABLE_5_2_CACHE_HIT_TEST_CASE.id, CLAUDE_SONNET_5_5_CACHE_HIT_TEST_CASE.id],
 )
 def test_chat_completions_prompt_cache_hit_anthropic(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
