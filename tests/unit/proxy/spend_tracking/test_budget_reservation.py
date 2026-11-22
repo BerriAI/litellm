@@ -1197,6 +1197,22 @@ def test_a_gemini_body_sending_its_config_under_two_names_is_held_at_the_larger_
     )
 
 
+@pytest.mark.parametrize(("uncapped", "capped"), [("config", "generationConfig"), ("generationConfig", "generation_config")])
+def test_a_gemini_config_name_without_an_output_cap_keeps_the_uncapped_hold(uncapped: str, capped: str) -> None:
+    uncapped_body: Final = GEMINI_QUESTION | {uncapped: {"temperature": 0.5}}
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=uncapped_body | {capped: {"maxOutputTokens": 1}}, route=GEMINI_ROUTES[0], llm_router=None
+    )
+
+    assert reserved == pytest.approx(
+        estimate_request_max_cost(request_body=uncapped_body, route=GEMINI_ROUTES[0], llm_router=None)
+    )
+    assert reserved > estimate_request_max_cost(
+        request_body=GEMINI_QUESTION | {capped: {"maxOutputTokens": 1}}, route=GEMINI_ROUTES[0], llm_router=None
+    )
+
+
 @pytest.mark.parametrize(
     ("request_body", "input_tokens", "expected"),
     [

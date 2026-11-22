@@ -1768,6 +1768,16 @@ def _gemini_generation_configs(request_body: Mapping[str, object]) -> tuple[Mapp
     return tuple(config for field in GOOGLE_GENAI_CONFIG_FIELDS if (config := as_str_mapping(request_body.get(field))))
 
 
+def _gemini_output_token_cap(request_body: Mapping[str, object]) -> int | None:
+    caps: Final = tuple(
+        _largest_int(config.get(field) for field in _GEMINI_OUTPUT_TOKEN_FIELDS)
+        for config in _gemini_generation_configs(request_body)
+    )
+    if not caps or None in caps:
+        return None
+    return max(cap for cap in caps if cap is not None)
+
+
 def _largest_int(values: Iterable[object]) -> int | None:
     return max((value for value in map(_to_int, values) if value is not None), default=None)
 
@@ -1903,7 +1913,7 @@ def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[st
     top_level_caps: Final = tuple(
         (field, request_body[field]) for field in _TOP_LEVEL_OUTPUT_TOKEN_FIELDS if field in request_body
     )
-    generation_config_max_tokens: Final = _largest_int(_gemini_config_values(request_body, _GEMINI_OUTPUT_TOKEN_FIELDS))
+    generation_config_max_tokens: Final = _gemini_output_token_cap(request_body)
     generation_config_cap: Final = (
         ((_GENERATION_CONFIG_MAX_OUTPUT_TOKENS, generation_config_max_tokens),)
         if generation_config_max_tokens is not None
