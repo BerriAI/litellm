@@ -22,23 +22,25 @@ pub fn get_provider_specific_headers(
         .iter()
         .filter(|entry| applies_to_call(entry, custom_llm_provider, takes_user_profile_id))
         .collect();
-    let replaced_names: HashSet<String> = applicable
+    let replacing: Map<String, Value> = applicable
         .iter()
         .filter(|entry| entry.configured_credential_headers.is_empty())
-        .flat_map(|entry| {
-            contributed_headers(entry, &configured_names)
-                .into_iter()
-                .map(|(name, _)| name)
-        })
+        .flat_map(|entry| contributed_headers(entry, &configured_names))
         .collect();
-    let kept_configured = first_text_value_by_name(
+    let sent_values = text_values_by_name(
         configured_headers
             .iter()
-            .filter(|(name, _)| !replaced_names.contains(*name)),
+            .map(|(name, value)| (name, replacing.get(name).unwrap_or(value)))
+            .chain(
+                replacing
+                    .iter()
+                    .filter(|(name, _)| !configured_headers.contains_key(*name)),
+            ),
     );
+    let contributed_values: HashSet<&str> = replacing.values().filter_map(Value::as_str).collect();
     applicable
         .into_iter()
-        .filter(|entry| configures_a_listed_credential(entry, &kept_configured))
+        .filter(|entry| configures_a_listed_credential(entry, &sent_values, &contributed_values))
         .flat_map(|entry| contributed_headers(entry, &configured_names))
         .collect()
 }
@@ -56,32 +58,46 @@ fn applies_to_call(
             .any(|scoped| scoped.trim() == custom_llm_provider)
 }
 
-fn first_text_value_by_name<'a>(
+fn text_values_by_name<'a>(
     headers: impl Iterator<Item = (&'a String, &'a Value)>,
-) -> HashMap<String, &'a str> {
-    let mut first_values: HashMap<String, &'a str> = HashMap::new();
+) -> HashMap<String, Vec<&'a str>> {
+    let mut values: HashMap<String, Vec<&'a str>> = HashMap::new();
     for (name, value) in headers {
-        first_values
+        values
             .entry(name.to_ascii_lowercase())
-            .or_insert(value.as_str().unwrap_or(""));
+            .or_default()
+            .push(value.as_str().unwrap_or(""));
     }
-    first_values
+    values
+}
+
+fn sent_values<'a, 'b>(values: &'a [&'b str], prefix: &str) -> &'a [&'b str] {
+    match values {
+        [first, ..] if first.starts_with(prefix) => &values[..1],
+        _ => values,
+    }
 }
 
 fn sends(
-    first_values: &HashMap<String, &str>,
+    values_by_name: &HashMap<String, Vec<&str>>,
     name: &str,
     prefix: &str,
     caller_credentials: &[String],
+    contributed_values: &HashSet<&str>,
 ) -> bool {
-    first_values.get(name).is_some_and(|value| {
-        value.starts_with(prefix) && !caller_credentials.iter().any(|caller| caller == value)
-    })
+    sent_values(values_by_name.get(name).map_or(&[], Vec::as_slice), prefix)
+        .iter()
+        .any(|value| {
+            value.starts_with(prefix)
+                && !contributed_values.contains(value)
+                && !caller_credentials.iter().any(|caller| caller == value)
+        })
 }
 
 fn configures_a_listed_credential(
     entry: &ProviderSpecificHeader,
-    configured_values: &HashMap<String, &str>,
+    sent_values: &HashMap<String, Vec<&str>>,
+    contributed_values: &HashSet<&str>,
 ) -> bool {
     entry.configured_credential_headers.is_empty()
         || entry
@@ -89,10 +105,11 @@ fn configures_a_listed_credential(
             .iter()
             .any(|credential| {
                 sends(
-                    configured_values,
+                    sent_values,
                     &credential.to_ascii_lowercase(),
                     &entry.configured_credential_prefix,
                     &entry.caller_credentials,
+                    contributed_values,
                 )
             })
             != entry.without_configured_credential
@@ -325,6 +342,10 @@ mod tests {
         json!({"Authorization": "Bearer sk-ant-oat01-deployment", "authorization": "Bearer sk-ant-oat01-caller"}),
         true
     )]
+    #[case::configured_token_behind_a_non_oauth_value(
+        json!({"authorization": "Bearer sk-ant-api03-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}),
+        true
+    )]
     #[case::no_token(json!({}), false)]
     fn an_entry_waits_on_whether_a_configured_token_that_is_not_the_callers_own_is_sent(
         #[case] configured: Value,
@@ -364,6 +385,10 @@ mod tests {
     #[case::configured_token_kept_under_another_name(
         json!({"Authorization": "Bearer sk-ant-oat01-deployment"}),
         json!({"authorization": "Bearer sk-ant-oat01-caller", "anthropic-user-profile-id": "uprof_pinned"})
+    )]
+    #[case::caller_token_replaces_a_value_ahead_of_the_configured_token(
+        json!({"authorization": "Bearer sk-ant-api03-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}),
+        json!({"authorization": "Bearer sk-ant-oat01-caller"})
     )]
     fn a_pin_applies_only_while_the_configured_credential_survives_the_merge(
         #[case] configured: Value,

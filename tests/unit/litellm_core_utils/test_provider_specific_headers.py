@@ -320,6 +320,7 @@ def test_a_configured_credential_prefix_applies_only_beside_a_matching_value(
         ({"Authorization": "Bearer sk-ant-oat01-deployment"}, True),
         ({"authorization": "Bearer sk-ant-oat01-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}, False),
         ({"Authorization": "Bearer sk-ant-oat01-deployment", "authorization": "Bearer sk-ant-oat01-caller"}, True),
+        ({"authorization": "Bearer sk-ant-api03-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}, True),
         ({}, False),
     ],
     ids=[
@@ -327,6 +328,7 @@ def test_a_configured_credential_prefix_applies_only_beside_a_matching_value(
         "configured_token_survives_the_merge",
         "caller_token_first_of_both",
         "configured_token_first_of_both",
+        "configured_token_behind_a_non_oauth_value",
         "no_token",
     ],
 )
@@ -355,8 +357,16 @@ def test_an_entry_waits_on_whether_a_configured_token_that_is_not_the_callers_ow
             {"Authorization": "Bearer sk-ant-oat01-deployment"},
             {"authorization": "Bearer sk-ant-oat01-caller", "anthropic-user-profile-id": "uprof_pinned"},
         ),
+        (
+            {"authorization": "Bearer sk-ant-api03-caller", "Authorization": "Bearer sk-ant-oat01-deployment"},
+            {"authorization": "Bearer sk-ant-oat01-caller"},
+        ),
     ],
-    ids=["caller_replaces_the_configured_token", "configured_token_kept_under_another_name"],
+    ids=[
+        "caller_replaces_the_configured_token",
+        "configured_token_kept_under_another_name",
+        "caller_token_replaces_a_value_ahead_of_the_configured_token",
+    ],
 )
 def test_a_pin_applies_only_while_the_configured_credential_survives_the_merge(
     configured_headers: dict[str, str], expected: dict[str, str]
