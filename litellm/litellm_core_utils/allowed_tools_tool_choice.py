@@ -164,10 +164,7 @@ def _why_the_mcp_choice_stays(tool_choice: object, route: str, call: HostedMcpCa
         case "runs":
             return f"{route} runs hosted MCP tools itself, but LiteLLM cannot force one there. {_REMOVE_THE_MCP_CHOICE}"
         case "forwards":
-            return (
-                f"{route} forwards hosted MCP tools as sent, but LiteLLM cannot force one there. "
-                f"{_REMOVE_THE_MCP_CHOICE}"
-            )
+            return f"LiteLLM cannot force a hosted MCP tool on {route}. {_REMOVE_THE_MCP_CHOICE}"
         case "drops":
             return _why_a_dropping_route_keeps_the_mcp_choice(_forced_mcp_server(tool_choice), call)
         case _:
