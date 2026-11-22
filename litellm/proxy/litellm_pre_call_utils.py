@@ -4172,12 +4172,12 @@ def _apply_credential_overrides_from_model_config(
             data[key] = credential_values[key]
 
     if litellm.enable_gateway_io_logging:
-        _cred_meta = data.get("litellm_metadata")
-        if not isinstance(_cred_meta, dict):
-            _cred_meta = {}
-            data["litellm_metadata"] = _cred_meta
-        _cred_meta["_gateway_credential_name"] = str(credential_name)
-        _cred_meta["_gateway_credential_source"] = "model_config"
+        _credential_metadata = data.get("litellm_metadata")
+        if not isinstance(_credential_metadata, dict):
+            _credential_metadata = {}
+            data["litellm_metadata"] = _credential_metadata
+        _credential_metadata["_gateway_credential_name"] = str(credential_name)
+        _credential_metadata["_gateway_credential_source"] = "model_config"
     _safe_model: Final = str(model_name).replace("\n", "").replace("\r", "")
     _safe_cred = str(credential_name).replace("\n", "").replace("\r", "")
     verbose_proxy_logger.debug(

@@ -220,11 +220,11 @@ def _sanitize_model_name(
         return fallback if isinstance(fallback, str) and fallback else MASKED_VALUE
     if isinstance(fallback, str) and fallback:
         raw_bare = raw_model.rsplit("/", 1)[-1]
-        fb_bare = fallback.rsplit("/", 1)[-1]
-        if fallback != raw_model and fb_bare != raw_bare:
+        fallback_bare_model = fallback.rsplit("/", 1)[-1]
+        if fallback != raw_model and fallback_bare_model != raw_bare:
             if not _SAFE_MODEL_NAME_PATTERN.match(fallback) or fallback in ("invalid-model", "unknown", "redacted"):
                 return fallback
-            if sanitized_model and sanitized_model == sanitized_model_group and raw_bare != fb_bare:
+            if sanitized_model and sanitized_model == sanitized_model_group and raw_bare != fallback_bare_model:
                 return fallback
     return raw_model
 
@@ -232,12 +232,12 @@ def _sanitize_model_name(
 def _summarize_response_format(value: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"bytes": _estimate_size(value)}
     if isinstance(value, Mapping):
-        rf_type = value.get("type")
-        if isinstance(rf_type, str):
-            out["type"] = _truncate_str(rf_type, 32)
-        js = value.get("json_schema")
-        if isinstance(js, Mapping) and isinstance(js.get("strict"), bool):
-            out["strict"] = js["strict"]
+        response_format_type = value.get("type")
+        if isinstance(response_format_type, str):
+            out["type"] = _truncate_str(response_format_type, 32)
+        json_string = value.get("json_schema")
+        if isinstance(json_string, Mapping) and isinstance(json_string.get("strict"), bool):
+            out["strict"] = json_string["strict"]
     return out
 
 
@@ -283,27 +283,27 @@ def _collect_runtime_secrets(
     for k in ("api_key", "aws_secret_access_key", "aws_session_token"):
         _add(litellm_params.get(k))
 
-    vc = litellm_params.get("vertex_credentials")
-    if isinstance(vc, str):
-        _add(vc)
-        if vc.lstrip().startswith("{"):
+    vertex_credentials = litellm_params.get("vertex_credentials")
+    if isinstance(vertex_credentials, str):
+        _add(vertex_credentials)
+        if vertex_credentials.lstrip().startswith("{"):
             try:
-                parsed_vc = json.loads(vc)
-                if isinstance(parsed_vc, Mapping):
-                    _add(parsed_vc.get("private_key"))
-                    _add(parsed_vc.get("private_key_id"))
+                parsed_vertex_credentials = json.loads(vertex_credentials)
+                if isinstance(parsed_vertex_credentials, Mapping):
+                    _add(parsed_vertex_credentials.get("private_key"))
+                    _add(parsed_vertex_credentials.get("private_key_id"))
             except Exception:
                 pass
-    elif isinstance(vc, Mapping):
-        _add(vc.get("private_key"))
-        _add(vc.get("private_key_id"))
+    elif isinstance(vertex_credentials, Mapping):
+        _add(vertex_credentials.get("private_key"))
+        _add(vertex_credentials.get("private_key_id"))
 
     if isinstance(raw_headers, Mapping):
-        for hk, hv in raw_headers.items():
-            if str(hk).lower() in AUTH_HEADER_NAMES and isinstance(hv, str):
-                tok = _extract_auth_token_secret(hv)
-                if tok:
-                    _add(tok)
+        for header_key, hv in raw_headers.items():
+            if str(header_key).lower() in AUTH_HEADER_NAMES and isinstance(hv, str):
+                token_value = _extract_auth_token_secret(hv)
+                if token_value:
+                    _add(token_value)
     return tuple(secrets)
 
 
@@ -337,9 +337,9 @@ def _scrub_text(
     out = value[:MAX_REGEX_SCAN_LEN] if len(value) > MAX_REGEX_SCAN_LEN else value
     if runtime_secrets:
         repl = f"<credential:{credential_name}>" if credential_name else MASKED_VALUE
-        for sec in runtime_secrets:
-            if sec in out:
-                out = out.replace(sec, repl)
+        for secret_value in runtime_secrets:
+            if secret_value in out:
+                out = out.replace(secret_value, repl)
                 changed = True
     if "PRIVATE KEY-----" in out.upper():
         new_out = _PEM_BLOCK_PATTERN.sub(MASKED_VALUE, out)
@@ -350,13 +350,13 @@ def _scrub_text(
         out = _RAW_SECRET_PATTERN.sub(MASKED_VALUE, out)
         changed = True
     if scrub_high_entropy and len(out) >= 28:
-        def _repl_entropy(m: re.Match[str]) -> str:
-            tok = m.group(0)
-            if tok.lower().startswith(_SAFE_ID_PREFIXES):
-                return tok
+        def _replace_entropy_match(m: re.Match[str]) -> str:
+            token_value = m.group(0)
+            if token_value.lower().startswith(_SAFE_ID_PREFIXES):
+                return token_value
             return MASKED_VALUE
 
-        new_out = _HEX_OR_B64_SECRET_PATTERN.sub(_repl_entropy, out)
+        new_out = _HEX_OR_B64_SECRET_PATTERN.sub(_replace_entropy_match, out)
         if new_out != out:
             out = new_out
             changed = True
@@ -427,17 +427,17 @@ def _sanitize_url(
             netloc = f"{MASKED_VALUE}@{hostpart}"
         query = parts.query
         if query:
-            sanitized_q: list[tuple[str, str]] = []
+            sanitized_query: list[tuple[str, str]] = []
             for k, v in parse_qsl(query, keep_blank_values=True):
-                lk = k.lower()
-                if lk in SAFE_QUERY_PARAMS:
+                lower_key = k.lower()
+                if lower_key in SAFE_QUERY_PARAMS:
                     scrubbed_v, _ = _scrub_text(v, runtime_secrets=runtime_secrets, credential_name=credential_name)
-                    sanitized_q.append((k, _truncate_str(scrubbed_v, 64)))
-                elif lk in SENSITIVE_QUERY_PARAMS and credential_name:
-                    sanitized_q.append((k, f"<credential:{credential_name}>"))
+                    sanitized_query.append((k, _truncate_str(scrubbed_v, 64)))
+                elif lower_key in SENSITIVE_QUERY_PARAMS and credential_name:
+                    sanitized_query.append((k, f"<credential:{credential_name}>"))
                 else:
-                    sanitized_q.append((k, MASKED_VALUE))
-            query = urlencode(sanitized_q)
+                    sanitized_query.append((k, MASKED_VALUE))
+            query = urlencode(sanitized_query)
         rebuilt = urlunsplit((parts.scheme, netloc, parts.path, query, ""))
         rebuilt, _ = _scrub_text(rebuilt, runtime_secrets=runtime_secrets, credential_name=credential_name, ip_redactor=ip_redactor)
         return _truncate_str(rebuilt, MAX_HEADER_VALUE_LEN)
@@ -476,8 +476,8 @@ def _sanitize_safe_nested(
     if isinstance(value, Mapping):
         out: dict[str, Any] = {}
         for k, v in value.items():
-            ks = str(k)
-            out[ks] = _sanitize_safe_nested(
+            key_string = str(k)
+            out[key_string] = _sanitize_safe_nested(
                 v,
                 runtime_secrets=runtime_secrets,
                 credential_name=credential_name,
@@ -580,15 +580,15 @@ def _summarize_body(
                 if was_scrubbed:
                     process_body[key_str] = "mask"
             elif isinstance(v, (Mapping, list, tuple)):
-                est = _estimate_size(v)
-                if est <= MAX_BODY_SCALAR_LEN:
+                estimated_size = _estimate_size(v)
+                if estimated_size <= MAX_BODY_SCALAR_LEN:
                     params[key_str] = _sanitize_safe_nested(
                         v,
                         runtime_secrets=runtime_secrets,
                         credential_name=credential_name,
                     )
                 else:
-                    params[f"{key_str}_bytes"] = est
+                    params[f"{key_str}_bytes"] = estimated_size
                     if isinstance(v, (list, tuple)):
                         params[f"{key_str}_count"] = len(v)
             else:
@@ -622,12 +622,12 @@ def capture_external_egress(
 ) -> dict[str, Any]:
     args = additional_args if isinstance(additional_args, Mapping) else {}
     litellm_params = model_call_details.get("litellm_params")
-    lp = litellm_params if isinstance(litellm_params, Mapping) else {}
+    litellm_params_value = litellm_params if isinstance(litellm_params, Mapping) else {}
 
     active_ip_redactor = _get_active_ip_redactor(ip_redactor)
-    credential_name, credential_source = _resolve_credential_info(lp)
+    credential_name, credential_source = _resolve_credential_info(litellm_params_value)
     raw_headers = args.get("headers") or {}
-    runtime_secrets = _collect_runtime_secrets(api_key, lp, raw_headers=raw_headers)
+    runtime_secrets = _collect_runtime_secrets(api_key, litellm_params_value, raw_headers=raw_headers)
     headers_out, process_header = _sanitize_headers(
         raw_headers,
         credential_label=credential_name,
@@ -669,9 +669,9 @@ def _extract_response_headers(
         if isinstance(hidden, Mapping):
             candidates.append(hidden.get("additional_headers"))
     if isinstance(standard_logging_payload, Mapping):
-        sl_meta = standard_logging_payload.get("metadata")
-        if isinstance(sl_meta, Mapping):
-            candidates.append(sl_meta.get("response_headers"))
+        logging_metadata = standard_logging_payload.get("metadata")
+        if isinstance(logging_metadata, Mapping):
+            candidates.append(logging_metadata.get("response_headers"))
     for c in candidates:
         if isinstance(c, Mapping) and len(c) > 0:
             return c
@@ -693,11 +693,11 @@ def build_gateway_io_metadata(
     sanitized_model_group: str | None = None,
     ip_redactor: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
-    psr = litellm_params.get("proxy_server_request")
-    psr_map = psr if isinstance(psr, Mapping) else {}
-    psr_body = psr_map.get("body")
-    psr_body_map = psr_body if isinstance(psr_body, Mapping) else {}
-    psr_headers = psr_map.get("headers")
+    proxy_server_request = litellm_params.get("proxy_server_request")
+    proxy_server_request_map = proxy_server_request if isinstance(proxy_server_request, Mapping) else {}
+    proxy_server_request_body = proxy_server_request_map.get("body")
+    proxy_server_request_body_map = proxy_server_request_body if isinstance(proxy_server_request_body, Mapping) else {}
+    proxy_server_request_headers = proxy_server_request_map.get("headers")
 
     raw_alias = metadata.get("user_api_key_alias")
     key_label = (
@@ -705,16 +705,16 @@ def build_gateway_io_metadata(
         if isinstance(raw_alias, str) and raw_alias and not raw_alias.lower().startswith("sk-")
         else None
     )
-    in_secrets = _collect_runtime_secrets(None, {}, raw_headers=psr_headers)
-    in_headers, in_proc_header = _sanitize_headers(
-        psr_headers or {},
+    in_secrets = _collect_runtime_secrets(None, {}, raw_headers=proxy_server_request_headers)
+    in_headers, internal_process_header = _sanitize_headers(
+        proxy_server_request_headers or {},
         credential_label=key_label,
         replace_action="replace:key_alias",
         runtime_secrets=in_secrets,
         ip_redactor=ip_redactor,
     )
-    raw_route = str(psr_map.get("url") or metadata.get("user_api_key_request_route") or "")
-    raw_in_model = str(psr_body_map.get("model") or metadata.get("model_group") or "")
+    raw_route = str(proxy_server_request_map.get("url") or metadata.get("user_api_key_request_route") or "")
+    raw_in_model = str(proxy_server_request_body_map.get("model") or metadata.get("model_group") or "")
     internal_ingress: dict[str, Any] = {
         "route": _sanitize_url(
             raw_route,
@@ -728,10 +728,10 @@ def build_gateway_io_metadata(
             sanitized_model_group=sanitized_model_group,
         ),
         "headers": in_headers,
-        "body_bytes": _estimate_size(psr_body),
+        "body_bytes": _estimate_size(proxy_server_request_body),
     }
-    if in_proc_header:
-        internal_ingress["litellm_process"] = {"header": in_proc_header}
+    if internal_process_header:
+        internal_ingress["litellm_process"] = {"header": internal_process_header}
 
     exc = kwargs.get("exception")
     is_failure = (
@@ -765,81 +765,81 @@ def build_gateway_io_metadata(
     runtime_secrets = _collect_runtime_secrets(kwargs.get("api_key"), litellm_params)
     captured = kwargs.get("_gateway_external_egress")
     if isinstance(captured, Mapping):
-        ext_headers = dict(captured.get("headers") or {})
-        ext_proc_header = dict(captured.get("_process_header") or {})
-        ext_body_params = dict(captured.get("body_params") or {})
-        ext_proc_body = dict(captured.get("_process_body") or {})
-        ext_raw_keys = list(captured.get("_raw_body_keys") or [])
-        ext_api_base = str(captured.get("api_base") or "")
-        cred_name = captured.get("credential_name")
-        cred_source = str(captured.get("credential_source") or "unspecified")
+        external_headers = dict(captured.get("headers") or {})
+        external_process_header = dict(captured.get("_process_header") or {})
+        external_body_params = dict(captured.get("body_params") or {})
+        external_process_body = dict(captured.get("_process_body") or {})
+        external_raw_keys = list(captured.get("_raw_body_keys") or [])
+        external_api_base = str(captured.get("api_base") or "")
+        credential_name = captured.get("credential_name")
+        credential_source = str(captured.get("credential_source") or "unspecified")
     else:
-        cred_name, cred_source = _resolve_credential_info(litellm_params)
-        ext_headers = {}
-        ext_proc_header = {}
-        ext_body_params = {}
-        ext_proc_body = {}
-        ext_raw_keys = []
-        ext_api_base = _sanitize_url(
+        credential_name, credential_source = _resolve_credential_info(litellm_params)
+        external_headers = {}
+        external_process_header = {}
+        external_body_params = {}
+        external_process_body = {}
+        external_raw_keys = []
+        external_api_base = _sanitize_url(
             str(api_base or ""),
-            credential_name=cred_name,
+            credential_name=credential_name,
             runtime_secrets=runtime_secrets,
         )
 
     in_header_lower = {k.lower() for k in in_headers}
-    for hk in ext_headers:
-        if hk.lower() not in in_header_lower and hk not in ext_proc_header:
-            ext_proc_header[hk] = "add"
+    for header_key in external_headers:
+        if header_key.lower() not in in_header_lower and header_key not in external_process_header:
+            external_process_header[header_key] = "add"
 
-    if isinstance(ext_body_params.get("model"), str):
-        ext_body_params["model"] = _sanitize_model_name(
-            ext_body_params["model"],
+    if isinstance(external_body_params.get("model"), str):
+        external_body_params["model"] = _sanitize_model_name(
+            external_body_params["model"],
             sanitized_model=sanitized_model,
             sanitized_model_group=sanitized_model_group,
         )
     if ip_redactor is not None:
-        if ext_api_base:
-            ext_api_base = ip_redactor(ext_api_base)
-        for hk, hv in list(ext_headers.items()):
-            redacted_hv = ip_redactor(hv)
-            if redacted_hv != hv:
-                ext_headers[hk] = redacted_hv
-                ext_proc_header[hk] = "mask"
+        if external_api_base:
+            external_api_base = ip_redactor(external_api_base)
+        for header_key, hv in list(external_headers.items()):
+            redacted_header_value = ip_redactor(hv)
+            if redacted_header_value != hv:
+                external_headers[header_key] = redacted_header_value
+                external_process_header[header_key] = "mask"
 
-    in_body_keys = {str(k) for k in psr_body_map}
+    in_body_keys = {str(k) for k in proxy_server_request_body_map}
     if in_body_keys:
-        for bk in ext_raw_keys:
-            if bk not in in_body_keys and bk not in ext_proc_body:
-                ext_proc_body[bk] = "add"
+        for body_key in external_raw_keys:
+            if body_key not in in_body_keys and body_key not in external_process_body:
+                external_process_body[body_key] = "add"
         in_model = internal_ingress.get("model")
-        ext_model = ext_body_params.get("model")
-        if isinstance(in_model, str) and isinstance(ext_model, str) and in_model != ext_model:
-            ext_proc_body["model"] = "replace:model"
+        external_model = external_body_params.get("model")
+        if isinstance(in_model, str) and isinstance(external_model, str) and in_model != external_model:
+            external_process_body["model"] = "replace:model"
 
     external_egress: dict[str, Any] = {
         "provider": str(custom_llm_provider or ""),
-        "api_base": ext_api_base,
-        "credential_name": cred_name,
-        "credential_source": cred_source,
-        "headers": ext_headers,
-        "body_params": ext_body_params,
+        "api_base": external_api_base,
+        "credential_name": credential_name,
+        "credential_source": credential_source,
+        "headers": external_headers,
+        "body_params": external_body_params,
     }
-    ext_egress_proc: dict[str, Any] = {}
-    if ext_proc_header:
-        ext_egress_proc["header"] = ext_proc_header
-    if ext_proc_body:
-        ext_egress_proc["body"] = ext_proc_body
-    if ext_egress_proc:
-        external_egress["litellm_process"] = ext_egress_proc
+    external_egress_process: dict[str, Any] = {}
+    if external_process_header:
+        external_egress_process["header"] = external_process_header
+    if external_process_body:
+        external_egress_process["body"] = external_process_body
+    if external_egress_process:
+        external_egress["litellm_process"] = external_egress_process
 
-    raw_resp_headers = _extract_response_headers(
+    raw_response_headers = _extract_response_headers(
         kwargs=kwargs,
         metadata=metadata,
         standard_logging_payload=standard_logging_payload,
         response_obj=response_obj,
     )
     resp_headers, response_process_header = _sanitize_headers(
-        raw_resp_headers,
+        raw_response_headers,
         credential_label=None,
         strip_provider_prefix=True,
         runtime_secrets=runtime_secrets,
@@ -850,10 +850,10 @@ def build_gateway_io_metadata(
         "http_status": http_status,
         "headers": resp_headers,
     }
-    resp_model = response_obj_dict.get("model") if response_obj_dict else getattr(response_obj, "model", None)
-    if isinstance(resp_model, str):
+    response_model = response_obj_dict.get("model") if response_obj_dict else getattr(response_obj, "model", None)
+    if isinstance(response_model, str):
         external_ingress["model"] = _sanitize_model_name(
-            resp_model,
+            response_model,
             sanitized_model=sanitized_model,
             sanitized_model_group=sanitized_model_group,
         )
@@ -866,7 +866,7 @@ def build_gateway_io_metadata(
         external_ingress["access_programs"] = _sanitize_safe_nested(
             response_access_programs,
             runtime_secrets=runtime_secrets,
-            credential_name=cred_name,
+            credential_name=credential_name,
             ip_redactor=ip_redactor,
         )
     if is_failure:
@@ -883,7 +883,7 @@ def build_gateway_io_metadata(
             scrubbed_err, _ = _scrub_text(
                 err_msg,
                 runtime_secrets=runtime_secrets,
-                credential_name=cred_name,
+                credential_name=credential_name,
                 scrub_high_entropy=True,
                 ip_redactor=ip_redactor,
             )
@@ -912,18 +912,18 @@ def attach_gateway_io_to_spend_log_payload(
 ) -> Any:
     if not isinstance(payload, dict):
         return payload
-    kw = kwargs if isinstance(kwargs, Mapping) else {}
-    lp = kw.get("litellm_params")
-    lp_map = lp if isinstance(lp, Mapping) else {}
-    meta = lp_map.get("litellm_metadata")
+    keyword_args = kwargs if isinstance(kwargs, Mapping) else {}
+    litellm_params_value = keyword_args.get("litellm_params")
+    litellm_params_map = litellm_params_value if isinstance(litellm_params_value, Mapping) else {}
+    meta = litellm_params_map.get("litellm_metadata")
     if not isinstance(meta, Mapping):
-        meta = lp_map.get("metadata")
+        meta = litellm_params_map.get("metadata")
     if not isinstance(meta, Mapping):
-        meta = kw.get("metadata")
+        meta = keyword_args.get("metadata")
     meta_map = meta if isinstance(meta, Mapping) else {}
-    resp_dict: Mapping[str, Any] = response_obj if isinstance(response_obj, Mapping) else {}
-    slp = kw.get("standard_logging_object")
-    slp_map = slp if isinstance(slp, Mapping) else None
+    response_dict: Mapping[str, Any] = response_obj if isinstance(response_obj, Mapping) else {}
+    logging_payload = keyword_args.get("standard_logging_object")
+    logging_payload_map = logging_payload if isinstance(logging_payload, Mapping) else None
     raw_meta = payload.get("metadata")
     parsed_meta: dict[str, Any] | None = None
     if isinstance(raw_meta, str):
@@ -936,12 +936,12 @@ def attach_gateway_io_to_spend_log_payload(
         parsed_meta = raw_meta
     sanitized_err = parsed_meta.get("error_information") if isinstance(parsed_meta, dict) else None
     gateway_io = build_gateway_io_metadata(
-        kwargs=kw,
+        kwargs=keyword_args,
         metadata=meta_map,
-        litellm_params=lp_map,
-        response_obj_dict=resp_dict,
-        standard_logging_payload=slp_map,
-        custom_llm_provider=str(payload.get("custom_llm_provider") or lp_map.get("custom_llm_provider") or ""),
+        litellm_params=litellm_params_map,
+        response_obj_dict=response_dict,
+        standard_logging_payload=logging_payload_map,
+        custom_llm_provider=str(payload.get("custom_llm_provider") or litellm_params_map.get("custom_llm_provider") or ""),
         api_base=str(payload.get("api_base") or ""),
         response_obj=response_obj,
         sanitized_error_info=sanitized_err if isinstance(sanitized_err, Mapping) else None,
