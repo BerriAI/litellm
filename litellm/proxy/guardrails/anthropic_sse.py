@@ -20,6 +20,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_error_events,
     anthropic_sse_event_type,
     anthropic_sse_event_types,
+    anthropic_sse_message_delta,
     anthropic_sse_started_blocks,
     anthropic_sse_started_message,
     anthropic_sse_stopped_block_index,
@@ -193,7 +194,8 @@ def anthropic_sse_chunks_from_response(
 ) -> tuple[bytes, ...]:
     """Re-emit a rewritten response as the SSE events of the ``source_chunks`` stream it replaces.
 
-    ``message_delta`` carries the source stream's ``stop_details`` and ``safeguard_results`` and
+    ``message_delta`` keeps the source stream's own fields, such as the code execution ``container`` and
+    server tool usage, and carries its ``stop_details`` and ``safeguard_results`` and
     nothing the OpenAI round trip made up, with a verdict kept only for a tool call delivered with
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
@@ -245,6 +247,7 @@ def _rebuilt_sse_chunks(
         message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
         message_start_fields=_upstream_message_start_fields(source_chunks),
         tool_use_starts=_tool_use_starts(source_chunks),
+        upstream_message_delta=anthropic_sse_message_delta(source_chunks),
     ).chunks
     if not error_events:
         return tuple(rewritten_chunks)

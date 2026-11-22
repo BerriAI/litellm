@@ -26,13 +26,18 @@ import litellm
 from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.anthropic.messages.stream_assembly import anthropic_sse_started_blocks
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
     PresidioPerRequestConfig,
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 
@@ -2813,6 +2818,19 @@ _STREAMS_WITH_A_READABLE_PHONE: Final = {
     ),
     "error-after-text":(_message_start_sse(), *_text_block_sse(0, "Sure, one moment."), _phone_error_sse()),
     "error-alone": (_phone_error_sse(),),
+    "error-name-on-a-ping-frame": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure, one moment."),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+        _anthropic_sse("error", {"type": "ping", "error": {"type": "overloaded_error", "message": f"Call {_PHONE}"}}),
+    ),
+    "phone-under-a-duplicate-error-key": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure, one moment."),
+        b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", '
+        + f'"message": "Call {_PHONE}", "message": "Overloaded"}}}}\n\n'.encode(),
+    ),
 }
 _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
     "text-in-message-start": (
@@ -2916,11 +2934,11 @@ async def test_apply_to_output_streaming_anthropic_sse_refuses_a_stream_a_client
         ),
         (
             f'event: error\ndata: {{"type":"error","error":{{"type":"api_error","message":"Call {_PHONE}","code":529}}}}\n\n'.encode(),
-            b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Call <PHONE_NUMBER>", "code": 529}}\n\n',
+            b'event: error\ndata: {"type":"error","error":{"type":"api_error","message":"Call <PHONE_NUMBER>","code":529}}\n\n',
         ),
         (
             f'event: error\ndata: {{"type":"error","error":{{"type":"api_error","details":["Call {_PHONE}"]}}}}\n\n'.encode(),
-            b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "details": ["Call <PHONE_NUMBER>"]}}\n\n',
+            b'event: error\ndata: {"type":"error","error":{"type":"api_error","details":["Call <PHONE_NUMBER>"]}}\n\n',
         ),
         (
             f"event: error\ndata: Overloaded while calling {_PHONE}\n\n".encode(),
@@ -2928,7 +2946,7 @@ async def test_apply_to_output_streaming_anthropic_sse_refuses_a_stream_a_client
         ),
         (
             f'event: error\ndata: {{"type":"error",\ndata: "error":{{"type":"api_error","message":"Call {_PHONE}"}}}}\n\n'.encode(),
-            b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Call <PHONE_NUMBER>"}}\n\n',
+            b'event: error\ndata: {"type":"error", "error":{"type":"api_error","message":"Call <PHONE_NUMBER>"}}\n\n',
         ),
         (
             f"event: error\ndata: Overloaded while\ndata: calling {_PHONE}\n\n".encode(),
@@ -3002,6 +3020,13 @@ async def test_apply_to_output_streaming_anthropic_sse_tool_input_without_pii_is
     assert collected == list(upstream)
 
 
+_PHONE_UNDER_A_DUPLICATE_TOOL_INPUT_KEY: Final = (
+    _message_start_sse(),
+    _tool_use_start_sse(0),
+    _input_json_delta_sse(0, f'{{"number": "{_PHONE}", "number": "ok"}}'),
+    _block_stop_sse(0),
+    *_TOOL_USE_END_SSE,
+)
 _STREAMS_CARRYING_A_PHONE_NO_CLIENT_READS: Final = {
     "tool-input-cut-off-by-an-error": (
         (
@@ -3024,6 +3049,10 @@ _STREAMS_CARRYING_A_PHONE_NO_CLIENT_READS: Final = {
         ),
         {0: "tool_use"},
     ),
+    "phone-under-a-tool-input-key-a-later-duplicate-replaces": (
+        _PHONE_UNDER_A_DUPLICATE_TOOL_INPUT_KEY,
+        {0: "tool_use"},
+    ),
 }
 
 
@@ -3042,6 +3071,196 @@ async def test_apply_to_output_streaming_anthropic_sse_sends_no_pii_its_scan_lef
     started: Final = anthropic_sse_started_blocks(collected)
     assert _PHONE not in b"".join(collected).decode()
     assert {index: block.get("type") for index, block in started.items()} == block_types
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_blocks_a_phone_under_a_tool_input_key_a_later_duplicate_replaces():
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.BLOCK) as guardrail:
+        with pytest.raises(BlockedPiiEntityError):
+            await anext(_post_call_stream(guardrail, _PHONE_UNDER_A_DUPLICATE_TOOL_INPUT_KEY))
+
+
+_PHONE_DIGITS_PATTERN: Final = re.compile(r"\d{10}")
+_INPUT_JSON_DELTA: Final = re.compile(r'data: (\{.*"input_json_delta".*\})')
+
+
+def _tool_input_of(chunks: Iterable[object]) -> object:
+    sent: Final = b"".join(chunk for chunk in chunks if isinstance(chunk, bytes)).decode()
+    deltas: Final = tuple(json.loads(data)["delta"]["partial_json"] for data in _INPUT_JSON_DELTA.findall(sent))
+    return json.loads("".join(deltas))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_input", "sent_input"),
+    [
+        ('{"number": 2125550147, "vip": true}', {"number": "<PHONE_NUMBER>", "vip": True}),
+        ('{"number": -2125550147}', {"number": "-<PHONE_NUMBER>"}),
+        ('{"numbers": [2125550147, 7], "note": "call 2125550147"}', {"numbers": ["<PHONE_NUMBER>", 7], "note": "call <PHONE_NUMBER>"}),
+    ],
+)
+async def test_apply_to_output_streaming_anthropic_sse_masks_a_number_in_a_tool_input_as_a_string(
+    tool_input: str, sent_input: dict[str, object]
+):
+    upstream: Final = (
+        _message_start_sse(),
+        _tool_use_start_sse(0),
+        _input_json_delta_sse(0, tool_input),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    )
+
+    async with _guardrail_over_regex_presidio(
+        PiiEntityType.PHONE_NUMBER, _PHONE_DIGITS_PATTERN, PiiAction.MASK
+    ) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+    assert _tool_input_of(collected) == sent_input
+
+
+async def _messages_tool_input(guardrail: OPTIONAL_PresidioPIIMasking, tool_input: dict[str, object]) -> object:
+    response: Final = {
+        "type": "message",
+        "id": "msg_1",
+        "model": "claude",
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "save_contact", "input": tool_input}],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+    sent: Final = await AnthropicMessagesHandler().process_output_response(
+        response=response, guardrail_to_apply=guardrail, request_data={}
+    )
+    return sent["content"][0]["input"]
+
+
+async def _chat_tool_input(guardrail: OPTIONAL_PresidioPIIMasking, tool_input: dict[str, object]) -> object:
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "save_contact", "arguments": json.dumps(tool_input)},
+    }
+    response: Final = ModelResponse(choices=[Choices(message=Message(content=None, tool_calls=[tool_call]))])
+    sent: Final = await OpenAIChatCompletionsHandler().process_output_response(
+        response=response, guardrail_to_apply=guardrail, request_data={}
+    )
+    return json.loads(sent.choices[0].message.tool_calls[0].function.arguments)
+
+
+async def _responses_tool_input(guardrail: OPTIONAL_PresidioPIIMasking, tool_input: dict[str, object]) -> object:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "save_contact",
+                "arguments": json.dumps(tool_input),
+                "status": "completed",
+            }
+        ],
+    )
+    sent: Final = await OpenAIResponsesHandler().process_output_response(
+        response=response, guardrail_to_apply=guardrail, request_data={}
+    )
+    return json.loads(stream_item_field(sent.output[0], "arguments"))
+
+
+_NON_STREAMED_TOOL_INPUTS: Final = {
+    "messages": _messages_tool_input,
+    "chat_completions": _chat_tool_input,
+    "responses": _responses_tool_input,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _NON_STREAMED_TOOL_INPUTS)
+@pytest.mark.parametrize(
+    ("tool_input", "sent_input"),
+    [
+        (
+            {"contact": {"phone": _PHONE}, "note": "ok", "vip": True},
+            {"contact": {"phone": "<PHONE_NUMBER>"}, "note": "ok", "vip": True},
+        ),
+        ({"city": "Zürich"}, {"city": "Zürich"}),
+        ({}, {}),
+    ],
+)
+async def test_a_non_streamed_tool_call_is_masked_on_every_endpoint(
+    endpoint: str, tool_input: dict[str, object], sent_input: dict[str, object]
+):
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        assert await _NON_STREAMED_TOOL_INPUTS[endpoint](guardrail, tool_input) == sent_input
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _NON_STREAMED_TOOL_INPUTS)
+async def test_a_number_in_a_non_streamed_tool_call_is_masked_as_a_string(endpoint: str):
+    async with _guardrail_over_regex_presidio(
+        PiiEntityType.PHONE_NUMBER, _PHONE_DIGITS_PATTERN, PiiAction.MASK
+    ) as guardrail:
+        sent: Final = await _NON_STREAMED_TOOL_INPUTS[endpoint](guardrail, {"number": 2125550147})
+
+    assert sent == {"number": "<PHONE_NUMBER>"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _NON_STREAMED_TOOL_INPUTS)
+async def test_pii_in_a_non_streamed_tool_call_is_blocked_on_every_endpoint(endpoint: str):
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.BLOCK) as guardrail:
+        with pytest.raises(BlockedPiiEntityError):
+            await _NON_STREAMED_TOOL_INPUTS[endpoint](guardrail, {"phone": _PHONE})
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_messages_tool_call_is_masked_when_the_ended_stream_is_rewritten():
+    chunks: Final = list(_PHONE_IN_A_TOOL_INPUT)
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        sent: Final = await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=MagicMock(),
+            request_data={},
+            deliver_ended_stream_rewrites=True,
+        )
+
+    assert _tool_input_of(sent) == {"number": "<PHONE_NUMBER>"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_call",
+    [
+        {"id": "call_1", "type": "function", "function": {"name": "now", "arguments": ""}},
+        {"id": "call_1", "type": "custom", "custom": {"name": "run", "input": "ok"}},
+    ],
+)
+async def test_apply_guardrail_returns_a_response_tool_call_without_arguments_as_sent(tool_call: dict[str, object]):
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [tool_call]}, request_data={}, input_type="response"
+        )
+
+    assert result["tool_calls"] == [tool_call]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_rewrites_only_the_tool_calls_of_a_response():
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "call", "arguments": json.dumps({"to": _PHONE})},
+    }
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [tool_call]}, request_data={}, input_type="request"
+        )
+
+    assert result["tool_calls"] == [tool_call]
 
 
 def _anthropic_sse_chunks_led_by_a_non_object_data_line(*, line_in_its_own_chunk: bool) -> tuple[bytes, ...]:

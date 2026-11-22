@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import accumulate, count, pairwise
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
@@ -48,6 +49,7 @@ from litellm.llms.anthropic.common_utils import (
     with_server_tool_call_arguments,
     write_anthropic_server_tool_calls,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
@@ -68,11 +70,12 @@ from litellm.types.guardrails import (
     PiiEntityType,
     PresidioPerRequestConfig,
 )
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
-from litellm.types.utils import GuardrailStatus, Message, StreamingChoices
+from litellm.types.utils import ChatCompletionMessageToolCall, GuardrailStatus, Message, StreamingChoices
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -169,43 +172,78 @@ def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[
     yield from all_chunks
 
 
-async def _masked_json_strings(value: JsonValue, mask: Callable[[str], Awaitable[str]]) -> JsonValue:
-    match value:
-        case str():
-            return await mask(value)
-        case list():
-            return [await _masked_json_strings(item, mask) for item in value]
-        case dict():
-            return {key: await _masked_json_strings(item, mask) for key, item in value.items()}
-        case _:
-            return value
+_JSON_STRING: Final = re.compile(r'"(?:[^"\\]|\\.)*"')
+_JSON_STRING_OR_SCALAR: Final = re.compile(_JSON_STRING.pattern + r'|[^\s,:\[\]{}"]+')
+_JSON_STRING_VALUE: Final[TypeAdapter[str]] = TypeAdapter(str)
+
+
+def _is_json(text: str) -> bool:
+    try:
+        _JSON_VALUE.validate_json(text)
+    except ValidationError:
+        return False
+    return True
+
+
+def _json_string_value(token: re.Match[str]) -> str:
+    return _JSON_STRING_VALUE.validate_json(token.group())
+
+
+async def _masked_json_string(token: re.Match[str], mask: Callable[[str], Awaitable[str]]) -> str:
+    value: Final = _json_string_value(token)
+    masked: Final = await mask(value)
+    return token.group() if masked == value else json.dumps(masked)
 
 
 async def _masked_error_data(data: str, mask: Callable[[str], Awaitable[str]]) -> str:
-    """The data of an upstream ``error`` event, all its ``data:`` lines, with every string value in it masked."""
-    try:
-        error: Final = _JSON_VALUE.validate_json(data)
-    except ValidationError:
+    """The data of an upstream ``error`` event, all its ``data:`` lines, with every JSON string in it masked in place."""
+    if not _is_json(data):
         return await mask(data)
-    masked_error: Final = await _masked_json_strings(error, mask)
-    return data if masked_error == error else json.dumps(masked_error)
+    masked_strings: Final = MappingProxyType(
+        {token.start(): await _masked_json_string(token, mask) for token in _JSON_STRING.finditer(data)}
+    )
+    return _JSON_STRING.sub(lambda token: masked_strings[token.start()], data)
+
+
+def _decoded_json_string(token: re.Match[str]) -> str:
+    return json.dumps(_json_string_value(token), ensure_ascii=False)
 
 
 def _decoded_json_text(text: str) -> str:
-    try:
-        value: Final = _JSON_VALUE.validate_json(text)
-    except ValidationError:
-        return text
-    return json.dumps(value, ensure_ascii=False)
+    return _JSON_STRING.sub(_decoded_json_string, text) if _is_json(text) else text
+
+
+def _quoted_unless_json(token: re.Match[str]) -> str:
+    value: Final = token.group()
+    return value if value.startswith('"') or _is_json(value) else json.dumps(value)
+
+
+def _with_replaced_scalars_quoted(text: str) -> str:
+    return text if _is_json(text) else _JSON_STRING_OR_SCALAR.sub(_quoted_unless_json, text)
 
 
 def _json_text_processor(process: Callable[[str], Awaitable[str]]) -> Callable[[str], Awaitable[str]]:
     async def processed(text: str) -> str:
         decoded: Final = _decoded_json_text(text)
         result: Final = await process(decoded)
-        return text if result == decoded else result
+        if result == decoded:
+            return text
+        return _with_replaced_scalars_quoted(result) if _is_json(decoded) else result
 
     return processed
+
+
+async def _processed_tool_call(
+    tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall,
+    process_arguments: Callable[[str], Awaitable[str]],
+) -> ChatCompletionToolCallChunk | ChatCompletionMessageToolCall:
+    arguments: Final = stream_item_field(stream_item_field(tool_call, "function"), "arguments")
+    if not isinstance(arguments, str):
+        return tool_call
+    processed: Final = await process_arguments(arguments)
+    if isinstance(tool_call, dict):
+        return {**tool_call, "function": {**tool_call["function"], "arguments": processed}}
+    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"arguments": processed})})
 
 
 async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
@@ -1860,24 +1898,32 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        new_texts: Final = []
         if input_type == "response" and (
             self._callback_role == "restore"
             or (self._callback_role is None and not self.apply_to_output and pii_tokens)
         ):
-            for text in texts:
-                new_texts.append(self._unmask_pii_text(text, pii_tokens))
-        else:
-            for text in texts:
-                modified_text = await self.check_pii(
-                    text=text,
-                    output_parse_pii=self.output_parse_pii,
-                    presidio_config=None,
-                    request_data=request_data,
-                )
-                new_texts.append(modified_text)
-        inputs["texts"] = new_texts
-        return inputs
+            return {**inputs, "texts": [self._unmask_pii_text(text, pii_tokens) for text in texts]}
+
+        async def scanned_text(text: str) -> str:
+            return await self.check_pii(
+                text=text,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=None,
+                request_data=request_data,
+            )
+
+        scanned: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": [await scanned_text(text) for text in texts]}
+        tool_calls: Final = inputs.get("tool_calls")
+        if input_type == "request" or not tool_calls:
+            return scanned
+        scanned_arguments: Final = _json_text_processor(scanned_text)
+        scanned_tool_calls: Final = [await _processed_tool_call(call, scanned_arguments) for call in tool_calls]
+        return {
+            **scanned,
+            "tool_calls": cast(  # cast-ok: each call keeps the type it came in as
+                list[ChatCompletionToolCallChunk], scanned_tool_calls
+            ),
+        }
 
     def supports_scan_tool_descriptions_as_text(self) -> bool:
         return True

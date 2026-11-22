@@ -585,6 +585,11 @@ def anthropic_sse_started_message(all_chunks: Sequence[object]) -> Mapping[str, 
     return MappingProxyType({}) if message is None else message
 
 
+def anthropic_sse_message_delta(all_chunks: Sequence[object]) -> Mapping[str, object]:
+    events: Final = _parsed_sse_events(_joined_sse_stream(all_chunks) or "")
+    return next((event for event in reversed(events) if event.get("type") == "message_delta"), MappingProxyType({}))
+
+
 def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str, object]:
     """The ``stop_details`` and ``safeguard_results`` of the stream's ``message_delta``.
 
@@ -592,13 +597,7 @@ def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str,
     from that event and nowhere else (a Claude Code auto-mode session takes its classifier verdict
     from ``safeguard_results``), so a caller re-emitting a rewritten response merges them back in.
     """
-    sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
-        return MappingProxyType({})
-    message_delta: Final = next(
-        (event for event in reversed(_parsed_sse_events(sse_stream)) if event.get("type") == "message_delta"), None
-    )
-    delta: Final = as_str_mapping(message_delta.get("delta")) if message_delta is not None else None
+    delta: Final = as_str_mapping(anthropic_sse_message_delta(all_chunks).get("delta"))
     if delta is None:
         return MappingProxyType({})
     return MappingProxyType(
@@ -692,8 +691,13 @@ def _client_data(event: str) -> str:
     return "" if client_frame is None else client_frame[1]
 
 
+def _is_error_to_some_client(event: str) -> bool:
+    return _is_error_event(event) or _is_named_error_event(event)
+
+
 def anthropic_sse_error_data(all_chunks: Sequence[object]) -> tuple[str, ...]:
-    return tuple(_client_data(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
+    events: Final = _frames_a_client_dispatches(_joined_sse_stream(all_chunks) or "")
+    return tuple(_client_data(event) for event in events if _is_error_to_some_client(event))
 
 
 def _error_data_lines(data: str) -> tuple[str, ...]:
