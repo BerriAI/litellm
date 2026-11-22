@@ -6,6 +6,7 @@
 # +-------------------------------------------------------------+
 import os
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
@@ -17,6 +18,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, joined
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -69,7 +71,7 @@ class OnyxGuardrail(CustomGuardrail):
         payload: object,
         input_type: Literal["request", "response"],
         conversation_id: str,
-    ) -> dict:
+    ) -> Mapping[str, object]:
         """
         Call external Onyx Guard server for validation
         """
@@ -85,11 +87,11 @@ class OnyxGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        result: Final = response.json()
+        result: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
         if not result.get("allowed", True):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
-                detection_message = ", ".join(result["violated_rules"])
+                detection_message = joined(", ", result["violated_rules"])
             verbose_proxy_logger.warning("Request blocked by Onyx Guard. Violations: %s.", detection_message)
             raise HTTPException(
                 status_code=400,

@@ -365,8 +365,10 @@ async def test_arrivals_progress_while_retry_scan_advances_and_wraps(count: int)
             assert any(latest_ids[0] in tuple(row.id for row in page) for page in followups)
 
             restarted: Final = CheckBatchCost(logging, prisma, router)
-            restart_page: Final = await restarted._find_jobs(where)
-            assert tuple(row.id for row in restart_page) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
+            restart_ids: Final = tuple(row.id for row in await restarted._find_jobs(where))
+            restart_old: Final = tuple(identity for identity in restart_ids if identity in old_ids)
+            assert len(restart_ids) == MAX_OBJECTS_PER_POLL_CYCLE
+            assert restart_old == old_ids[: MAX_OBJECTS_PER_POLL_CYCLE - MAX_OBJECTS_PER_POLL_CYCLE // 2]
     finally:
         write_rows('DELETE FROM "LiteLLM_ManagedObjectTable" WHERE created_by = %s', (owner,))
 

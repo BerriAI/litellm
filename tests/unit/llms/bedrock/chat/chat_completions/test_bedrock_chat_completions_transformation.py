@@ -1,7 +1,9 @@
 """Bedrock Runtime Chat Completions: the default for GPT 5.6 and newer, ``bedrock/chat_completions/<model>`` for the rest."""
 
 import json
+import logging
 import re
+from typing import Final
 
 import httpx
 import pytest
@@ -157,11 +159,21 @@ def test_complete_url_appends_to_openai_v1_base():
     assert url == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
 
 
-def test_complete_url_sends_to_the_runtime_endpoint_over_api_base_like_converse(monkeypatch):
+SIGNING_HOST_API_BASES: Final = pytest.mark.parametrize(
+    "api_base",
+    ["https://signing-host.example.com", "https://signing-host.example.com/openai/v1/chat/completions"],
+    ids=["bare", "full-chat-url"],
+)
+
+
+@SIGNING_HOST_API_BASES
+def test_complete_url_sends_to_the_runtime_endpoint_over_api_base_like_converse(
+    monkeypatch: pytest.MonkeyPatch, api_base: str
+) -> None:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
-    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
-    url = cfg.get_complete_url(
-        api_base="https://signing-host.example.com",
+    cfg: Final = AmazonBedrockRuntimeChatCompletionsConfig()
+    url: Final = cfg.get_complete_url(
+        api_base=api_base,
         api_key=None,
         model="us.openai.gpt-5.6-sol",
         optional_params={"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": "https://egress.example.com/"},
@@ -181,6 +193,94 @@ def test_complete_url_sends_to_the_env_runtime_endpoint_over_api_base_like_conve
         litellm_params={},
     )
     assert url == "https://env-egress.example.com/openai/v1/chat/completions"
+
+
+@SIGNING_HOST_API_BASES
+def test_complete_url_skips_an_unused_malformed_region_when_api_base_is_set(
+    monkeypatch: pytest.MonkeyPatch, api_base: str
+) -> None:
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params={
+            "aws_region_name": "Not A Region",
+            "aws_bedrock_runtime_endpoint": "https://egress.example.com",
+        },
+        litellm_params={},
+    )
+    assert url == "https://egress.example.com/openai/v1/chat/completions"
+
+
+@pytest.mark.parametrize("api_base", [None, "https://signing-host.example.com/openai/v1/chat/completions"])
+def test_complete_url_uses_a_full_chat_completions_runtime_endpoint_as_is(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None
+) -> None:
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params={
+            "aws_region_name": "us-east-1",
+            "aws_bedrock_runtime_endpoint": "https://egress.example.com/gateway/openai/v1/chat/completions/",
+        },
+        litellm_params={},
+    )
+    assert url == "https://egress.example.com/gateway/openai/v1/chat/completions"
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{}, {"aws_region_name": "Not A Region"}, {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": ""}],
+    ids=["no-region", "unused-malformed-region", "empty-runtime-endpoint"],
+)
+def test_complete_url_uses_a_full_chat_completions_api_base_as_is_without_a_runtime_endpoint(
+    monkeypatch: pytest.MonkeyPatch, optional_params: dict[str, str]
+) -> None:
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+        api_base="https://gateway.example.com/bedrock/openai/v1/chat/completions/",
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    assert url == "https://gateway.example.com/bedrock/openai/v1/chat/completions"
+
+
+def test_complete_url_keeps_a_full_chat_completions_api_base_over_the_env_runtime_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com")
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+        api_base="https://gateway.example.com/bedrock/openai/v1/chat/completions",
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params={"aws_region_name": "us-east-1"},
+        litellm_params={},
+    )
+    assert url == "https://gateway.example.com/bedrock/openai/v1/chat/completions"
+
+
+@pytest.mark.parametrize(
+    "runtime_endpoint",
+    ["https://egress.example.com/openai/v1/responses", "https://egress.example.com/v1/responses/"],
+)
+@pytest.mark.parametrize("api_base", [None, "https://signing-host.example.com/openai/v1/chat/completions"])
+def test_complete_url_swaps_a_responses_route_on_the_runtime_endpoint_for_chat_completions(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, runtime_endpoint: str
+) -> None:
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params={"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": runtime_endpoint},
+        litellm_params={},
+    )
+    assert url == "https://egress.example.com/openai/v1/chat/completions"
 
 
 @pytest.mark.parametrize("digits", [4, 4301, 30000])
@@ -291,6 +391,232 @@ def test_completion_posts_runtime_chat_completions(local_cost_map, fake_aws_env)
     assert body["model"] == "us.xai.grok-4.6"
     assert body["messages"] == [{"role": "user", "content": "hello"}]
     assert "inferenceConfig" not in body
+
+
+EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+PROMPT_CACHE_OPTIONS: Final = {"mode": "explicit", "ttl": "30m"}
+
+
+def _messages_with_a_marked_prefix(breakpoint):
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "stable prefix", "prompt_cache_breakpoint": breakpoint},
+                {"type": "text", "text": "variable suffix"},
+            ],
+        }
+    ]
+
+
+async def _transformed_body(model, messages, litellm_params, is_async, optional_params=None):
+    cfg: Final = AmazonBedrockRuntimeChatCompletionsConfig()
+    request: Final = {
+        "model": model,
+        "messages": messages,
+        "optional_params": dict(optional_params or {}),
+        "litellm_params": litellm_params,
+        "headers": {},
+    }
+    return await cfg.async_transform_request(**request) if is_async else cfg.transform_request(**request)
+
+
+@pytest.mark.parametrize("model", ["global.openai.gpt-6.1-sol", "global.openai.gpt-6.2-sol"])
+@pytest.mark.parametrize("options_via", ["top_level", "extra_body"])
+def test_native_chat_sends_a_content_part_cache_breakpoint_under_drop_params(
+    local_cost_map, fake_aws_env, model, options_via
+):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model))
+    options: Final = (
+        {"prompt_cache_options": PROMPT_CACHE_OPTIONS}
+        if options_via == "top_level"
+        else {"extra_body": {"prompt_cache_options": PROMPT_CACHE_OPTIONS}}
+    )
+
+    litellm.completion(
+        model=f"bedrock/{model}",
+        messages=_messages_with_a_marked_prefix(EXPLICIT_BREAKPOINT),
+        drop_params=True,
+        client=client,
+        **options,
+    )
+
+    (request,) = requests
+    assert request.url.path == "/openai/v1/chat/completions"
+    body: Final = json.loads(request.content)
+    assert body["prompt_cache_options"] == PROMPT_CACHE_OPTIONS
+    assert body["messages"][0]["content"] == _messages_with_a_marked_prefix(EXPLICIT_BREAKPOINT)[0]["content"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["global.openai.gpt-6.2-sol", "chat_completions/openai.gpt-oss-20b-1:0", "chat_completions/us.xai.grok-4.6"],
+)
+def test_native_chat_sends_the_client_cache_breakpoint_untouched_without_drop_params(
+    local_cost_map, fake_aws_env, model
+):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("chat_completions/")))
+    breakpoint_with_ttl: Final = {"mode": "explicit", "ttl": "30m"}
+
+    litellm.completion(
+        model=f"bedrock/{model}",
+        messages=_messages_with_a_marked_prefix(breakpoint_with_ttl),
+        drop_params=False,
+        client=client,
+    )
+
+    (request,) = requests
+    body: Final = json.loads(request.content)
+    assert body["messages"][0]["content"][0]["prompt_cache_breakpoint"] == breakpoint_with_ttl
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "model, model_info, keeps_breakpoint",
+    [
+        ("global.openai.gpt-6.2-sol", None, True),
+        ("global.openai.gpt-7-sol", None, False),
+        ("vendor.native-model-v1:0", {"supports_openai_prompt_cache_breakpoint": True}, True),
+        ("global.openai.gpt-6.2-sol", {"supports_openai_prompt_cache_breakpoint": False}, False),
+        ("global.openai.gpt-5.5", None, False),
+        ("openai.gpt-oss-20b-1:0", None, False),
+        ("us.xai.grok-4.6", None, False),
+        ("us.xai.grok-4.6", {"supports_openai_prompt_cache_breakpoint": True}, True),
+    ],
+)
+async def test_native_chat_keeps_a_cache_breakpoint_under_drop_params_only_where_the_model_reads_it(
+    local_cost_map, model, model_info, keeps_breakpoint, is_async
+):
+    litellm_params: Final = {"drop_params": True, **({"model_info": model_info} if model_info is not None else {})}
+
+    body: Final = await _transformed_body(
+        model, _messages_with_a_marked_prefix(EXPLICIT_BREAKPOINT), litellm_params, is_async
+    )
+
+    marker: Final = {"prompt_cache_breakpoint": EXPLICIT_BREAKPOINT} if keeps_breakpoint else {}
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": "stable prefix", **marker},
+        {"type": "text", "text": "variable suffix"},
+    ]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("supported", [True, False])
+async def test_native_chat_reads_breakpoint_support_from_the_catalog_for_any_model_name(
+    local_cost_map, supported, is_async
+):
+    model: Final = "vendor.native-model-v1:0"
+    litellm.register_model(
+        {model: {"litellm_provider": "bedrock", "supports_openai_prompt_cache_breakpoint": supported}}
+    )
+
+    body: Final = await _transformed_body(
+        model, _messages_with_a_marked_prefix(EXPLICIT_BREAKPOINT), {"drop_params": True}, is_async
+    )
+
+    marker: Final = {"prompt_cache_breakpoint": EXPLICIT_BREAKPOINT} if supported else {}
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": "stable prefix", **marker},
+        {"type": "text", "text": "variable suffix"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "breakpoint, sent",
+    [
+        ({"mode": "explicit", "ttl": "30m"}, EXPLICIT_BREAKPOINT),
+        ({"mode": "implicit"}, None),
+    ],
+)
+async def test_native_chat_cuts_a_kept_cache_breakpoint_down_to_the_chat_completions_shape(
+    local_cost_map, breakpoint, sent
+):
+    body: Final = await _transformed_body(
+        "global.openai.gpt-6.2-sol", _messages_with_a_marked_prefix(breakpoint), {"drop_params": True}, False
+    )
+
+    assert body["messages"][0]["content"][0].get("prompt_cache_breakpoint") == sent
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_native_chat_keeping_content_part_breakpoints_still_strips_every_other_cache_mark(
+    local_cost_map, is_async
+):
+    messages: Final = [
+        {
+            "role": "user",
+            "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT,
+            "content": [
+                {"type": "text", "text": "question", "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT},
+                {"type": "text", "text": "anthropic marked", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT,
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "result", "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT}],
+        },
+    ]
+    tools: Final = [
+        {
+            "type": "function",
+            "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT,
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object"},
+                "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT,
+            },
+        }
+    ]
+
+    body: Final = await _transformed_body(
+        "global.openai.gpt-6.2-sol", messages, {"drop_params": True}, is_async, optional_params={"tools": tools}
+    )
+
+    user, *rest = body["messages"]
+    assert user["content"] == [
+        {"type": "text", "text": "question", "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT},
+        {"type": "text", "text": "anthropic marked"},
+    ]
+    assert "prompt_cache_breakpoint" not in user
+    assert "prompt_cache_breakpoint" not in json.dumps(rest)
+    assert "prompt_cache_breakpoint" not in json.dumps(body["tools"])
+    assert body["tools"][0]["function"]["name"] == "lookup"
+
+
+@pytest.mark.parametrize(
+    "model, extra",
+    [
+        ("bedrock/converse/global.openai.gpt-6.2-sol", {}),
+        ("bedrock/global.openai.gpt-6.2-sol", {"top_k": 5}),
+    ],
+)
+def test_converse_served_gpt_requests_still_send_no_prompt_cache_breakpoint(local_cost_map, fake_aws_env, model, extra):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+
+    litellm.completion(
+        model=model,
+        messages=_messages_with_a_marked_prefix(EXPLICIT_BREAKPOINT),
+        drop_params=True,
+        client=client,
+        **extra,
+    )
+
+    (request,) = requests
+    assert request.url.raw_path == b"/model/global.openai.gpt-6.2-sol/converse"
+    assert b"prompt_cache_breakpoint" not in request.content
 
 
 def test_completion_keeps_the_aws_request_id_as_a_provider_header(local_cost_map, fake_aws_env):
@@ -706,18 +1032,30 @@ def test_with_max_completion_tokens_leaves_other_params_alone():
 
 
 @pytest.mark.parametrize(
-    "model",
-    ["us.xai.grok-4.6", "bedrock/us-gov-west-1/us.xai.grok-4.6"],
+    ("model", "logged_model"),
+    [
+        ("us.xai.grok-4.6", "us.xai.grok-4.6"),
+        ("chat_completions/us.xai.grok-4.6", "us.xai.grok-4.6"),
+        ("bedrock/us-gov-west-1/us.xai.grok-4.6", "us-gov-west-1/us.xai.grok-4.6"),
+    ],
 )
-def test_map_openai_params_drops_reasoning_effort_none_for_grok(model):
+def test_map_openai_params_drops_reasoning_effort_none_for_grok_with_one_warning(
+    model: str, logged_model: str, caplog: pytest.LogCaptureFixture
+) -> None:
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
-    mapped = cfg.map_openai_params(
-        non_default_params={"reasoning_effort": "none", "max_tokens": 64},
-        optional_params={},
-        model=model,
-        drop_params=False,
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        mapped = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "none", "max_tokens": 64},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    drop_warnings = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     assert "reasoning_effort" not in mapped
+    assert len(drop_warnings) == 1
+    assert "reasoning_effort='none'" in drop_warnings[0]
+    assert f"model={logged_model!r}" in drop_warnings[0]
+    assert "drop_params" not in drop_warnings[0]
 
 
 def test_map_openai_params_keeps_reasoning_effort_low_for_grok():
@@ -750,17 +1088,24 @@ def test_map_openai_params_refuses_a_non_string_reasoning_effort_without_drop_pa
 @pytest.mark.parametrize("reasoning_effort", [["low"], {"effort": "low"}, 5], ids=["list", "object", "int"])
 @pytest.mark.parametrize("drop_params_via", ["request", "litellm.drop_params"])
 def test_map_openai_params_drops_a_non_string_reasoning_effort_under_drop_params(
-    monkeypatch, model, reasoning_effort, drop_params_via
+    monkeypatch, caplog, model, reasoning_effort, drop_params_via
 ):
     monkeypatch.setattr(litellm, "drop_params", drop_params_via == "litellm.drop_params")
-    mapped = AmazonBedrockRuntimeChatCompletionsConfig().map_openai_params(
-        non_default_params={"reasoning_effort": reasoning_effort, "max_tokens": 64},
-        optional_params={},
-        model=model,
-        drop_params=drop_params_via == "request",
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        mapped = AmazonBedrockRuntimeChatCompletionsConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort, "max_tokens": 64},
+            optional_params={},
+            model=model,
+            drop_params=drop_params_via == "request",
+        )
+    drop_warnings = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     assert "reasoning_effort" not in mapped
     assert mapped["max_completion_tokens"] == 64
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in (f"reasoning_effort={reasoning_effort!r}", repr(model), "(drop_params=True)")
+    )
 
 
 def test_map_openai_params_keeps_reasoning_effort_none_for_gpt56():

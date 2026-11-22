@@ -42,6 +42,15 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_HAIKU_5_5_STREAM,
     CLAUDE_HAIKU_5_5_THINKING,
     CLAUDE_HAIKU_5_5_TOOL_CALL,
+    CLAUDE_OPUS_5_5_CACHE_READ,
+    CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    CLAUDE_OPUS_5_5_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    CLAUDE_OPUS_5_5_STREAM,
+    CLAUDE_OPUS_5_5_THINKING,
+    CLAUDE_OPUS_5_5_TOOL_CALL,
 )
 
 
@@ -271,7 +280,7 @@ COHERE_RERANK_V4_TOTAL_TOKENS_FALLBACK: Final = CostTrackingTestCase(
             "meta": {"billed_units": {"total_tokens": 99}},
         },
     ),
-    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=0, completion_tokens=0),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=99, completion_tokens=0),
 )
 
 
@@ -493,8 +502,8 @@ OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_PROVIDER_REPORTED_COST: Final = CostTrackin
     ),
     expected=ExactExpected(
         spend=0.0421,
-        input_cost=0.0,
-        output_cost=0.0421,
+        input_cost=0.0421 * (1840 * 3.2e-06) / (1840 * 3.2e-06 + 412 * 1.6e-05),
+        output_cost=0.0421 * (412 * 1.6e-05) / (1840 * 3.2e-06 + 412 * 1.6e-05),
         prompt_tokens=1840,
         completion_tokens=412,
         breakdown_persisted=False,
@@ -551,6 +560,30 @@ PERPLEXITY_SONAR_NEXT_NO_SEARCH: Final = CostTrackingTestCase(
     expected=ExactExpected(
         spend=0.0025118, input_cost=0.0020792, output_cost=0.0004326, prompt_tokens=1840, completion_tokens=412
     ),
+)
+
+PERPLEXITY_SONAR_NEXT_CACHED_PROMPT_NO_REPORTED_COST: Final = PERPLEXITY_SONAR_NEXT_NO_SEARCH.model_copy(
+    update={
+        "name": "perplexity-sonar-next-cached_prompt_no_reported_cost",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "model": "sonar-next",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 1200},
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0012914, input_cost=0.0008588, output_cost=0.0004326, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
 )
 
 
@@ -2109,6 +2142,181 @@ AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = with_usage(
         spend=0.01667744, input_cost=0.01439744, output_cost=0.00228, prompt_tokens=114688, completion_tokens=480
     ),
 )
+AZURE_AI_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = CLAUDE_OPUS_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure_ai/claude-opus-5-5-input_text",
+        "model": "azure_ai/claude-opus-5-5",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "model": "claude-opus-5-5",
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "scripted answer for cost fixtures"}],
+                "container": None,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                    "service_tier": "standard",
+                    "inference_geo": "global",
+                    "speed": "standard",
+                },
+                "diagnostics": None,
+            },
+        ),
+        "expected": ExactExpected(
+                spend=0.02028, input_cost=0.009568, output_cost=0.010712, prompt_tokens=1840, completion_tokens=412
+            ),
+    }
+)
+AZURE_AI_CLAUDE_OPUS_5_5_STREAM: Final = CLAUDE_OPUS_5_5_STREAM.model_copy(
+    update={
+        "name": "azure_ai/claude-opus-5-5-stream",
+        "model": "azure_ai/claude-opus-5-5",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-opus-5-5",
+                        "id": "msg_$REQUEST_ID",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "container": None,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "usage": {
+                            "input_tokens": 1840,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                            "output_tokens": 1,
+                            "service_tier": "standard",
+                            "inference_geo": "global",
+                            "speed": "standard",
+                        },
+                        "diagnostics": None,
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "ping"},
+                *(
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
+                    for text in ("scripted ", "answer for ", "cost fixtures")
+                ),
+                {"type": "content_block_stop", "index": 0},
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "container": None,
+                    },
+                    "usage": {
+                        "input_tokens": 1840,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 412,
+                        "output_tokens_details": {"thinking_tokens": 0},
+                    },
+                },
+                {"type": "message_stop"},
+            ),
+        ),
+        "expected": AZURE_AI_CLAUDE_OPUS_5_5_INPUT_TEXT.expected,
+    }
+)
+AZURE_AI_CLAUDE_OPUS_5_5_CACHE_READ: Final = _azure_ai_claude_shape_case(
+    CLAUDE_OPUS_5_5_CACHE_READ,
+    "azure_ai/claude-opus-5-5-cache_read",
+    "azure_ai/claude-opus-5-5",
+    _azure_ai_claude_usage(input_tokens=13, output_tokens=4, inference_geo="global", cache_read_input_tokens=40013),
+    ExactExpected(
+        spend=0.01057498, input_cost=0.01047098, output_cost=0.000104, prompt_tokens=40026, completion_tokens=4
+    ),
+)
+AZURE_AI_CLAUDE_OPUS_5_5_CACHE_WRITE_5M: Final = _azure_ai_claude_shape_case(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    "azure_ai/claude-opus-5-5-cache_write_5m",
+    "azure_ai/claude-opus-5-5",
+    _azure_ai_claude_usage(
+        input_tokens=13,
+        output_tokens=4,
+        inference_geo="global",
+        cache_creation_input_tokens=40013,
+        ephemeral_5m_input_tokens=40013,
+    ),
+    ExactExpected(
+        spend=0.2602561, input_cost=0.2601521, output_cost=0.000104, prompt_tokens=40026, completion_tokens=4
+    ),
+)
+AZURE_AI_CLAUDE_OPUS_5_5_CACHE_WRITE_1H: Final = _azure_ai_claude_shape_case(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    "azure_ai/claude-opus-5-5-cache_write_1h",
+    "azure_ai/claude-opus-5-5",
+    _azure_ai_claude_usage(
+        input_tokens=13,
+        output_tokens=4,
+        inference_geo="global",
+        cache_creation_input_tokens=40013,
+        ephemeral_1h_input_tokens=40013,
+    ),
+    ExactExpected(
+        spend=0.4163068, input_cost=0.4162028, output_cost=0.000104, prompt_tokens=40026, completion_tokens=4
+    ),
+)
+AZURE_AI_CLAUDE_OPUS_5_5_THINKING: Final = _azure_ai_claude_shape_case(
+    CLAUDE_OPUS_5_5_THINKING,
+    "azure_ai/claude-opus-5-5-thinking",
+    "azure_ai/claude-opus-5-5",
+    _azure_ai_claude_usage(input_tokens=63, output_tokens=75, inference_geo="global", thinking_tokens=45),
+    ExactExpected(
+        spend=0.0022776, input_cost=0.0003276, output_cost=0.00195, prompt_tokens=63, completion_tokens=75
+    ),
+    [
+        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+        {"type": "text", "text": "scripted answer for cost fixtures"},
+    ],
+    adaptive_thinking=True,
+)
+AZURE_AI_CLAUDE_OPUS_5_5_TOOL_CALL: Final = _azure_ai_claude_shape_case(
+    CLAUDE_OPUS_5_5_TOOL_CALL,
+    "azure_ai/claude-opus-5-5-tool_call",
+    "azure_ai/claude-opus-5-5",
+    _azure_ai_claude_usage(input_tokens=388, output_tokens=52, inference_geo="global"),
+    ExactExpected(
+        spend=0.0033696, input_cost=0.0020176, output_cost=0.001352, prompt_tokens=388, completion_tokens=52
+    ),
+)
+AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_OPUS_5_5_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    "azure_ai/claude-opus-5-5-messages_input_text",
+    "azure_ai/claude-opus-5-5",
+)
+AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_OPUS_5_5_STREAM,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    "azure_ai/claude-opus-5-5-messages_stream",
+    "azure_ai/claude-opus-5-5",
+)
+AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES: Final = bridge_pairs(
+    (AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     PERPLEXITY_SONAR_NEXT_OFF_PEAK,
     NOVA_NEXT_TRANSCRIPTIONS_PER_SECOND,
@@ -2130,6 +2338,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_PROVIDER_REPORTED_COST,
     OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_TOKEN_PRICED,
     PERPLEXITY_SONAR_NEXT_NO_SEARCH,
+    PERPLEXITY_SONAR_NEXT_CACHED_PROMPT_NO_REPORTED_COST,
     DEEPSEEK_DEEPSEEK_V4_CHAT_PROMPT_CACHE_HIT,
     DEEPSEEK_DEEPSEEK_V4_CHAT_NO_CACHE_FIELDS_BILLS_ZERO_CACHE,
     XAI_GROK_5_REASONING_FOLDED_INTO_COMPLETION,
@@ -2184,6 +2393,16 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
     AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
     *(pair.bridged for pair in AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES),
+    AZURE_AI_CLAUDE_OPUS_5_5_INPUT_TEXT,
+    AZURE_AI_CLAUDE_OPUS_5_5_STREAM,
+    AZURE_AI_CLAUDE_OPUS_5_5_CACHE_READ,
+    AZURE_AI_CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    AZURE_AI_CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    AZURE_AI_CLAUDE_OPUS_5_5_THINKING,
+    AZURE_AI_CLAUDE_OPUS_5_5_TOOL_CALL,
+    AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    *(pair.bridged for pair in AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES),
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -2210,9 +2429,13 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         plain=AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES[0].bridged,
         streamed=AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES[1].bridged,
     ),
+    StreamParityTestCase(plain=AZURE_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_OPUS_5_5_STREAM),
+    StreamParityTestCase(plain=AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM),
+    StreamParityTestCase(plain=AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES[0].bridged, streamed=AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES[1].bridged),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *AZURE_AI_CLAUDE_FABLE_5_1_ROUTE_BRIDGES,
     *AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES,
+    *AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES,
 )

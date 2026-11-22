@@ -10,9 +10,9 @@ A2A Streaming Events (in order):
 4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,8 +22,9 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2AStreamingContext,
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
-from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
+from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS, A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.interactions.agents.utils import merge_agent_headers
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse
 
@@ -79,7 +80,7 @@ class A2ACompletionBridgeHandler:
 
     @staticmethod
     def _build_completion_params(
-        params: dict[str, Any],
+        params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_base: str | None,
         agent_extra_headers: Mapping[str, str] | None,
@@ -87,7 +88,7 @@ class A2ACompletionBridgeHandler:
         stream: bool,
     ) -> Mapping[str, object]:
         # Extract message from params
-        message: Final = params.get("message", {})
+        message: Final = require_attributes(params.get("message", {}), dict[str, object], "get")
 
         # Transform A2A message to OpenAI format
         openai_messages: Final = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
@@ -100,7 +101,7 @@ class A2ACompletionBridgeHandler:
             verbose_logger.info("A2A completion bridge: model=%s, api_base=%s", full_model, api_base)
 
         # Build completion params dict
-        completion_params: Final[dict[str, Any]] = {
+        completion_params: Final[dict[str, object]] = {
             "model": full_model,
             "messages": openai_messages,
             "api_base": api_base,
@@ -126,16 +127,13 @@ class A2ACompletionBridgeHandler:
 
     @staticmethod
     async def _acompletion(completion_params: Mapping[str, object]) -> ModelResponse | CustomStreamWrapper:
-        acompletion_fn: Final[Callable[..., Coroutine[object, object, ModelResponse | CustomStreamWrapper]]] = vars(
-            litellm
-        )["acompletion"]
-        return await acompletion_fn(**completion_params)
+        return await litellm.acompletion(**completion_params)
 
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
         params: dict[str, object],
-        litellm_params: dict[str, Any],
+        litellm_params: Mapping[str, object],
         api_base: str | None = None,
         agent_extra_headers: dict[str, str] | None = None,
         *,
@@ -197,8 +195,8 @@ class A2ACompletionBridgeHandler:
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: dict[str, Any],
-        litellm_params: dict[str, Any],
+        params: dict[str, object],
+        litellm_params: Mapping[str, object],
         api_base: str | None = None,
         agent_extra_headers: dict[str, str] | None = None,
         *,
@@ -248,7 +246,7 @@ class A2ACompletionBridgeHandler:
         # Create streaming context
         ctx: Final = A2AStreamingContext(
             request_id=request_id,
-            input_message=params.get("message", {}),
+            input_message=require_attributes(params.get("message", {}), dict[str, object], "get"),
         )
 
         completion_params: Final = A2ACompletionBridgeHandler._build_completion_params(
@@ -268,7 +266,7 @@ class A2ACompletionBridgeHandler:
             ctx=ctx,
             state="working",
             final=False,
-            message_text="Processing request...",
+            message_text=A2A_COMPLETION_BRIDGE_WORKING_MESSAGE,
         )
         yield working_event
 

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH free AS (\n    SELECT $3::bool OR NOT EXISTS (\n        SELECT 1\n        FROM \"LiteLLM_UserTable\"\n        WHERE lower(user_email) = lower($2)\n          AND user_id <> $1\n    ) AS free\n), filled AS (\n    UPDATE \"LiteLLM_UserTable\"\n    SET user_email = $2,\n        updated_at = CURRENT_TIMESTAMP\n    WHERE user_id = $1\n      AND user_email IS NULL\n      AND (SELECT free FROM free)\n    RETURNING user_email\n)\nSELECT user_email AS \"user_email!\"\nFROM filled\nUNION ALL\nSELECT user_email\nFROM \"LiteLLM_UserTable\"\nWHERE user_id = $1\n  AND user_email IS NOT NULL\n  AND (SELECT free FROM free)\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_email!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "edce1072c75aac75f6e521fe25a7c671c41e68cf7ed2c3462d9e92afb6a1fbb2"
+}

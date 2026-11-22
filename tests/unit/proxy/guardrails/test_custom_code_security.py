@@ -4,12 +4,14 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from http.server import ThreadingHTTPServer
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
 
 import litellm
 from litellm.exceptions import ModifyResponseException
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     CustomCodeCompilationError,
@@ -193,6 +195,33 @@ async def test_custom_code_post_call_block_raises_http_400():
         "guardrail": "t",
         "detection_info": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_custom_code_reading_the_last_text_still_blocks_an_earlier_responses_reasoning_text():
+    guardrail: Final = _compile(
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        "    if 'exfiltrate' in inputs['texts'][-1]:\n"
+        "        return block('plan leaked')\n"
+        "    return allow()\n"
+    )
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})
+
+    assert exc_info.value.detail["error"] == "plan leaked"
 
 
 FLAG_CODE = (
@@ -568,9 +597,7 @@ async def test_caller_headers_pass_through_untouched_when_url_validation_is_disa
 @pytest.mark.parametrize(("method", "body"), [("PUT", "put"), ("DELETE", "deleted"), ("PATCH", "patched")])
 async def test_http_request_other_methods_reach_an_allowlisted_host(local_server, monkeypatch, method, body):
     monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
-    guardrail = _reporting_guardrail(
-        f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")'
-    )
+    guardrail = _reporting_guardrail(f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")')
 
     reason = await _block_reason(guardrail)
 
@@ -924,9 +951,7 @@ async def test_async_with_still_executes():
 
     sandbox_globals = build_sandbox_globals()
     exec(  # noqa: S102
-        compile_sandboxed(
-            "async def f(ctx):\n    async with ctx as (a, b):\n        return a + b\n"
-        ),
+        compile_sandboxed("async def f(ctx):\n    async with ctx as (a, b):\n        return a + b\n"),
         sandbox_globals,
     )
     assert await sandbox_globals["f"](_ACtx((5, 6))) == 11
@@ -997,9 +1022,7 @@ async def test_async_for_unpacking_still_rejects_a_non_sequence():
 
     sandbox_globals = build_sandbox_globals()
     exec(  # noqa: S102
-        compile_sandboxed(
-            "async def f(it):\n    async for a, b in it:\n        pass\n"
-        ),
+        compile_sandboxed("async def f(it):\n    async for a, b in it:\n        pass\n"),
         sandbox_globals,
     )
     with pytest.raises(TypeError):

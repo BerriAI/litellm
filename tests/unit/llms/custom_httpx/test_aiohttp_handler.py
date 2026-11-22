@@ -1,11 +1,17 @@
+import json
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
+import httpx
 import pytest
 
 import litellm
+from litellm.llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.utils import ModelResponseStream
 
 
 class TestBaseLLMAIOHTTPHandler:
@@ -301,20 +307,12 @@ class TestBaseLLMAIOHTTPHandler:
         # Should not call aiohttp.ClientSession directly
         mock_client_session.assert_not_called()
 
-    @patch("aiohttp.ClientSession")
-    def test_create_client_session_with_connector(self, mock_client_session):
-        """Test session creation using connector"""
-        mock_connector = Mock(spec=aiohttp.BaseConnector)
-        mock_session_instance = Mock()
-        mock_client_session.return_value = mock_session_instance
-
-        handler = BaseLLMAIOHTTPHandler(connector=mock_connector)
-
-        result = handler._create_client_session_with_transport()
-
-        # Should create session with connector
-        mock_client_session.assert_called_once_with(connector=mock_connector)
-        assert result is mock_session_instance
+    @pytest.mark.asyncio
+    async def test_create_client_session_with_connector(self) -> None:
+        connector: Final = aiohttp.TCPConnector()
+        handler: Final = BaseLLMAIOHTTPHandler(connector=connector)
+        async with handler._create_client_session_with_transport() as session:
+            assert session.connector is connector
 
     @pytest.mark.asyncio
     async def test_create_client_session_default_honors_global_ssl_verify_false(
@@ -445,3 +443,34 @@ class TestBaseLLMAIOHTTPHandler:
         # Should use transport, not connector
         mock_transport.get_valid_client_session.assert_called_once()
         assert result is mock_session_from_transport
+
+
+def test_make_sync_call_stream_keeps_unicode_line_separators_inside_a_delta() -> None:
+    text: Final = "before\u2028between\u2029after"
+    chunk: Final = {
+        "id": "c1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5.5",
+        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+    }
+    body: Final = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode()
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, stream=httpx.ByteStream(body)))
+
+    completion_stream, _ = BaseLLMAIOHTTPHandler().make_sync_call(
+        provider_config=AiohttpOpenAIChatConfig(),
+        api_base="https://example.com/v1/chat/completions",
+        headers={},
+        data={"model": "gpt-5.5", "messages": []},
+        model="gpt-5.5",
+        messages=[],
+        logging_obj=Mock(),
+        litellm_params={},
+        timeout=5.0,
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+
+    contents: Final = [
+        chunk.choices[0].delta.content for chunk in completion_stream if isinstance(chunk, ModelResponseStream)
+    ]
+    assert contents == [text]
