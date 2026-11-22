@@ -1804,3 +1804,24 @@ def test_invalid_identity_and_untrusted_tenant_cannot_be_registered(
     with pytest.raises(HTTPException, match=message) as failure:
         agent_endpoints._validate_managed_identity_request(request)
     assert failure.value.status_code == 400
+
+
+def test_okta_identity_providers_list_only_opted_in_issuers_with_audience(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+
+    issuers: Final = [
+        JWTIssuerConfig(issuer="https://b.okta.example", audience="api", agent_identity_provider="okta", okta_org="b"),
+        JWTIssuerConfig(
+            issuer="https://a.okta.example/oauth2/aus1", audience="api", agent_identity_provider="okta", okta_org="a"
+        ),
+        JWTIssuerConfig(issuer="https://login.example/v2.0", audience="api"),
+    ]
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth(issuers=issuers))
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
+
+    response: Final = client.get("/v1/agents/identity/providers/okta")
+
+    assert response.status_code == 200
+    assert response.json() == ["https://a.okta.example/oauth2/aus1", "https://b.okta.example"]
+    assert _make_app_with_role(LitellmUserRoles.INTERNAL_USER).get("/v1/agents/identity/providers/okta").status_code == 403

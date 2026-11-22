@@ -67,6 +67,7 @@ from litellm.proxy.agent_endpoints.kill_switch import (
     redact_kill_switch,
 )
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+from litellm.proxy.agent_endpoints.okta_identity import okta_issuers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
@@ -569,6 +570,13 @@ def _trusted_agent_issuers() -> tuple[str, ...]:
     )
 
 
+def _okta_agent_issuers() -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import litellm_jwtauth
+
+    trusted: Final = _trusted_agent_issuers()
+    return tuple(sorted(issuer for issuer in okta_issuers(litellm_jwtauth) if issuer in trusted))
+
+
 def _validate_managed_identity_request(
     request: AgentConfig | PatchAgentRequest, existing: AgentResponse | None = None
 ) -> None:
@@ -592,6 +600,14 @@ async def get_agent_identity_providers(
 ) -> tuple[str, ...]:
     _check_agent_management_permission(user_api_key_dict)
     return _trusted_agent_issuers()
+
+
+@router.get("/v1/agents/identity/providers/okta", response_model=tuple[str, ...], tags=["[beta] A2A Agents"])
+async def get_okta_agent_identity_providers(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> tuple[str, ...]:
+    _check_agent_management_permission(user_api_key_dict)
+    return _okta_agent_issuers()
 
 
 @router.get("/v1/agents/{agent_id}/identity", response_model=ManagedAgentIdentityStatus, tags=("[beta] A2A Agents",))
