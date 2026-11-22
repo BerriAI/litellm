@@ -4,6 +4,7 @@ limits/mode/display name/service tiers/listing info, group usage this minute, re
 the rate limit headers ``set_response_headers`` attaches.
 """
 
+from datetime import timedelta
 from typing import Final, Literal
 
 import pytest
@@ -37,8 +38,9 @@ def _usage_core(make_core: MakeCore) -> RouterCore:
     )
 
 
-def _minute() -> str:
-    return get_utc_datetime().strftime("%H-%M")
+def _minutes_a_read_can_land_in() -> tuple[str, str]:
+    now: Final = get_utc_datetime()
+    return now.strftime("%H-%M"), (now + timedelta(minutes=1)).strftime("%H-%M")
 
 
 async def _serve(core: RouterCore, deployment_id: str, model: str, total_tokens: int) -> None:
@@ -51,7 +53,8 @@ async def _serve(core: RouterCore, deployment_id: str, model: str, total_tokens:
 
 async def _count(core: RouterCore, kind: Literal["itpm", "otpm"], deployment_id: str, model: str, value: int) -> None:
     usage: Final = core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the core counts io tokens in
-    usage.set_local(UsageCounter("global_router", deployment_id, model, _minute(), kind), value)
+    for minute in _minutes_a_read_can_land_in():
+        usage.set_local(UsageCounter("global_router", deployment_id, model, minute, kind), value)
 
 
 # -- model group info -----------------------------------------------------------------------------

@@ -1490,9 +1490,8 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
 
 @pytest.mark.parametrize("path", ["/v1/traces", "/v1/logs"])
 @pytest.mark.asyncio
-async def test_auth_and_retired_trace_handler_never_consume_upload_body(path: str) -> None:
+async def test_auth_never_consumes_an_otlp_upload_body(path: str) -> None:
     from litellm.constants import OTLP_MAX_BODY_BYTES
-    from litellm.integrations.lens.proxy import tracing_endpoints
     from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
 
     chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
@@ -1504,11 +1503,6 @@ async def test_auth_and_retired_trace_handler_never_consume_upload_body(path: st
     parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
     assert parsed == {}
     assert parse_error is None
-    receive.assert_not_awaited()
-
-    response: Final = await tracing_endpoints.ingest_otlp_logs(request)
-    assert response.status_code == 410
-    assert json.loads(response.body) == {"message": "Send logs directly to the Lens endpoint shown in Lens setup."}
     receive.assert_not_awaited()
 
 

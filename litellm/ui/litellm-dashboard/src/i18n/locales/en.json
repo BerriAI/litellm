@@ -15351,6 +15351,9 @@
         "resetFilters": "Reset Filters"
       },
       "toolbar": {
+        "export": "Export",
+        "exportCapped": "Export limited to the first {{count}} logs.",
+        "exportEmpty": "No matching logs to export.",
         "customRange": "Custom Range",
         "rangeSeparator": "to"
       },
