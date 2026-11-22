@@ -1793,6 +1793,10 @@ def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_b
     [
         ("/v1beta/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
         ("/models/url-model:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/models/:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {}, None, "body-model"),
+        ("/v1beta/models/:countTokens", {"completion_model": "configured"}, "cli", "body-model"),
         ("/v1beta/models/url-model:generateContent", {"image_generation_model": "configured"}, None, "url-model"),
         ("/openai/deployments/url-model/images/generations", {}, "cli", "cli"),
         ("/openai/deployments/url-model/images/generations", {"completion_model": "configured"}, None, "url-model"),
@@ -1826,6 +1830,12 @@ def test_get_model_from_request_applies_the_handlers_server_model_precedence(
 @pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
 def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str) -> None:
     assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route", ["/v1beta/models/:generateContent", "/models/:countTokens"])
+def test_get_model_from_request_finds_no_model_when_neither_url_nor_body_names_one(route: str) -> None:
+    assert get_model_from_request(request_data={}, route=route) is None
 
 
 @pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)

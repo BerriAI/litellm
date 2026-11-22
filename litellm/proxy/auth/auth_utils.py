@@ -2887,8 +2887,8 @@ def get_model_from_request(
 _HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit", "path"]
 _MODEL_REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 _HANDLER_MODEL_ROUTES: Final[tuple[tuple[re.Pattern[str], str, _HandlerModelKind], ...]] = (
-    (re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
-    (re.compile(r"^(?:/v1beta)?/models/(.+):countTokens$"), "model_name", "path"),
+    (re.compile(r"^(?:/v1beta)?/models/(.*):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
+    (re.compile(r"^(?:/v1beta)?/models/(.*):countTokens$"), "model_name", "path"),
     (re.compile(r"^/openai/deployments/(.+)/images/generations$"), "model", "image_generation"),
     (re.compile(r"^/openai/deployments/(.+)/images/edits$"), "model", "image_edit"),
 )
@@ -2915,7 +2915,7 @@ def _handler_selected_model(
         path_model if isinstance(path_model, str) and path_model else route_model,
         kind=kind,
     )
-    return model if isinstance(model, str) and model else route_model
+    return model if isinstance(model, str) and model else route_model or None
 
 
 def _model_from_route_path(route: str) -> str | None:
