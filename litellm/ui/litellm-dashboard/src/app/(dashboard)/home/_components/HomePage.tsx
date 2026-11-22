@@ -1,12 +1,11 @@
 "use client";
 
-import { ArrowRight, Plus, Rocket, Sparkles } from "lucide-react";
+import { ArrowRight, House, Plus, Rocket, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { uiHref } from "@/utils/uiHref";
 import { Leaderboard, useBreakdown } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
@@ -29,9 +28,12 @@ export default function HomePage() {
   const { series, ranking } = useBreakdown(usage.results, LEADERBOARD, 8);
 
   return (
-    <Page>
+    <>
       <PageHeader>
-        <PageHeaderTitle>{t("home.page.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <House />
+          {t("home.page.title")}
+        </PageHeaderTitle>
         {!isViewOnly && (
           <PageHeaderControls>
             <Button render={<a href={uiHref("api-keys?create=true")} />}>
@@ -116,6 +118,6 @@ export default function HomePage() {
 
         <UpdatesFeed className="self-start" />
       </div>
-    </Page>
+    </>
   );
 }

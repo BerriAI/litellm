@@ -1,4 +1,4 @@
-import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
@@ -681,7 +681,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   ];
 
   return (
-    <Page className={selectedTeamId ? undefined : "h-full"}>
+    <>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -1381,7 +1381,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           </DialogContent>
         </Dialog>
       )}
-    </Page>
+    </>
   );
 };
 

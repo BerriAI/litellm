@@ -9,7 +9,7 @@ import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { TabsContent } from "@/components/ui/tabs";
 import {
@@ -326,7 +326,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   );
 
   return (
-    <Page>
+    <>
       <PageContent>
         <PageTabs defaultValue="users">
           <PageHeader>
@@ -473,7 +473,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         userModels={userModels}
         allowAllUsers={userRole ? isAdminRole(userRole) : false}
       />
-    </Page>
+    </>
   );
 };
 

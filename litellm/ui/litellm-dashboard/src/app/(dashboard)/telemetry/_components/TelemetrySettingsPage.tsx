@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { FieldLabel } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Activity } from "lucide-react";
-import { Page, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -212,16 +212,16 @@ export default function TelemetrySettingsPage() {
   const { premiumUser } = useAuthorized();
   const [enableDialogOpen, setEnableDialogOpen] = useState(false);
   const requestEnable = () => setEnableDialogOpen(true);
-  if (isLoading) return <Page>{t("telemetry.page.loading")}</Page>;
+  if (isLoading) return <>{t("telemetry.page.loading")}</>;
   if (settings === undefined)
     return (
-      <Page className="text-destructive">
+      <div className="contents text-destructive">
         {t("telemetry.page.loadFailed")}
         {error?.message}
-      </Page>
+      </div>
     );
   return (
-    <Page className="text-sm">
+    <div className="contents text-sm">
       <PageTabs value={tab} onValueChange={(value) => setTab(value as (typeof TABS)[number])}>
         <PageHeader>
           <PageHeaderTitle>
@@ -259,6 +259,6 @@ export default function TelemetrySettingsPage() {
         onOpenChange={setEnableDialogOpen}
         premiumUser={premiumUser === true}
       />
-    </Page>
+    </div>
   );
 }
