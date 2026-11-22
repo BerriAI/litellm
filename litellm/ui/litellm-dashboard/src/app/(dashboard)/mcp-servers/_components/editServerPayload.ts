@@ -13,6 +13,7 @@ import {
   TRANSPORT,
   isClientForwardedTokenMode,
   preservedAdminCredentials,
+  type MCPServerEventsConfig,
 } from "@/components/mcp_tools/types";
 import { AUTH_TYPES_REQUIRING_CREDENTIALS, reduceStaticHeaders } from "./createServerPayload";
 import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
@@ -33,6 +34,8 @@ export interface EditServerFormValues {
   readonly oauth_passthrough?: boolean;
   readonly dcr_bridge?: boolean;
   readonly token_validation_json?: string;
+  readonly events_enabled?: boolean;
+  readonly events_allowed?: readonly string[];
   readonly mcp_access_groups?: readonly MCPAccessGroupValue[];
   readonly transport?: string;
   readonly server_name?: string;
@@ -300,6 +303,8 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     oauth_passthrough: oauthPassthroughRaw,
     dcr_bridge: dcrBridgeRaw,
     token_validation_json: rawTokenValidationJson,
+    events_enabled: eventsEnabledRaw,
+    events_allowed: eventsAllowedRaw,
     ...rawRestValues
   } = values;
 
@@ -383,6 +388,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     server_id: mcpServer.server_id,
     mcp_info: {
       ...(mcpServer.mcp_info ?? {}),
+      ...eventsProtocol(mcpServer.mcp_info?.protocol_version, eventsEnabledRaw ?? mcpServer.events?.enabled),
       server_name: mcpInfoServerName,
       description: restValues.description,
       logo_url: logoUrl || undefined,
@@ -428,8 +434,38 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     ...(tokenValidation.value !== null || mcpServer.token_validation
       ? { token_validation: tokenValidation.value }
       : {}),
+    ...eventsEntry(mcpServer.events, eventsEnabledRaw, eventsAllowedRaw),
     ...credentialsEntry,
   };
 
   return { kind: "ok", payload };
 };
+
+export function eventsEntry(
+  current: MCPServerEventsConfig | null | undefined,
+  enabled: boolean | undefined,
+  allowed: readonly string[] | undefined,
+): { readonly events?: MCPServerEventsConfig } {
+  const nextEnabled = enabled ?? current?.enabled ?? false;
+  const allowedEvents = allowed ?? current?.allowed_events ?? [];
+  if (!nextEnabled && !current && allowedEvents.length === 0) return {};
+  return {
+    events: {
+      ...(current ?? {}),
+      enabled: nextEnabled,
+      allowed_events: allowedEvents.length > 0 ? [...allowedEvents] : null,
+    },
+  };
+}
+
+export const EVENTS_PROTOCOL_VERSION = "2026-07-28";
+
+/** Events need the 2026-07-28 protocol; a server left on auto negotiation is pinned to it when events turn on. */
+export function eventsProtocol(
+  current: string | undefined,
+  eventsEnabled: boolean | undefined,
+): { readonly protocol_version?: string } {
+  return eventsEnabled === true && (current === undefined || current === "auto")
+    ? { protocol_version: EVENTS_PROTOCOL_VERSION }
+    : {};
+}
