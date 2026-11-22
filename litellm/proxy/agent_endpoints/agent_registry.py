@@ -425,8 +425,8 @@ class GrantMigrationResult(NamedTuple):
 def _readable_agent(db_agent: Mapping[str, object]) -> AgentResponse | None:
     try:
         return AgentResponse.model_validate(db_agent)
-    except ValidationError as exc:
-        verbose_proxy_logger.warning("Skipping agent %s that this version cannot read: %s", db_agent.get("agent_id"), exc)
+    except ValidationError:
+        verbose_proxy_logger.warning("Skipping agent %s that this version cannot read", db_agent.get("agent_id"))
         return None
 
 

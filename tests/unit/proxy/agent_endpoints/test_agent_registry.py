@@ -167,7 +167,7 @@ def test_load_agents_from_db_and_config_retains_previously_loaded_config_agents(
     ]
 
 
-def test_load_agents_from_db_and_config_skips_a_row_this_version_cannot_read():
+def test_load_agents_from_db_and_config_skips_a_row_this_version_cannot_read() -> None:
     registry = AgentRegistry()
     registry.load_agents_from_config([{"agent_name": "config-agent", "agent_card_params": _sample_agent_card_params()}])
     unreadable = {
