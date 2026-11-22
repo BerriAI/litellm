@@ -607,19 +607,22 @@ def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[in
             items.pop(index)
 
 
+_CARRIED_WHEN_MISSING_FROM_LITELLM_METADATA: Final = frozenset({"litellm_received_at", "spend_logs_metadata"})
+
+
 def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'. The proxy receive stamp rides along for the same
-    reason: a guardrail hook can plant `litellm_metadata` on a chat request after the proxy stamped
-    `metadata`, and the response timing headers anchor on that stamp.
+    and user_api_key values are in 'metadata'. The proxy receive stamp and the caller's spend_logs_metadata
+    ride along for the same reason: a guardrail hook can plant `litellm_metadata` on a chat request after the
+    proxy filled `metadata`, and the response timing headers and the spend row read them from there.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
     for key, value in dict(metadata).items():
-        carry_receive_stamp = key == "litellm_received_at" and key not in litellm_metadata
-        if potential_spend_tracking_metadata_substring in key or carry_receive_stamp:
+        carry_when_missing = key in _CARRIED_WHEN_MISSING_FROM_LITELLM_METADATA and key not in litellm_metadata
+        if potential_spend_tracking_metadata_substring in key or carry_when_missing:
             litellm_metadata[key] = value
     return litellm_metadata
 

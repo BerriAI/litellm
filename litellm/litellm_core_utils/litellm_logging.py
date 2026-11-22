@@ -731,6 +731,13 @@ def mask_api_base_credentials(api_base: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class EndpointRequest:
+    messages: Sequence[object] | None
+    stream_options: object
+    custom_pricing: bool
+
+
+@dataclass(frozen=True, slots=True)
 class UncachedPrice:
     cost: float | None
     cost_breakdown: CostBreakdown | None
@@ -1158,7 +1165,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.logged_call_type: str | None = None
-        self.endpoint_request: tuple[Sequence[object] | None, object] | None = None
+        self.endpoint_request: EndpointRequest | None = None
         self.relays_llm_passthrough: Final = call_type in (
             CallTypes.llm_passthrough_route.value,
             CallTypes.allm_passthrough_route.value,
@@ -3595,7 +3602,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self, messages: Sequence[AllMessageValues], stream_options: ChatCompletionStreamOptionsParam | None
     ) -> None:
         if self.endpoint_request is None:
-            self.endpoint_request = (self.messages, self.stream_options)
+            self.endpoint_request = EndpointRequest(
+                messages=self.messages,
+                stream_options=self.stream_options,
+                custom_pricing=self.custom_pricing,
+            )
+            self.endpoint_litellm_params = dict(self._litellm_params_view)
         self.messages = messages
         self.model_call_details["messages"] = messages
         self.stream_options = stream_options
@@ -3604,11 +3616,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self.logged_call_type = None
         if self.endpoint_request is None:
             return
-        messages, stream_options = self.endpoint_request
+        endpoint_request: Final = self.endpoint_request
         self.endpoint_request = None
-        self.messages = messages
-        self.model_call_details["messages"] = messages
-        self.stream_options = stream_options
+        self.messages = endpoint_request.messages
+        self.model_call_details["messages"] = endpoint_request.messages
+        self.stream_options = endpoint_request.stream_options
+        self.litellm_params = self.endpoint_litellm_params
+        self.model_call_details["litellm_params"] = self.litellm_params
+        self.custom_pricing = endpoint_request.custom_pricing
 
     def payload_call_type(self) -> str:
         if self.logged_call_type is not None:
@@ -4447,7 +4462,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self._restore_correlation_context()
 
     def _is_batch_poll_without_logging(self, result: object) -> bool:
-        litellm_metadata: Final = (self.litellm_params or {}).get("litellm_metadata") or {}
+        litellm_metadata: Final = as_str_mapping((self.litellm_params or {}).get("litellm_metadata")) or {}
         return isinstance(result, LiteLLMBatch) and litellm_metadata.get("batch_ignore_default_logging", False) is True
 
     def _success_handler_body(
