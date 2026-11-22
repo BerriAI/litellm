@@ -6030,18 +6030,18 @@ class TestStreamingClientDisconnectLogging:
             _record_streaming_client_disconnect_if_needed,
         )
 
-        logging_obj = MagicMock()
+        logging_obj: Final = MagicMock()
         logging_obj.model_call_details = {"litellm_params": copy.deepcopy(logged_litellm_params)}
-        tags_before = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("tags")
-        request_data = {
+        tags_before: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("tags")
+        request_data: Final = {
             "litellm_logging_obj": logging_obj,
             **copy.deepcopy(logged_litellm_params),
             "litellm_params": copy.deepcopy(logged_litellm_params),
         }
 
-        recorded = await _record_streaming_client_disconnect_if_needed(None, request_data, client_disconnected=True)
+        recorded: Final = await _record_streaming_client_disconnect_if_needed(None, request_data, client_disconnected=True)
 
-        logged = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+        logged: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
         assert recorded is True
         assert logged["client_disconnected"] is True
         assert logged["error_information"]["error_class"] == "ClientDisconnected"

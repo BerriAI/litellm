@@ -27961,7 +27961,7 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
 
 
 def _cut_responses_stream(
-    response_id: str, usage: Mapping[str, object] | None, response_cost: float | None
+    response_id: str, usage: Mapping[str, object] | None, response_cost: float | None, price_in_usage: bool = False
 ) -> MagicMock:
     response: Final = ResponsesAPIResponse.model_validate(
         MappingProxyType(
@@ -27972,11 +27972,14 @@ def _cut_responses_stream(
                 "status": "incomplete",
                 "model": "claude-haiku-5-5",
                 "output": (),
-                "usage": usage,
+                "usage": MappingProxyType({**usage, "cost": response_cost})
+                if price_in_usage and usage is not None
+                else usage,
             }
         )
     )
-    response.hidden_params["response_cost"] = response_cost
+    if not price_in_usage:
+        response.hidden_params["response_cost"] = response_cost
     stream: Final = MagicMock(spec=BaseResponsesAPIStreamingIterator)
     stream.partial_response_on_disconnect = MagicMock(
         return_value=ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=response)
@@ -28027,8 +28030,10 @@ async def test_a_client_cut_after_a_fallback_bills_the_tokens_cache_reads_and_co
 _FIXED_MARGIN: Final = 0.001
 
 
-def _priced_cut_responses_stream(response_id: str, response_cost: float, logging_obj: LiteLLMLogging) -> MagicMock:
-    stream: Final = _cut_responses_stream(response_id, _cut_usage(25, 0), response_cost)
+def _priced_cut_responses_stream(
+    response_id: str, response_cost: float, logging_obj: LiteLLMLogging, price_in_usage: bool
+) -> MagicMock:
+    stream: Final = _cut_responses_stream(response_id, _cut_usage(25, 0), response_cost, price_in_usage)
     event: Final = stream.partial_response_on_disconnect.return_value
 
     def priced_partial() -> ResponseIncompleteEvent:
@@ -28061,18 +28066,27 @@ def _cut_stream_logging(call_id: str) -> LiteLLMLogging:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deployments_share_one_logging_object", [True, False])
-async def test_a_client_cut_after_a_fallback_charges_the_fixed_margin_once(deployments_share_one_logging_object: bool):
+@pytest.mark.parametrize(
+    ("primary_price_in_usage", "fallback_price_in_usage"),
+    [(False, False), (False, True), (True, True)],
+    ids=["both-bridged", "native-fallback", "both-native"],
+)
+async def test_a_client_cut_after_a_fallback_charges_the_fixed_margin_once(
+    deployments_share_one_logging_object: bool, primary_price_in_usage: bool, fallback_price_in_usage: bool
+):
     primary_logging: Final = _cut_stream_logging("primary")
     fallback_logging: Final = (
         primary_logging if deployments_share_one_logging_object else _cut_stream_logging("fallback")
     )
     billed: Final = await _billed_after_a_fallback(
-        _priced_cut_responses_stream("resp_primary", 0.00105, primary_logging),
-        _priced_cut_responses_stream("resp_fallback", 0.0010325, fallback_logging),
+        _priced_cut_responses_stream("resp_primary", 0.00105, primary_logging, primary_price_in_usage),
+        _priced_cut_responses_stream("resp_fallback", 0.0010325, fallback_logging, fallback_price_in_usage),
     )
 
     billed_cost: Final = (get_hidden_params(billed) or {}).get("response_cost")
     assert billed_cost == pytest.approx(0.00105 + 0.0010325 - _FIXED_MARGIN)
+    assert billed.usage is not None
+    assert billed.usage.cost == pytest.approx(billed_cost)
     assert primary_logging.cost_breakdown is not None
     assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(billed_cost)
     assert primary_logging.cost_breakdown.get("margin_total_amount") == pytest.approx(_FIXED_MARGIN)

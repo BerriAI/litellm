@@ -19,6 +19,7 @@ to None when the only update we saw was the cursor, allowing the
 text-based fallback to estimate from the real completion text.
 """
 
+from typing import Final
 import time
 
 import pytest
@@ -398,8 +399,8 @@ _STREAMED_TEXT = "The lighthouse keeper climbed the stairs"
 
 
 def _anthropic_parsed_events(*, completed: bool) -> list[ModelResponseStream]:
-    parser = AnthropicStreamParser(streaming_response=None, sync_stream=True)
-    events = [
+    parser: Final = AnthropicStreamParser(streaming_response=None, sync_stream=True)
+    opening: Final = (
         {
             "type": "message_start",
             "message": {
@@ -412,14 +413,17 @@ def _anthropic_parsed_events(*, completed: bool) -> list[ModelResponseStream]:
         },
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": _STREAMED_TEXT}},
-    ]
-    if completed:
-        events += [
+    )
+    closing: Final = (
+        (
             {"type": "content_block_stop", "index": 0},
             {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 40}},
             {"type": "message_stop"},
-        ]
-    return [parser.chunk_parser(event) for event in events]
+        )
+        if completed
+        else ()
+    )
+    return [parser.chunk_parser(event) for event in (*opening, *closing)]
 
 
 def _wrapped_stream(*, model: str, custom_llm_provider: str, completed: bool) -> CustomStreamWrapper:
@@ -456,10 +460,10 @@ class TestStreamsParsedFromAnthropicEvents:
     def test_a_cut_stream_bills_the_text_it_read_instead_of_the_message_start_placeholder(
         self, custom_llm_provider: str, model: str
     ):
-        stream = _wrapped_stream(model=model, custom_llm_provider=custom_llm_provider, completed=False)
-        read = next(chunk for chunk in stream if chunk.choices and chunk.choices[0].delta.content)
+        stream: Final = _wrapped_stream(model=model, custom_llm_provider=custom_llm_provider, completed=False)
+        read: Final = next(chunk for chunk in stream if chunk.choices and chunk.choices[0].delta.content)
 
-        built = litellm.stream_chunk_builder(chunks=stream.chunks, messages=[])
+        built: Final = litellm.stream_chunk_builder(chunks=stream.chunks, messages=[])
 
         assert read.choices[0].delta.content == _STREAMED_TEXT
         assert built.usage.prompt_tokens == _PROMPT_TOKENS
@@ -469,22 +473,22 @@ class TestStreamsParsedFromAnthropicEvents:
 
     @_PROVIDERS_REUSING_ANTHROPICS_PARSER
     def test_a_finished_stream_bills_the_output_count_the_provider_reported(self, custom_llm_provider: str, model: str):
-        stream = _wrapped_stream(model=model, custom_llm_provider=custom_llm_provider, completed=True)
+        stream: Final = _wrapped_stream(model=model, custom_llm_provider=custom_llm_provider, completed=True)
         list(stream)
 
-        usage = litellm.stream_chunk_builder(chunks=stream.chunks, messages=[]).usage
+        usage: Final = litellm.stream_chunk_builder(chunks=stream.chunks, messages=[]).usage
 
         assert (usage.prompt_tokens, usage.completion_tokens) == (_PROMPT_TOKENS, 40)
 
     def test_a_lone_usage_event_from_another_parser_on_the_same_provider_keeps_its_count(self):
-        chunks = [
+        chunks: Final = [
             _make_chunk(
                 usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
                 custom_llm_provider="vertex_ai",
                 model="gemini-3-pro",
             ),
         ]
-        result = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(chunks=chunks)
+        result: Final = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(chunks=chunks)
         assert result["completion_tokens"] == 1
 
 

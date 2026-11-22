@@ -1607,7 +1607,8 @@ def _usage_of_both_deployments(
 
 
 def _response_cost(response: ResponsesAPIResponse) -> object:
-    return (get_hidden_params(response) or {}).get("response_cost")
+    hidden_cost: Final = (get_hidden_params(response) or {}).get("response_cost")
+    return getattr(response.usage, "cost", None) if hidden_cost is None else hidden_cost
 
 
 def stream_logging(stream: object) -> LiteLLMLoggingObj | None:
@@ -1656,20 +1657,18 @@ def partial_billed_for_both_deployments(
 ) -> ResponseIncompleteEvent:
     primary_cost: Final = _response_cost(primary.response)
     fallback_cost: Final = _response_cost(fallback.response)
+    total_cost: Final = (
+        primary_cost + fallback_cost - _fixed_margin_charged_twice(primary_breakdown, fallback_breakdown)
+        if isinstance(primary_cost, (int, float)) and isinstance(fallback_cost, (int, float))
+        else None
+    )
+    usage: Final = _usage_of_both_deployments(primary.response.usage, fallback.response.usage)
     billed: Final = fallback.response.model_copy(
-        update={"usage": _usage_of_both_deployments(primary.response.usage, fallback.response.usage)}
+        update={
+            "usage": usage if usage is None or total_cost is None else usage.model_copy(update={"cost": total_cost})
+        }
     )
-    set_hidden_params(
-        billed,
-        {
-            **(get_hidden_params(fallback.response) or {}),
-            "response_cost": primary_cost
-            + fallback_cost
-            - _fixed_margin_charged_twice(primary_breakdown, fallback_breakdown)
-            if isinstance(primary_cost, (int, float)) and isinstance(fallback_cost, (int, float))
-            else None,
-        },
-    )
+    set_hidden_params(billed, {**(get_hidden_params(fallback.response) or {}), "response_cost": total_cost})
     return fallback.model_copy(update={"response": billed})
 
 
