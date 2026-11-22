@@ -1545,6 +1545,18 @@ def _has_video_url_part(message: object) -> bool:
     return any((as_str_mapping(part) or {}).get("type") == "video_url" for part in parts)
 
 
+def reject_system_message_videos(
+    messages: Sequence[AllMessageValues], drop_params: bool, model: str | None, custom_llm_provider: str | None
+) -> None:
+    if drop_params or not any(is_system_message(message) and _has_video_url_part(message) for message in messages):
+        return
+    raise litellm.BadRequestError(
+        message="Gemini system instructions take text only. Move the video to a user message or set drop_params=True.",
+        model=model or "",
+        llm_provider=custom_llm_provider or "gemini",
+    )
+
+
 def transform_system_message(
     supports_system_message: bool,
     messages: list[AllMessageValues],
@@ -1565,14 +1577,7 @@ def transform_system_message(
     """
     if supports_system_message is not True:
         return None, messages
-    if not drop_params and any(is_system_message(message) and _has_video_url_part(message) for message in messages):
-        raise litellm.BadRequestError(
-            message=(
-                "Gemini system instructions take text only. Move the video to a user message or set drop_params=True."
-            ),
-            model=model or "",
-            llm_provider=custom_llm_provider or "gemini",
-        )
+    reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
     leading_system_run, rest = split_leading_system_run(messages)
     parts_by_message: Final = tuple((message, _system_instruction_part(message)) for message in leading_system_run)
     system_content_blocks: Final = [part for _, part in parts_by_message if part is not None]

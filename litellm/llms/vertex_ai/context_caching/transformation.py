@@ -128,6 +128,7 @@ def _cached_block_end(messages: Sequence[AllMessageValues], block_start: int, bl
 
 def separate_cached_messages(
     messages: list[AllMessageValues],
+    supports_system_message: bool = True,
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
     Returns the first continuous block of cached messages and the remaining messages.
@@ -136,7 +137,9 @@ def separate_cached_messages(
     still becomes the system_instruction. Every later system message comes back already converted to a user
     turn in place, so a reminder added each turn is never hoisted into a system_instruction beside the
     cachedContent. A system run that ends the cached block right before a tool result stays out of the
-    cached block, since its user turn goes after that tool result.
+    cached block, since its user turn goes after that tool result. A model without system message support
+    gets its later system messages back as they are, so the request renders them the way it does without a
+    cache.
     """
     filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
     if not filtered_messages:
@@ -150,13 +153,15 @@ def separate_cached_messages(
         _cached_block_end(messages, block_start, filtered_messages[last_continuous_block_idx][0] + 1),
     )
     uncached: Final = tuple((idx, message) for idx, message in enumerate(messages) if idx not in cached_block)
+    later_messages: Final = tuple(message for idx, message in uncached if idx >= len(leading_system_run))
     return (
         messages[cached_block.start : cached_block.stop],
         [
             *(message for idx, message in uncached if idx < len(leading_system_run)),
-            *place_mid_conversation_system(
-                tuple(message for idx, message in uncached if idx >= len(leading_system_run)),
-                supports_mid_conversation_system=False,
+            *(
+                place_mid_conversation_system(later_messages, supports_mid_conversation_system=False)
+                if supports_system_message
+                else later_messages
             ),
         ],
     )
