@@ -477,25 +477,21 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
 
 
+def _echo_request_parts(request: httpx.Request) -> httpx.Response:
+    parts: Final = json.loads(request.content)["contents"][0]["parts"]
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [{"content": {"parts": [{"text": json.dumps(parts)}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+        },
+    )
+
+
 async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video(
     async_only_image_fetch: AsyncOnlyImageFetch,
 ) -> None:
     video_url: Final = f"https://videos.example/{uuid.uuid4()}.mp4"
-    captured = {}
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [{"content": {"parts": [{"text": "A rabbit"}], "role": "model"}, "finishReason": "STOP"}],
-                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
-            },
-        )
-
-    client: Final = AsyncHTTPHandler()
-    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
-
     response: Final = await litellm.acompletion(
         model="gemini/gemini-3.8-flash",
         messages=[
@@ -508,11 +504,10 @@ async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video
             }
         ],
         api_key="fake-gemini-key",
-        client=client,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_echo_request_parts)),
     )
 
-    assert response.choices[0].message.content == "A rabbit"
-    assert captured["body"]["contents"][0]["parts"] == [
+    assert json.loads(response.choices[0].message.content) == [
         {"text": "Describe the clip"},
         {"file_data": {"mime_type": "video/mp4", "file_uri": video_url}},
     ]
@@ -701,22 +696,7 @@ def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself
 ) -> None:
     watch_link: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
     short_link: Final = "https://youtu.be/aqz-KE-bpKQ"
-    captured = {}
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [{"content": {"parts": [{"text": "A rabbit"}], "role": "model"}, "finishReason": "STOP"}],
-                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
-            },
-        )
-
-    client: Final = HTTPHandler()
-    client.client = httpx.Client(transport=httpx.MockTransport(handle))
-
-    litellm.completion(
+    response: Final = litellm.completion(
         model="gemini/gemini-3.8-flash",
         messages=[
             {
@@ -729,10 +709,10 @@ def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself
             }
         ],
         api_key="fake-gemini-key",
-        client=client,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_echo_request_parts))),
     )
 
-    assert captured["body"]["contents"][0]["parts"] == [
+    assert json.loads(response.choices[0].message.content) == [
         {"text": "Describe these"},
         {"file_data": {"mime_type": "video/mp4", "file_uri": watch_link}},
         {"file_data": {"mime_type": "video/mp4", "file_uri": short_link}},
@@ -895,11 +875,11 @@ async def test_async_transform_downloads_a_video_off_the_event_loop(
     loop: Final = asyncio.get_running_loop()
     download_started: Final = asyncio.Event()
     released_by_the_loop: Final = threading.Event()
-    released_while_downloading: Final[list[bool]] = []
 
     def blocking_download(request: httpx.Request) -> httpx.Response:
         loop.call_soon_threadsafe(download_started.set)
-        released_while_downloading.append(released_by_the_loop.wait(timeout=5))
+        if not released_by_the_loop.wait(timeout=5):
+            return httpx.Response(504)
         return httpx.Response(200, content=b"\x00\x00\x00\x18ftypmp42", headers={"content-type": "video/mp4"})
 
     async def release_the_download() -> None:
@@ -927,7 +907,6 @@ async def test_async_transform_downloads_a_video_off_the_event_loop(
         )
     await asyncio.wait_for(releaser, timeout=5)
 
-    assert released_while_downloading == [True]
     assert downloaded_parts(body) == [{"inline_data": {"data": "AAAAGGZ0eXBtcDQy", "mime_type": "video/mp4"}}]
 
 
