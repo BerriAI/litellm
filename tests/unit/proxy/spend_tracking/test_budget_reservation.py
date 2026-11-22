@@ -1063,6 +1063,23 @@ def test_a_gemini_prompt_past_a_price_threshold_is_held_at_the_higher_rates() ->
     assert reserved == pytest.approx(250_000 * 2e-06 + 100 * 6e-06)
 
 
+def test_a_gemini_body_held_at_the_whole_window_it_could_not_count_keeps_the_base_rates() -> None:
+    image_body: Final = {
+        "contents": [{"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]}],
+        "generationConfig": {"maxOutputTokens": 100},
+    }
+    model_info: Final = _THRESHOLD_PRICED | {"max_input_tokens": 300_000}
+    cost_inputs: Final = {"request_body": image_body, "route": GEMINI_ROUTES[0], "model": "custom-gemini"}
+
+    reserved: Final = _max_cost_for_cost_info(
+        **cost_inputs, model_info=model_info, requested_output_tokens=100, output_multiplier=1
+    )
+    floor: Final = _input_cost_for_cost_info(**cost_inputs, model_info=model_info)
+
+    assert reserved == pytest.approx(300_000 * 1e-06 + 100 * 4e-06)
+    assert floor == pytest.approx(300_000 * 1e-06)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "overrides",
@@ -1101,6 +1118,44 @@ async def test_a_gemini_hold_is_sized_from_the_body_extra_body_sends(
         estimate_request_max_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None) or 0
     )
     await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
+async def test_an_extra_body_generation_config_replaces_an_output_cap_sent_as_config(spend_counter_store) -> None:
+    override: Final = {"generationConfig": {"maxOutputTokens": 4096}}
+
+    reservation: Final = await reserve_budget_for_request(
+        request_body=GEMINI_QUESTION | {"config": {"maxOutputTokens": 1}, "extra_body": override},
+        route=GEMINI_ROUTES[2],
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="extra-body-config-key", max_budget=10000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(
+        estimate_request_max_cost(request_body=GEMINI_QUESTION | override, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.parametrize(("small", "large"), [("generationConfig", "generation_config"), ("config", "generationConfig")])
+def test_a_gemini_body_sending_its_config_under_two_names_is_held_at_the_larger_output_cap(
+    small: str, large: str
+) -> None:
+    body: Final = GEMINI_QUESTION | {small: {"maxOutputTokens": 1}, large: {"maxOutputTokens": 4096}}
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+
+    assert reserved == pytest.approx(
+        estimate_request_max_cost(
+            request_body=GEMINI_QUESTION | {large: {"maxOutputTokens": 4096}}, route=GEMINI_ROUTES[0], llm_router=None
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -1185,6 +1240,34 @@ def test_cached_content_through_a_router_is_held_at_the_highest_deployment_cache
     reserved: Final = estimate_request_max_cost(
         request_body=_CACHED_BODY,
         route=GEMINI_ROUTES[0].replace(GEMINI_MODEL, "custom-gemini"),
+        llm_router=router,
+        input_token_counts={"custom-gemini": 200},
+    )
+
+    assert reserved == pytest.approx(200 * 1e-06 + 9_800 * 3e-07 + 100 * 4e-06)
+
+
+def test_cached_content_through_a_router_is_held_at_a_deployments_audio_cache_read_rate() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "custom-gemini",
+                "litellm_params": {"model": "gemini/audio-cache-priced-gemini", "api_key": "k"},
+                "model_info": {
+                    "id": "audio-cache-priced-gemini",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 4e-06,
+                    "cache_read_input_token_cost": 1e-07,
+                    "cache_read_input_audio_token_cost": 3e-07,
+                    "max_input_tokens": 10_000,
+                },
+            }
+        ]
+    )
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[2].replace(GEMINI_MODEL, "custom-gemini"),
         llm_router=router,
         input_token_counts={"custom-gemini": 200},
     )

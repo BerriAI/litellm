@@ -176,14 +176,14 @@ def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object 
     return next((config[key] for key in keys if config.get(key) is not None), None)
 
 
-_GOOGLE_GENAI_CONFIG_FIELDS: Final = ("config", "generationConfig", "generation_config")
+GOOGLE_GENAI_CONFIG_FIELDS: Final = ("config", "generationConfig", "generation_config")
 
 
 def google_genai_config_field(data: object) -> str | None:
     fields: Final = as_str_mapping(data)
     if fields is None:
         return None
-    return next((field for field in _GOOGLE_GENAI_CONFIG_FIELDS if fields.get(field)), None)
+    return next((field for field in GOOGLE_GENAI_CONFIG_FIELDS if fields.get(field)), None)
 
 
 def google_genai_request_config(data: object) -> object:

@@ -19,7 +19,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BadRequestError
-from litellm.google_genai.adapters.transformation import google_genai_request_config
+from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import (
@@ -363,11 +363,13 @@ async def reserve_budget_for_request(
 
 def _sent_generate_content_body(request_body: Mapping[str, object], route: str) -> Mapping[str, object] | None:
     """The generateContent body as the provider receives it when `extra_body` replaces the top-level fields it
-    names, else None."""
+    names, a config under any of its names included, else None."""
     extra_body: Final = as_str_mapping(request_body.get("extra_body"))
     if extra_body is None or not route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
         return None
-    return {**{key: value for key, value in request_body.items() if key != "extra_body"}, **extra_body}
+    replaces_config: Final = any(field in extra_body for field in GOOGLE_GENAI_CONFIG_FIELDS)
+    replaced: Final = frozenset(("extra_body", *(GOOGLE_GENAI_CONFIG_FIELDS if replaces_config else ())))
+    return {**{key: value for key, value in request_body.items() if key not in replaced}, **extra_body}
 
 
 async def _forwards_subscription_oauth(
@@ -1316,18 +1318,18 @@ def _input_cost_for_cost_info(
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
 ) -> float | None:
-    estimated_input_tokens: Final = _estimate_input_tokens(
-        request_body=request_body,
-        route=route,
-        model=model,
-        model_info=model_info,
-        input_tokens=input_tokens,
-    )
+    counted_input_tokens: Final = _counted_input_tokens(request_body, model, input_tokens)
+    estimated_input_tokens: Final = _estimate_input_tokens(model_info, counted_input_tokens)
     if estimated_input_tokens is None:
         return None
     body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
     cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
-    rates: Final = _hold_rates(body, model_info, prompt_tokens=estimated_input_tokens + cached_tokens)
+    rates: Final = _hold_rates(
+        body,
+        model_info,
+        prompt_tokens=estimated_input_tokens + cached_tokens,
+        prompt_counted=counted_input_tokens is not None,
+    )
     return _prompt_cost(rates, input_tokens=estimated_input_tokens, cached_tokens=cached_tokens)
 
 
@@ -1383,13 +1385,8 @@ def _max_cost_for_cost_info(
     if image_cost is not None:
         return image_cost
 
-    estimated_input_tokens: Final = _estimate_input_tokens(
-        request_body=request_body,
-        route=route,
-        model=model,
-        model_info=model_info,
-        input_tokens=input_tokens,
-    )
+    counted_input_tokens: Final = _counted_input_tokens(request_body, model, input_tokens)
+    estimated_input_tokens: Final = _estimate_input_tokens(model_info, counted_input_tokens)
     output_tokens: Final = _estimate_output_tokens(
         route=route,
         model_info=model_info,
@@ -1400,7 +1397,12 @@ def _max_cost_for_cost_info(
 
     body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
     cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
-    rates: Final = _hold_rates(body, model_info, prompt_tokens=estimated_input_tokens + cached_tokens)
+    rates: Final = _hold_rates(
+        body,
+        model_info,
+        prompt_tokens=estimated_input_tokens + cached_tokens,
+        prompt_counted=counted_input_tokens is not None,
+    )
     prompt_cost: Final = _prompt_cost(rates, input_tokens=estimated_input_tokens, cached_tokens=cached_tokens)
     if prompt_cost is None or (rates.output is None and output_tokens > 0):
         return None
@@ -1414,10 +1416,13 @@ class _HoldRates:
     output: float | None
 
 
-def _hold_rates(body: Mapping[str, object], model_info: Mapping[str, object], *, prompt_tokens: int) -> _HoldRates:
-    """Per-token rates for a prompt of `prompt_tokens`, cached tokens included, since its size picks the tier or the
-    `_above_<n>_tokens` prices. Output is held at the higher of the standard and reasoning rates because the
-    reasoning share is unknown before the request runs."""
+def _hold_rates(
+    body: Mapping[str, object], model_info: Mapping[str, object], *, prompt_tokens: int, prompt_counted: bool
+) -> _HoldRates:
+    """Per-token rates for a prompt of `prompt_tokens`, cached tokens included, since its size picks the tier or,
+    once the prompt was counted, the `_above_<n>_tokens` prices. A prompt held at the whole window because it could
+    not be counted keeps the base prices. Output is held at the higher of the standard and reasoning rates because
+    the reasoning share is unknown before the request runs."""
     holds_audio: Final = gemini_body_has_inline_audio(body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     tier: Final = (
@@ -1431,7 +1436,9 @@ def _hold_rates(body: Mapping[str, object], model_info: Mapping[str, object], *,
             cached=tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
             output=max(tier_rate(tier, "output_cost_per_token"), tier_rate(tier, "output_cost_per_reasoning_token")),
         )
-    prompt_rate: Final = partial(_prompt_size_rate, model_info, prompt_tokens if "contents" in body else None)
+    prompt_rate: Final = partial(
+        _prompt_size_rate, model_info, prompt_tokens if prompt_counted and "contents" in body else None
+    )
     output_rates: Final = tuple(
         rate
         for rate in (
@@ -1656,26 +1663,16 @@ def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_fil
     )
 
 
-def _estimate_input_tokens(
-    request_body: dict,
-    route: str,
-    model: str,
-    model_info: Mapping[str, object],
-    input_tokens: int | None = None,
-) -> int | None:
-    counted: Final = (
-        input_tokens
-        if input_tokens is not None
-        else count_input_tokens_for_model(request_body=request_body, model=model)
-    )
-    if counted is not None:
-        return counted
+def _counted_input_tokens(request_body: dict, model: str, input_tokens: int | None) -> int | None:
+    if input_tokens is not None:
+        return input_tokens
+    return count_input_tokens_for_model(request_body=request_body, model=model)
 
-    max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
-    if max_input_tokens is not None:
-        return max_input_tokens
 
-    return None
+def _estimate_input_tokens(model_info: Mapping[str, object], counted_input_tokens: int | None) -> int | None:
+    if counted_input_tokens is not None:
+        return counted_input_tokens
+    return _to_int(model_info.get("max_input_tokens"))
 
 
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
@@ -1711,9 +1708,16 @@ _GEMINI_CANDIDATE_COUNT_FIELDS: Final = ("candidateCount", "candidate_count")
 _CACHED_CONTENT_FIELDS: Final = ("cachedContent", "cached_content")
 
 
-def _gemini_generation_config(request_body: Mapping[str, object]) -> Mapping[str, object]:
-    config: Final = as_str_mapping(google_genai_request_config(request_body)) if "contents" in request_body else None
-    return MappingProxyType({}) if config is None else config
+def _gemini_config_values(request_body: Mapping[str, object], fields: Sequence[str]) -> tuple[object, ...]:
+    """What a Gemini body's generation config sets for `fields` under every name the config is sent as, since the
+    SDK route honors the first name present and Vertex the last one in the JSON."""
+    return tuple(config.get(field) for config, field in product(_gemini_generation_configs(request_body), fields))
+
+
+def _gemini_generation_configs(request_body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    if "contents" not in request_body:
+        return ()
+    return tuple(config for field in GOOGLE_GENAI_CONFIG_FIELDS if (config := as_str_mapping(request_body.get(field))))
 
 
 def _largest_int(values: Iterable[object]) -> int | None:
@@ -1723,10 +1727,9 @@ def _largest_int(values: Iterable[object]) -> int | None:
 def _cached_content_tokens(
     request_body: Mapping[str, object], model_info: Mapping[str, object], counted_input_tokens: int
 ) -> int:
-    gemini_config: Final = _gemini_generation_config(request_body)
     names: Final = (
         *(request_body.get(field) for field in _CACHED_CONTENT_FIELDS),
-        *(gemini_config.get(field) for field in _CACHED_CONTENT_FIELDS),
+        *_gemini_config_values(request_body, _CACHED_CONTENT_FIELDS),
     )
     max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
     if max_input_tokens is None or "contents" not in request_body or not any(names):
@@ -1747,9 +1750,21 @@ _CACHE_READ_COST_KEYS: Final = ("cache_read_input_token_cost", "cache_read_input
 
 
 def _cache_read_rate(model_info: Mapping[str, object]) -> float | None:
+    """The highest cache-read price any deployment lists for text or audio, since the hold cannot see what the
+    cache holds."""
     text_rate: Final = _highest_deployment_rate(model_info, "cache_read_input_token_cost")
-    audio_rate: Final = _to_float(model_info.get("cache_read_input_audio_token_cost"))
-    return text_rate if text_rate is None or audio_rate is None else max(text_rate, audio_rate)
+    if text_rate is None:
+        return None
+    return max((text_rate, *_listed_rates(model_info, "cache_read_input_audio_token_cost")))
+
+
+def _price_tables(model_info: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    deployments: Final = _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
+    return (model_info, *(pricing.costs for pricing in deployments))
+
+
+def _listed_rates(model_info: Mapping[str, object], cost_key: str) -> tuple[float, ...]:
+    return tuple(rate for prices in _price_tables(model_info) if (rate := _to_float(prices.get(cost_key))) is not None)
 
 
 def _prompt_size_rate(
@@ -1759,11 +1774,9 @@ def _prompt_size_rate(
     read from each deployment too, since a router model group's own prices leave them out."""
     if rate is None or prompt_tokens is None:
         return rate
-    deployments: Final = _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
-    price_tables: Final = (model_info, *(pricing.costs for pricing in deployments))
     above_rates: Final = tuple(
         above_rate
-        for prices, cost_key in product(price_tables, cost_keys)
+        for prices, cost_key in product(_price_tables(model_info), cost_keys)
         if (above_rate := _above_threshold_rate(prices, cost_key, prompt_tokens)) is not None
     )
     return max((rate, *above_rates))
@@ -1842,9 +1855,7 @@ def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[st
     top_level_caps: Final = tuple(
         (field, request_body[field]) for field in _TOP_LEVEL_OUTPUT_TOKEN_FIELDS if field in request_body
     )
-    generation_config_max_tokens: Final = _largest_int(
-        _gemini_generation_config(request_body).get(field) for field in _GEMINI_OUTPUT_TOKEN_FIELDS
-    )
+    generation_config_max_tokens: Final = _largest_int(_gemini_config_values(request_body, _GEMINI_OUTPUT_TOKEN_FIELDS))
     generation_config_cap: Final = (
         ((_GENERATION_CONFIG_MAX_OUTPUT_TOKENS, generation_config_max_tokens),)
         if generation_config_max_tokens is not None
@@ -2025,9 +2036,7 @@ def _output_multiplier(
     router_defaults: Final[Mapping[str, object]] = (
         RoutingContext(llm_router).default_litellm_params() if llm_router is not None else {}
     )
-    candidate_count: Final = _largest_int(
-        _gemini_generation_config(request_body).get(key) for key in _GEMINI_CANDIDATE_COUNT_FIELDS
-    )
+    candidate_count: Final = _largest_int(_gemini_config_values(request_body, _GEMINI_CANDIDATE_COUNT_FIELDS))
     return max(
         (
             1,
