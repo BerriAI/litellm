@@ -993,15 +993,27 @@ def _bedrock_pricing_info(
     profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
     if profile is None or not _declares_rates(profile):
         return _cost_map_model_info(registration[0], None) if registration is not None else None
-    if registration is None or registration[0] == profile["key"]:
+    overrides: Final = registration[1] if registration is not None and registration[0] != profile["key"] else {}
+    served_rates: Final = _served_model_rates(model, profile["key"])
+    if not overrides and not served_rates:
         return profile
     return cast(  # cast-ok: the profile's own model info, its prices swapped for the declared-prices merge
         ModelInfo,
         {
             **{field: value for field, value in profile.items() if not is_server_derived_pricing_key(field)},
-            **bedrock_profile_pricing(profile["key"], registration[1]),
+            **served_rates,
+            **bedrock_profile_pricing(profile["key"], overrides),
         },
     )
+
+
+def _served_model_rates(model: str, profile_key: str) -> Mapping[str, object]:
+    served: Final = _cost_map_model_info(model, "bedrock")
+    if served is None or served["key"] == profile_key:
+        return {}
+    return {
+        field: value for field, value in served.items() if value is not None and is_server_derived_pricing_key(field)
+    }
 
 
 def cost_map_key_prices_anything(key: str) -> bool:
