@@ -1202,16 +1202,16 @@ export default function KeyInfoView({
                       className="pt-4 border-t border-border"
                       accessToken={accessToken}
                     />
-                {userRole != null && rolesWithWriteAccess.includes(userRole) ? (
-                  <div className="mt-4">
-                    <MCPEventPermissionsEditor
-                      key={currentKeyData.token}
-                      accessToken={accessToken}
-                      value={currentKeyData.object_permission?.mcp_event_permissions ?? {}}
-                      onSave={saveEventPermissions}
-                    />
-                  </div>
-                ) : null}
+                    {userRole != null && rolesWithWriteAccess.includes(userRole) ? (
+                      <div className="mt-4">
+                        <MCPEventPermissionsEditor
+                          key={currentKeyData.token}
+                          accessToken={accessToken}
+                          value={currentKeyData.object_permission?.mcp_event_permissions ?? {}}
+                          onSave={saveEventPermissions}
+                        />
+                      </div>
+                    ) : null}
 
                     <LoggingSettingsView
                       loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
