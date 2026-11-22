@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs,
+    get_spend_log_metadata_from_kwargs,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
@@ -556,7 +556,7 @@ def get_logging_payload(
         response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params: Final = kwargs.get("litellm_params", {})
-    metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
+    metadata: Final = dict(get_spend_log_metadata_from_kwargs(kwargs))
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
@@ -734,7 +734,7 @@ def get_logging_payload(
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
-            else (metadata.get("standard_logging_guardrail_information", None) if metadata is not None else None)
+            else metadata.get("standard_logging_guardrail_information", None)
         ),
         cold_storage_object_key=(
             standard_logging_payload["metadata"].get("cold_storage_object_key", None)

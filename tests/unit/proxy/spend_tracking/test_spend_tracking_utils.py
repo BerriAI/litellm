@@ -2563,6 +2563,31 @@ def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_spend_row_keeps_the_callers_spend_logs_metadata_beside_a_planted_litellm_metadata() -> None:
+    planted: Final = {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                "metadata": {
+                    "litellm_api_version": "1.0.0",
+                    "user_api_key_hash": "hash",
+                    "spend_logs_metadata": {"team": "search"},
+                },
+                "litellm_metadata": planted,
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=now,
+        end_time=now,
+    )
+
+    stored: Final = TypeAdapter(Mapping[str, object]).validate_json(payload["metadata"])
+    assert stored["spend_logs_metadata"] == {"team": "search"}
+    assert planted == {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
+
+
 def test_get_logging_payload_includes_retry_info_in_spend_logs_metadata():
     """
     Test that retry info (attempted_retries, max_retries) from metadata

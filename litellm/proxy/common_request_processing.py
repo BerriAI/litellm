@@ -2817,8 +2817,13 @@ class ProxyBaseLLMRequestProcessing:
         hold the attribute at all, and Google :generateContent carries
         ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
         cases the cost is read back from the logging object instead, recomputing from
-        the same calculator only when it has not been stored yet.
+        the same calculator only when it has not been stored yet. A response served from
+        the cache reports no cost, as a chat cache hit does, since the calculator would
+        price it as a fresh call.
         """
+        caching_details: Final = logging_obj.caching_details
+        if caching_details is not None and caching_details.get("cache_hit") is True:
+            return ""
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
             return float(stored_cost)
@@ -4870,12 +4875,12 @@ class ProxyBaseLLMRequestProcessing:
             if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
                 # First check direct model_info path (set by router.py with selected deployment)
                 model_info = _logging_obj.litellm_params.get("model_info") or {}
-                model_id = model_info.get("id", None)
+                model_id = model_info.get("id", None) if isinstance(model_info, dict) else None
 
                 # Fallback to nested metadata path
                 if not model_id:
                     metadata = _logging_obj.litellm_params.get("metadata") or {}
-                    model_info = metadata.get("model_info") or {}
+                    model_info = metadata.get("model_info") or {} if isinstance(metadata, dict) else {}
                     model_id = model_info.get("id", None)
 
             # 2. Fallback to kwargs (initial)
