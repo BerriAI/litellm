@@ -657,8 +657,8 @@ def get_logging_payload(
         if litellm.enable_gateway_io_logging:
             try:
                 _rust_payload = attach_gateway_io_to_spend_log_payload(_rust_payload, kwargs=kwargs, response_obj=response_obj, ip_redactor=_masked_ip_text if requester_ip_address_logging_disabled() else None)
-            except Exception as _gio_err:
-                verbose_proxy_logger.debug("gateway_io_logging rust attach failed: %s", _gio_err)
+            except Exception as _gateway_io_error:
+                verbose_proxy_logger.debug("gateway_io_logging rust attach failed: %s", _gateway_io_error)
         return _rust_payload
 
     from litellm.proxy.spend_tracking import legacy_spend_log_rows
@@ -667,8 +667,8 @@ def get_logging_payload(
     if litellm.enable_gateway_io_logging:
         try:
             _payload = attach_gateway_io_to_spend_log_payload(_payload, kwargs=kwargs, response_obj=response_obj, ip_redactor=_masked_ip_text if requester_ip_address_logging_disabled() else None)
-        except Exception as _gio_err:
-            verbose_proxy_logger.debug("gateway_io_logging legacy attach failed: %s", _gio_err)
+        except Exception as _gateway_io_error:
+            verbose_proxy_logger.debug("gateway_io_logging legacy attach failed: %s", _gateway_io_error)
     return _payload
 
 

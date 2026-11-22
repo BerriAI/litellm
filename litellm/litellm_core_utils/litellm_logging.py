@@ -2157,8 +2157,8 @@ class Logging(LiteLLMLoggingBaseClass):
                         model_call_details=self.model_call_details,
                         api_key=api_key,
                     )
-                except Exception as _gio_err:
-                    verbose_logger.debug("gateway_io_logging pre_call capture failed: %s", _gio_err)
+                except Exception as _gateway_io_error:
+                    verbose_logger.debug("gateway_io_logging pre_call capture failed: %s", _gateway_io_error)
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
