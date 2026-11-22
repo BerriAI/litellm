@@ -14,6 +14,8 @@ import pytest
 from prometheus_client import CollectorRegistry, Counter
 from pydantic import TypeAdapter
 
+from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
+from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
 from litellm.integrations.lens import exporter as exporter_module
 from litellm.integrations.lens.exporter import (
     MAX_BUFFER_EVENTS,
@@ -592,6 +594,26 @@ async def test_records_without_a_confirmed_ledger_commit_are_counted_and_never_s
     assert [exporter.rows_dropped for exporter in exporters] == [1, 2, 2]
 
 
+_PAYLOAD: Final = TypeAdapter(SpendLogPayload)
+
+
+def _grown(padding: int) -> dict[str, object]:
+    """The grown request's callback event, its logging payload already without the conversation."""
+    return {
+        "response_cost": 9.0,
+        "litellm_call_id": "grown",
+        "standard_logging_object": {
+            "startTime": _LOGGED_START,
+            "id": "grown",
+            "status": "success",
+            "response_cost": 9.0,
+            "metadata": {"padding": "x" * padding},
+            "messages": None,
+            "response": None,
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_a_record_the_committed_owner_grows_past_the_event_limit_is_counted_without_blocking_others() -> None:
     sent: Final = asyncio.Queue[bytes]()
@@ -600,18 +622,15 @@ async def test_a_record_the_committed_owner_grows_past_the_event_limit_is_counte
         sent.put_nowait(request.content)
         return httpx.Response(204)
 
-    grown: Final = {
-        "response_cost": 9.0,
-        "litellm_call_id": "grown",
-        "standard_logging_object": {
-            "startTime": _LOGGED_START,
-            "id": "grown",
-            "status": "success",
-            "response_cost": 9.0,
-            "metadata": {"padding": "x" * (MAX_EVENT_BYTES - 1300)},
-        },
-    }
     owner: Final = {field: "a" * 512 for field in ("organization_id", "end_user")}
+    baseline: Final = _grown(0)
+    unpadded: Final = encode_record(
+        spend_log_row_from_payload(_PAYLOAD.validate_python(baseline["standard_logging_object"]), baseline)
+    )
+    assert isinstance(unpadded, bytes)
+    margin: Final = 512
+    assert margin < sum(len(value) for value in owner.values())
+    grown: Final = _grown(MAX_EVENT_BYTES - len(unpadded) - margin)
     handoff: Final = LedgerHandoff()
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
         exporter: Final = LensExporter(
