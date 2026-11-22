@@ -4,6 +4,7 @@ from typing import Final
 
 import pytest
 
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_request_body_for_spend_logs_payload
 from litellm.responses.litellm_completion_transformation.provider_signed_state import (
@@ -98,6 +99,7 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
         ),
         pytest.param({"id": _cut(_LONG), "type": "function"}, id="cut-unsigned-call-id"),
         pytest.param([{**_WHOLE_THINKING, "thinking": f"It holds {_cut(_LONG)} now."}], id="signed-text-quoting-a-cut"),
+        pytest.param([{**_WHOLE_THINKING, "thinking": REDACTED_BY_LITELM_STRING}], id="signed-text-naming-a-mask"),
         pytest.param([{"type": ["string", "null"]}, {"type": {"enum": ["thinking"]}}], id="schemas-typed-by-no-name"),
         pytest.param(_cut(_LONG), id="plain-string-input"),
         pytest.param(None, id="nothing-stored"),

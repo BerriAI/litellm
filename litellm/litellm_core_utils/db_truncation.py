@@ -3,10 +3,10 @@ from typing import Final
 
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
 
-_SKIPPED_CHARS: Final = rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars"
+_SKIPPED: Final = rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped "
 _SAFEGUARD_NOTE: Final = rf"\. {re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}"
-TRUNCATION_MARKER: Final = re.compile(rf"{_SKIPPED_CHARS}{_SAFEGUARD_NOTE}\) \.\.\.")
-_MARKER_OF_ANY_RELEASE: Final = re.compile(rf"{_SKIPPED_CHARS}(?:{_SAFEGUARD_NOTE})?\) \.\.\.")
+TRUNCATION_MARKER: Final = re.compile(rf"{_SKIPPED}\d+ chars{_SAFEGUARD_NOTE}\) \.\.\.")
+_MARKER_OF_ANY_RELEASE: Final = re.compile(rf"{_SKIPPED}(?P<skipped>\d+) chars(?:{_SAFEGUARD_NOTE})?\) \.\.\.")
 
 
 def _kept_chars(max_length: int) -> tuple[int, int]:
@@ -28,20 +28,23 @@ def truncated_for_db(value: str, max_length: int) -> str:
 
 def _is_where_the_value_was_cut(marker: re.Match[str]) -> bool:
     kept: Final = (marker.start(), len(marker.string) - marker.end())
-    return any(_kept_chars(max_length) == kept for max_length in (sum(kept), sum(kept) + 1))
+    return _kept_chars(sum(kept) + 1) == kept
 
 
-def _ends_kept_by_a_cut(value: str) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (value[: marker.start()], value[marker.end() :])
-        for marker in _MARKER_OF_ANY_RELEASE.finditer(value)
-        if _is_where_the_value_was_cut(marker)
-    )
+def _cuts(value: str) -> tuple[re.Match[str], ...]:
+    return tuple(filter(_is_where_the_value_was_cut, _MARKER_OF_ANY_RELEASE.finditer(value)))
 
 
 def was_truncated_for_db(value: str) -> bool:
-    return bool(_ends_kept_by_a_cut(value))
+    return bool(_cuts(value))
+
+
+def _is_cut_from(cut: re.Match[str], whole: str) -> bool:
+    start: Final = cut.string[: cut.start()]
+    end: Final = cut.string[cut.end() :]
+    skipped: Final = str(len(whole) - len(start) - len(end))
+    return cut["skipped"] == skipped and whole.startswith(start) and whole.endswith(end)
 
 
 def is_truncation_of(stored: str, whole: str) -> bool:
-    return any(whole.startswith(start) and whole.endswith(end) for start, end in _ends_kept_by_a_cut(stored))
+    return any(_is_cut_from(cut, whole) for cut in _cuts(stored))
