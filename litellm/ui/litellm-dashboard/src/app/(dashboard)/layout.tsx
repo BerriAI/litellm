@@ -128,6 +128,12 @@ const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> 
   ["guardrails", "default"],
   ["guardrails-monitor", "default"],
   ["logging-and-alerts", "default"],
+  ["memory", "default"],
+  ["prompts", "default"],
+  ["router-settings", "default"],
+  ["ui-theme", "default"],
+  ["vector-stores", "default"],
+  ["workflows", "default"],
 ]);
 
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
