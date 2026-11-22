@@ -4,7 +4,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.utils import ModelInfoLookupMiss, cost_map_key_declared_prices, lookup_model_info_for_registration
 
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
@@ -31,10 +31,10 @@ def deployment_pricing_models(deployment: object) -> tuple[str, ...]:
 
 
 def unpriced_bedrock_arn(model: str) -> bool:
-    if not is_bedrock_arn(model.removeprefix("bedrock/")):
+    if not contains_bedrock_arn(model):
         return False
     row: Final = lookup_model_info_for_registration(model=model, custom_llm_provider="bedrock")
-    return isinstance(row, ModelInfoLookupMiss) or not cost_map_key_declared_prices(row["key"])
+    return not isinstance(row, ModelInfoLookupMiss) and not cost_map_key_declared_prices(row["key"])
 
 
 def _named_models(*candidates: object) -> Iterator[str]:
