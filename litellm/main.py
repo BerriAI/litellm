@@ -2041,6 +2041,13 @@ def _validate_vispark_api_key(provider: str | None, api_key: str | None, model: 
         )
 
 
+def _validate_bf16_api_key(provider: str | None, api_key: str | None, model: str, has_client: bool = False) -> None:
+    if provider == "bf16" and not api_key and not has_client:
+        raise litellm.AuthenticationError(
+            message="Set BF16_API_KEY or pass api_key", llm_provider="bf16", model=model
+        )
+
+
 def _complete_text_completion_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2076,6 +2083,7 @@ def _complete_text_completion_openai(
     # set API KEY
 
     _validate_vispark_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
+    _validate_bf16_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
 
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
 
@@ -2968,6 +2976,13 @@ def _complete_custom_openai(
     if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
         raise missing_key_error
     _validate_vispark_api_key(
+        custom_llm_provider,
+        api_key,
+        model,
+        has_client=isinstance(client, (openai.OpenAI, openai.AsyncOpenAI))
+        and not get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"),
+    )
+    _validate_bf16_api_key(
         custom_llm_provider,
         api_key,
         model,

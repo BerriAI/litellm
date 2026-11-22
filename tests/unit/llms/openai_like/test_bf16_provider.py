@@ -112,3 +112,82 @@ def test_bf16_models_trim_to_their_input_budget(local_model_cost_map: None) -> N
         )
         assert litellm.token_counter(model=model, messages=messages) > budget
         assert litellm.token_counter(model=model, messages=trimmed) <= budget
+
+
+@pytest.mark.parametrize("text_completion", (False, True))
+def test_bf16_missing_key_rejects_before_openai_fallback(
+    monkeypatch: pytest.MonkeyPatch, text_completion: bool
+) -> None:
+    monkeypatch.delenv("BF16_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__regex=r"https://api\.bf16\.ai/v1/.*").respond(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "zai-org/glm-5.3-uncensored",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+            },
+        )
+        if text_completion:
+            with pytest.raises(litellm.AuthenticationError, match="BF16_API_KEY"):
+                litellm.text_completion(model="bf16/zai-org/glm-5.3-uncensored", prompt="Hello")
+        else:
+            with pytest.raises(litellm.AuthenticationError, match="BF16_API_KEY"):
+                litellm.completion(
+                    model="bf16/zai-org/glm-5.3-uncensored",
+                    messages=[{"role": "user", "content": "Hello"}],
+                )
+    assert route.call_count == 0
+
+
+def test_bf16_chat_completion_uses_authenticated_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai import OpenAI
+
+    monkeypatch.delenv("BF16_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="bf16-client-key", base_url="https://api.bf16.ai/v1") as client:
+        with respx.mock() as upstream:
+            route: Final = upstream.post("https://api.bf16.ai/v1/chat/completions").respond(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "zai-org/glm-5.3-uncensored",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+                },
+            )
+            response: Final = litellm.completion(
+                model="bf16/zai-org/glm-5.3-uncensored",
+                messages=[{"role": "user", "content": "Hello"}],
+                client=client,
+            )
+    assert route.calls.last.request.headers["authorization"] == "Bearer bf16-client-key"
+    assert response.choices[0].message.content == "hello"
+
+
+def test_bf16_http_transport_rejects_unused_sdk_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai import OpenAI
+
+    monkeypatch.delenv("BF16_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    with OpenAI(api_key="bf16-client-key", base_url="https://api.bf16.ai/v1") as client:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://api.bf16.ai/v1/chat/completions").respond(200, json={})
+            with pytest.raises(litellm.AuthenticationError, match="BF16_API_KEY"):
+                litellm.completion(
+                    model="bf16/zai-org/glm-5.3-uncensored",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    client=client,
+                )
+    assert route.call_count == 0
