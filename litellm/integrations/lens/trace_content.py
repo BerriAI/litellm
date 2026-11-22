@@ -74,8 +74,9 @@ def _bounded_json(
         return text.getvalue()
 
 
-def _stringified(message: object, limit: int) -> object | None | Unavailable:
-    """One message as ``stringify_message`` round-trips it, without ever holding more than ``limit`` of its text."""
+def _stringified(message: object, limit: int) -> tuple[object, int] | None | Unavailable:
+    """One message as ``stringify_message`` round-trips it, with its text length, never holding more than ``limit``
+    characters of that text."""
     if not is_mapping(message) or not isinstance(message, dict):
         return None
     try:
@@ -85,19 +86,50 @@ def _stringified(message: object, limit: int) -> object | None | Unavailable:
     if text is None:
         return Unavailable.TOO_LARGE
     loaded: Final[object] = json.loads(text)  # pyright: ignore[reportAny]  # untyped JSON is re-encoded unchanged
-    return loaded
+    return loaded, len(text)
 
 
 def serialized_messages(messages: Sequence[object], limit: int) -> str | None | Unavailable:
-    """Exactly ``serialize_messages(messages)``, bounded to ``limit`` characters while it is built."""
-    loaded: Final = tuple(_stringified(message, limit) for message in messages)
-    if any(item is Unavailable.TOO_LARGE for item in loaded):
-        return Unavailable.TOO_LARGE
-    kept: Final = [item for item in loaded if item is not None]
+    """Exactly ``serialize_messages(messages)``, bounded to ``limit`` characters across all messages while it is
+    built. The messages' texts add up to the final text minus its brackets and separators, so the shared budget
+    stops at the first message that cannot fit. One escaped string is encoded whole before it is measured, so the
+    transient text is at most 12 characters per character of the string being encoded."""
+    remaining = limit  # rebind-ok: one budget shared by every message
+    kept: Final[list[object]] = []  # mutable-ok: the round-tripped messages that fit the shared budget
+    for message in messages:
+        match _stringified(message, remaining):
+            case Unavailable() as failure:
+                return failure
+            case (value, length):
+                kept.append(value)
+                remaining -= length
+            case None:
+                pass
     if not kept:
         return None
     text: Final = _bounded_json(kept, limit, default=None, ascii_only=True)
     return Unavailable.TOO_LARGE if text is None else text
+
+
+def _kept_messages(messages: Sequence[object]) -> tuple[object, ...]:
+    return tuple(message for message in messages if is_mapping(message) and isinstance(message, dict))
+
+
+def _string_chars(value: object, budget: int, depth: int = 0) -> int | None:
+    """Characters in every string of ``value``, keys included, or None once they pass ``budget``. JSON never
+    shortens a string, so content past this lower bound cannot serialize within the budget."""
+    if isinstance(value, str):
+        return len(value) if len(value) <= budget else None
+    if depth > _MAX_DEPTH:
+        return None
+    total = 0  # rebind-ok: consumes a finite budget across children
+    for child in _children(value):
+        match _string_chars(child, budget - total, depth + 1):
+            case None:
+                return None
+            case int() as counted:
+                total += counted
+    return total
 
 
 def _children(value: object) -> Iterable[object]:
@@ -222,10 +254,19 @@ class TraceContentSpool:
     ) -> int | Unavailable | None:
         """None when the call's content stays inline exactly as today, else the bytes to reserve or why not."""
         threshold: Final = self._threshold(span)
-        texts: Final = (serialized_messages(messages_in, threshold), serialized_messages(outputs, threshold))
-        sizes: Final = tuple(len(text) if isinstance(text, str) else 0 for text in texts)
-        inline: Final = Unavailable.TOO_LARGE not in texts and sum(sizes) <= self.limits.inline_bytes
-        return None if inline else self._admission((messages_in, outputs))
+        content: Final = (messages_in, outputs)
+        floors: Final = tuple(_string_chars(_kept_messages(messages), threshold) for messages in content)
+        if None in floors or sum(floor or 0 for floor in floors) > self.limits.inline_bytes:
+            return self._admission(content)
+        sent: Final = serialized_messages(messages_in, threshold)
+        sent_size: Final = len(sent) if isinstance(sent, str) else 0
+        answer: Final = (
+            Unavailable.TOO_LARGE
+            if sent is Unavailable.TOO_LARGE
+            else serialized_messages(outputs, min(threshold, self.limits.inline_bytes - sent_size))
+        )
+        inline: Final = sent is not Unavailable.TOO_LARGE and answer is not Unavailable.TOO_LARGE
+        return None if inline else self._admission(content)
 
     def text_admission(self, span: RecordingSpan, texts: Sequence[str]) -> int | Unavailable | None:
         """None when these attribute values stay inline exactly as today, else the bytes to reserve or why not."""
