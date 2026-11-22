@@ -168,3 +168,67 @@ def test_gemini_4_chat_stream_google_ends_early_is_continued_under_one_id_with_s
         usages: Final = tuple(chunk["usage"] for chunk in chunks if chunk.get("usage"))
         assert usages[-1]["completion_tokens"] == 150  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         assert wire.received.qsize() == 2
+
+
+def test_gemini_4_chat_answer_continued_across_hops_cites_each_source_at_its_joined_text(gateway: Gateway) -> None:
+    first_text: Final = "Grüße aus 東京, "
+    second_text: Final = "dann Zürich."
+    hops: Final = tuple(
+        {
+            **hop,
+            "steps": [
+                {
+                    "type": "model_output",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": text,
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "start_index": 0,
+                                    "end_index": len(text.encode()),
+                                    "url": url,
+                                    "title": url,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        for hop, text, url in (
+            ({**_FIRST_HOP, "id": _fresh_answer_id()}, first_text, "https://tokyo.example"),
+            (_SECOND_HOP, second_text, "https://zurich.example"),
+        )
+    )
+
+    def respond(request: Request) -> Reply:
+        return Reply(body=json.dumps(hops[1 if "continuation_token" in json.loads(request.body) else 0]).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_KEY)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "write it all"}], "max_tokens": 1000},
+            key=scenario.key(models=[model]),
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        message: Final = payload["choices"][0]["message"]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+        answer: Final = message["content"]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+        assert answer == first_text + second_text
+        cited: Final = {
+            (
+                answer[cite["url_citation"]["start_index"] : cite["url_citation"]["end_index"]],  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+                cite["url_citation"]["url"],  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+            )
+            for cite in message["annotations"]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType, reportOptionalIterable, reportUnknownVariableType, reportGeneralTypeIssues]  # JSON payload indexed by fixed keys
+        }
+        assert cited == {(first_text, "https://tokyo.example"), (second_text, "https://zurich.example")}
+        grounding: Final = payload["vertex_ai_grounding_metadata"][0]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+        assert {chunk["web"]["uri"] for chunk in grounding["groundingChunks"]} == {  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType, reportOptionalIterable, reportUnknownVariableType, reportGeneralTypeIssues]  # JSON payload indexed by fixed keys
+            "https://tokyo.example",
+            "https://zurich.example",
+        }
