@@ -4098,15 +4098,19 @@ class _PricingModelInfo(ModelInfo):
 _PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
 
 
-def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+def pricing_with_overrides(
+    model_info: Mapping[str, object], registration: Mapping[str, object]
+) -> Mapping[str, object]:
     from litellm.types.utils import is_server_derived_pricing_key
 
     overrides: Final = {
         name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
     }
-    return _PRICING_MODEL_INFO.validate_python(
-        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
-    )
+    return update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+
+
+def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+    return _PRICING_MODEL_INFO.validate_python(pricing_with_overrides(model_info, registration))
 
 
 @dataclass(frozen=True, slots=True)
