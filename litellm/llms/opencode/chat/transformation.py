@@ -7,7 +7,8 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest, request_extra_body
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
@@ -78,6 +79,14 @@ class OpenCodeGoChatConfig(_GoReportedCostMixin, OpenAILikeChatConfig):
         api_key: str | None,
     ) -> tuple[str, str | None]:
         return go_api_base(api_base), go_api_key(api_key)
+
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: matches OpenAIGPTConfig's list return
+        supports_reasoning: Final = litellm.supports_reasoning(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        )
+        inherited: Final[list[str]] = super().get_supported_openai_params(model)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent returns a bare list  # mutable-ok: same
+        extra: Final = ("reasoning_effort",) if supports_reasoning else ()
+        return [*inherited, *extra]
 
     def validate_environment(
         self,
@@ -194,6 +203,29 @@ class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
             dict(headers),
         )
         return TypeAdapter(dict[str, object]).validate_python(raw)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        fields: Final = request_extra_body(extra_body)
+        if isinstance(fields, AnthropicError):
+            raise fields
+        system_kwarg: Final = (
+            {} if "system" in request else {key: value for key, value in fields.items() if key == "system"}
+        )
+        return {
+            **system_kwarg,
+            **super().transform_extra_body(
+                extra_body={key: value for key, value in fields.items() if key != "system"},
+                request=request,
+                model=model,
+                litellm_params=litellm_params,
+            ),
+        }
 
 
 class OpenCodeGoGeminiChatConfig(_GoReportedCostMixin, GoogleAIStudioGeminiConfig):
