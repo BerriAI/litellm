@@ -333,3 +333,201 @@ async def test_a_response_guardrail_sees_the_decimal_text_of_a_fractional_number
         "unit_price": {"type": "number", "value": None},
         "prices": {"type": "list", "value": None},
     }
+
+
+@pytest.mark.asyncio
+async def test_request_enum_options_and_nested_object_property_specs_are_guardrailed_on_a_copy() -> None:
+    guardrail: Final = _MaskingGuardrail("acme", "[ORG]")
+    data: Final = {
+        "model": "invoice-reader",
+        "state": "Order from acme",
+        "fields": {
+            "vendor_tier": {
+                "type": "enum",
+                "enum": ["acme-gold", "standard", 1],
+                "instructions": "Pick tier for acme",
+            },
+            "item": {
+                "type": "object",
+                "instructions": "Item from acme",
+                "properties": {
+                    "sku": {"type": "text", "instructions": "SKU for acme"},
+                    "amount": {"type": "number", "unit": "acme-usd"},
+                    "channel": {"type": "enum", "enum": ["acme-direct", "partner"]},
+                },
+            },
+            "rows": {
+                "type": "list",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "text", "instructions": "Label for acme"},
+                        "tag": {"type": "enum", "enum": ["acme-vip", "other"]},
+                    },
+                },
+            },
+        },
+    }
+
+    result: Final = await ExtractionHandler().process_input_messages(data, guardrail)
+
+    assert result["state"] == "Order from [ORG]"
+    assert result["fields"] == {
+        "vendor_tier": {
+            "type": "enum",
+            "enum": ["[ORG]-gold", "standard", 1],
+            "instructions": "Pick tier for [ORG]",
+        },
+        "item": {
+            "type": "object",
+            "instructions": "Item from [ORG]",
+            "properties": {
+                "sku": {"type": "text", "instructions": "SKU for [ORG]"},
+                "amount": {"type": "number", "unit": "[ORG]-usd"},
+                "channel": {"type": "enum", "enum": ["[ORG]-direct", "partner"]},
+            },
+        },
+        "rows": {
+            "type": "list",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "text", "instructions": "Label for [ORG]"},
+                    "tag": {"type": "enum", "enum": ["[ORG]-vip", "other"]},
+                },
+            },
+        },
+    }
+    assert data["state"] == "Order from acme"
+    assert data["fields"]["vendor_tier"]["enum"] == ["acme-gold", "standard", 1]
+    assert data["fields"]["item"]["properties"]["channel"]["enum"] == ["acme-direct", "partner"]
+
+
+@pytest.mark.asyncio
+async def test_response_guardrail_nulls_modified_enum_and_compute_answers_and_keeps_unchanged() -> None:
+    request_data: Final = {
+        "fields": {
+            "payment": {"type": "enum", "enum": ["secret-card", "cash"]},
+            "safe_enum": {"type": "enum", "enum": ["cash", "paypal"]},
+            "flag": {"type": "boolean"},
+            "total": {"type": "compute", "unit": "USD"},
+            "safe_compute": {"type": "compute", "unit": "USD"},
+        }
+    }
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "clairic-27b",
+            "answers": {
+                "payment": {"type": "enum", "value": "secret-card", "raw": '"secret-card"'},
+                "safe_enum": {"type": "enum", "value": "cash", "raw": '"cash"'},
+                "flag": {"type": "boolean", "value": True},
+                "total": {"type": "compute", "value": 4155550123, "guess": 4155550123},
+                "safe_compute": {"type": "compute", "value": 42, "guess": 42},
+            },
+            "truncated": False,
+            "usage": {"input_tokens": 60, "output_tokens": 12},
+        }
+    )
+
+    masked_enum: Final = await ExtractionHandler().process_output_response(
+        response,
+        _MaskingGuardrail("secret-card", "[REDACTED]"),
+        request_data=request_data,
+    )
+    assert isinstance(masked_enum, ExtractionResponse)
+    assert masked_enum.answers["payment"].model_dump(mode="json") == {"type": "enum", "value": None}
+    assert masked_enum.answers["safe_enum"].model_dump(mode="json") == {
+        "type": "enum",
+        "value": "cash",
+        "raw": '"cash"',
+    }
+    assert masked_enum.answers["flag"].value is True
+    assert masked_enum.answers["safe_compute"].value == 42
+
+    masked_compute: Final = await ExtractionHandler().process_output_response(
+        response,
+        _MaskingGuardrail("4155550123", "[PHONE]"),
+        request_data=request_data,
+    )
+    assert isinstance(masked_compute, ExtractionResponse)
+    assert masked_compute.answers["total"].model_dump(mode="json") == {"type": "compute", "value": None}
+
+
+@pytest.mark.asyncio
+async def test_response_guardrail_masks_object_text_properties_and_nulls_non_text_properties() -> None:
+    request_data: Final = {
+        "fields": {
+            "item": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "text"},
+                    "qty": {"type": "number"},
+                    "color": {"type": "enum", "enum": ["secret-red", "blue"]},
+                },
+            },
+            "rows": {
+                "type": "list",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "text"},
+                        "qty": {"type": "number"},
+                    },
+                },
+            },
+        }
+    }
+    response: Final = ExtractionResponse.model_validate(
+        {
+            "model": "clairic-27b",
+            "answers": {
+                "item": {
+                    "type": "object",
+                    "value": {"name": "jane-mug", "qty": 3, "color": "secret-red"},
+                    "raw": '{"name":"jane-mug","qty":3,"color":"secret-red"}',
+                },
+                "rows": {
+                    "type": "list",
+                    "value": [{"name": "jane-mug", "qty": 3}, {"name": "plain-cup", "qty": 999}],
+                    "property_spans": [{"name": [10, 18], "qty": [8, 9]}, {"name": [25, 34], "qty": [21, 24]}],
+                    "raw": '[{"name":"jane-mug","qty":3},{"name":"plain-cup","qty":999}]',
+                },
+            },
+            "state_text": "Order for jane-mug and plain-cup",
+            "truncated": False,
+            "usage": {"input_tokens": 80, "output_tokens": 20},
+        }
+    )
+
+    masked_text: Final = await ExtractionHandler().process_output_response(
+        response,
+        _MaskingGuardrail("jane", "[USER]"),
+        request_data=request_data,
+    )
+    assert isinstance(masked_text, ExtractionResponse)
+    assert masked_text.state_text == "Order for [USER]-mug and plain-cup"
+    assert masked_text.answers["item"].model_dump(mode="json") == {
+        "type": "object",
+        "value": {"name": "[USER]-mug", "qty": 3, "color": "secret-red"},
+    }
+    assert masked_text.answers["rows"].model_dump(mode="json") == {
+        "type": "list",
+        "value": [{"name": "[USER]-mug", "qty": 3}, {"name": "plain-cup", "qty": 999}],
+    }
+    assert response.answers["item"].value == {"name": "jane-mug", "qty": 3, "color": "secret-red"}
+
+    masked_enum_prop: Final = await ExtractionHandler().process_output_response(
+        response,
+        _MaskingGuardrail("secret-red", "[COLOR]"),
+        request_data=request_data,
+    )
+    assert isinstance(masked_enum_prop, ExtractionResponse)
+    assert masked_enum_prop.answers["item"].model_dump(mode="json") == {"type": "object", "value": None}
+
+    masked_num_prop: Final = await ExtractionHandler().process_output_response(
+        response,
+        _MaskingGuardrail("999", "[NUM]"),
+        request_data=request_data,
+    )
+    assert isinstance(masked_num_prop, ExtractionResponse)
+    assert masked_num_prop.answers["rows"].model_dump(mode="json") == {"type": "list", "value": None}

@@ -207,7 +207,10 @@ def _state_rewritten_by_guardrail(litellm_params: Mapping[str, object]) -> bool:
 
 
 def _without_spans(answers: Mapping[str, ExtractionAnswer]) -> Mapping[str, ExtractionAnswer]:
-    return {name: answer.model_copy(update={"span": None, "spans": None}) for name, answer in answers.items()}
+    return {
+        name: answer.model_copy(update={"span": None, "spans": None, "property_spans": None})
+        for name, answer in answers.items()
+    }
 
 
 def _formatted_response(response: ExtractionResponse, call: _ExtractionCall) -> ExtractionResponse:

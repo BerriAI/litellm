@@ -219,3 +219,111 @@ def test_decisions_config_still_resolves_clef_after_the_shared_helpers_moved(mon
         == "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
     )
     assert config.unwrap_response({"result": {"answers": {}}}) == {"answers": {}}
+
+
+def test_enum_boolean_object_compute_and_object_list_specs_round_trip_to_clairic() -> None:
+    state: Final = "Order #A17: Maria bought 3 red mugs at $4.50 each and paid by credit card. Gift wrap was requested."
+    fields: Final = {
+        "payment": {
+            "type": "enum",
+            "enum": ["cash", "credit card", "paypal"],
+            "instructions": "Payment method",
+        },
+        "gift_wrap": {"type": "boolean", "instructions": "Whether gift wrap was requested"},
+        "item": {
+            "type": "object",
+            "instructions": "The purchased item",
+            "properties": {
+                "name": {"type": "text"},
+                "qty": {"type": "number"},
+                "gift": {"type": "boolean"},
+                "color": {"type": "enum", "enum": ["red", "blue"]},
+            },
+        },
+        "total": {"type": "compute", "instructions": "Total cost in dollars", "unit": "USD"},
+        "rows": {
+            "type": "list",
+            "items": {
+                "type": "object",
+                "properties": {"name": {"type": "text"}, "qty": {"type": "number"}},
+            },
+            "instructions": "Items purchased",
+        },
+    }
+    request: Final = ExtractionRequestBody.model_validate({"state": state, "fields": fields})
+
+    body: Final = _cloudflare_config().transform_extraction_request("@cf/cloudflare/clairic", request)
+
+    assert json.loads(json.dumps(body)) == {"model": "clairic", "state": state, "fields": fields}
+
+
+def test_response_parses_enum_boolean_object_compute_and_object_list_answers() -> None:
+    result: Final = {
+        "model": "clairic-27b",
+        "answers": {
+            "payment": {"type": "enum", "value": "credit card", "raw": '"credit card"'},
+            "gift_wrap": {"type": "boolean", "value": True},
+            "item": {
+                "type": "object",
+                "value": {"name": "mugs", "qty": 3, "gift": True, "color": "red"},
+                "raw": '{"name":"mugs","qty":3,"gift":true,"color":"red"}',
+            },
+            "total": {"type": "compute", "value": 16.5, "guess": 16.5},
+            "rows": {
+                "type": "list",
+                "value": [{"name": "red mugs", "qty": 3}],
+                "property_spans": [{"name": [27, 35], "qty": [25, 26]}],
+            },
+        },
+        "truncated": False,
+        "usage": {"input_tokens": 220, "output_tokens": 36},
+    }
+
+    response: Final = _cloudflare_config().transform_extraction_response(
+        "@cf/cloudflare/clairic",
+        "cloudflare",
+        _response({"result": result, "success": True, "errors": [], "messages": []}),
+    )
+
+    assert response.model_dump(mode="json") == result
+    assert response.answers["payment"].value == "credit card"
+    assert response.answers["gift_wrap"].value is True
+    assert response.answers["item"].value == {"name": "mugs", "qty": 3, "gift": True, "color": "red"}
+    assert response.answers["total"].value == 16.5
+    assert response.answers["rows"].property_spans == ({"name": [27, 35], "qty": [25, 26]},)
+
+
+@pytest.mark.parametrize(
+    ("field_spec", "pattern"),
+    (
+        ({"type": "enum"}, r"enum fields need enum"),
+        ({"type": "enum", "enum": []}, r"fields\.target\.enum"),
+        ({"type": "enum", "enum": "cash"}, r"fields\.target\.enum"),
+        ({"type": "object"}, r"object fields need properties"),
+        ({"type": "object", "properties": {}}, r"fields\.target\.properties"),
+        ({"type": "object", "properties": {"bad name": {"type": "text"}}}, r"fields\.target\.properties"),
+        ({"type": "object", "properties": {"nested": {"type": "object"}}}, r"fields\.target\.properties\.nested"),
+        ({"type": "object", "properties": {"color": {"type": "enum"}}}, r"enum properties need enum"),
+        ({"type": "list", "items": {"type": "object"}}, r"fields\.target\.items"),
+        ({"type": "list", "items": {"type": "object", "properties": {}}}, r"fields\.target\.items"),
+        ({"type": "list", "items": "boolean"}, r"fields\.target\.items"),
+    ),
+    ids=(
+        "enum_missing_options",
+        "enum_empty_options",
+        "enum_non_array",
+        "object_missing_properties",
+        "object_empty_properties",
+        "object_invalid_property_name",
+        "object_unsupported_property_type",
+        "object_enum_property_missing_options",
+        "list_object_missing_properties",
+        "list_object_empty_properties",
+        "list_unsupported_scalar_item",
+    ),
+)
+def test_invalid_enum_object_and_list_item_specs_are_rejected_locally(
+    field_spec: dict[str, object], pattern: str
+) -> None:
+    with pytest.raises(ValidationError, match=pattern):
+        ExtractionRequestBody.model_validate({"state": INVOICE_STATE, "fields": {"target": field_spec}})
