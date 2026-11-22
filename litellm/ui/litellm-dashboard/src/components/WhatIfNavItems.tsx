@@ -1,4 +1,4 @@
-import { FlaskConical, SearchX, ShieldCheck } from "lucide-react";
+import { FlaskConical, Ghost, ReceiptText, ScanLine, SearchX, ShieldCheck } from "lucide-react";
 import { all_admin_roles } from "../utils/roles";
 import type { MenuItem } from "./LeftNav";
 
@@ -25,5 +25,26 @@ export const whatIfNavItems: MenuItem[] = [
     icon: <FlaskConical {...ICON} />,
     roles: all_admin_roles,
     label: "shell.nav.items.planLab",
+  },
+  {
+    key: "limit-xray",
+    page: "limit-xray",
+    icon: <ScanLine {...ICON} />,
+    roles: all_admin_roles,
+    label: "shell.nav.items.limitXray",
+  },
+  {
+    key: "ghost-trace",
+    page: "ghost-trace",
+    icon: <Ghost {...ICON} />,
+    roles: all_admin_roles,
+    label: "shell.nav.items.ghostTrace",
+  },
+  {
+    key: "pr-receipts",
+    page: "pr-receipts",
+    icon: <ReceiptText {...ICON} />,
+    roles: all_admin_roles,
+    label: "shell.nav.items.prReceipts",
   },
 ];

@@ -8525,7 +8525,10 @@
         "customers": "$t(customerPortal.entities.organizations)",
         "controlCanaries": "Control Canaries",
         "cacheMiss": "Cache-Miss Explainer",
-        "planLab": "Plan Lab"
+        "planLab": "Plan Lab",
+        "limitXray": "限额透视",
+        "ghostTrace": "幽灵追踪",
+        "prReceipts": "PR 账单"
       },
       "homeLink": "LiteLLM 首页"
     },
@@ -8570,7 +8573,10 @@
       "adminPanel": "访问管理面板与设置",
       "controlCanaries": "向已配置的管控发送真实请求，查看哪些生效",
       "cacheMiss": "查看提示缓存未命中的原因及其成本",
-      "planLab": "用草稿订阅方案回放支出日志"
+      "planLab": "用草稿订阅方案回放支出日志",
+      "limitXray": "作用于单个密钥的全部预算与速率限制，涵盖密钥、团队、团队成员、用户和组织，按最先拦截下一次请求的顺序排列。",
+      "ghostTrace": "从未携带会话 ID 的请求中重建智能体运行：当请求的消息以更早请求的完整消息列表开头时，即归入同一次运行。",
+      "prReceipts": "每个拉取请求的产出成本，依据智能体工具调用中的 GitHub URL 归因。"
     },
     "sidebarAccountMenu": {
       "toggles": {
@@ -21507,6 +21513,38 @@
       "costUnderPlan": "套餐下成本",
       "blocked": "已拦截",
       "rerouted": "已改道"
+    },
+    "limitXray": {
+      "title": "限额透视",
+      "description": "作用于单个密钥的全部预算与速率限制，涵盖密钥、团队、团队成员、用户和组织，按最先拦截下一次请求的顺序排列。",
+      "bindsFirst": "最先生效",
+      "verdict": "{{name}} 的 {{scope}} {{kind}} 将在 {{count}} 次请求后拦截此密钥",
+      "layers": "{{alias}} 的全部限额",
+      "requestsLeft": "剩余 {{count}} 次请求",
+      "unlimited": "未设置限额：{{scopes}}"
+    },
+    "ghostTrace": {
+      "title": "幽灵追踪",
+      "description": "从未携带会话 ID 的请求中重建智能体运行：当请求的消息以更早请求的完整消息列表开头时，即归入同一次运行。",
+      "requests": "已观察请求",
+      "clientSessions": "客户端声明的会话",
+      "stitched": "已拼接的智能体运行",
+      "steps": "{{count}} 步",
+      "tools": "{{count}} 次工具调用"
+    },
+    "prReceipts": {
+      "title": "PR 账单",
+      "description": "每个拉取请求的产出成本，依据智能体工具调用中的 GitHub URL 归因。",
+      "shipped": "产出 PR 的支出",
+      "noPr": "未产出 PR 的智能体支出",
+      "count": "拉取请求",
+      "pr": "拉取请求",
+      "who": "密钥",
+      "models": "模型",
+      "requests": "请求",
+      "toolCalls": "工具调用",
+      "tokens": "Token",
+      "cost": "成本"
     }
   }
 }

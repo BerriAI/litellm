@@ -48,6 +48,9 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   "control-canaries": "shell.pageDescriptions.controlCanaries",
   "cache-miss": "shell.pageDescriptions.cacheMiss",
   "plan-lab": "shell.pageDescriptions.planLab",
+  "limit-xray": "shell.pageDescriptions.limitXray",
+  "ghost-trace": "shell.pageDescriptions.ghostTrace",
+  "pr-receipts": "shell.pageDescriptions.prReceipts",
 };
 
 export interface PageMetadata {

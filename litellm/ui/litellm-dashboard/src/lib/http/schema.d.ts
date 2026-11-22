@@ -26950,6 +26950,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/what_if/ghost_trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ghost Trace
+         * @description Stitch requests that carry no session id into agent runs: a request continues an earlier one from
+         *     the same key when its messages start with that request's full message list.
+         */
+        get: operations["ghost_trace_what_if_ghost_trace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/limit_xray": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Xray Limits
+         * @description Every budget and rate limit that applies to one key, across the key, its team, its team membership,
+         *     its user and its organization, ordered by which one blocks the next request first.
+         */
+        get: operations["xray_limits_what_if_limit_xray_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/what_if/plan_lab/replay": {
         parameters: {
             query?: never;
@@ -26964,6 +27006,27 @@ export interface paths {
          * @description Replay the real spend logs of the last ``days`` against a draft plan and report margin per customer.
          */
         post: operations["replay_draft_plan_what_if_plan_lab_replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/pr_receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pr Receipts
+         * @description Attribute each stitched agent run to the GitHub pull requests its tool calls opened or pushed to,
+         *     and total the spend per pull request.
+         */
+        get: operations["pr_receipts_what_if_pr_receipts_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -36853,6 +36916,53 @@ export interface components {
              */
             team_member_permissions: string[] | null;
         };
+        /** GhostRun */
+        GhostRun: {
+            /** Duration Seconds */
+            duration_seconds: number;
+            /** Key Alias */
+            key_alias: string;
+            /** Models */
+            models: string[];
+            /** Pr Urls */
+            pr_urls: string[];
+            /** Run Id */
+            run_id: string;
+            /** Spend */
+            spend: number;
+            /** Steps */
+            steps: components["schemas"]["GhostStep"][];
+            /** Task */
+            task: string;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** GhostStep */
+        GhostStep: {
+            /** Model */
+            model: string;
+            /** Request Id */
+            request_id: string;
+            /** Role */
+            role: string;
+            /** Spend */
+            spend: number;
+            /** Start Time */
+            start_time: string;
+            /** Summary */
+            summary: string;
+        };
+        /** GhostTrace */
+        GhostTrace: {
+            /** Client Session Ids */
+            client_session_ids: number;
+            /** Loose Requests */
+            loose_requests: number;
+            /** Runs */
+            runs: components["schemas"]["GhostRun"][];
+        };
         /** GlobalEndUsersSpend */
         GlobalEndUsersSpend: {
             /** Api Key */
@@ -37817,6 +37927,43 @@ export interface components {
             release_url: string;
             /** Version */
             version: string;
+        };
+        /** LimitLayer */
+        LimitLayer: {
+            /** Change With */
+            change_with: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "budget" | "rpm";
+            /** Limit */
+            limit: number;
+            /** Name */
+            name: string;
+            /** Remaining */
+            remaining: number;
+            /** Requests Left */
+            requests_left: number | null;
+            /** Resets At */
+            resets_at: string | null;
+            /** Scope */
+            scope: string;
+            /** Used */
+            used: number;
+        };
+        /** LimitXray */
+        LimitXray: {
+            /** Avg Request Usd */
+            avg_request_usd: number;
+            /** Key Alias */
+            key_alias: string;
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Layers */
+            layers: components["schemas"]["LimitLayer"][];
+            /** Unlimited */
+            unlimited: string[];
         };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
@@ -46117,6 +46264,40 @@ export interface components {
              * @description New status: 'published' or 'production'.
              */
             version_status: string;
+        };
+        /** PrReceipt */
+        PrReceipt: {
+            /** Agent Minutes */
+            agent_minutes: number;
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Models */
+            models: string[];
+            /** Number */
+            number: number;
+            /** Repo */
+            repo: string;
+            /** Requests */
+            requests: number;
+            /** Runs */
+            runs: string[];
+            /** Spend */
+            spend: number;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /** Url */
+            url: string;
+        };
+        /** PrReceipts */
+        PrReceipts: {
+            /** Receipts */
+            receipts: components["schemas"]["PrReceipt"][];
+            /** Spend With Pr */
+            spend_with_pr: number;
+            /** Spend Without Pr */
+            spend_without_pr: number;
         };
         /** PriceTier */
         PriceTier: {
@@ -96662,6 +96843,68 @@ export interface operations {
             };
         };
     };
+    ghost_trace_what_if_ghost_trace_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GhostTrace"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    xray_limits_what_if_limit_xray_get: {
+        parameters: {
+            query?: {
+                key_alias?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitXray"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     replay_draft_plan_what_if_plan_lab_replay_post: {
         parameters: {
             query?: never;
@@ -96682,6 +96925,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanReplay"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pr_receipts_what_if_pr_receipts_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrReceipts"];
                 };
             };
             /** @description Validation Error */
