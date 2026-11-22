@@ -2,6 +2,7 @@ import asyncio
 import functools
 import itertools
 import json
+import re
 import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -900,11 +901,16 @@ def _live_delegated_costs(kwargs: Mapping[str, object], response_obj: object) ->
     )
 
 
+_DATED_SNAPSHOT: Final = re.compile(r"-\d{4}-\d{2}-\d{2}")
+
+
 def _names_provider_model(deployment_model: object, provider_model: str) -> bool:
     if not isinstance(deployment_model, str):
         return False
     name: Final = deployment_model.rsplit("/", 1)[-1]
-    return provider_model == name or provider_model.startswith(f"{name}-")
+    return provider_model == name or (
+        provider_model.startswith(f"{name}-") and _DATED_SNAPSHOT.fullmatch(provider_model[len(name) :]) is not None
+    )
 
 
 def _budget_names_of(provider_model: str) -> tuple[str, ...]:

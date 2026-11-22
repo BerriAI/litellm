@@ -1141,6 +1141,7 @@ async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_call
             model_list=[
                 {"model_name": "a-shared", "litellm_params": calls_the_model},
                 {"model_name": "z-capped", "litellm_params": calls_the_model},
+                {"model_name": "flagship", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
                 {
                     "model_name": f"model_name_{TEAM_ID}_capped",
                     "litellm_params": calls_the_model,
@@ -1168,7 +1169,9 @@ async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_call
                 "model_group": "gpt-live-1",
                 "metadata": {"user_api_key_hash": KEY_HASH},
             },
-            "litellm_params": {"metadata": {"user_api_key_model_max_budget": dict.fromkeys(groups, budget)}},
+            "litellm_params": {
+                "metadata": {"user_api_key_model_max_budget": dict.fromkeys((*groups, "flagship"), budget)}
+            },
         },
         response_obj=LiteLLMRealtimeStreamLoggingObject(
             usage=Usage(),
@@ -1188,9 +1191,9 @@ async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_call
         ),
     )
 
-    assert {group: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{group}:1d") for group in groups} == {
-        group: pytest.approx(delegated_cost) for group in groups
-    }
+    assert {
+        group: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{group}:1d") for group in (*groups, "flagship")
+    } == {**{group: pytest.approx(delegated_cost) for group in groups}, "flagship": 0.0}
 
 
 @pytest.mark.asyncio
