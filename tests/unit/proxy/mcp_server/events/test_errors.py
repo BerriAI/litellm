@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.proxy.mcp_server.events.errors import (
