@@ -5653,6 +5653,23 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _bridge_params_without_unretrievable_background_run(
+    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    *,
+    streams_upstream: bool | None,
+    fakes_stream: Callable[[Mapping[str, object]], bool],
+    routing_kwargs: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    if streams_upstream is True and not fakes_stream(optional_params):
+        return optional_params
+    from litellm.completion_extras.litellm_responses_transformation.transformation import without_background_run
+    from litellm.litellm_core_utils.tool_fields import drop_policy
+
+    return without_background_run(optional_params, drop_policy(routing_kwargs), model, custom_llm_provider)
+
+
 def _responses_bridge_optional_params(
     optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
     summary_alias: object,
@@ -6587,10 +6604,6 @@ def completion(
         )
         if responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api:
             from litellm.completion_extras import responses_api_bridge
-            from litellm.completion_extras.litellm_responses_transformation.transformation import (
-                without_background_run,
-            )
-            from litellm.litellm_core_utils.tool_fields import drop_policy
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
             mapped_bridge_params: Final = _responses_bridge_optional_params(
@@ -6605,12 +6618,13 @@ def completion(
                 drop_params=drop_unsupported_reasoning,
                 additional_drop_params=routing_kwargs.get("additional_drop_params"),
             )
-            bridge_optional_params: Final = (
-                mapped_bridge_params
-                if stream
-                else without_background_run(
-                    mapped_bridge_params, drop_policy(routing_kwargs), model, custom_llm_provider
-                )
+            bridge_optional_params: Final = _bridge_params_without_unretrievable_background_run(
+                mapped_bridge_params,
+                streams_upstream=dispatch_stream,
+                fakes_stream=fakes_stream,
+                routing_kwargs=routing_kwargs,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
             bridged: Final = responses_api_bridge.completion(

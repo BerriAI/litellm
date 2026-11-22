@@ -395,8 +395,14 @@ async def test_bridged_chat_stream_is_logged_as_the_chat_completion_it_streamed(
 
 @pytest.mark.parametrize(
     "background_kwargs",
-    [{"background": True}, {"extra_body": {"background": True}}, {"background": "true"}, {"background": 0}],
-    ids=["top-level", "extra-body", "truthy-string", "falsy-int"],
+    [
+        {"background": True},
+        {"extra_body": {"background": True}},
+        {"background": "true"},
+        {"background": 0},
+        {"background": True, "stream": True, "fake_stream": True},
+    ],
+    ids=["top-level", "extra-body", "truthy-string", "falsy-int", "faked-stream"],
 )
 @_BRIDGED_PROVIDERS
 def test_bridged_chat_rejects_background_before_any_upstream_call(
@@ -464,6 +470,33 @@ def test_bridged_chat_serves_a_foreground_run_when_background_is_dropped_or_off(
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "pong"
     assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+def test_bridged_chat_rejects_background_on_a_model_the_provider_cannot_stream_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "faked-stream-responses-model",
+        {"litellm_provider": "openai", "mode": "responses", "supports_native_streaming": False},
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("faked-stream-responses-model"))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model="openai/faked-stream-responses-model",
+                messages=[{"role": "user", "content": "ping"}],
+                api_key="test-key",
+                stream=True,
+                background=True,
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
 
 
 @_BRIDGED_PROVIDERS
