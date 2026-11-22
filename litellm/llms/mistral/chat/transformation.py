@@ -437,7 +437,7 @@ class MistralConfig(OpenAIGPTConfig):
         ## 3. Handle name in message
         prepared_messages: Final = tuple(
             MistralConfig._handle_tool_call_message(m)
-            for m in MistralConfig._flattened_messages(replayed_messages, keeps_reasoning)
+            for m in self._flattened_messages(replayed_messages, keeps_reasoning)
         )
         new_messages: Final[list[AllMessageValues]] = [
             strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
@@ -661,7 +661,7 @@ class MistralConfig(OpenAIGPTConfig):
             tuple(
                 map(
                     MistralConfig._handle_tool_call_message,
-                    MistralConfig._flattened_messages(replayed_messages, self.accepts_reasoning(model)),
+                    self._flattened_messages(replayed_messages, self.accepts_reasoning(model)),
                 )
             )
         )
@@ -691,14 +691,11 @@ class MistralConfig(OpenAIGPTConfig):
             case _:
                 return False
 
-    @staticmethod
+    @classmethod
     def _flattened_messages(
-        messages: Sequence[AllMessageValues], keeps_reasoning: bool
+        cls, messages: Sequence[AllMessageValues], keeps_reasoning: bool
     ) -> tuple[AllMessageValues, ...]:
-        return tuple(
-            MistralConfig._handle_name_in_message(MistralConfig._with_flattened_content(m, keeps_reasoning))
-            for m in messages
-        )
+        return tuple(cls._handle_name_in_message(cls._with_flattened_content(m, keeps_reasoning)) for m in messages)
 
     @staticmethod
     def _sent_flags(messages: Sequence[AllMessageValues]) -> tuple[bool, ...]:
@@ -779,6 +776,13 @@ class MistralConfig(OpenAIGPTConfig):
                 )
             case _:
                 return message
+
+    @staticmethod
+    def _with_text_parts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues:
+        text_parts: Final = [ChatCompletionTextObject(type="text", text=text) for text in texts]
+        return cast(  # cast-ok: every message role takes a list of text parts
+            AllMessageValues, {**message, "content": text_parts}
+        )
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:

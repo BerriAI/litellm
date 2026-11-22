@@ -295,3 +295,63 @@ def test_mistral_chat_sends_a_tool_call_without_an_id_as_is(local_model_cost_map
     )
 
     assert sent[0]["tool_calls"] == [tool_call]
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/mistral-medium-3", "vertex_ai/mistral-ocr-2505"])
+def test_mistral_chat_sends_several_text_parts_as_separate_parts(
+    model: str, local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    two_parts: Final = [
+        {"type": "text", "text": "apple", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "banana"},
+    ]
+    messages: Final = [
+        {"role": "user", "content": two_parts},
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call("call_abc123", "get_weather")]},
+        {"role": "tool", "tool_call_id": "call_abc123", "content": two_parts},
+        {"role": "assistant", "content": two_parts},
+        {"role": "user", "content": [{"type": "text", "text": "Repeat it."}]},
+    ]
+
+    def send(transport: httpx.MockTransport, _: pytest.MonkeyPatch) -> None:
+        litellm.completion(
+            model=model,
+            messages=messages,
+            vertex_location="us-central1",
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+
+    sent_messages: Final = SENT_MAPPINGS.validate_python(
+        SENT_BODY.validate_json(_sent_mistral_request(send, monkeypatch).content)["messages"]
+    )
+
+    sent_parts: Final = [{"type": "text", "text": "apple"}, {"type": "text", "text": "banana"}]
+    assert [message.get("content") for message in sent_messages] == [
+        sent_parts,
+        None,
+        sent_parts,
+        sent_parts,
+        "Repeat it.",
+    ]
+
+
+def test_mistral_chat_sends_a_list_with_a_non_text_part_the_way_the_mistral_api_gets_it(local_model_cost_map):
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Transcribe "},
+                {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+            ],
+        }
+    ]
+    vertex_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-medium-3", provider=LlmProviders.VERTEX_AI
+    )
+    mistral_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-medium-3", provider=LlmProviders.MISTRAL
+    )
+
+    assert vertex_config.transform_messages(
+        messages=copy.deepcopy(messages), model="mistral-medium-3"
+    ) == mistral_config.transform_messages(messages=copy.deepcopy(messages), model="mistral-medium-3")
