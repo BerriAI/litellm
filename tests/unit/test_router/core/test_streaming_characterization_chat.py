@@ -350,6 +350,26 @@ async def test_a_failover_stream_that_fails_before_content_does_not_fail_back_to
     assert (sorted(called[:2]), called[2:]) == (["a1", "a2"], ["b"])
 
 
+async def test_a_dict_targets_params_carry_over_its_stream_that_fails_before_content(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", chat_stream(error=server_error(), leading_role_chunk=True))
+    host.answer("openai/c", chat_stream("C"))
+    core = build(
+        make_core,
+        model_list=[*GROUPS_AB, deployment("c", "c")],
+        fallbacks=[{"a": [{"model": "b", "temperature": 0.3}]}, {"b": ["c"]}],
+    )
+    stream = await open_stream(core)
+    assert await collect_texts(stream) == "C"
+    assert [(call.deployment_id, call.kwargs.get("temperature")) for call in host.calls] == [
+        ("a", None),
+        ("b", 0.3),
+        ("c", 0.3),
+    ]
+
+
 async def open_team_stream(core: RouterCore, bucket: str) -> object:
     return await core.acompletion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
         model="tp", messages=MESSAGES, stream=True, **{bucket: {"user_api_key_team_id": "T1"}}

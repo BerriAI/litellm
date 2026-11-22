@@ -42,8 +42,9 @@ pub struct StreamOrigin {
     committed_budget: Option<u32>,
 }
 
-/// A [`StreamOrigin`] as the Python host hands it back. It names the level without the params
-/// the level carried, so a stream that host recovers starts without them.
+/// A [`StreamOrigin`] named by hand: the level's place in the chain, without the params and the
+/// exclusions the level carried. A host never writes one; it keeps the origin its attempt was
+/// given ([`Attempt::origin`](crate::host::Attempt::origin)) and hands that back.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Document {
@@ -58,8 +59,6 @@ struct Document {
     committed_budget: Option<u32>,
     /// The group a pre-routing hook selected for `group`, which the fallback lookup keys on first.
     routed: Option<String>,
-    excluded: Vec<String>,
-    failover_excluded: Vec<String>,
 }
 
 impl From<Document> for StreamOrigin {
@@ -69,8 +68,6 @@ impl From<Document> for StreamOrigin {
                 group: document.group,
                 order: document.order,
                 routed: document.routed,
-                excluded: document.excluded.into(),
-                failover_excluded: document.failover_excluded.into(),
                 ..Target::default()
             },
             depth: document.depth,
@@ -138,9 +135,52 @@ impl StreamOrigin {
         }
     }
 
+    /// The origin of a stream of `group` that no attempt of a call returned: the chain's first
+    /// level, on no deployment.
+    pub fn outside_a_call(group: String) -> Self {
+        Self {
+            target: Target {
+                group,
+                ..Target::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// This origin after the stream's group retried it: the retries spent so far and the budget
+    /// the first of them committed to.
+    #[must_use]
+    pub fn retried(self, attempted_retries: u32, committed_budget: u32) -> Self {
+        Self {
+            attempted_retries,
+            committed_budget: Some(committed_budget),
+            ..self
+        }
+    }
+
     /// The name the attempt served: the requested group, or the fallback target.
     pub fn group(&self) -> &str {
         &self.target.group
+    }
+
+    /// `fallback_depth` of the attempt.
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// How many fallbacks deep the attempt's level is: 0 for the requested name.
+    pub fn level(&self) -> u32 {
+        self.level
+    }
+
+    /// The deployment the attempt ran on.
+    pub fn deployment_id(&self) -> Option<&str> {
+        self.deployment_id.as_deref()
+    }
+
+    /// Same-group stream retries this request already spent.
+    pub fn attempted_retries(&self) -> u32 {
+        self.attempted_retries
     }
 
     fn at(&self) -> FallbackHop {

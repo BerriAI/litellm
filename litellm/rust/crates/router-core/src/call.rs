@@ -1168,6 +1168,7 @@ impl<H: RouterHost> Call<'_, H> {
                 ),
                 Ok(None)
             );
+        let routed = routed_name(target, &candidates);
         let attempt = Attempt {
             op: op.clone(),
             request: request.clone(),
@@ -1178,11 +1179,18 @@ impl<H: RouterHost> Call<'_, H> {
             } else {
                 candidates.model_group.clone()
             },
-            routed: routed_name(target, &candidates),
+            routed: routed.clone(),
             target_order: target.order,
             candidate_ids: candidates.all.iter().map(|d| d.id.clone()).collect(),
-            excluded: target.excluded.clone(),
-            failover_excluded: target.failover_excluded.clone(),
+            origin: StreamOrigin::of(
+                Target {
+                    routed,
+                    ..target.clone()
+                },
+                at,
+                Some(deployment.id.clone()),
+                retry,
+            ),
             retry,
             fallback_depth: at.depth,
             fallback_level: at.level,
@@ -1200,8 +1208,7 @@ impl<H: RouterHost> Call<'_, H> {
             Ok(output) => {
                 // `_should_raise_content_policy_error`: a blocked response is raised only when
                 // a content-policy fallback would serve it, and counts as no failure.
-                let routed = routed_name(target, &candidates);
-                let served = (routed.as_deref(), candidates.served_as.as_deref());
+                let served = (attempt.routed.as_deref(), candidates.served_as.as_deref());
                 let raised = match output.blocked {
                     Some(Blocked::ContentFilter) => has_content_policy_fallback(level, served),
                     Some(Blocked::Refusal) => refusal_fallback_available(level, served),
@@ -1264,15 +1271,7 @@ impl<H: RouterHost> Call<'_, H> {
                     attempted_retries: retry,
                     max_retries: None,
                     attempted_fallbacks: at.depth,
-                    origin: StreamOrigin::of(
-                        Target {
-                            routed,
-                            ..target.clone()
-                        },
-                        at,
-                        Some(deployment.id.clone()),
-                        retry,
-                    ),
+                    origin: attempt.origin,
                 })
             }
             Err(failure) => {
@@ -1408,8 +1407,7 @@ impl<H: RouterHost> Call<'_, H> {
             routed: None,
             target_order: target.order,
             candidate_ids: Vec::new(),
-            excluded: target.excluded.clone(),
-            failover_excluded: target.failover_excluded.clone(),
+            origin: StreamOrigin::of(target.clone(), at, None, retry),
             retry,
             fallback_depth: at.depth,
             fallback_level: at.level,
@@ -1428,15 +1426,7 @@ impl<H: RouterHost> Call<'_, H> {
                 attempted_retries: retry,
                 max_retries: None,
                 attempted_fallbacks: at.depth,
-                origin: StreamOrigin::of(
-                    Target {
-                        routed: None,
-                        ..target.clone()
-                    },
-                    at,
-                    None,
-                    retry,
-                ),
+                origin: attempt.origin,
             }),
             Err(failure) => Err(self.failed(failure, None).into()),
         }

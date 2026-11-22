@@ -14,6 +14,7 @@ use litellm_router_types::RoutingStrategy;
 
 use crate::{
     cache::RouterCache,
+    call::StreamOrigin,
     config::{Op, RetryPolicy},
     error::{AttemptError, Error, FailureKind},
     fallback::Fallbacks,
@@ -309,10 +310,9 @@ pub struct Attempt {
     pub target_order: Option<i64>,
     /// Every deployment `name` resolved to for this caller, the picked one included.
     pub candidate_ids: Vec<String>,
-    /// The deployments a weighted failover hop excluded from the pick.
-    pub excluded: Arc<[String]>,
-    /// The deployments weighted failover already excluded on the way to this level.
-    pub failover_excluded: Arc<[String]>,
+    /// Where a stream this attempt returns comes from. A host that wraps the stream keeps it and
+    /// hands it back unchanged when the stream fails before content.
+    pub origin: StreamOrigin,
     /// 0 for the first attempt in this group, then the retry number.
     pub retry: u32,
     pub fallback_depth: u32,

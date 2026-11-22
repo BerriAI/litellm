@@ -8,6 +8,8 @@ mod host;
 mod retries;
 mod stream;
 
+pub(crate) use self::stream::StreamOrigin;
+
 use std::{
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
@@ -989,7 +991,7 @@ impl RouterCoreHandle {
         &self,
         py: Python<'py>,
         request: &Bound<'py, PyAny>,
-        origin: &Bound<'py, PyAny>,
+        origin: &StreamOrigin,
         kind: Option<&str>,
     ) -> PyResult<Bound<'py, PyDict>> {
         stream::policy(py, &self.router, request, origin, kind)
@@ -1001,7 +1003,7 @@ impl RouterCoreHandle {
         &self,
         op: &str,
         request: &Bound<'_, PyAny>,
-        origin: &Bound<'_, PyAny>,
+        origin: &StreamOrigin,
         failure: &Bound<'_, PyDict>,
     ) -> PyResult<RouterCall> {
         stream::recover(
@@ -1020,7 +1022,7 @@ impl RouterCoreHandle {
         &self,
         op: &str,
         request: &Bound<'_, PyAny>,
-        origin: &Bound<'_, PyAny>,
+        origin: &StreamOrigin,
         failure: &Bound<'_, PyDict>,
     ) -> PyResult<RouterCall> {
         stream::recover(
@@ -1747,8 +1749,7 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             routed,
             target_order,
             candidate_ids,
-            excluded_ids,
-            failover_excluded_ids,
+            origin,
             retry,
             fallback_depth,
             fallback_level,
@@ -1770,11 +1771,7 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             dict.set_item("model_group", model_group)?;
             dict.set_item("target_order", target_order)?;
             dict.set_item("candidate_ids", PyList::new(py, candidate_ids)?)?;
-            dict.set_item("excluded_ids", PyTuple::new(py, excluded_ids.iter())?)?;
-            dict.set_item(
-                "failover_excluded_ids",
-                PyTuple::new(py, failover_excluded_ids.iter())?,
-            )?;
+            dict.set_item("origin", StreamOrigin::from(*origin))?;
             dict.set_item("retry", retry)?;
             dict.set_item("fallback_depth", fallback_depth)?;
             dict.set_item("fallback_level", fallback_level)?;

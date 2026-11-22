@@ -28,6 +28,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        call::StreamOrigin,
         config::Op,
         registry::{Deployment, DeploymentSpec},
     };
@@ -51,8 +52,7 @@ mod tests {
             routed: None,
             target_order: None,
             candidate_ids: vec!["d1".to_owned()],
-            excluded: Arc::from([]),
-            failover_excluded: Arc::from([]),
+            origin: StreamOrigin::default(),
             retry: 0,
             fallback_depth: 0,
             fallback_level: 0,

@@ -53,6 +53,8 @@ struct ScriptedHost {
     pre_routes: Option<(&'static str, PreRouted)>,
     /// The params each attempt carried, in the order the attempts ran.
     params_sent: Mutex<Vec<Option<Value>>>,
+    /// The origin each attempt was given for the stream it returns, in the order they ran.
+    origins: Mutex<Vec<StreamOrigin>>,
 }
 
 impl ScriptedHost {
@@ -221,6 +223,7 @@ impl RouterHost for ScriptedHost {
     async fn attempt(&self, attempt: &Attempt) -> Result<Served<String>, AttemptFailure<Raised>> {
         let params = attempt.params.as_deref().cloned().map(Value::Object);
         self.params_sent.lock().push(params);
+        self.origins.lock().push(attempt.origin.clone());
         if let Some(failure) = self.first_failure.lock().take() {
             return Err(Self::raised(attempt, failure));
         }
@@ -2582,20 +2585,21 @@ async fn a_failed_failover_stream_falls_back_instead_of_failing_back_to_the_depl
         falling_back(0),
         host.clone(),
     );
-    let failed_over = origin(json!({
-        "deployment_id": "a2",
-        "depth": 1,
-        "level": 1,
-        "excluded": ["a1"],
-        "failover_excluded": ["a1"],
-    }));
+    let failed_over = answer(
+        router
+            .take_over(request(), origin_on("a1"), server_error())
+            .await,
+    );
+    let handed_to_the_host = host.origins.lock().last().cloned();
+
     let taken = router
-        .take_over(request(), failed_over, server_error())
+        .take_over(request(), handed_to_the_host.unwrap(), server_error())
         .await;
 
-    let served = answer(taken);
-
-    assert_eq!(served.output.response, "b1");
+    assert_eq!(
+        (failed_over.output.response, answer(taken).output.response),
+        ("a2".to_owned(), "b1".to_owned())
+    );
 }
 
 #[rstest]
