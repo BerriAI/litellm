@@ -61,7 +61,6 @@ import {
   Settings as SettingsIcon,
   Shield,
   ShieldCheck,
-  SearchX,
   Tags,
   Terminal,
   User,
@@ -81,6 +80,7 @@ import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
+import { whatIfNavItems } from "./WhatIfNavItems";
 import {
   all_admin_roles,
   formatUserRole,
@@ -381,27 +381,7 @@ const menuGroups: MenuGroup[] = [
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "shell.nav.items.costOptimization",
       },
-      {
-        key: "control-canaries",
-        page: "control-canaries",
-        icon: <ShieldCheck {...ICON} />,
-        roles: all_admin_roles,
-        label: "shell.nav.items.controlCanaries",
-      },
-      {
-        key: "cache-miss",
-        page: "cache-miss",
-        icon: <SearchX {...ICON} />,
-        roles: all_admin_roles,
-        label: "shell.nav.items.cacheMiss",
-      },
-      {
-        key: "plan-lab",
-        page: "plan-lab",
-        icon: <FlaskConical {...ICON} />,
-        roles: all_admin_roles,
-        label: "shell.nav.items.planLab",
-      },
+      ...whatIfNavItems,
       { key: "logs", page: "logs", label: "shell.nav.items.logs", icon: <Activity {...ICON} /> },
       {
         key: "lens",

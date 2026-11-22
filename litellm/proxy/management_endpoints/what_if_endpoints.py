@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
+from litellm.llms.custom_httpx.asgi_handler import get_async_asgi_client
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import query_raw_within_statement_timeout
@@ -20,6 +21,7 @@ router: Final = APIRouter(prefix="/what_if", tags=["what-if"])
 
 ROUTES: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")
 CACHE_TTL: Final = timedelta(minutes=5)
+BASE_URL: Final = "http://litellm-proxy"
 
 
 def _require_admin(user: UserAPIKeyAuth) -> None:
@@ -95,7 +97,9 @@ async def _probe(
     client: httpx.AsyncClient, key: str, route: str, model: str, prompt: str, repeat: int = 1
 ) -> CanaryCell:
     responses: Final = [
-        await client.post(route, json=dict(_body(route, model, prompt)), headers={"Authorization": f"Bearer {key}"})
+        await client.post(
+            f"{BASE_URL}{route}", json=dict(_body(route, model, prompt)), headers={"Authorization": f"Bearer {key}"}
+        )
         for _ in range(repeat)
     ]
     last: Final = responses[-1]
@@ -114,14 +118,14 @@ async def _run_canary(
     repeat: int = 1,
 ) -> CanaryResult:
     created: Final = await client.post(
-        "/key/generate", json={**shadow, "duration": "5m", "key_alias": None}, headers=dict(admin_headers)
+        f"{BASE_URL}/key/generate", json={**shadow, "duration": "5m", "key_alias": None}, headers=dict(admin_headers)
     )
     created.raise_for_status()
     key: Final = str(created.json()["key"])
     try:
         cells: Final = await asyncio.gather(*(_probe(client, key, route, model, prompt, repeat) for route in ROUTES))
     finally:
-        await client.post("/key/delete", json={"keys": [key]}, headers=dict(admin_headers))
+        await client.post(f"{BASE_URL}/key/delete", json={"keys": [key]}, headers=dict(admin_headers))
     return result.model_copy(update={"cells": cells})
 
 
@@ -217,11 +221,9 @@ async def run_control_canaries(
     keys: Final = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"key_alias": {"not": None}}, take=50, order={"created_at": "asc"}
     )
-    all_models: Final = tuple(llm_router.get_model_names()) if llm_router else ()
+    all_models: Final = tuple(llm_router.registry().names()) if llm_router else ()
     admin_headers: Final = {"Authorization": request.headers.get("authorization", "")}
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=request.app), base_url="http://litellm-proxy", timeout=60
-    ) as client:
+    with get_async_asgi_client(request.app) as client:
         results: Final = await asyncio.gather(
             *chain.from_iterable(
                 _canaries(
