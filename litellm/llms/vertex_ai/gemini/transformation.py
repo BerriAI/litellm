@@ -739,16 +739,25 @@ def _message_thought_signatures(
     return signatures
 
 
-def _own_image_thought_signature(image_item: Mapping[str, object]) -> str | None:
+def _own_image_thought_signature(
+    image_item: Mapping[str, object], target: _TargetModel, *, drop_params: bool
+) -> str | None:
     fields: Final = as_str_mapping(image_item.get("provider_specific_fields"))
     signature: Final = fields.get("thought_signature") if fields is not None else None
+    if signature is not None and not isinstance(signature, str) and not drop_params:
+        raise _malformed_assistant_history(
+            "images[].provider_specific_fields.thought_signature must be a string", target
+        )
     return signature if isinstance(signature, str) and signature else None
 
 
 def _assistant_image_source(
     image_item: Mapping[str, object], target: _TargetModel, *, drop_params: bool
 ) -> _AssistantImageSource | None:
-    image_url: Final = as_str_mapping(image_item.get("image_url"))
+    raw_image_url: Final = image_item.get("image_url")
+    image_url: Final = {"url": raw_image_url} if isinstance(raw_image_url, str) else as_str_mapping(raw_image_url)
+    if raw_image_url is not None and image_url is None and not drop_params:
+        raise _malformed_assistant_history("images[].image_url must be an object or a string", target)
     url: Final = image_url.get("url") if image_url is not None else None
     if image_url is None or not url or (drop_params and not isinstance(url, str)):
         return None
@@ -771,9 +780,12 @@ def _right_aligned(signatures: Sequence[str], count: int) -> tuple[str | None, .
 def _sourced_assistant_images(
     images: object, target: _TargetModel, *, drop_params: bool
 ) -> tuple[tuple[_AssistantImageSource, str | None], ...]:
-    items: Final = tuple(filter(None, map(as_str_mapping, as_object_list(images) or ())))
+    entries: Final = as_object_list(images) or ()
+    items: Final = tuple(item for item in map(as_str_mapping, entries) if item is not None)
+    if len(items) < len(entries) and not drop_params:
+        raise _malformed_assistant_history("images entries must be objects", target)
     return tuple(
-        (source, _own_image_thought_signature(item))
+        (source, _own_image_thought_signature(item, target, drop_params=drop_params))
         for item in items
         if (source := _assistant_image_source(item, target, drop_params=drop_params)) is not None
     )
