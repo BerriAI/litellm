@@ -5,7 +5,7 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 import os
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from pydantic import JsonValue
 
@@ -17,6 +17,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    malformed_message_error,
     messages_count_options,
 )
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
@@ -63,7 +64,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, JsonValue]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: Mapping[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, JsonValue]] | None = None,
         system: object | None = None,
@@ -111,6 +112,9 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 )
             case None:
                 pass
+
+        if (malformed := malformed_message_error(messages)) is not None:
+            return malformed.response(request_model, model_to_use, "azure_ai_anthropic_api")
 
         match options := await asyncify(messages_count_options)(
             AzureAnthropicMessagesConfig(),

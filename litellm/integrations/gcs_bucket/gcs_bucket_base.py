@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter
@@ -138,7 +139,7 @@ class GCSBucketBase(CustomBatchLogger):
             return bucket_name, object_name
         return bucket_name, object_name
 
-    async def get_gcs_logging_config(self, kwargs: dict[str, Any] | None = {}) -> GCSLoggingConfig:
+    async def get_gcs_logging_config(self, kwargs: Mapping[str, object] | None = None) -> GCSLoggingConfig:
         """
         Returns the bucket and service account this logger was configured with.
         """

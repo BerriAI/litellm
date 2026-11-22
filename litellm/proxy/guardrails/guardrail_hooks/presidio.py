@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import accumulate, count, pairwise
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -31,7 +31,13 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
-from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    attribute_items,
+    attribute_or_none,
+    float_of,
+    int_of,
+    require_attributes,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -223,16 +229,28 @@ def _collapse_run(run: Sequence[_Detection]) -> _Detection:
     return _Detection(label.entity_type, run[0].start, max(detection.end for detection in run), label.score)
 
 
-def _to_detection(item: PresidioAnalyzeResponseItem) -> _Detection:
+class _DetectionFields(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def _to_detection(item: _DetectionFields) -> _Detection:
     return _Detection(
         str(item.get("entity_type")),
-        int(item.get("start") or 0),
-        int(item.get("end") or 0),
-        float(item.get("score") or 0.0),
+        int_of(item.get("start") or 0),
+        int_of(item.get("end") or 0),
+        float_of(item.get("score") or 0.0),
     )
 
 
-def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponseItem]) -> tuple[_Detection, ...]:
+def _analyze_items(
+    analyze_results: Sequence[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
+) -> Sequence[_DetectionFields]:
+    if isinstance(analyze_results, dict):
+        return tuple(require_attributes(key, _DetectionFields, "get") for key in analyze_results)
+    return analyze_results
+
+
+def _resolve_overlapping_spans(analyze_results: Sequence[_DetectionFields]) -> tuple[_Detection, ...]:
     """
     Collapse each run of overlapping detections into one detection covering the whole run.
 
@@ -874,7 +892,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
-        analyze_results: Any,
+        analyze_results: Sequence[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
         request_data: dict | None,
         masked_entity_count: dict[str, int],
     ) -> str:
@@ -896,7 +914,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = cast("dict[str, str]", request_data["metadata"]["pii_tokens"])  # cast-ok: this hook's map
 
-        runs: Final = _resolve_overlapping_spans(analyze_results)
+        runs: Final = _resolve_overlapping_spans(_analyze_items(analyze_results))
         # Every message and content part numbers its runs from 1 into this one map, so a
         # token another part already holds for a different value takes a spare number.
         # No token in the map is numbered above its size, so spares start above both.
@@ -1831,11 +1849,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     text=text,
                     output_parse_pii=self.output_parse_pii,
                     presidio_config=None,
-                    request_data=request_data or {},
+                    request_data=request_data,
                 )
                 new_texts.append(modified_text)
         inputs["texts"] = new_texts
         return inputs
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """

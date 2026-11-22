@@ -9,10 +9,11 @@
 
 use std::sync::Arc;
 
+use litellm_python_compat::truthy::json_truthy as truthy;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    host_index::{HostIndexes, python_str, truthy},
+    host_index::{HostIndexes, python_str},
     registry::{Deployment, Registry},
 };
 

@@ -7,7 +7,8 @@ use std::{
     sync::Arc,
 };
 
-use litellm_router_types::{LitellmParams, Spelled};
+use litellm_python_compat::{json, repr::float_repr, truthy::json_truthy};
+use litellm_router_types::{LitellmParams, RoutingGroupSpec, Spelled};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -35,17 +36,6 @@ pub struct DeploymentSpec {
     /// read from a config or an `apply`.
     #[serde(skip)]
     pub provider: Option<String>,
-}
-
-/// `routing_groups`: a named subset of model groups sharing a routing strategy.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct RoutingGroupSpec {
-    pub group_name: String,
-    pub models: Vec<String>,
-    pub routing_strategy: crate::config::RoutingStrategy,
-    /// A priority group's member priorities, served as each member's `order`.
-    #[serde(default)]
-    pub model_priorities: Option<BTreeMap<String, i64>>,
 }
 
 /// The `model_info` fields the router reads; every other key stays in [`Self::raw`].
@@ -210,6 +200,19 @@ impl Deployment {
         }
     }
 
+    /// The deployment's own `litellm_params.num_retries`, written as a count or as its digits.
+    /// A call to the deployment carries it, so it is the retry budget of a level whose first
+    /// attempt failed here, and of a stream this deployment served.
+    pub fn num_retries(&self) -> Option<u32> {
+        match self.raw_params.get("num_retries")? {
+            Value::Number(count) => count.as_u64().and_then(|count| u32::try_from(count).ok()),
+            Value::String(digits) if digits.chars().all(|digit| digit.is_ascii_digit()) => {
+                digits.parse().ok()
+            }
+            _ => None,
+        }
+    }
+
     /// `get_deployment_order`: `litellm_params.order`, else `model_info.order`, which is where a
     /// team model added through the API keeps it. Neither is validated as an int, so a bool, a
     /// whole float and a numeric string are read as the level they compare as.
@@ -255,7 +258,7 @@ impl Deployment {
         self.model_info
             .raw
             .get("supports_web_search")
-            .is_none_or(|flag| flag.is_null() || crate::host_index::truthy(flag))
+            .is_none_or(|flag| flag.is_null() || json_truthy(flag))
     }
 
     /// Whether `team_id` may use this deployment (`deployment_usable_by_team`).
@@ -987,7 +990,7 @@ impl Registry {
     pub fn resolve_routing_group_strategy(
         &self,
         group_name: &str,
-    ) -> Option<crate::config::RoutingStrategy> {
+    ) -> Option<litellm_router_types::RoutingStrategy> {
         self.routing_groups
             .iter()
             .find(|group| group.group_name == group_name)
@@ -1181,7 +1184,10 @@ pub fn deployment_id(model_group: &str, litellm_params: &Map<String, Value>) -> 
         text.push_str(key);
         match value {
             Value::String(value) => text.push_str(value),
-            Value::Object(_) => json_dumps(value, &mut text),
+            // `json.dumps` of a JSON object cannot fail: every key is a string.
+            Value::Object(_) => {
+                text.push_str(&json::dumps(&json::from_json(value.clone())).unwrap_or_default());
+            }
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) => {
                 python_str(value, &mut text);
             }
@@ -1195,117 +1201,11 @@ pub fn deployment_id(model_group: &str, litellm_params: &Map<String, Value>) -> 
     hex
 }
 
-/// Python's `repr(float)`: the shortest round-trip digits, positional for exponents in
-/// `-4..16`, scientific otherwise.
-fn python_float(value: f64, out: &mut String) {
-    if value.is_nan() {
-        out.push_str("nan");
-        return;
-    }
-    if value.is_infinite() {
-        out.push_str(if value > 0.0 { "inf" } else { "-inf" });
-        return;
-    }
-    let scientific = format!("{value:e}");
-    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-    let exponent: i32 = exponent.parse().unwrap_or(0);
-    let (sign, mantissa) = mantissa
-        .strip_prefix('-')
-        .map_or(("", mantissa), |m| ("-", m));
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    out.push_str(sign);
-    if (-4..16).contains(&exponent) {
-        if exponent < 0 {
-            out.push_str("0.");
-            out.extend(std::iter::repeat_n('0', (-exponent - 1) as usize));
-            out.push_str(&digits);
-        } else {
-            let point = exponent as usize + 1;
-            if digits.len() <= point {
-                out.push_str(&digits);
-                out.extend(std::iter::repeat_n('0', point - digits.len()));
-                out.push_str(".0");
-            } else {
-                out.push_str(&digits[..point]);
-                out.push('.');
-                out.push_str(&digits[point..]);
-            }
-        }
-    } else {
-        out.push_str(&digits[..1]);
-        if digits.len() > 1 {
-            out.push('.');
-            out.push_str(&digits[1..]);
-        }
-        let _ = write!(
-            out,
-            "e{}{:02}",
-            if exponent < 0 { '-' } else { '+' },
-            exponent.abs()
-        );
-    }
-}
-
 fn number(value: &serde_json::Number, out: &mut String) {
     match value.as_f64() {
-        Some(float) if !value.is_i64() && !value.is_u64() => python_float(float, out),
+        Some(float) if !value.is_i64() && !value.is_u64() => out.push_str(&float_repr(float)),
         Some(_) | None => out.push_str(&value.to_string()),
     }
-}
-
-/// `json.dumps` with its defaults: `", "` and `": "` separators and `ensure_ascii`.
-fn json_dumps(value: &Value, out: &mut String) {
-    match value {
-        Value::Null => out.push_str("null"),
-        Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
-        Value::Number(value) => number(value, out),
-        Value::String(text) => json_string(text, out),
-        Value::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                json_dumps(item, out);
-            }
-            out.push(']');
-        }
-        Value::Object(entries) => {
-            out.push('{');
-            for (index, (key, item)) in entries.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                json_string(key, out);
-                out.push_str(": ");
-                json_dumps(item, out);
-            }
-            out.push('}');
-        }
-    }
-}
-
-fn json_string(text: &str, out: &mut String) {
-    out.push('"');
-    for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            ch if ch.is_ascii() && !ch.is_ascii_control() => out.push(ch),
-            ch => {
-                let mut units = [0u16; 2];
-                for unit in ch.encode_utf16(&mut units) {
-                    let _ = write!(out, "\\u{unit:04x}");
-                }
-            }
-        }
-    }
-    out.push('"');
 }
 
 /// Python's `str()` of a JSON value: `repr` for the items of a list or dict.
@@ -1378,6 +1278,20 @@ mod tests {
             "model_name": model_name, "litellm_params": params, "model_info": info,
         }))
         .unwrap()
+    }
+
+    #[rstest]
+    #[case::a_count(json!({"model": "a/b", "num_retries": 2}), Some(2))]
+    #[case::digits(json!({"model": "a/b", "num_retries": "3"}), Some(3))]
+    #[case::unset(json!({"model": "a/b"}), None)]
+    #[case::digits_with_a_sign(json!({"model": "a/b", "num_retries": "+3"}), None)]
+    fn a_deployments_own_num_retries_is_a_count_or_its_digits(
+        #[case] params: Value,
+        #[case] expected: Option<u32>,
+    ) {
+        let deployment = Deployment::from_spec(spec("primary", params, json!({}))).unwrap();
+
+        assert_eq!(deployment.num_retries(), expected);
     }
 
     #[rstest]
@@ -1507,17 +1421,6 @@ mod tests {
             unreachable!()
         };
         assert_eq!(deployment_id(group, &params), expected);
-    }
-
-    #[rstest]
-    #[case::integral(2.0, "2.0")]
-    #[case::small(0.00001, "1e-05")]
-    #[case::large(1e16, "1e+16")]
-    #[case::fraction(0.1, "0.1")]
-    fn floats_print_as_python_repr(#[case] value: f64, #[case] expected: &str) {
-        let mut out = String::new();
-        python_float(value, &mut out);
-        assert_eq!(out, expected);
     }
 
     #[rstest]

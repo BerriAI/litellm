@@ -68,7 +68,7 @@ describe("getVectorStoreProviderLogoAndName", () => {
     expect(byName("mongodb_num_candidates")).toMatchObject({ required: false });
   });
 
-  it("registers opensearch with its endpoint, optional region, proxy embedding model, and default field names", () => {
+  it("registers opensearch with its endpoint, optional region, proxy embedding model, default field names, and hybrid search", () => {
     const fields = getProviderSpecificFields("opensearch");
     const byName = (name: string) => fields.find((field) => field.name === name);
 
@@ -83,6 +83,8 @@ describe("getVectorStoreProviderLogoAndName", () => {
       "opensearch_embedding_field",
       "opensearch_text_field",
       "opensearch_index_name",
+      "opensearch_search_pipeline",
+      "opensearch_hybrid_search",
     ]);
     expect(byName("api_base")).toMatchObject({ required: true });
     expect(byName("aws_region_name")).toMatchObject({ required: false });
@@ -92,6 +94,8 @@ describe("getVectorStoreProviderLogoAndName", () => {
     expect(byName("opensearch_text_field")).toMatchObject({ required: false, initialValue: "text" });
     expect(byName("opensearch_index_name")).toMatchObject({ required: false });
     expect(byName("opensearch_index_name")).not.toHaveProperty("initialValue");
+    expect(byName("opensearch_search_pipeline")).toMatchObject({ type: "text", required: false });
+    expect(byName("opensearch_hybrid_search")).toMatchObject({ type: "boolean", required: false });
   });
 
   it("registers valkey in the provider, logo, and field maps", () => {
