@@ -175,7 +175,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     and a run of frames with no JSON object.
     """
     pending: Final = bytearray()
-    classified = 0
+    classified = 0  # rebind-ok: offset of the first byte no read has classified yet, advanced on every read
     try:
         async for chunk in stream:
             if not isinstance(chunk, bytes):
