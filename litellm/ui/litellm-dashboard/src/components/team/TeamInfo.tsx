@@ -110,6 +110,8 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 import { useAccessGroups, type AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTokens";
+import MCPEventPermissionsEditor from "../mcp_server_management/MCPEventPermissionsEditor";
+import { parseErrorMessage } from "../shared/errorUtils";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -806,6 +808,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   const onTeamUpdateSubmit = (values: TeamUpdateFormValues) => handleTeamUpdate(mountedUpdateValues(values));
+
+  const saveTeamEventPermissions = async (next: Record<string, string[]>) => {
+    if (!accessToken) return;
+    try {
+      await teamUpdateCall(accessToken, { team_id: teamId, object_permission: { mcp_event_permissions: next } });
+      setTeamData(await teamInfoCall(accessToken, teamId));
+      toast.success(t("teams.teamInfo.toasts.settingsUpdated"));
+    } catch (error) {
+      toast.fromError(parseErrorMessage(error));
+    }
+  };
 
   const fetchTeamInfo = async () => {
     try {
@@ -1853,6 +1866,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             variant="card"
             accessToken={accessToken}
           />
+          {canEditAsProxyAdmin ? (
+            <MCPEventPermissionsEditor
+              key={info.team_id}
+              className="rounded-xl bg-card p-6 text-card-foreground shadow-xs ring-1 ring-foreground/10"
+              accessToken={accessToken}
+              value={info.object_permission?.mcp_event_permissions ?? {}}
+              onSave={saveTeamEventPermissions}
+            />
+          ) : null}
 
           <Card className="block p-6">
             <GuardrailSettingsView
