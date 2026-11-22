@@ -1669,6 +1669,11 @@ def _call_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
     return frozenset(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
 
 
+def _unanswered_call_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    call_ids: Final = tuple(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
+    return frozenset(call_id for call_id in call_ids if call_ids.count(call_id) == 1)
+
+
 def _has_call_id_in(item: Mapping[str, object], call_ids: frozenset[str]) -> bool:
     call_id: Final = item.get("call_id")
     return isinstance(call_id, str) and call_id in call_ids
@@ -3160,7 +3165,7 @@ class ManagedResponsesWebSocketHandler:
         self._store_history(new_response_id, all_messages)
         if terminal_event.get("type") == "response.incomplete":
             self._cut_off_call_ids = MappingProxyType(
-                {**self._cut_off_call_ids, new_response_id: _call_ids(output_msgs)}
+                {**self._cut_off_call_ids, new_response_id: _unanswered_call_ids(output_msgs)}
             )
         verbose_logger.debug(
             "ManagedResponsesWS: stored %d messages for response_id=%s",
