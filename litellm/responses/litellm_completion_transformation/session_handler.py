@@ -58,7 +58,7 @@ def _replayable(stored: object, spend_log: "SpendLogsPayload") -> object:
     replayable: Final = without_altered_provider_state(stored)
     if replayable != stored:
         verbose_proxy_logger.warning(
-            "previous_response_id replay leaves out reasoning the stored turn %s holds cut or redacted",
+            "previous_response_id replay leaves out reasoning the stored turn %s holds cut",
             spend_log.get("request_id"),
         )
     return replayable

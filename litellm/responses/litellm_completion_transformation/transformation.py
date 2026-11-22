@@ -592,7 +592,11 @@ def _answered_call_id(tool_call_id: str, call_ids: Sequence[str]) -> str | None:
     if tool_call_id in call_ids:
         return tool_call_id
     prefix: Final = tool_call_id_prefix(tool_call_id)
-    same_call: Final = frozenset(call_id for call_id in call_ids if tool_call_id_prefix(call_id) == prefix)
+    same_call: Final = frozenset(
+        call_id
+        for call_id in call_ids
+        if prefix and tool_call_id_prefix(call_id) == prefix and prefix in (call_id, tool_call_id)
+    )
     return next(iter(same_call)) if len(same_call) == 1 else None
 
 

@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.db_truncation import TRUNCATION_MARKER, truncated_for_db
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
@@ -477,10 +478,6 @@ def _looks_like_model_name(model: str) -> bool:
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
-_TRUNCATION_MARKER: Final = re.compile(
-    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
-    rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
-)
 _SCRUBBED_ERROR_TEXT_FIELDS: Final = frozenset(("error_message", "traceback"))
 
 
@@ -499,7 +496,7 @@ def _overlap_at_start(text: str, spelling: str) -> int:
 
 
 def _scrub_raw_model_split_by_truncation(text: str, spellings: tuple[str, ...]) -> str:
-    marker: Final = _TRUNCATION_MARKER.search(text)
+    marker: Final = TRUNCATION_MARKER.search(text)
     if marker is None:
         return text
     head: Final = text[: marker.start()]
@@ -1199,11 +1196,6 @@ def _sanitize_request_body_for_spend_logs_payload(
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
     and logprobs.
     """
-    from litellm.constants import (
-        LITELLM_TRUNCATED_PAYLOAD_FIELD,
-        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    )
-
     if visited is None:
         visited = set()
     if max_string_length_prompt_in_db is None:
@@ -1223,37 +1215,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            if len(value) > max_string_length_prompt_in_db:
-                # Keep 35% from beginning and 65% from end (end is usually more important)
-                # This split ensures we keep more context from the end of conversations
-                start_ratio: Final = 0.35
-                end_ratio: Final = 0.65
-
-                # Calculate character distribution
-                start_chars: Final = int(max_string_length_prompt_in_db * start_ratio)
-                end_chars = int(max_string_length_prompt_in_db * end_ratio)
-
-                # Ensure we don't exceed the total limit
-                total_keep: Final = start_chars + end_chars
-                if total_keep > max_string_length_prompt_in_db:
-                    end_chars = max_string_length_prompt_in_db - start_chars
-
-                # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= max_string_length_prompt_in_db:
-                    return value
-
-                # Calculate how many characters are being skipped
-                skipped_chars: Final = len(value) - total_keep
-
-                # Build the truncated string: beginning + truncation marker + end
-                truncated_value: Final = (
-                    f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
-                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-                    f"{value[-end_chars:]}"
-                )
-                return truncated_value
-            return value
+            return truncated_for_db(value, max_string_length_prompt_in_db)
         return value
 
     def _stored_value(key: str, value: object) -> object:
@@ -1671,7 +1633,7 @@ _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
 _MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
 _LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
-_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
+_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({TRUNCATION_MARKER.pattern})")
 _IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
 _IPV6_ADDRESS_CANDIDATE: Final = re.compile(
     r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"

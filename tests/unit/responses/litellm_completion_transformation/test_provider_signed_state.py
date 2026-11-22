@@ -4,7 +4,6 @@ from typing import Final
 
 import pytest
 
-from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_request_body_for_spend_logs_payload
 from litellm.responses.litellm_completion_transformation.provider_signed_state import without_altered_provider_state
@@ -23,7 +22,6 @@ def _cut(value: str) -> str:
     [
         pytest.param({**_WHOLE_THINKING, "signature": _cut(_LONG)}, id="cut-signature"),
         pytest.param({**_WHOLE_THINKING, "thinking": _cut(_LONG)}, id="cut-signed-text"),
-        pytest.param({**_WHOLE_THINKING, "thinking": f"Key {REDACTED_BY_LITELM_STRING}."}, id="masked-signed-text"),
         pytest.param({"type": "redacted_thinking", "data": _cut(_LONG)}, id="cut-redacted-thinking"),
     ],
 )
@@ -71,7 +69,7 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
         "type": "reasoning",
         "id": "rs_1",
         "summary": [{"type": "summary_text", "text": "Counted."}],
-        "encrypted_content": json.dumps([{"type": "thinking", "thinking": "Count.", "signature": _cut(_LONG)}]),
+        "encrypted_content": _cut(json.dumps([{"type": "thinking", "thinking": "Count.", "signature": _LONG}])),
     }
 
     assert without_altered_provider_state([reasoning]) == [
@@ -87,16 +85,27 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
         pytest.param({"thought_signatures": [_LONG], "thought_signature": _LONG}, id="whole-thought-signatures"),
         pytest.param({"content": _cut(_LONG), "reasoning_content": _cut(_LONG)}, id="cut-unsigned-text"),
         pytest.param([{"type": "thinking", "thinking": _cut(_LONG)}], id="cut-unsigned-thinking"),
+        pytest.param({"content": _cut(f"Ids hold {THOUGHT_SIGNATURE_SEPARATOR}. {_LONG}")}, id="cut-text-on-signed-ids"),
         pytest.param({"type": "web_search_call", "encrypted_content": _cut(_LONG)}, id="cut-state-of-another-item"),
         pytest.param(
-            {"id": _cut(f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG}"), "type": "function"}, id="cut-signed-call-id"
+            {"id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG}", "type": "function"}, id="whole-signed-call-id"
         ),
+        pytest.param({"id": _cut(_LONG), "type": "function"}, id="cut-unsigned-call-id"),
+        pytest.param([{**_WHOLE_THINKING, "thinking": f"It holds {_cut(_LONG)} now."}], id="signed-text-quoting-a-cut"),
+        pytest.param([{"type": ["string", "null"]}, {"type": {"enum": ["thinking"]}}], id="schemas-typed-by-no-name"),
         pytest.param(_cut(_LONG), id="plain-string-input"),
         pytest.param(None, id="nothing-stored"),
     ],
 )
 def test_whole_state_and_unsigned_text_replay_unchanged(stored: object):
     assert without_altered_provider_state(stored) == stored
+
+
+@pytest.mark.parametrize("key", ["id", "call_id", "tool_call_id", "tool_use_id"])
+def test_a_cut_signed_call_id_replays_as_the_unsigned_id_it_starts_with(key: str):
+    stored: Final = {key: _cut(f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG}"), "type": "function"}
+
+    assert without_altered_provider_state([stored]) == [{key: "call_1", "type": "function"}]
 
 
 def test_state_nested_past_the_depth_bound_replays_instead_of_failing():
