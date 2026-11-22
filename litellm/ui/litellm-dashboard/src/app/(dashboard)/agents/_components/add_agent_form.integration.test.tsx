@@ -176,7 +176,7 @@ describe("AddAgentForm submit payload", () => {
       }),
     );
     expect(screen.getByLabelText("Trusted Okta Authorization Server")).toBeInTheDocument();
-    expect(screen.queryByText(/agent_identity_provider: okta first/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/agent_identity_provider: okta and okta_org/)).not.toBeInTheDocument();
   });
 
   it("keeps the loaded Entra tenants while reselecting Entra", async () => {
@@ -472,7 +472,7 @@ describe("AddAgentForm submit payload", () => {
     await user.click(screen.getByLabelText("Identity Provider"));
     await user.click(await screen.findByRole("option", { name: "Okta" }));
 
-    expect(await screen.findByText(/agent_identity_provider: okta first/)).toBeInTheDocument();
+    expect(await screen.findByText(/agent_identity_provider: okta and okta_org/)).toBeInTheDocument();
   });
 
   it("sends a custom Okta-bound agent without a synthesized agent card", async () => {
