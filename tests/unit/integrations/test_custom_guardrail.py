@@ -2802,6 +2802,28 @@ def test_framework_logging_only_does_not_allow_other_unsupported_modes(
         _InheritedApplyGuardrail(event_hook=event_hook, supported_event_hooks=[GuardrailEventHooks.pre_call])
 
 
+
+@pytest.mark.parametrize(
+    ("guardrail_type", "accepted"),
+    ((_InheritedApplyGuardrail, True), (CustomGuardrail, False), (_NativeApplyGuardrail, False)),
+)
+@pytest.mark.parametrize(
+    "event_hook",
+    (GuardrailEventHooks.mcp_event, "mcp_event", ["pre_call", "mcp_event"], Mode(tags={"events": "mcp_event"})),
+)
+def test_mcp_event_mode_is_accepted_only_where_event_screening_can_run(
+    guardrail_type: type[CustomGuardrail],
+    accepted: bool,
+    event_hook: GuardrailEventHooks | str | list[str] | Mode,
+) -> None:
+    supported: Final = [GuardrailEventHooks.pre_call]
+    if accepted:
+        assert guardrail_type(event_hook=event_hook, supported_event_hooks=supported).event_hook == event_hook
+    else:
+        with pytest.raises(ValueError, match=r"mcp_event.*not in the supported event hooks"):
+            guardrail_type(event_hook=event_hook, supported_event_hooks=supported)
+
+
 class TestLoggingOnlyApplyGuardrail:
     """LIT-4876 regression: a guardrail in mode logging_only that implements only
     apply_guardrail must still run against the logged request and response and
