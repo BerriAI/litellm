@@ -19,7 +19,7 @@ import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -30,6 +30,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_get
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
@@ -52,14 +53,10 @@ from litellm.proxy.auth.password_policy import (
     validate_passwords_bulk,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
-from litellm.proxy.common_utils.user_api_key_cache import (
-    AUTH_OBJECTS_TARGET,
-    object_permission_cache_key,
-    user_object_permission_id_cache_key,
-)
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -104,10 +101,12 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     user_counter,
     user_window_counter,
 )
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
 from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -957,16 +956,15 @@ async def _get_user_info_teams(
 _SCIM_DIRECTORY_METADATA_KEYS: Final = SCIM_DIRECTORY_METADATA_KEYS
 
 
-def _redact_scim_enterprise_metadata(
-    metadata: dict[str, object] | None,
-) -> dict[str, object] | None:
+def _redact_scim_enterprise_metadata(metadata: object) -> object:
     """SCIM enterprise attributes, entitlements, and roles are persisted in user
     metadata so reporting can group on them, but they are directory-only fields
     that generic user-info endpoints must not surface; SCIM clients read them
     through the SCIM endpoints."""
-    if not isinstance(metadata, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(metadata):
+    mapping: Final = as_str_mapping(metadata)
+    if not isinstance(mapping, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(mapping):
         return metadata
-    return {k: v for k, v in metadata.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
+    return {k: v for k, v in mapping.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
 
 
 async def _user_budget_limits_usage(
@@ -984,7 +982,7 @@ async def _user_budget_limits_usage(
 
 def _build_user_info_response(
     user_id: str | None,
-    user_info: Any | None,
+    user_info: object,
     keys: Sequence[LiteLLM_VerificationToken] | None,
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
@@ -1000,19 +998,17 @@ def _build_user_info_response(
     team_list.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     _user_info: Final = user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
-    if isinstance(_user_info, dict):
-        _user_info.pop("password", None)
-        _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
+    info_fields: Final = as_str_mapping(_user_info)
+    if isinstance(info_fields, dict):
+        info_fields.pop("password", None)
+        info_fields["metadata"] = _redact_scim_enterprise_metadata(info_fields.get("metadata"))
         if model_max_budget_usage is not None:
-            _user_info["model_max_budget_usage"] = model_max_budget_usage
+            info_fields["model_max_budget_usage"] = model_max_budget_usage
         if budget_limits_usage is not None:
-            _user_info["budget_limits_usage"] = budget_limits_usage
+            info_fields["budget_limits_usage"] = budget_limits_usage
 
-    return UserInfoResponse(
-        user_id=user_id,
-        user_info=_user_info,
-        keys=returned_keys,
-        teams=team_list,
+    return UserInfoResponse.model_validate(
+        {"user_id": user_id, "user_info": _user_info, "keys": returned_keys, "teams": team_list}
     )
 
 
@@ -1284,37 +1280,40 @@ async def user_info_v2(
                 detail=f"User not found: {user_id}",
             )
 
-        user_data: Final = user_row.model_dump()
+        user_dump: Final = user_row.model_dump()
+        user_data: Final = require_get(user_dump)
+        row_user_id: Final = user_data.get("user_id", user_id)
+        row_user_key: Final = None if row_user_id is None else f"{row_user_id}"
 
-        return UserInfoV2Response(
-            user_id=user_data.get("user_id", user_id),
-            user_email=user_data.get("user_email"),
-            user_alias=user_data.get("user_alias"),
-            user_role=user_data.get("user_role"),
-            spend=user_data.get("spend", 0.0),
-            max_budget=user_data.get("max_budget"),
-            tpm_limit=user_data.get("tpm_limit"),
-            rpm_limit=user_data.get("rpm_limit"),
-            models=user_data.get("models") or [],
-            budget_duration=user_data.get("budget_duration"),
-            budget_limits=user_data.get("budget_limits"),
-            budget_reset_at=user_data.get("budget_reset_at"),
-            metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
-            created_at=user_data.get("created_at"),
-            updated_at=user_data.get("updated_at"),
-            sso_user_id=user_data.get("sso_user_id"),
-            teams=user_data.get("teams") or [],
-            object_permission=user_data.get("object_permission"),
-            model_max_budget=user_data.get("model_max_budget"),
-            model_max_budget_usage=await build_model_max_budget_usage(
-                entity_type=Litellm_EntityType.USER,
-                entity_id=user_data.get("user_id", user_id),
-                model_max_budget=user_data.get("model_max_budget"),
-                cache=model_max_budget_limiter.dual_cache,
-            ),
-            budget_limits_usage=await _user_budget_limits_usage(
-                user_data.get("user_id", user_id), user_data.get("budget_limits")
-            ),
+        return UserInfoV2Response.model_validate(
+            {
+                "user_id": row_user_id,
+                "user_email": user_data.get("user_email"),
+                "user_alias": user_data.get("user_alias"),
+                "user_role": user_data.get("user_role"),
+                "spend": user_data.get("spend", 0.0),
+                "max_budget": user_data.get("max_budget"),
+                "tpm_limit": user_data.get("tpm_limit"),
+                "rpm_limit": user_data.get("rpm_limit"),
+                "models": user_data.get("models") or [],
+                "budget_duration": user_data.get("budget_duration"),
+                "budget_limits": user_data.get("budget_limits"),
+                "budget_reset_at": user_data.get("budget_reset_at"),
+                "metadata": _redact_scim_enterprise_metadata(user_data.get("metadata")),
+                "created_at": user_data.get("created_at"),
+                "updated_at": user_data.get("updated_at"),
+                "sso_user_id": user_data.get("sso_user_id"),
+                "teams": user_data.get("teams") or [],
+                "object_permission": user_data.get("object_permission"),
+                "model_max_budget": user_data.get("model_max_budget"),
+                "model_max_budget_usage": await build_model_max_budget_usage(
+                    entity_type=Litellm_EntityType.USER,
+                    entity_id=row_user_key,
+                    model_max_budget=user_dump.get("model_max_budget"),
+                    cache=model_max_budget_limiter.dual_cache,
+                ),
+                "budget_limits_usage": await _user_budget_limits_usage(row_user_key, user_dump.get("budget_limits")),
+            }
         )
     except Exception as e:
         if isinstance(e, HTTPException) and e.status_code < 500:
@@ -1624,10 +1623,35 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
     from litellm.proxy.proxy_server import user_api_key_cache
 
     keys: Final = (
-        *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
-        *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
+        *(AuthObject.object_permission(permission_id).key for permission_id in dict.fromkeys(object_permission_ids)),
+        *((AuthObject.user_object_permission(user_id).key, user_id) if user_id is not None else ()),
     )
     await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
+
+
+async def _write_user_update(
+    prisma_client: "PrismaClient",
+    user_id: str,
+    data: Mapping[str, object],
+    original: LiteLLM_UserTable | None,
+) -> Mapping[str, object] | None:
+    if "budget_limits" not in data and "budget_duration" not in data:
+        return cast(  # cast-ok: the user branch returns a user_id/data dictionary
+            "Mapping[str, object] | None",
+            await prisma_client.update_data(user_id=user_id, data=data, table_name="user"),
+        )
+    async with prisma_client.tx() as transaction:
+        rebased: Final = await rebase_budget_limits_update(
+            cast("BudgetLimitsTransaction", transaction),  # cast-ok: Prisma implements raw transaction queries
+            "LiteLLM_UserTable",
+            user_id,
+            original.budget_limits if original is not None else None,
+            prisma_client.jsonify_object(data),
+        )
+        row: Final = await user_tx_db(transaction).upsert(
+            where={"user_id": user_id}, data={"create": rebased, "update": rebased}
+        )
+    return {"user_id": user_id, "data": row}
 
 
 async def _update_single_user_helper(
@@ -1636,7 +1660,7 @@ async def _update_single_user_helper(
     litellm_changed_by: str | None = None,
     password_prevalidated: bool = False,
     hibp_client: AsyncHTTPHandler | None = None,
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """
     Helper function to update a single user.
     Used by both user_update and bulk_user_update endpoints.
@@ -1678,7 +1702,7 @@ async def _update_single_user_helper(
         if (
             "budget_reset_at" in non_default_values
             and isinstance(non_default_values["budget_duration"], str)
-            and keeps_due_budget_reset(
+            and keeps_budget_reset(
                 non_default_values["budget_duration"],
                 existing_user_row.budget_duration,
                 existing_user_row.budget_reset_at,
@@ -1758,14 +1782,15 @@ async def _update_single_user_helper(
         non_default_values["object_permission_id"] = None
 
     # Perform the update
-    response: dict[str, Any] | None = None
+    response: Mapping[str, object] | None = None
 
     if user_request.user_id and len(user_request.user_id) > 0:
         non_default_values["user_id"] = user_request.user_id
-        response = await prisma_client.update_data(
-            user_id=user_request.user_id,
-            data=non_default_values,
-            table_name="user",
+        response = await _write_user_update(
+            prisma_client,
+            user_request.user_id,
+            _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values),
+            existing_user_row,
         )
     elif user_request.user_email:
         # Handle email-based updates
@@ -1778,10 +1803,11 @@ async def _update_single_user_helper(
         if existing_user_rows and isinstance(existing_user_rows, list) and len(existing_user_rows) > 0:
             for existing_user in existing_user_rows:
                 non_default_values["user_id"] = existing_user.user_id
-                response = await prisma_client.update_data(
-                    user_id=existing_user.user_id,
-                    data=non_default_values,
-                    table_name="user",
+                response = await _write_user_update(
+                    prisma_client,
+                    TypeAdapter(str).validate_python(existing_user.user_id),
+                    _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values),
+                    existing_user_row,
                 )
                 break  # Update first matching user
         else:
@@ -1823,7 +1849,6 @@ async def _update_single_user_helper(
             await evict_budget_windows_absent_marker(
                 entity_type=Litellm_EntityType.USER,
                 entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
-                user_api_key_cache=user_api_key_cache,
             )
 
         await evict_and_broadcast(
@@ -1850,7 +1875,7 @@ async def _update_single_user_helper(
             detail={"error": "Failed to update user"},
         )
     _strip_password_from_response(response)
-    return response
+    return dict(response)
 
 
 def can_user_call_user_update(
@@ -1985,11 +2010,13 @@ async def bulk_update_processed_users(
                 )
                 # Record success
                 results.append(
-                    UserUpdateResult(
-                        user_id=(response.get("user_id") if response else user_request.user_id),
-                        user_email=user_request.user_email,
-                        success=True,
-                        updated_user=response,
+                    UserUpdateResult.model_validate(
+                        {
+                            "user_id": (response.get("user_id") if response else user_request.user_id),
+                            "user_email": user_request.user_email,
+                            "success": True,
+                            "updated_user": response,
+                        }
                     )
                 )
                 successful_updates += 1
@@ -2200,7 +2227,6 @@ async def bulk_user_update(
                         evict_budget_windows_absent_marker(
                             entity_type=Litellm_EntityType.USER,
                             entity_id=user.user_id,
-                            user_api_key_cache=user_api_key_cache,
                         )
                         for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                         if user.user_id in windows_by_user
@@ -2442,14 +2468,14 @@ async def _authorize_user_list_request(
 _NO_SEARCH_WHERE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _user_search_where(search: str | None) -> Mapping[str, object]:
-    """Prisma predicate for `/user/list?search=`: user_id or user_email contains it, case-insensitive."""
+def _user_search_where(search: str | None, *, include_alias: bool = False) -> Mapping[str, object]:
     if not search:
         return _NO_SEARCH_WHERE
     search_where: Final[UserSearchWhere] = {
         "OR": (
             {"user_id": {"contains": search, "mode": "insensitive"}},
             {"user_email": {"contains": search, "mode": "insensitive"}},
+            *(({"user_alias": {"contains": search, "mode": "insensitive"}},) if include_alias else ()),
         )
     }
     return search_where
@@ -2996,7 +3022,7 @@ async def ui_view_users(
     user_email: str | None = fastapi.Query(default=None, description="User email in the request parameters"),
     search: str | None = fastapi.Query(
         default=None,
-        description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
+        description="Case-insensitive search by ID or email, or by alias for proxy admins and admin viewers.",
     ),
     team_id: str | None = fastapi.Query(
         default=None,
@@ -3008,6 +3034,7 @@ async def ui_view_users(
 ):
     """
     Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
+    Proxy admins and admin viewers can also search by alias and receive the alias in results.
 
     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
     (stored in the ``litellm_uisettings`` table):
@@ -3059,9 +3086,13 @@ async def ui_view_users(
         if org_filter_ids is not None:
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_filter_ids}}}
 
+        include_alias: Final = user_api_key_has_admin_view(user_api_key_dict)
         where: Final[Mapping[str, object]] = {
             key: value
-            for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+            for key, value in (
+                *where_conditions.items(),
+                *_user_search_where(search, include_alias=include_alias).items(),
+            )
             if value is not None
         }
 
@@ -3076,7 +3107,12 @@ async def ui_view_users(
         if not users:
             return []
 
-        return [LiteLLM_UserTableFiltered.model_validate(user.model_dump()) for user in users]
+        return [
+            LiteLLM_UserTableFiltered(
+                user_id=user.user_id, user_email=user.user_email, user_alias=user.user_alias if include_alias else None
+            )
+            for user in users
+        ]
 
     except HTTPException:
         raise

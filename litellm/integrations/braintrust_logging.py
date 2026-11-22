@@ -272,7 +272,7 @@ class BraintrustLogger(CustomLogger):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
                 output = response_obj.choices[0].message.json()
-                choices = response_obj["choices"]
+                choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
@@ -365,10 +365,7 @@ class BraintrustLogger(CustomLogger):
                 if value:
                     request_data[key] = value
 
-            if choices is not None:
-                request_data["output"] = [choice.dict() for choice in choices]
-            else:
-                request_data["output"] = output
+            request_data["output"] = [choice.dict() for choice in choices]
 
             if metrics is not None:
                 request_data["metrics"] = metrics

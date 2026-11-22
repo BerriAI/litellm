@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.openai_files_endpoints.common_utils import (
     ManagedBatchOutputFileWriter,
     ensure_batch_response_managed_file_ids,
@@ -420,7 +421,7 @@ async def test_store_unified_object_id_resolves_org_through_the_cached_team(monk
     instance, store = _in_memory_managed_files()
     creator = UserAPIKeyAuth(user_id="alice", team_id="team-cached", api_key="hash-alice")
     await user_api_key_cache.async_set_cache(
-        key="team_id:team-cached",
+        key=AuthObject.team("team-cached"),
         value=LiteLLM_TeamTableCachedObj(team_id="team-cached", organization_id="org-via-team"),
         model_type=LiteLLM_TeamTableCachedObj,
     )
@@ -435,7 +436,7 @@ async def test_store_unified_object_id_resolves_org_through_the_cached_team(monk
             persist_attribution=True,
         )
     finally:
-        user_api_key_cache.delete_cache(key="team_id:team-cached")
+        user_api_key_cache.delete_cache(key=AuthObject.team("team-cached").key)
 
     assert store["unified-b"]["org_id"] == "org-via-team"
     assert stores.team.lookups == []
@@ -471,7 +472,7 @@ async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is
             persist_attribution=True,
         )
     finally:
-        user_api_key_cache.delete_cache(key="team_id:team-uncached")
+        user_api_key_cache.delete_cache(key=AuthObject.team("team-uncached").key)
 
     assert store["unified-b"]["org_id"] == "org-via-db"
 

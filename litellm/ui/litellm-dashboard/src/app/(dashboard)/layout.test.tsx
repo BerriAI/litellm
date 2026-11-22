@@ -130,6 +130,24 @@ describe("(dashboard) Layout", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
   });
 
+  it.each(["/app-groups", "/ui/app-groups/"])(
+    "selects Customer Management when opening %s directly",
+    async (pathname) => {
+      localStorage.setItem("litellm_plugin_mode", "ai-gateway");
+      vi.mocked(usePathname).mockReturnValue(pathname);
+      render(
+        <AuthProvider>
+          <Layout>
+            <p>App groups content</p>
+          </Layout>
+        </AuthProvider>,
+      );
+      pendingUiConfig.resolve();
+      await screen.findByText("App groups content");
+      await waitFor(() => expect(localStorage.getItem("litellm_plugin_mode")).toBe("customer-portal"));
+    },
+  );
+
   it("records one page view per route segment, not per query change", async () => {
     const dashboard = () => (
       <AuthProvider>
@@ -197,6 +215,24 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
     rerender(dashboard());
     expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+  });
+
+  it("draws the page frame around a mapped route and leaves an unmapped route unframed", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <p>Route content</p>
+        </Layout>
+      </AuthProvider>
+    );
+    vi.mocked(usePathname).mockReturnValue("/ui/caching");
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    expect((await screen.findByText("Route content")).parentElement).toHaveClass("p-4", "sm:p-6");
+
+    vi.mocked(usePathname).mockReturnValue("/ui/lens");
+    rerender(dashboard());
+    expect(screen.getByText("Route content").parentElement).not.toHaveClass("p-4");
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {
