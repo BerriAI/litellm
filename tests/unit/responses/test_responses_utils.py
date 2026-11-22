@@ -144,6 +144,28 @@ class TestResponsesAPIRequestUtils:
         assert result["max_output_tokens"] == 100
         assert result["prompt"] == {"id": "pmpt_456"}
 
+    def test_background_options_reach_the_openai_responses_request(self):
+        """`background_options` picks the completion window of a background response
+        (https://github.com/openai/openai-python/commit/720bcb501dff, fetched 2026-11-22)."""
+        sent = {
+            "background": True,
+            "background_options": {"completion_window": "2h", "continuation_id": "cont_123"},
+            "invalid_param": "value",
+        }
+
+        result = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-5",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+                dict(sent)
+            ),
+        )
+
+        assert result == {
+            "background": True,
+            "background_options": {"completion_window": "2h", "continuation_id": "cont_123"},
+        }
+
     def test_get_requested_response_api_optional_param_drops_nested_path(self):
         """Nested additional_drop_params paths like reasoning.summary must be honored"""
         params = {
