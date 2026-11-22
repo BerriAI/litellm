@@ -4,12 +4,12 @@ import asyncio
 import json
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from itertools import groupby, pairwise
+from itertools import chain, groupby, pairwise
 from typing import Annotated, Final, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
@@ -59,11 +59,15 @@ def _body(route: str, model: str, prompt: str) -> Mapping[str, object]:
 
 
 class CanaryRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     guardrail_probes: Mapping[str, str] = Field(default_factory=dict)
     forbidden_model: str | None = None
 
 
 class CanaryCell(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     route: str
     status_code: int
     enforced: bool
@@ -71,6 +75,8 @@ class CanaryCell(BaseModel):
 
 
 class CanaryResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     key_alias: str
     control: Literal["model_access", "rpm_limit", "guardrail"]
     configured: str
@@ -79,6 +85,8 @@ class CanaryResult(BaseModel):
 
 
 class CanaryResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     ran_at: datetime
     results: Sequence[CanaryResult]
 
@@ -117,6 +125,84 @@ async def _run_canary(
     return result.model_copy(update={"cells": cells})
 
 
+def _canaries(
+    client: httpx.AsyncClient,
+    admin_headers: Mapping[str, str],
+    body: CanaryRequest,
+    all_models: Sequence[str],
+    alias: str,
+    models: Sequence[str],
+    team_id: str | None,
+    rpm_limit: int | None,
+    guardrails: Sequence[object],
+) -> Sequence[Awaitable[CanaryResult]]:
+    allowed: Final = tuple(m for m in models if m in all_models)
+    if not allowed:
+        return ()
+    base: Final = {"models": list(models), "team_id": team_id}
+    forbidden: Final = body.forbidden_model or next((m for m in all_models if m not in models), None)
+    model_access: Final = (
+        (
+            _run_canary(
+                client,
+                admin_headers,
+                CanaryResult(
+                    key_alias=alias,
+                    control="model_access",
+                    configured=f"models = {', '.join(models)}",
+                    probe=f"call {forbidden}",
+                    cells=(),
+                ),
+                base,
+                forbidden,
+                "ping",
+            ),
+        )
+        if forbidden
+        else ()
+    )
+    rpm: Final = (
+        (
+            _run_canary(
+                client,
+                admin_headers,
+                CanaryResult(
+                    key_alias=alias,
+                    control="rpm_limit",
+                    configured=f"rpm_limit = {rpm_limit}",
+                    probe="shadow key at rpm_limit 1, second request in the same minute",
+                    cells=(),
+                ),
+                {**base, "rpm_limit": 1},
+                allowed[0],
+                "ping",
+                repeat=2,
+            ),
+        )
+        if rpm_limit is not None
+        else ()
+    )
+    guarded: Final = tuple(
+        _run_canary(
+            client,
+            admin_headers,
+            CanaryResult(
+                key_alias=alias,
+                control="guardrail",
+                configured=f"guardrail = {name}",
+                probe=f'send "{body.guardrail_probes[str(name)]}"',
+                cells=(),
+            ),
+            {**base, "guardrails": [name]},
+            allowed[0],
+            body.guardrail_probes[str(name)],
+        )
+        for name in guardrails
+        if body.guardrail_probes.get(str(name))
+    )
+    return (*model_access, *rpm, *guarded)
+
+
 @router.post("/canaries/run")
 async def run_control_canaries(
     body: CanaryRequest, request: Request, user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
@@ -133,79 +219,31 @@ async def run_control_canaries(
     )
     all_models: Final = tuple(llm_router.get_model_names()) if llm_router else ()
     admin_headers: Final = {"Authorization": request.headers.get("authorization", "")}
-    jobs: Final[
-        list[Awaitable[CanaryResult]]
-    ] = []  # mutable-ok  # heterogeneous canaries collected per key before one gather
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=request.app), base_url="http://litellm-proxy", timeout=60
     ) as client:
-        for row in keys:
-            alias = str(row.key_alias)
-            allowed = [m for m in row.models if m in all_models]
-            guardrails = _as_list(_as_dict(row.metadata).get("guardrails"))
-            if not allowed:
-                continue
-            base = {"models": row.models, "team_id": row.team_id}
-            forbidden = body.forbidden_model or next((m for m in all_models if m not in row.models), None)
-            if forbidden:
-                jobs.append(
-                    _run_canary(
-                        client,
-                        admin_headers,
-                        CanaryResult(
-                            key_alias=alias,
-                            control="model_access",
-                            configured=f"models = {', '.join(row.models)}",
-                            probe=f"call {forbidden}",
-                            cells=(),
-                        ),
-                        base,
-                        forbidden,
-                        "ping",
-                    )
+        results: Final = await asyncio.gather(
+            *chain.from_iterable(
+                _canaries(
+                    client,
+                    admin_headers,
+                    body,
+                    all_models,
+                    str(row.key_alias),
+                    tuple(row.models),
+                    row.team_id,
+                    row.rpm_limit,
+                    _as_list(_as_dict(row.metadata).get("guardrails")),
                 )
-            if row.rpm_limit is not None:
-                jobs.append(
-                    _run_canary(
-                        client,
-                        admin_headers,
-                        CanaryResult(
-                            key_alias=alias,
-                            control="rpm_limit",
-                            configured=f"rpm_limit = {row.rpm_limit}",
-                            probe="shadow key at rpm_limit 1, second request in the same minute",
-                            cells=(),
-                        ),
-                        {**base, "rpm_limit": 1},
-                        allowed[0],
-                        "ping",
-                        repeat=2,
-                    )
-                )
-            for name in guardrails:
-                prompt = body.guardrail_probes.get(str(name))
-                if prompt:
-                    jobs.append(
-                        _run_canary(
-                            client,
-                            admin_headers,
-                            CanaryResult(
-                                key_alias=alias,
-                                control="guardrail",
-                                configured=f"guardrail = {name}",
-                                probe=f'send "{prompt}"',
-                                cells=(),
-                            ),
-                            {**base, "guardrails": [name]},
-                            allowed[0],
-                            prompt,
-                        )
-                    )
-        results: Final = await asyncio.gather(*jobs)
+                for row in keys
+            )
+        )
     return CanaryResponse(ran_at=datetime.now(timezone.utc), results=results)
 
 
 class CacheTurn(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     request_id: str
     start_time: datetime
     key_alias: str
@@ -223,6 +261,8 @@ class CacheTurn(BaseModel):
 
 
 class CacheMissResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     turns: Sequence[CacheTurn]
     wasted_usd_by_cause: Mapping[str, float]
     wasted_usd_per_day: float
@@ -247,6 +287,43 @@ def _changed_text(previous: str, current: str) -> str | None:
     if offset is None:
         return None
     return f"...{previous[max(0, offset - 30) : offset + 40]}  ->  ...{current[max(0, offset - 30) : offset + 40]}"
+
+
+def _verdict(
+    previous: Mapping[str, object],
+    row: Mapping[str, object],
+    model: str,
+    missed: int,
+    block_size: int,
+    cache_read: int,
+    reusable: int,
+    shared: int,
+    previous_tokens: int,
+    prompt_tokens: int,
+    gap: timedelta,
+) -> tuple[Literal["hit", "client", "gateway", "provider", "first"], str]:
+    if not previous:
+        return "first", "First request in the session, nothing to reuse yet"
+    if missed < block_size or cache_read >= 0.5 * min(previous_tokens, prompt_tokens):
+        return "hit", f"{cache_read:,} tokens read from cache"
+    if reusable < 0.8 * min(previous_tokens, prompt_tokens):
+        return (
+            "client",
+            f"Prompt prefix changed at token ~{shared * block_size:,} of {previous_tokens:,}, "
+            "so everything after it was re-billed",
+        )
+    if row.get("model_id") != previous.get("model_id"):
+        return (
+            "gateway",
+            "Prefix was byte-identical, but the router moved the session from "
+            f"{previous.get('custom_llm_provider')}/{previous.get('model')} to {row.get('custom_llm_provider')}/{model}",
+        )
+    if gap > CACHE_TTL:
+        return (
+            "provider",
+            f"Prefix was identical, but {int(gap.total_seconds() // 60)} min passed and the provider cache expired",
+        )
+    return "provider", "Prefix was identical and routing was sticky, the provider still reported no cache read"
 
 
 def _explain(previous: Mapping[str, object], row: Mapping[str, object]) -> CacheTurn:
@@ -284,28 +361,19 @@ def _explain(previous: Mapping[str, object], row: Mapping[str, object]) -> Cache
         else start
     )
     changed: Final = _changed_text(_prompt_text(previous), _prompt_text(row)) if previous else None
-    verdict: Literal["hit", "client", "gateway", "provider", "first"]
-    if not previous:
-        verdict, reason = "first", "First request in the session, nothing to reuse yet"
-    elif missed < block_size or cache_read >= 0.5 * min(previous_tokens, prompt_tokens):
-        verdict, reason = "hit", f"{cache_read:,} tokens read from cache"
-    elif reusable < 0.8 * min(previous_tokens, prompt_tokens):
-        verdict = "client"
-        reason = f"Prompt prefix changed at token ~{shared * block_size:,} of {previous_tokens:,}, so everything after it was re-billed"
-    elif row.get("model_id") != previous.get("model_id"):
-        verdict = "gateway"
-        reason = (
-            f"Prefix was byte-identical, but the router moved the session from "
-            f"{previous.get('custom_llm_provider')}/{previous.get('model')} to {row.get('custom_llm_provider')}/{model}"
-        )
-    elif start - previous_start > CACHE_TTL:
-        verdict = "provider"
-        reason = f"Prefix was identical, but {int((start - previous_start).total_seconds() // 60)} min passed and the provider cache expired"
-    else:
-        verdict, reason = (
-            "provider",
-            "Prefix was identical and routing was sticky, the provider still reported no cache read",
-        )
+    verdict, reason = _verdict(
+        previous,
+        row,
+        model,
+        missed,
+        block_size,
+        cache_read,
+        reusable,
+        shared,
+        previous_tokens,
+        prompt_tokens,
+        start - previous_start,
+    )
     return CacheTurn(
         request_id=str(row["request_id"]),
         start_time=start,
@@ -345,9 +413,10 @@ async def explain_cache_misses(
         since,
     )
     turns: Final = tuple(
-        turn
-        for _, session in groupby(rows, key=lambda row: row.get("session_id"))
-        for turn in (_explain(previous, row) for previous, row in pairwise(({}, *session)))
+        chain.from_iterable(
+            (_explain(previous, row) for previous, row in pairwise(({}, *session)))
+            for _, session in groupby(rows, key=lambda row: row.get("session_id"))
+        )
     )
     by_cause: Final = {
         cause: sum(turn.wasted_usd for turn in turns if turn.verdict == cause)
@@ -359,6 +428,8 @@ async def explain_cache_misses(
 
 
 class DraftPlan(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     days: int = 30
     monthly_price: float
     included_spend: float
@@ -367,6 +438,8 @@ class DraftPlan(BaseModel):
 
 
 class PlanCustomer(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     customer: str
     requests: int
     cost_today: float
@@ -377,6 +450,8 @@ class PlanCustomer(BaseModel):
 
 
 class PlanReplay(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     customers: Sequence[PlanCustomer]
     requests_replayed: int
     revenue: float
