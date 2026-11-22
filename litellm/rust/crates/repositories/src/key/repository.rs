@@ -107,6 +107,10 @@ pub struct FetchedKey {
 }
 
 impl FetchedKey {
+    pub fn view(&self) -> &KeyView {
+        &self.view
+    }
+
     fn new(view: KeyView, now: SystemTime) -> Self {
         Self {
             view,

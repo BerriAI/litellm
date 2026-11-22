@@ -16,6 +16,7 @@ const defaultProps = {
   dateValue: { from: new Date("2025-01-01"), to: new Date("2025-01-31") },
   entityType: "team" as const,
   onExport: vi.fn().mockResolvedValue(new Blob(["data"])),
+  canIncludeMetadata: true,
 };
 
 describe("UsageExportHeader", () => {

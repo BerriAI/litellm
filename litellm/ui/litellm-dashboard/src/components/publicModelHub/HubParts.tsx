@@ -7,7 +7,6 @@ import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { ItemTitle } from "@/components/ui/item";
 import { Kbd } from "@/components/ui/kbd";
@@ -131,21 +130,6 @@ export function Facts({ groups }: { groups: Fact[][] }) {
         </dl>
       ))}
     </div>
-  );
-}
-
-export function EndpointField({ id, value }: { id: string; value: string }) {
-  const { t } = useTranslation();
-  return (
-    <Field>
-      <FieldLabel htmlFor={id}>{t("publicModelHub.endpointField.label")}</FieldLabel>
-      <InputGroup>
-        <InputGroupInput id={id} readOnly value={value} className="font-mono text-xs md:text-xs" />
-        <InputGroupAddon align="inline-end">
-          <CopyIconButton value={value} label={t("publicModelHub.endpointField.copy")} className="size-6" />
-        </InputGroupAddon>
-      </InputGroup>
-    </Field>
   );
 }
 

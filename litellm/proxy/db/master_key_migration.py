@@ -2,15 +2,21 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, Literal
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    V2_GCM_PREFIX,
+    decode_legacy_mcp_user_credential,
+    decrypt_if_encrypted_with,
+    encrypt_secret_map,
+    encrypt_value_helper,
+)
 from litellm.proxy.db.create_views import SupportsRawQueries
 
 
@@ -21,6 +27,7 @@ class _SecretColumn:
     column: str
     is_json: bool = True
     only_rows_with_marked_ciphertexts: bool = False
+    legacy_mcp_format: Literal["credential", "secret_map"] | None = None
 
 
 _SECRET_COLUMNS: Final = (
@@ -32,11 +39,12 @@ _SECRET_COLUMNS: Final = (
     _SecretColumn("LiteLLM_CacheConfig", "id", "cache_settings"),
     _SecretColumn("LiteLLM_ConfigOverrides", "config_type", "config_value"),
     _SecretColumn("LiteLLM_MCPServerTable", "server_id", "credentials"),
-    _SecretColumn("LiteLLM_MCPServerTable", "server_id", "static_headers"),
+    _SecretColumn("LiteLLM_MCPServerTable", "server_id", "static_headers", legacy_mcp_format="secret_map"),
     _SecretColumn("LiteLLM_MCPServerTable", "server_id", "env_vars"),
-    _SecretColumn("LiteLLM_MCPServerTable", "server_id", "env"),
+    _SecretColumn("LiteLLM_MCPServerTable", "server_id", "env", legacy_mcp_format="secret_map"),
     _SecretColumn("LiteLLM_MCPServerOAuthClient", "server_id", "credentials"),
-    _SecretColumn("LiteLLM_MCPUserCredentials", "id", "credential_b64", is_json=False),
+    _SecretColumn("LiteLLM_MCPUserCredentials", "id", "credential_b64", is_json=False, legacy_mcp_format="credential"),
+    _SecretColumn("LiteLLM_UserProviderCredentials", "id", "credential_b64", is_json=False),
     _SecretColumn("LiteLLM_MCPUserEnvVars", "id", "values_b64", is_json=False),
     _SecretColumn("LiteLLM_SSOIdentityAssertion", "user_id", "assertion_b64", is_json=False),
     _SecretColumn("LiteLLM_SearchToolsTable", "search_tool_id", "litellm_params"),
@@ -49,6 +57,8 @@ _SECRET_COLUMNS: Final = (
 
 _STORED_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _PRIMARY_KEY: Final = TypeAdapter(str)
+_CIPHERTEXT: Final = TypeAdapter(str)
+_MCP_SECRET_MAP: Final = TypeAdapter(dict[str, str])
 
 ReplaceCiphertext = Callable[[str], str | None]
 
@@ -77,9 +87,13 @@ async def count_values_encrypted_with(database: SupportsRawQueries, signing_key:
 
     return sum(
         [
-            replace_ciphertexts(_STORED_VALUE.validate_python(row[secret_column.column]), keep)[1]
+            sum(
+                _replace_column_ciphertexts(
+                    secret_column, _STORED_VALUE.validate_python(row[secret_column.column]), keep
+                )[1]
+                for row in await _rows_of(database, secret_column)
+            )
             for secret_column in await _secret_columns_in(database)
-            for row in await _rows_of(database, secret_column)
         ]
     )
 
@@ -93,21 +107,28 @@ async def count_values_encrypted_with_or_none(
         return None
 
 
-async def reencrypt_stored_values(database: SupportsRawQueries, *, from_key: str, to_key: str) -> int:
+async def reencrypt_stored_values(
+    database: SupportsRawQueries,
+    *,
+    from_key: str,
+    to_key: str,
+    require_unchanged: bool = False,
+    upgrade_legacy_mcp: bool = False,
+) -> int | None:
     def reencrypted(value: str) -> str | None:
         plaintext: Final = decrypt_if_encrypted_with(value, from_key)
         return None if plaintext is None else _CIPHERTEXT.validate_python(encrypt_value_helper(plaintext, to_key))
 
-    return sum(
-        [
-            await _reencrypt_row(database, secret_column, row, reencrypted)
-            for secret_column in await _secret_columns_in(database)
-            for row in await _rows_of(database, secret_column)
-        ]
-    )
-
-
-_CIPHERTEXT: Final = TypeAdapter(str)
+    migrated = 0  # rebind-ok: count successful writes while stopping on the first conflict during rotation
+    for secret_column in await _secret_columns_in(database):
+        for row in await _rows_of(database, secret_column):
+            count = await _reencrypt_row(
+                database, secret_column, row, reencrypted, to_key if upgrade_legacy_mcp else None
+            )
+            if count is None and require_unchanged:
+                return None
+            migrated += count or 0
+    return migrated
 
 
 async def _secret_columns_in(database: SupportsRawQueries) -> tuple[_SecretColumn, ...]:
@@ -142,9 +163,10 @@ async def _reencrypt_row(
     secret_column: _SecretColumn,
     row: Mapping[str, object],
     reencrypted: ReplaceCiphertext,
-) -> int:
+    legacy_mcp_key: str | None,
+) -> int | None:
     stored: Final = _STORED_VALUE.validate_python(row[secret_column.column])
-    migrated, count = replace_ciphertexts(stored, reencrypted)
+    migrated, count = _replace_column_ciphertexts(secret_column, stored, reencrypted, legacy_mcp_key)
     if count == 0:
         return 0
     cast_to: Final = "::jsonb" if secret_column.is_json else ""
@@ -155,7 +177,45 @@ async def _reencrypt_row(
         _PRIMARY_KEY.validate_python(row[secret_column.primary_key]),
         _as_sql_parameter(stored, secret_column),
     )
-    return count if rows_updated else 0
+    return count if rows_updated else None
+
+
+def _encrypt_legacy_mcp_map(stored: JsonValue, to_key: str) -> str | None:
+    if not (isinstance(stored, dict) or (isinstance(stored, str) and stored.lstrip().startswith("{"))):
+        return None
+    try:
+        plaintext: Final = (
+            _MCP_SECRET_MAP.validate_json(stored, strict=True)
+            if isinstance(stored, str)
+            else _MCP_SECRET_MAP.validate_python(stored, strict=True)
+        )
+    except ValidationError:
+        return None
+    return encrypt_secret_map(plaintext, new_encryption_key=to_key) if plaintext else None
+
+
+def _replace_column_ciphertexts(
+    column: _SecretColumn, stored: JsonValue, replacement_for: ReplaceCiphertext, legacy_mcp_key: str | None = None
+) -> tuple[JsonValue, int]:
+    if legacy_mcp_key is not None and column.legacy_mcp_format == "secret_map":
+        encrypted_map: Final = _encrypt_legacy_mcp_map(stored, legacy_mcp_key)
+        if encrypted_map is not None:
+            return encrypted_map, 1
+    if column.is_json and isinstance(stored, str) and stored.lstrip().startswith(("{", "[", '"')):
+        try:
+            parsed: Final = _STORED_VALUE.validate_json(stored)
+        except ValueError:
+            return stored, 0
+        replaced, count = replace_ciphertexts(parsed, replacement_for)
+        return (json.dumps(replaced), count) if count else (stored, 0)
+    migrated, migrated_count = replace_ciphertexts(stored, replacement_for)
+    if migrated_count or legacy_mcp_key is None:
+        return migrated, migrated_count
+    if column.legacy_mcp_format == "credential" and isinstance(stored, str) and not stored.startswith(V2_GCM_PREFIX):
+        plaintext: Final = decode_legacy_mcp_user_credential(stored)
+        if plaintext is not None:
+            return encrypt_value_helper(plaintext, legacy_mcp_key), 1
+    return stored, 0
 
 
 def _as_sql_parameter(value: JsonValue, secret_column: _SecretColumn) -> str:
@@ -263,7 +323,7 @@ async def _migrate(
         return NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
     log(f"Re-encrypting {found} stored value(s) from the {MIGRATE_FROM_MASTER_KEY_ENV_VAR} key to the new master key.")
     migrated: Final = Migrated(
-        migrated=await reencrypt_stored_values(database, from_key=previous_master_key, to_key=master_key),
+        migrated=await reencrypt_stored_values(database, from_key=previous_master_key, to_key=master_key) or 0,
         remaining=await count_values_encrypted_with(database, previous_master_key),
     )
     another_worker_migrated_everything: Final = migrated == Migrated(migrated=0, remaining=0)
