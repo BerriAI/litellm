@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { ArrowLeft, ChevronDown, RefreshCw } from "lucide-react";
+import { PageContent } from "@/components/shared/Page";
+import { DeprecationBanner } from "@/components/DeprecationBanner";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import { ArrowLeft, ChevronDown, RefreshCw, Workflow } from "lucide-react";
 import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
 import type { ParseKeys, TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -518,146 +521,150 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
   const statusLabels = Object.fromEntries(RUN_STATUS_OPTIONS.map((status) => [status, t(STATUS_LABEL_KEYS[status])]));
 
   return (
-    <div className="w-full px-8 py-6">
-      {/* page header */}
-      <div className="mb-5">
-        <div className="text-lg font-semibold text-foreground">{t("workflows.header.title")}</div>
-        <div className="mt-0.5 text-[13px] text-muted-foreground">{t("workflows.header.subtitle")}</div>
-      </div>
-
-      <DataTable
-        data={runs}
-        columns={columns}
-        getRowId={(run) => run.run_id}
-        isLoading={loadingRuns}
-        loadingMessage={t("workflows.table.loading")}
-        noDataMessage={
-          <div className="py-6 text-center text-[13px] text-muted-foreground">{t("workflows.table.empty")}</div>
-        }
-        paginationMode="client"
-        pageSizeOptions={[50, 100]}
-        filterMode="client"
-        columnFilters={columnFilters}
-        onColumnFiltersChange={setColumnFilters}
-        globalFilter={globalFilter}
-        onGlobalFilterChange={setGlobalFilter}
-        onRowClick={fetchRunDetail}
-        size="compact"
-        toolbar={(table) => (
-          <>
-            <DataTableToolbar
-              table={table}
-              searchValue={globalFilter}
-              onSearchChange={setGlobalFilter}
-              searchPlaceholder={t("workflows.table.searchPlaceholder")}
-              onRefresh={fetchRuns}
-              isRefreshing={loadingRuns}
-              onOpenFilters={() => setFiltersOpen(true)}
-            />
-            <DataTableFilterDrawer
-              table={table}
-              open={filtersOpen}
-              onOpenChange={setFiltersOpen}
-              title={t("workflows.filters.title")}
-              description={t("workflows.filters.description")}
-            >
-              {({ get, set }: FilterDraft<"status" | "workflow_type">) => (
-                <>
-                  <DataTableFilterField label={t("workflows.filters.status")}>
-                    <Select
-                      items={statusLabels}
-                      value={(get("status") as string) || null}
-                      onValueChange={(value: string | null) => set("status", value ?? "")}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder={t("workflows.filters.allStatuses")} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={null}>{t("workflows.filters.allStatuses")}</SelectItem>
-                        {RUN_STATUS_OPTIONS.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {statusLabels[status]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </DataTableFilterField>
-                  <DataTableFilterField label={t("workflows.filters.type")}>
-                    <Input
-                      value={(get("workflow_type") as string) ?? ""}
-                      onChange={(event) => set("workflow_type", event.target.value)}
-                      placeholder={t("workflows.filters.typePlaceholder")}
-                    />
-                  </DataTableFilterField>
-                </>
-              )}
-            </DataTableFilterDrawer>
-          </>
-        )}
-      />
-
-      {/* detail drawer */}
-      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent
-          showCloseButton={false}
-          className="overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[680px]"
-        >
-          <SheetTitle className="sr-only">{t("workflows.drawer.srTitle")}</SheetTitle>
-          <SheetDescription className="sr-only">{t("workflows.drawer.srDescription")}</SheetDescription>
-          {!selectedRun ? null : loadingDetail ? (
-            <div className="flex justify-center py-20">
-              <UiLoadingSpinner className="size-8 text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="px-7 py-6">
-              {/* drawer close + refresh */}
-              <div className="mb-4 flex items-center justify-between">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="px-0 text-xs font-normal text-muted-foreground hover:bg-transparent"
-                  onClick={() => setDrawerOpen(false)}
-                >
-                  <ArrowLeft />
-                  {t("workflows.drawer.close")}
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => fetchRunDetail(selectedRun)}>
-                  <RefreshCw />
-                  {t("workflows.drawer.refresh")}
-                </Button>
-              </div>
-
-              {/* metadata card — top */}
-              <MetadataCard run={selectedRun} />
-
-              {/* collapsible sections */}
-              <div className="divide-y overflow-hidden rounded-lg border">
-                <DetailSection
-                  title={t("workflows.drawer.timeline")}
-                  meta={t("workflows.drawer.eventCount", { count: events.length })}
-                  defaultOpen
-                >
-                  <GanttTimeline run={selectedRun} events={events} />
-                </DetailSection>
-                <DetailSection title={t("workflows.drawer.messages")} meta={messages.length}>
-                  {messages.length === 0 ? (
-                    <div className="py-3 font-mono text-xs text-muted-foreground">
-                      {t("workflows.drawer.noMessages")}
-                    </div>
-                  ) : (
-                    <div>
-                      {messages.map((msg) => (
-                        <MessageRow key={msg.message_id} msg={msg} />
-                      ))}
-                    </div>
-                  )}
-                </DetailSection>
-              </div>
-            </div>
+    <>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Workflow />
+          {t("workflows.header.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("workflows.header.subtitle")}</PageHeaderDescription>
+      </PageHeader>
+      <PageContent>
+        <DeprecationBanner featureName={t("workflows.page.featureName")} />
+        <DataTable
+          data={runs}
+          columns={columns}
+          getRowId={(run) => run.run_id}
+          isLoading={loadingRuns}
+          loadingMessage={t("workflows.table.loading")}
+          noDataMessage={
+            <div className="py-6 text-center text-[13px] text-muted-foreground">{t("workflows.table.empty")}</div>
+          }
+          paginationMode="client"
+          pageSizeOptions={[50, 100]}
+          filterMode="client"
+          columnFilters={columnFilters}
+          onColumnFiltersChange={setColumnFilters}
+          globalFilter={globalFilter}
+          onGlobalFilterChange={setGlobalFilter}
+          onRowClick={fetchRunDetail}
+          size="compact"
+          toolbar={(table) => (
+            <>
+              <DataTableToolbar
+                table={table}
+                searchValue={globalFilter}
+                onSearchChange={setGlobalFilter}
+                searchPlaceholder={t("workflows.table.searchPlaceholder")}
+                onRefresh={fetchRuns}
+                isRefreshing={loadingRuns}
+                onOpenFilters={() => setFiltersOpen(true)}
+              />
+              <DataTableFilterDrawer
+                table={table}
+                open={filtersOpen}
+                onOpenChange={setFiltersOpen}
+                title={t("workflows.filters.title")}
+                description={t("workflows.filters.description")}
+              >
+                {({ get, set }: FilterDraft<"status" | "workflow_type">) => (
+                  <>
+                    <DataTableFilterField label={t("workflows.filters.status")}>
+                      <Select
+                        items={statusLabels}
+                        value={(get("status") as string) || null}
+                        onValueChange={(value: string | null) => set("status", value ?? "")}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder={t("workflows.filters.allStatuses")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={null}>{t("workflows.filters.allStatuses")}</SelectItem>
+                          {RUN_STATUS_OPTIONS.map((status) => (
+                            <SelectItem key={status} value={status}>
+                              {statusLabels[status]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </DataTableFilterField>
+                    <DataTableFilterField label={t("workflows.filters.type")}>
+                      <Input
+                        value={(get("workflow_type") as string) ?? ""}
+                        onChange={(event) => set("workflow_type", event.target.value)}
+                        placeholder={t("workflows.filters.typePlaceholder")}
+                      />
+                    </DataTableFilterField>
+                  </>
+                )}
+              </DataTableFilterDrawer>
+            </>
           )}
-        </SheetContent>
-      </Sheet>
-    </div>
+        />
+
+        {/* detail drawer */}
+        <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+          <SheetContent
+            showCloseButton={false}
+            className="overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[680px]"
+          >
+            <SheetTitle className="sr-only">{t("workflows.drawer.srTitle")}</SheetTitle>
+            <SheetDescription className="sr-only">{t("workflows.drawer.srDescription")}</SheetDescription>
+            {!selectedRun ? null : loadingDetail ? (
+              <div className="flex justify-center py-20">
+                <UiLoadingSpinner className="size-8 text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="px-7 py-6">
+                {/* drawer close + refresh */}
+                <div className="mb-4 flex items-center justify-between">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="px-0 text-xs font-normal text-muted-foreground hover:bg-transparent"
+                    onClick={() => setDrawerOpen(false)}
+                  >
+                    <ArrowLeft />
+                    {t("workflows.drawer.close")}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => fetchRunDetail(selectedRun)}>
+                    <RefreshCw />
+                    {t("workflows.drawer.refresh")}
+                  </Button>
+                </div>
+
+                {/* metadata card — top */}
+                <MetadataCard run={selectedRun} />
+
+                {/* collapsible sections */}
+                <div className="divide-y overflow-hidden rounded-lg border">
+                  <DetailSection
+                    title={t("workflows.drawer.timeline")}
+                    meta={t("workflows.drawer.eventCount", { count: events.length })}
+                    defaultOpen
+                  >
+                    <GanttTimeline run={selectedRun} events={events} />
+                  </DetailSection>
+                  <DetailSection title={t("workflows.drawer.messages")} meta={messages.length}>
+                    {messages.length === 0 ? (
+                      <div className="py-3 font-mono text-xs text-muted-foreground">
+                        {t("workflows.drawer.noMessages")}
+                      </div>
+                    ) : (
+                      <div>
+                        {messages.map((msg) => (
+                          <MessageRow key={msg.message_id} msg={msg} />
+                        ))}
+                      </div>
+                    )}
+                  </DetailSection>
+                </div>
+              </div>
+            )}
+          </SheetContent>
+        </Sheet>
+      </PageContent>
+    </>
   );
 };
 

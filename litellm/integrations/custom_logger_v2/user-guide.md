@@ -81,17 +81,19 @@ A hook is a named point in a request's life. Request-path hooks run before the c
 | `post_deployment_success` | SDK, after a deployment answers | `response` | Abort, Respond |
 | `post_deployment_failure` | SDK, after a deployment fails | `error` | Abort |
 | `post_call_success` | Proxy, before the response is returned | `response`, `guardrail_info` | Abort, Respond |
-| `post_call_failure` | Proxy, after the request failed | `error` | Abort |
+| `post_call_failure` | Proxy, after the request failed | `error`, `budget_reservation` (settle stamps only) | Abort |
 | `response_headers` | Proxy, when response headers are built | `response_headers` | none |
 | `list_models` | Proxy, on `/models` | `model_list` | Abort |
 | `mcp_tool_result` | After an MCP tool call | `tool_result` | Abort, Respond |
 | `log_prepare` | Logging, before success loggers, success only | `standard_logging_payload` | none |
 | `provider_request_sent` | Logging, when the provider request goes out | none | none |
 | `provider_response_received` | Logging, when the provider answers | none | none |
-| `attempt_ended` | Logging, once per attempt, success or failure | none | none |
+| `attempt_ended` | Logging, once per attempt, success or failure | `budget_reservation` (settle stamps only) | none |
 | `router_event` | Logging, on fallback and group rate limit events | none | none |
 
 The table is `HOOK_SPECS` in `hooks.py`. Declaring a write the hook does not allow, or `may_abort=True` on a hook that allows no outcome, fails when the class is defined. Returning an outcome type the hook does not allow is caught only at runtime, by a dispatcher built with `enforce=True`.
+
+On `attempt_ended` and `post_call_failure` a `budget_reservation` write settles the reservation the request holds. It stamps `finalized` and each entry's `applied_adjustment` in place and changes nothing else, so the proxy's later release sees the request as settled
 
 Five hooks are in the `Hook` enum but should not be used yet. `stream_chunk` rejects subscriptions. `call_ended` accepts them but is never dispatched, so settle on `attempt_ended`. `prompt_resolve`, `pre_route` and `audit_event` have no V2 call site on `main`.
 
@@ -126,12 +128,12 @@ A field is one named piece of request data, a member of the `Field` enum. Which 
 | --- | --- |
 | Proxy `pre_call` | `model`, `messages`, `input`, `tools` when the request has them, `key_identity`, `key_limits` |
 | Proxy `post_call_success` | the request fields above, `response`, `key_identity` |
-| Proxy `post_call_failure` | the request fields, `error`, `key_identity`, `usage` |
+| Proxy `post_call_failure` | the request fields, `error`, `key_identity`, `usage`, `cost`, `spend_log_id`, `billed_retry_attempts`, `budget_reservation` |
 | Proxy `response_headers` | `response_headers`, `key_identity` |
 | Logging hooks | `model`, `messages`, `input`, `optional_params`, `standard_logging_payload`, plus the typed records below |
-| `attempt_ended` only | `outcome`, `input_sequence_length` |
+| `attempt_ended` only | `outcome`, `input_sequence_length`, `budget_reservation` |
 
-Typed records on the logging hooks are small frozen pydantic models from `litellm/types/integrations/custom_logger_v2.py`: `usage`, `cost`, `deployment`, `request_tags`, `guardrail_info`, `attempt_timing`, `rate_limit_state`, `logged_request`, `logged_key_identity`, `logged_model_group`, `metadata_labels`, `mcp_tool_call`, `log_id`. They are built lazily and only when some selected logger declared them.
+Typed records on the logging hooks are small frozen pydantic models from `litellm/types/integrations/custom_logger_v2.py`: `usage`, `cost`, `deployment`, `request_tags`, `guardrail_info`, `attempt_timing`, `rate_limit_state`, `logged_request`, `logged_key_identity`, `logged_model_group`, `metadata_labels`, `mcp_tool_call`, `log_id`, `spend_log_id`. They are built lazily and only when some selected logger declared them.
 
 Prefer typed records over `standard_logging_payload`. For example `view.usage.logged.total_tokens` and `view.cost.response_cost` need no payload at all. Members of a record are optional: `view.usage.logged` and `view.cost.response_cost` can be `None`, so check before using them.
 
@@ -199,7 +201,7 @@ Callbacks run in the order they appear in `litellm.callbacks`. Legacy loggers, V
 
 If a serial or parallel handler returns `Abort`, nothing after it runs, including steps 3 to 5.
 
-On hooks that allow writes, a legacy logger counts as writing everything, so it always gets its own step, and a V2 reader listed after it sees its changes. To make one logger see another's patch, list it later and declare the field in `reads`.
+On hooks that allow writes, except `attempt_ended`, a legacy logger counts as writing everything, so it always gets its own step, and a V2 reader listed after it sees its changes. To make one logger see another's patch, list it later and declare the field in `reads`.
 
 ## Delivery and opt-out
 

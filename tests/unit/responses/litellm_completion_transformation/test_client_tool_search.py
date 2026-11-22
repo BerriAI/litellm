@@ -1,5 +1,6 @@
 from typing import Final
 
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
@@ -46,6 +47,25 @@ def test_a_search_that_found_nothing_answers_the_call_and_loads_no_tools() -> No
         "type": "function_call_output",
         "call_id": "search-1",
         "output": "No tools matched the search.",
+    }
+
+
+def test_a_search_output_names_each_loaded_tool_as_the_model_can_call_it() -> None:
+    lint: Final = {**_SHELL, "name": "lint"}
+    documents: Final = {
+        "type": "namespace",
+        "name": "mcp__codex_apps__codex_document_control",
+        "description": "Document tools",
+        "tools": [{"type": "function", "name": "_get_document_tool_schemas", "parameters": {"type": "object"}}],
+    }
+
+    bridged: Final = bridge_client_tool_search([_SEARCH_CALL, _search_output(lint, documents)], [_CODEX_TOOL_SEARCH])
+
+    assert bridged.input[1] == {
+        "type": "function_call_output",
+        "call_id": "search-1",
+        "output": "Loaded these tools, which are now callable: lint, "
+        + chat_member_name("mcp__codex_apps__codex_document_control", "_get_document_tool_schemas"),
     }
 
 

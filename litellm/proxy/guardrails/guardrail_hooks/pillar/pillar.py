@@ -9,7 +9,7 @@
 import json
 import os
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -676,7 +676,7 @@ class PillarGuardrail(CustomGuardrail):
                 data.get("custom_llm_provider") or data.get("provider") or "unknown",
             )
 
-    def _prepare_payload(self, data: dict) -> dict[str, Any]:
+    def _prepare_payload(self, data: dict) -> dict[str, object]:
         """
         Prepare the payload for the Pillar API request following the /api/v1/protect contract.
 
@@ -694,34 +694,21 @@ class PillarGuardrail(CustomGuardrail):
         Returns:
             Formatted payload for Pillar API
         """
-        messages: Final = data.get("messages", [])
-        tools: Final = data.get("tools", [])
+        messages: Final[object] = data.get("messages", [])
+        tools: Final[object] = data.get("tools", [])
         metadata: Final = {
             "source": "litellm",
             "version": litellm_version,
         }
 
-        # Build payload following Pillar API format
-        payload: Final = {
-            "messages": messages,
-            "tools": tools,
-            "metadata": metadata,
-        }
-
         # User ID: use LiteLLM user field
-        user_id: Final = data.get("user")
-        if user_id:
-            payload["user_id"] = user_id
+        user_id: Final[object] = data.get("user")
 
         # Session ID: use metadata.pillar_session_id if provided
-        session_id: Final = data.get("metadata", {}).get("pillar_session_id")
-        if session_id:
-            payload["session_id"] = session_id
+        session_id: Final[object] = data.get("metadata", {}).get("pillar_session_id")
 
         # Extract model and provider from actual request data
         model, provider = self._extract_model_and_provider(data)
-        payload["model"] = model
-        payload["provider"] = provider
 
         verbose_proxy_logger.debug(
             "Pillar Guardrail: Request context - user=%s, session=%s, model=%s, provider=%s",
@@ -730,7 +717,15 @@ class PillarGuardrail(CustomGuardrail):
             model,
             provider,
         )
-        return payload
+        return {
+            "messages": messages,
+            "tools": tools,
+            "metadata": metadata,
+            **({"user_id": user_id} if user_id else {}),
+            **({"session_id": session_id} if session_id else {}),
+            "model": model,
+            "provider": provider,
+        }
 
     async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, object]) -> _PillarProtectResponse:
         """

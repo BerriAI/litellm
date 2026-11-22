@@ -21,7 +21,8 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import SamplingMessage, TextContent
+from mcp.shared.exceptions import UrlElicitationRequiredError
+from mcp.types import ElicitRequestURLParams, SamplingMessage, TextContent
 from integration._support.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
@@ -103,6 +104,18 @@ def math_service(
     async def elicit(question: str, ctx: Context) -> str:
         result: Final = await ctx.elicit(message=question, schema=Confirmation)
         return f"elicited:{result.action}"
+
+    @service.tool()
+    def consent(elicitation_id: str) -> str:
+        raise UrlElicitationRequiredError(
+            [
+                ElicitRequestURLParams(
+                    message="Authorize to continue.",
+                    url=f"https://consent.example.invalid/authorize?id={elicitation_id}",
+                    elicitation_id=elicitation_id,
+                )
+            ]
+        )
 
     @service.prompt()
     def greeting(name: str) -> str:
@@ -311,9 +324,16 @@ JsonRpc = Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
+class JsonRpcFailure:
+    """A JSON-RPC error object a scripted tool answers with instead of a result."""
+
+    error: JsonRpc
+
+
+@dataclass(frozen=True, slots=True)
 class ScriptedTool:
     name: str
-    respond: Callable[[JsonRpc], Reply | JsonRpc]
+    respond: Callable[[JsonRpc], Reply | JsonRpc | JsonRpcFailure]
     description: str | Callable[[Mapping[str, str]], str] | None = None
     input_schema: JsonRpc = field(default_factory=lambda: {"type": "object"})
     event_stream: bool = False
@@ -369,7 +389,13 @@ def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
         if tool is None:
             return jsonrpc_error(identity, -32602, "unknown tool")
         produced: Final = tool.respond(body["params"])
-        reply: Final = produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        reply: Final = (
+            produced
+            if isinstance(produced, Reply)
+            else Reply(body=json.dumps({"jsonrpc": "2.0", "id": identity, "error": produced.error}).encode())
+            if isinstance(produced, JsonRpcFailure)
+            else jsonrpc_reply(identity, produced)
+        )
         if not tool.event_stream:
             return reply
         return Reply(content_type="text/event-stream", body=b"event: message\ndata: " + reply.body + b"\n\n")

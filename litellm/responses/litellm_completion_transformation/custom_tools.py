@@ -79,6 +79,26 @@ def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
     return {name for tool in (*top_level, *nested) if (name := _custom_tool_name_of(tool)) is not None}
 
 
+CustomToolKey: TypeAlias = tuple[str | None, str]
+
+
+def _namespaced_custom_tool_keys(tool: object) -> frozenset[CustomToolKey]:
+    parsed: Final = _tool_name_fields_of(tool)
+    if parsed is None or parsed.type != "namespace" or not parsed.name:
+        return frozenset()
+    return frozenset(
+        (parsed.name, name) for member in parsed.tools if (name := _custom_tool_name_of(member)) is not None
+    )
+
+
+def extract_custom_tool_keys(tools: Sequence[object] | None) -> frozenset[CustomToolKey]:
+    top_level: Final = tuple(tools or ())
+    named: Final[frozenset[CustomToolKey]] = frozenset(
+        (None, name) for tool in top_level if (name := _custom_tool_name_of(tool)) is not None
+    )
+    return named.union(*(_namespaced_custom_tool_keys(tool) for tool in top_level))
+
+
 def is_custom_tool_call(tool_name: str, custom_tool_names: set[str]) -> bool:
     """Check if a tool call name corresponds to a custom tool."""
     return tool_name in custom_tool_names

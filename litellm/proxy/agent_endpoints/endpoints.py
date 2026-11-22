@@ -559,10 +559,9 @@ def _trusted_agent_issuers() -> tuple[str, ...]:
         return ()
     configured: Final = litellm_jwtauth.issuers or ()
     issuer: Final = os.getenv("JWT_ISSUER")
+    audience: Final = litellm_jwtauth.audience or os.getenv("JWT_AUDIENCE")
     global_issuers: Final = (
-        (issuer,)
-        if issuer and os.getenv("JWT_AUDIENCE") and not any(item.issuer == issuer for item in configured)
-        else ()
+        (issuer,) if issuer and audience and not any(item.issuer == issuer for item in configured) else ()
     )
     return (
         tuple(item.issuer for item in configured if item.audience and not item.disable_audience_validation)
