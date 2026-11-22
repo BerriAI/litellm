@@ -13,7 +13,6 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    Any,
     Final,
     Literal,
     NamedTuple,
@@ -107,6 +106,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_guardrails_from_policy_engine,
     client_pricing_fields_stripped_for,
     is_chat_completions_body,
+    request_routing_metadata,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -841,12 +841,12 @@ async def cursor_chat_completions(
 
         # Transform non-streaming Responses API response to chat completions format
         if isinstance(response, ResponsesAPIResponse):
-            logging_obj: Final = processor.data.get("litellm_logging_obj")
+            logging_obj: Final = _DECODED_JSON.validate_python(processor.data.get("litellm_logging_obj"))
             transformed_response: Final = responses_api_bridge.transformation_handler.transform_response(
                 model=processor.data.get("model", ""),
                 raw_response=response,
                 model_response=ModelResponse(),
-                logging_obj=cast(Any, logging_obj),
+                logging_obj=logging_obj,
                 request_data=processor.data,
                 messages=processor.data.get("input", []),
                 optional_params={},
@@ -1613,6 +1613,8 @@ class _TokenCounter(Protocol):
         call_endpoint: bool,
         responses_request: Mapping[str, object] | None,
         litellm_call_id: str | None,
+        caller: UserAPIKeyAuth | None,
+        request_routing: Mapping[str, object],
     ) -> Awaitable[TokenCountResponse]: ...
 
 
@@ -1982,6 +1984,8 @@ async def _responses_input_tokens(
             call_endpoint=True,
             responses_request=responses_request,
             litellm_call_id=litellm_call_id,
+            caller=user_api_key_dict,
+            request_routing=request_routing_metadata(request, request_fields, user_api_key_dict),
         )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
@@ -2740,6 +2744,12 @@ async def _bill_rejected_frame(
                 )
             except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
                 verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+    from litellm.proxy.hooks.rust_spend_logger import bill_failure_in_rust
+
+    try:
+        await bill_failure_in_rust(user_api_key_dict, exception, frame_data)
+    except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
+        verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
 
 
 def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:

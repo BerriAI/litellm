@@ -11,15 +11,17 @@ Reference: https://docs.cohere.com/v2/reference/embed
 """
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllEmbeddingInputValues
 
 from httpx._models import Headers, Response
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes, subscript
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.bedrock.embed.cohere_transformation import (
@@ -30,6 +32,16 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import SagemakerError
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _cohere_embed_body(response_json: object) -> dict[str, object]:
+    body: Final = as_str_mapping(response_json)
+    if isinstance(body, dict):
+        return body
+    subscript(response_json, "embeddings")
+    return require_attributes(response_json, dict[str, object], "get")
 
 
 class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
@@ -113,12 +125,13 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         if isinstance(input_value, str):
             input_value = [input_value]
 
+        response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         return CohereEmbeddingConfig().populate_embedding_response(
-            response_json=raw_response.json(),
             model_response=model_response,
             model=model,
             encoding=litellm.encoding,
             input=input_value,
+            response_json=_cohere_embed_body(response_json),
         )
 
     def validate_environment(

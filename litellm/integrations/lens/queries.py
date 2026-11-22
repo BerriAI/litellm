@@ -27,8 +27,8 @@ class ClickHouseSQLEnvelope(LiteLLMBaseModel):
     statistics: TraceQueryStatistics
 
 
-ParamsT: Final = TypeVar("ParamsT", bound=BaseModel)
-RowT: Final = TypeVar("RowT")
+ParamsT = TypeVar("ParamsT", bound=BaseModel)
+RowT = TypeVar("RowT")
 
 
 class QueryResponse(LiteLLMBaseModel, Generic[RowT]):

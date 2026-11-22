@@ -1,13 +1,15 @@
-from collections.abc import Mapping, Sequence
-from typing import Any, Final, TypeVar
+from collections.abc import Awaitable, Mapping, Sequence
+from typing import Final, Literal, Protocol, TypeVar
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import ModelResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
 
-_ItemT: Final = TypeVar("_ItemT")
+_ItemT = TypeVar("_ItemT")
 
 
 class _ResultContentView(TypedDict):
@@ -39,6 +41,12 @@ class _RerankResultView(TypedDict):
 
 class _RerankResultsView(TypedDict):
     results: ReadOnly[Sequence[_RerankResultView]]
+
+
+class _RerankResultsSource(Protocol):
+    def get(
+        self, key: Literal["results"], default: Sequence[_RerankResultView], /
+    ) -> Sequence[_RerankResultView] | None: ...
 
 
 class _MessageView(TypedDict):
@@ -152,12 +160,17 @@ class RAGQuery:
 
     @staticmethod
     def get_top_chunks_from_rerank(
-        search_response: VectorStoreSearchResponse, rerank_response: Any
+        search_response: VectorStoreSearchResponse,
+        rerank_response: _RerankResultsSource | Awaitable[RerankResponse],
     ) -> list[_StoreResultView]:
         """Get the original search results corresponding to the top reranked results."""
         top_chunks: Final[list[_StoreResultView]] = []
         original_results: Final = search_response.get("data", [])
-        reranked: Final[_RerankResultsView] = {"results": rerank_response.get("results", [])}
+        reranked: Final[_RerankResultsView] = {
+            "results": _iterable_items(
+                require_attributes(rerank_response, _RerankResultsSource, "get").get("results", [])
+            )
+        }
         for result in reranked["results"]:
             index = result.get("index")
             if index is not None and index < len(sized_results := _sized_items(original_results)):

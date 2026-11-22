@@ -34,13 +34,13 @@ BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class InMemoryFile(io.BytesIO):
     def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
         super().__init__(content)
-        self.name = name
+        self.name: str = name
         self.content_type = content_type
 
 
