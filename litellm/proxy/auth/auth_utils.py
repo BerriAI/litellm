@@ -116,6 +116,12 @@ def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual
     return marked_exception
 
 
+def bearer_credential(authorization: str) -> str | None:
+    scheme, _, credential = authorization.partition(" ")
+    token: Final = credential.strip()
+    return token if scheme.lower() == "bearer" and token else None
+
+
 def get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
     client_ip = None
     if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:

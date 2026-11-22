@@ -200,29 +200,19 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_with_null_email(mocker, caplog):
-    """
-    Test that /user/filter/ui endpoint returns users even when they have null email fields.
-    Uses proxy admin so no org filtering is applied.
-    """
-    # Mock the prisma client
+@pytest.mark.parametrize(
+    ("role", "expected_alias"),
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "Acme Developer"),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, "Acme Developer"),
+        (LitellmUserRoles.INTERNAL_USER, None),
+    ],
+)
+async def test_ui_view_users_returns_the_alias_only_to_admins(mocker, role, expected_alias):
     mock_prisma_client = mocker.MagicMock()
-
-    # Create mock user data with null email
-    mock_user = mocker.MagicMock()
-    mock_user.model_dump.return_value = {
-        "user_id": "test-user-null-email",
-        "user_email": None,
-        "user_role": "proxy_admin",
-        "created_at": "2024-01-01T00:00:00Z",
-    }
-
-    async def mock_find_many(*args, **kwargs):
-        return [mock_user]
-
-    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
-
-    # Flag OFF by default
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[LiteLLM_UserTableFiltered(user_id="no-email", user_alias="Acme Developer")]
+    )
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={},
@@ -230,17 +220,19 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    # Proxy admin: no org filter, no get_user_object call
     response = await ui_view_users(
-        user_api_key_dict=UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
-        user_id="test_user",
+        user_api_key_dict=UserAPIKeyAuth(user_id="caller", user_role=role),
+        user_id="no-email",
         user_email=None,
+        search=None,
         team_id=None,
         page=1,
         page_size=50,
     )
 
-    assert response == [LiteLLM_UserTableFiltered(user_id="test-user-null-email", user_email=None)]
+    assert [user.model_dump() for user in response] == [
+        {"user_id": "no-email", "user_email": None, "user_alias": expected_alias}
+    ]
 
 
 @pytest.mark.asyncio
@@ -285,7 +277,7 @@ def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, User
     def matches(field: str, condition: UserWhereCondition) -> bool:
         if not isinstance(condition, Mapping):
             return any(_matches_user_where(row, branch) for branch in condition)
-        value: Final = {"user_id": row.user_id, "user_email": row.user_email}[field]
+        value: Final = {"user_id": row.user_id, "user_email": row.user_email, "user_alias": row.user_alias}[field]
         return value is not None and condition["contains"].lower() in value.lower()
 
     return all(matches(field, condition) for field, condition in where.items())
@@ -298,23 +290,24 @@ def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, User
         ({"search": "ali"}, ["alice-admin"]),
         ({"search": "example.com"}, ["alice-admin"]),
         ({"search": "admin"}, ["alice-admin"]),
+        ({"search": "acme dev"}, ["svc-bot"]),
         ({"user_email": "svc"}, []),
         ({"user_id": "svc"}, ["svc-bot"]),
         ({"search": "ali", "user_id": "svc"}, []),
     ],
 )
-def test_ui_view_users_search_matches_user_id_or_email(
+def test_ui_view_users_admin_search_matches_user_id_email_or_alias(
     mocker: MockerFixture, params: Mapping[str, str], expected_user_ids: list[str]
 ):
     """
-    search= returns users whose user_id or user_email contains the value (case-insensitive),
+    search= returns users whose ID, email, or alias contains the value (case-insensitive),
     including users with no email; user_id=/user_email= keep filtering a single field and AND with search.
     """
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     users = (
         LiteLLM_UserTableFiltered(user_id="alice-admin", user_email="alice@example.com"),
-        LiteLLM_UserTableFiltered(user_id="svc-bot", user_email=None),
+        LiteLLM_UserTableFiltered(user_id="svc-bot", user_email=None, user_alias="Acme Developer"),
         LiteLLM_UserTableFiltered(user_id="bob", user_email="bob@corp.io"),
     )
 
