@@ -7,11 +7,12 @@ import logging
 import os
 import re
 import sys
+import threading
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
-from typing import Final, Protocol, TextIO
+from types import FrameType, TracebackType
+from typing import Final, Protocol, TextIO, TypeAlias
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
@@ -874,6 +875,44 @@ class CorrelationPlainFormatter(logging.Formatter):
         return f"{formatted} [{' '.join(parts)}]"
 
 
+_ExcInfo: TypeAlias = tuple[type[BaseException], BaseException, TracebackType | None]
+
+
+def _exception_record(message: str, exc_info: _ExcInfo | None) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="LiteLLM",
+        level=logging.ERROR,
+        pathname="",
+        lineno=0,
+        msg=message,
+        args=(),
+        exc_info=exc_info,
+    )
+
+
+def _exc_info(
+    exc_type: type[BaseException], exc_value: BaseException | None, exc_traceback: TracebackType | None
+) -> _ExcInfo | None:
+    return None if exc_value is None else (exc_type, exc_value, exc_traceback)
+
+
+def _object_repr(obj: object) -> str:
+    try:
+        return repr(obj)
+    except Exception:  # noqa: BLE001  # mirrors CPython's default unraisablehook, which never lets a repr fail it
+        return "<object repr() failed>"
+
+
+def _unraisable_message(unraisable: "sys.UnraisableHookArgs") -> str:
+    err_msg: Final = unraisable.err_msg or "Exception ignored in"
+    return err_msg if unraisable.object is None else f"{err_msg}: {_object_repr(unraisable.object)}"
+
+
+def _thread_message(args: threading.ExceptHookArgs) -> str:
+    thread_name: Final = args.thread.name if args.thread is not None else str(threading.get_ident())
+    return f"Exception in thread {thread_name}"
+
+
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
@@ -884,19 +923,29 @@ def _setup_json_exception_handlers(formatter):
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
-    def json_excepthook(exc_type, exc_value, exc_traceback):
-        record: Final = logging.LogRecord(
-            name="LiteLLM",
-            level=logging.ERROR,
-            pathname="",
-            lineno=0,
-            msg=str(exc_value),
-            args=(),
-            exc_info=(exc_type, exc_value, exc_traceback),
+    def json_excepthook(
+        exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None
+    ) -> None:
+        error_handler.handle(_exception_record(str(exc_value), (exc_type, exc_value, exc_traceback)))
+
+    def json_unraisablehook(unraisable: "sys.UnraisableHookArgs") -> None:
+        error_handler.handle(
+            _exception_record(
+                _unraisable_message(unraisable),
+                _exc_info(unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback),
+            )
         )
-        error_handler.handle(record)
+
+    def json_thread_excepthook(args: threading.ExceptHookArgs) -> None:
+        if args.exc_type is SystemExit:
+            return
+        error_handler.handle(
+            _exception_record(_thread_message(args), _exc_info(args.exc_type, args.exc_value, args.exc_traceback))
+        )
 
     sys.excepthook = json_excepthook
+    sys.unraisablehook = json_unraisablehook
+    threading.excepthook = json_thread_excepthook
 
     # Configure asyncio exception handler if possible
     try:
@@ -905,17 +954,9 @@ def _setup_json_exception_handlers(formatter):
         def async_json_exception_handler(loop, context):
             exception: Final = context.get("exception")
             if exception:
-                exc_type: Final = type(exception)
-                record: Final = logging.LogRecord(
-                    name="LiteLLM",
-                    level=logging.ERROR,
-                    pathname="",
-                    lineno=0,
-                    msg=str(exception),
-                    args=(),
-                    exc_info=(exc_type, exception, exception.__traceback__),
+                error_handler.handle(
+                    _exception_record(str(exception), (type(exception), exception, exception.__traceback__))
                 )
-                error_handler.handle(record)
             else:
                 loop.default_exception_handler(context)
 

@@ -1186,6 +1186,8 @@ try:
 except Exception:
     version = "0.0.0"
 litellm.suppress_debug_info = True
+if litellm.json_logs:
+    litellm.turn_on_json()
 import json
 
 from fastapi import (

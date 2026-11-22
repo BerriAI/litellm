@@ -368,7 +368,7 @@ class PreCallFacts:
                 case _:
                     return _input_tokens(self._host, text_input, self._request, tokenizer_model, self._fits_within())
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
-            verbose_router_logger.error(
+            verbose_router_logger.debug(
                 "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
             )
             return None
@@ -409,7 +409,7 @@ class PreCallFacts:
                         self._host, text_input, self._request, tokenizer_model, self._fits_within()
                     )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
-            verbose_router_logger.error(
+            verbose_router_logger.debug(
                 "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
             )
             return None

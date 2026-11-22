@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sys
+import threading
 import time
 from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
@@ -2129,3 +2130,153 @@ def test_print_startup_message_blank_spacer_emits_no_json_record(
     print_startup_message("\n\033[0m\n")
 
     assert capfd.readouterr() == ("", "")
+
+
+class _FailsInDestructor:
+    def __del__(self) -> None:
+        raise RuntimeError("resource cleanup failed")
+
+
+class _UnprintableObject:
+    def __repr__(self) -> str:
+        raise RuntimeError("repr failed")
+
+
+def _fails_in_background() -> None:
+    raise ValueError("background job failed")
+
+
+def _stderr_records(capfd: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
+    _, err = capfd.readouterr()
+    return [json.loads(raw) for raw in err.splitlines() if raw.strip()]
+
+
+def _unraisable_args(err_msg: str | None, obj: object, keep_exception: bool) -> "sys.UnraisableHookArgs":
+    captured: Final[list["sys.UnraisableHookArgs"]] = []
+    with pytest.MonkeyPatch.context() as hooks:
+        hooks.setattr(sys, "unraisablehook", captured.append)
+        _FailsInDestructor()
+    raised: Final = captured[0]
+    exception: Final = (raised.exc_value, raised.exc_traceback) if keep_exception else (None, None)
+    return type(raised)((raised.exc_type, *exception, err_msg, obj))
+
+
+def test_json_logs_report_an_exception_raised_in_a_destructor_as_one_error_record(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """Python reports an exception raised in `__del__` through sys.unraisablehook, whose default prints a
+    multi-line traceback to stderr that a log shipper splits into one entry per line. With JSON logs on it
+    is one ERROR record that names the destructor and carries the traceback."""
+    turn_on_json()
+
+    _FailsInDestructor()
+
+    records: Final = _stderr_records(capfd)
+    assert len(records) == 1, records
+    assert records[0]["level"] == "ERROR"
+    assert str(records[0]["message"]).startswith("Exception ignored")
+    assert "_FailsInDestructor.__del__" in str(records[0]["message"])
+    assert str(records[0]["stacktrace"]).endswith("RuntimeError: resource cleanup failed")
+
+
+@pytest.mark.parametrize(
+    ("err_msg", "obj", "keep_exception", "message"),
+    [
+        pytest.param(None, _fails_in_background, True, f"Exception ignored in: {_fails_in_background!r}", id="object"),
+        pytest.param("Exception ignored in a callback", None, True, "Exception ignored in a callback", id="err-msg"),
+        pytest.param(None, _UnprintableObject(), True, "Exception ignored in: <object repr() failed>", id="bad-repr"),
+        pytest.param("Exception ignored in a callback", None, False, "Exception ignored in a callback", id="no-value"),
+    ],
+)
+def test_json_logs_word_an_unraisable_exception_like_python_does(
+    capfd: pytest.CaptureFixture[str], err_msg: str | None, obj: object, keep_exception: bool, message: str
+) -> None:
+    """CPython passes the hook an error message, the object the exception came from, or both, depending on
+    where it was raised and on the Python version, and the exception value may be missing. The record reads
+    like the line Python's own hook prints and carries a traceback only when there is an exception."""
+    turn_on_json()
+
+    sys.unraisablehook(_unraisable_args(err_msg, obj, keep_exception))
+
+    records: Final = _stderr_records(capfd)
+    assert len(records) == 1, records
+    assert records[0]["message"] == message
+    assert records[0]["level"] == "ERROR"
+    assert ("stacktrace" in records[0]) is keep_exception
+
+
+def test_json_logs_report_an_exception_raised_in_a_thread_as_one_error_record(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """An exception that ends a thread goes to threading.excepthook, whose default prints a multi-line
+    traceback to stderr. With JSON logs on it is one ERROR record that names the thread."""
+    turn_on_json()
+
+    worker: Final = threading.Thread(target=_fails_in_background, name="background-job")
+    worker.start()
+    worker.join()
+
+    records: Final = _stderr_records(capfd)
+    assert len(records) == 1, records
+    assert records[0]["message"] == "Exception in thread background-job"
+    assert records[0]["level"] == "ERROR"
+    assert str(records[0]["stacktrace"]).endswith("ValueError: background job failed")
+
+
+def test_json_logs_name_a_thread_python_no_longer_tracks_by_its_id(capfd: pytest.CaptureFixture[str]) -> None:
+    turn_on_json()
+
+    threading.excepthook(threading.ExceptHookArgs((ValueError, ValueError("gone"), None, None)))
+
+    records: Final = _stderr_records(capfd)
+    assert [record["message"] for record in records] == [f"Exception in thread {threading.get_ident()}"]
+
+
+def test_json_logs_stay_silent_when_a_thread_ends_with_system_exit(capfd: pytest.CaptureFixture[str]) -> None:
+    """Python's own thread hook ignores SystemExit, so a thread that calls sys.exit logs nothing."""
+    turn_on_json()
+
+    worker: Final = threading.Thread(target=sys.exit, args=(3,))
+    worker.start()
+    worker.join()
+
+    assert capfd.readouterr().err == ""
+
+
+def _fails_in_a_loop_callback() -> None:
+    raise ValueError("loop callback failed")
+
+
+async def test_json_logs_report_an_exception_raised_in_an_event_loop_callback_as_one_error_record(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """asyncio hands an exception raised in a loop callback to the loop's exception handler, whose default
+    logs a multi-line traceback. With JSON logs on it is one ERROR record carrying that traceback."""
+    loop: Final = asyncio.get_running_loop()
+    previous_handler: Final = loop.get_exception_handler()
+    turn_on_json()
+    try:
+        callbacks_ran: Final = loop.create_future()
+        loop.call_soon(_fails_in_a_loop_callback)
+        loop.call_soon(callbacks_ran.set_result, None)
+        await callbacks_ran
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    records: Final = _stderr_records(capfd)
+    assert [(record["message"], record["level"]) for record in records] == [("loop callback failed", "ERROR")]
+    assert str(records[0]["stacktrace"]).endswith("ValueError: loop callback failed")
+
+
+def test_json_logs_report_an_uncaught_exception_as_one_error_record(capfd: pytest.CaptureFixture[str]) -> None:
+    """Python passes an exception nothing caught to sys.excepthook, whose default prints a multi-line
+    traceback. With JSON logs on it is one ERROR record carrying that traceback."""
+    turn_on_json()
+    try:
+        raise LookupError("startup step failed")
+    except LookupError as uncaught:
+        sys.excepthook(type(uncaught), uncaught, uncaught.__traceback__)
+
+    records: Final = _stderr_records(capfd)
+    assert [(record["message"], record["level"]) for record in records] == [("startup step failed", "ERROR")]
+    assert str(records[0]["stacktrace"]).endswith("LookupError: startup step failed")

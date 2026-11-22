@@ -10,7 +10,9 @@ default and the WARNING log level, under a concurrent burst that lands on both w
 --log_config that names the proxy logger or gives it a handler of its own, and with a policy list longer
 than the stdout cap. The model list keeps a model name the secret patterns would match. The deprecated
 --enforce_prisma_migration_check notice is one JSON record under a config-only json_logs, and a boot whose
-config cannot be loaded still prints it before failing.
+config cannot be loaded still prints it before failing. A success callback that raises in a destructor, raises in a
+thread and drops an open aiohttp session leaves one JSON record per traceback, whether JSON logs came from the
+environment or the config.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import pytest
 import yaml
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from tests.integration._support.client import Gateway
+from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.process import OwnedProxy, owned_proxy_process, private_state, refused_boot_log
 
 JSON_RECORD: Final = TypeAdapter(dict[str, JsonValue])
@@ -73,6 +75,40 @@ OPERATOR_SILENCING_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
     "loggers": {"LiteLLM Proxy": {"level": "INFO", "handlers": ["silence"], "propagate": False}},
     "root": {"level": "INFO", "handlers": ["stdout"]},
 }
+
+
+NOISY_CALLBACK_MODULE: Final = "noisy_callback"
+NOISY_CALLBACK_SOURCE: Final = """
+import threading
+
+import aiohttp
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class _FailsInDestructor:
+    def __del__(self):
+        raise RuntimeError("callback resource cleanup failed")
+
+
+def _fails_in_background():
+    raise ValueError("callback background job failed")
+
+
+class NoisyCallback(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        aiohttp.ClientSession()
+        threading.Thread(target=_fails_in_background, name="callback-background-job").start()
+        _FailsInDestructor()
+
+
+proxy_handler_instance = NoisyCallback()
+"""
+DESTRUCTOR_TRACEBACK_TAIL: Final = "RuntimeError: callback resource cleanup failed"
+THREAD_RECORD_MESSAGE: Final = "Exception in thread callback-background-job"
+THREAD_TRACEBACK_TAIL: Final = "ValueError: callback background job failed"
+UNCLOSED_SESSION_MESSAGE: Final = "Unclosed client session"
+CALLBACK_RECORD_SECONDS: Final = 30
 
 
 def _models() -> tuple[str, str]:
@@ -430,3 +466,65 @@ def test_plain_logs_control_prints_startup_text(gateway: Gateway, tmp_path: Path
         )
     assert any(PLAIN_LOG_LINE.match(line) and REDIS_AUTH_CACHE_LINE in line for line in plaintext), log
     assert any(line.startswith(f"LiteLLM Proxy: {CONNECTION_BUDGET_LINE}") for line in plaintext), log
+
+
+def _records(log: str) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(record for record in (_record(line) for line in _lines(log)) if record is not None)
+
+
+def _callback_records(log: str) -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+    records: Final = _records(log)
+    return (
+        tuple(record for record in records if str(record.get("message", "")).startswith("Exception ignored")),
+        tuple(record for record in records if record.get("message") == THREAD_RECORD_MESSAGE),
+        tuple(record for record in records if str(record.get("message", "")).startswith(UNCLOSED_SESSION_MESSAGE)),
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "settings", "workers"),
+    [
+        pytest.param({"JSON_LOGS": "true"}, {}, 1, id="env-one-worker"),
+        pytest.param({"JSON_LOGS": "true"}, {}, 2, id="env-two-workers"),
+        pytest.param({}, {"json_logs": True}, 2, id="config-two-workers"),
+    ],
+)
+def test_json_logs_turn_every_callback_traceback_into_one_record(
+    gateway: Gateway,
+    tmp_path: Path,
+    overrides: Mapping[str, str],
+    settings: Mapping[str, JsonValue],
+    workers: int,
+) -> None:
+    """Python prints an exception raised in a destructor or in a thread, and asyncio prints an unclosed aiohttp
+    session, as plain multi-line text on stderr, and a log shipper files every line of it as its own error entry.
+    With JSON logs on, a served request whose success callback does all three leaves exactly one JSON record for
+    each, with the traceback inside it, and no plaintext line."""
+    models: Final = _models()[:1]
+    (tmp_path / f"{NOISY_CALLBACK_MODULE}.py").write_text(NOISY_CALLBACK_SOURCE)
+    config: Final = _write_config(
+        tmp_path,
+        gateway.upstream_url,
+        models,
+        {**settings, "callbacks": f"{NOISY_CALLBACK_MODULE}.proxy_handler_instance"},
+    )
+
+    with _initialized_proxy(gateway, tmp_path, config, {**overrides, "LITELLM_LOG": "WARNING"}, workers) as owned:
+        reply: Final = owned.gateway.chat(models[0], text=f"json logs {uuid.uuid4().hex}")
+        assert reply["model"] == models[0], reply
+        eventually(
+            lambda: _callback_records(owned.log.read_text()),
+            lambda found: all(found),
+            seconds=CALLBACK_RECORD_SECONDS,
+            return_last_on_timeout=True,
+        )
+        log_path: Final = owned.log
+    log: Final = log_path.read_text()
+
+    plaintext: Final = _non_json_lines(log)
+    assert plaintext == (), "plaintext lines with JSON logs on:\n" + "\n".join(plaintext)
+    destructor, thread, session = _callback_records(log)
+    assert [str(record["stacktrace"]).rstrip().endswith(DESTRUCTOR_TRACEBACK_TAIL) for record in destructor] == [True]
+    assert "_FailsInDestructor.__del__" in str(destructor[0]["message"])
+    assert [str(record["stacktrace"]).rstrip().endswith(THREAD_TRACEBACK_TAIL) for record in thread] == [True]
+    assert [record["level"] for record in (*destructor, *thread, *session)] == ["ERROR", "ERROR", "ERROR"]
