@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -254,7 +255,19 @@ def _read_timeout(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadTimeout("Read timed out", request=request)
 
 
-def test_sync_endpoint_read_timeout_surfaces_as_a_timeout() -> None:
+def _bad_request(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(400, json={"error": {"message": "max_tokens is too large"}}, request=request)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize(
+    "upstream,status,mapped",
+    [(_read_timeout, 408, litellm.Timeout), (_bad_request, 400, litellm.BadRequestError)],
+    ids=["read_timeout", "bad_request"],
+)
+def test_sync_endpoint_error_keeps_its_status(
+    upstream: Callable[[httpx.Request], httpx.Response], status: int, mapped: type[Exception], stream: bool
+) -> None:
     with pytest.raises(VertexAIError) as raised:
         _ModelGardenWithFakeToken().completion(
             model="5464397967697903616",
@@ -264,18 +277,18 @@ def test_sync_endpoint_read_timeout_surfaces_as_a_timeout() -> None:
             encoding=None,
             logging_obj=MagicMock(),
             api_base=None,
-            optional_params={},
+            optional_params={"stream": stream},
             custom_prompt_dict={},
             headers=None,
             timeout=8.0,
             litellm_params={},
             vertex_project="test-project",
             vertex_location="us-central1",
-            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_read_timeout))),
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream))),
         )
 
-    assert raised.value.status_code == 408
-    with pytest.raises(litellm.Timeout):
+    assert raised.value.status_code == status
+    with pytest.raises(mapped):
         exception_type(
             model="5464397967697903616",
             custom_llm_provider="vertex_ai",
