@@ -321,7 +321,7 @@ def _assert_native_responses_request(route, expected_url, expected_model):
     request = route.calls.last.request
     body = json.loads(request.content)
     assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
-    on_project: Final = expected_url in (FOUNDRY_RESPONSES_URL, GATEWAY_RESPONSES_URL)
+    on_project: Final = expected_url == FOUNDRY_RESPONSES_URL
     assert request.headers.get("authorization" if on_project else "api-key") == (
         "Bearer fake-key" if on_project else "fake-key"
     )
