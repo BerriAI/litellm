@@ -1162,10 +1162,11 @@ def test_bedrock_model_id_deployment_bills_tokens_at_base_rates_its_profile_row_
     ) == pytest.approx(100 * 0.03 + 3 * 0.04)
 
 
+@pytest.mark.parametrize("custom_pricing", (False, True))
 @pytest.mark.parametrize("profile_mode", (None, "chat"))
 @pytest.mark.parametrize("route", ("", "converse/"))
 def test_bedrock_model_id_deployment_bills_cached_tokens_at_the_served_model_cache_price_its_profile_row_leaves_out(
-    monkeypatch: pytest.MonkeyPatch, profile_mode: str | None, route: str
+    monkeypatch: pytest.MonkeyPatch, profile_mode: str | None, route: str, custom_pricing: bool
 ) -> None:
     from litellm.cost_calculator import completion_cost
     from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
@@ -1209,8 +1210,9 @@ def test_bedrock_model_id_deployment_bills_cached_tokens_at_the_served_model_cac
             ),
         ),
         custom_llm_provider="bedrock",
-        custom_pricing=True,
+        custom_pricing=custom_pricing,
         router_model_id="priced-profile-cache-deployment",
+        optional_params={"model_id": profile},
     ) == pytest.approx(20 * 0.01 + 80 * 0.001 + 3 * 0.02)
 
 
