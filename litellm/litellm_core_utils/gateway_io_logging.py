@@ -312,16 +312,16 @@ def _get_active_ip_redactor(
 ) -> Callable[[str], str] | None:
     if ip_redactor is not None:
         return ip_redactor
-    stu = sys.modules.get("litellm.proxy.spend_tracking.spend_tracking_utils")
-    if stu is not None:
-        is_disabled = getattr(stu, "requester_ip_address_logging_disabled", None)
-        mask_fn = getattr(stu, "_masked_ip_text", None)
-        if callable(is_disabled) and callable(mask_fn):
-            try:
-                if is_disabled():
-                    return mask_fn
-            except Exception:
-                return None
+    try:
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            _masked_ip_text,
+            requester_ip_address_logging_disabled,
+        )
+
+        if requester_ip_address_logging_disabled():
+            return _masked_ip_text
+    except Exception:
+        return None
     return None
 
 
@@ -481,6 +481,7 @@ def _sanitize_safe_nested(
                 v,
                 runtime_secrets=runtime_secrets,
                 credential_name=credential_name,
+                ip_redactor=ip_redactor,
                 depth=depth + 1,
             )
         return out
