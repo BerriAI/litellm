@@ -9,14 +9,14 @@ import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/t
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "./eventDisplayName";
 import { ClassifyTag } from "./ClassifyTag";
-import { type DrawerBackTo, DrawerHeader } from "./DrawerHeader";
+import { DrawerHeader } from "./DrawerHeader";
 import { SidebarToggle } from "./SidebarToggle";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
-import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
+import { normalizeGuardrailEntries, readMetaString, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
@@ -30,7 +30,6 @@ export interface LogDetailsDrawerProps {
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
   startTime?: string;
-  backTo?: DrawerBackTo;
 }
 
 const SIDEBAR_WIDTH_PX = 224;
@@ -126,7 +125,6 @@ export function LogDetailsDrawer({
   allLogs = [],
   onSelectLog,
   startTime,
-  backTo,
 }: LogDetailsDrawerProps) {
   const { t } = useTranslation();
   const isSessionMode = Boolean(sessionId);
@@ -470,14 +468,13 @@ export function LogDetailsDrawer({
               statusLabel={statusLabel}
               statusColor={statusColor}
               environment={environment}
-              backTo={backTo}
             />
             <div className="flex-1 overflow-y-auto">
               <LogDetailContent
                 logEntry={enrichedLog}
                 isLoadingDetails={isLoadingDetails}
                 accessToken={accessToken ?? null}
-                userEmail={logUser?.user_email || undefined}
+                userEmail={logUser?.user_email || readMetaString(metadata, "user_api_key_user_email")}
               />
             </div>
           </div>

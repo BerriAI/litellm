@@ -135,6 +135,16 @@ describe("UserInfoView", () => {
     expect(aliases.length).toBeGreaterThan(0);
   });
 
+  it.each([
+    ["internal_user_viewer", "Internal User Viewer"],
+    ["proxy_admin_viewer", "Proxy Admin Viewer"],
+  ])("labels the read-only Details role %s", async (user_role, label) => {
+    mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, user_role });
+    render(<UserInfoView {...defaultProps} initialTab={1} />);
+
+    expect(await screen.findByText(label)).toBeVisible();
+  });
+
   it("shows the saved role in Details without reloading", async () => {
     const user = userEvent.setup();
     mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, user_role: "internal_user" });
@@ -150,7 +160,7 @@ describe("UserInfoView", () => {
       />,
     );
 
-    expect(await screen.findByText("internal_user", { exact: true })).toBeVisible();
+    expect(await screen.findByText("Internal User", { exact: true })).toBeVisible();
     await user.click(screen.getByRole("button", { name: /edit settings/i }));
     await user.click(screen.getByRole("combobox", { name: /global proxy role/i }));
     await user.click(await screen.findByRole("option", { name: "Admin", exact: true }));
@@ -162,7 +172,7 @@ describe("UserInfoView", () => {
       expect.objectContaining({ user_role: "proxy_admin" }),
       null,
     );
-    expect(screen.getByText("proxy_admin", { exact: true })).toBeVisible();
+    expect(screen.getByText("Admin", { exact: true })).toBeVisible();
   });
 
   it("seeds the user rate limits when opening the edit form", async () => {

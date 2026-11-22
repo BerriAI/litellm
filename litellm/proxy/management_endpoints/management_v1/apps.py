@@ -12,6 +12,7 @@ from litellm.proxy.management_endpoints.management_v1.customers import (
     require_customer_admin,
 )
 from litellm.proxy.management_helpers.app_access import ALL_APPS, AppAccess, granted_app_ids
+from litellm.proxy.management_helpers.app_models import app_resource_models
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.types.proxy.management_endpoints.apps import (
     App,
@@ -42,18 +43,18 @@ async def get_app_store() -> AsyncIterator[AppStore]:
     if prisma_client is None:
         raise HTTPException(503, "Database unavailable.")
     async with prisma_client.db.tx() as db:
-        store: Final = AppStore(db, cache=user_api_key_cache)
+        store: Final = AppStore(db, cache=user_api_key_cache, cache_reads=False)
         yield store
-    await store.invalidate_definition_cache()
+    await store.invalidate_cache()
 
 
-Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]
+Store: TypeAlias = Annotated[AppStore, Depends(get_app_store, scope="function")]
 Actor: TypeAlias = Annotated[str, Depends(customer_actor)]
 
 
 async def get_app_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    store: Annotated[AppStore, Depends(get_app_store)],
+    store: Store,
 ) -> AppAccess:
     if auth.user_role == LitellmUserRoles.PROXY_ADMIN:
         return ALL_APPS
@@ -98,11 +99,23 @@ async def list_app_resources(
     return await store.resources(offset, limit, resource_type)
 
 
+@router.get(
+    "/resources/{resource_type}/{resource_id}/models",
+    response_model=tuple[str, ...],
+    dependencies=ADMIN_ONLY,
+    description="List models accessible to an app's underlying team, project, or virtual key. Proxy admins only.",
+)
+async def list_app_resource_models(resource_type: AppResourceType, resource_id: str, store: Store) -> tuple[str, ...]:
+    return resolve(await app_resource_models(store, resource_type, resource_id))
+
+
 @router.post(
     "",
     response_model=App,
     status_code=201,
-    description="Configure budget policy for an existing resource of the gateway app type. Proxy admins only.",
+    description="Configure budget policy for an existing resource of the gateway app type. Newly configured apps "
+    "inherit the overall app catalog default when budget and budget_id are omitted. Explicit null disables the cap. "
+    "Existing app bindings keep their settings. Proxy admins only.",
 )
 async def create_app(data: AppCreate, store: Store, actor: Actor) -> App:
     return await store.with_budget_usage(resolve(await store.create(data, actor)))

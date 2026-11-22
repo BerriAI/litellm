@@ -430,7 +430,7 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     "spec_input",
     (
-        "litellm/tracing/generated/models.py",
+        "litellm/integrations/lens/generated/models.py",
         "litellm/models/credentials.py",
         "litellm/enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
         "pyproject.toml",

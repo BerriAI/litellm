@@ -43,6 +43,20 @@ const rowIds = (): (string | null)[] =>
 const search = (value: string) => fireEvent.change(screen.getByTestId("datatable-search"), { target: { value } });
 
 describe("MemberTable display", () => {
+  it("labels organization roles while retaining an unknown role's name", () => {
+    renderTable({
+      members: [
+        { user_id: "org-admin", role: "org_admin" },
+        { user_id: "viewer", role: "internal_user_viewer" },
+        { user_id: "custom", role: "custom_role" },
+      ],
+    });
+
+    expect(screen.getByRole("cell", { name: "Org Admin" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Internal User Viewer" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "custom_role" })).toBeInTheDocument();
+  });
+
   it("shows each member's name, falling back to a dash when there is none", () => {
     renderTable();
 
@@ -221,6 +235,24 @@ describe("MemberTable paging", () => {
 });
 
 describe("MemberTable role filter", () => {
+  it("uses labels for organization role options and the applied filter", async () => {
+    const user = userEvent.setup();
+    renderTable({
+      members: [
+        { user_id: "viewer", role: "internal_user_viewer" },
+        { user_id: "member", role: "internal_user" },
+      ],
+    });
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(screen.getByTestId("filter-role"));
+    await user.click(await screen.findByRole("option", { name: "Internal User Viewer" }));
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    expect(await screen.findByTestId("filter-chip-role")).toHaveTextContent("Internal User Viewer");
+    expect(rowIds()).toEqual(["viewer"]);
+  });
+
   it("shows only members with the chosen role and clears on reset", async () => {
     const user = userEvent.setup();
     renderTable({ roleColumnTitle: "Team Role" });

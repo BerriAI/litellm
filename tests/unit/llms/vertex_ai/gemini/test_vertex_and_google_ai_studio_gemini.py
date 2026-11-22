@@ -2549,6 +2549,372 @@ def test_gemini_tts_stream_carries_audio_in_delta_and_rebuilds_full_clip(respx_m
     assert base64.b64decode(complete_response.choices[0].message.audio.data) == b"\x01\x02\x03\x04\x05"
 
 
+GEMINI_THOUGHT_IMAGE_MODEL_URL: Final = (
+    r"https://generativelanguage\.googleapis\.com/v1\w+/models/gemini-3\.1-flash-image"
+)
+GEMINI_THOUGHT_IMAGE_PARTS: Final = [
+    {"text": "Sketching the layout first", "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "ZmluYWw="}, "thoughtSignature": "c2ln"},
+]
+GEMINI_THOUGHT_TEXT_BLOCK: Final = {"type": "thinking", "thinking": "Sketching the layout first"}
+GEMINI_FINAL_IMAGE: Final = {
+    "image_url": {"url": "data:image/png;base64,ZmluYWw=", "detail": "auto"},
+    "index": 0,
+    "type": "image_url",
+}
+GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS: Final = [
+    {"text": "Sketching the layout first", "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "Zmlyc3Q="}, "thought": True},
+    {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True},
+]
+GEMINI_LAST_THOUGHT_IMAGE: Final = {
+    "image_url": {"url": "data:image/png;base64,ZHJhZnQ=", "detail": "auto"},
+    "index": 0,
+    "type": "image_url",
+}
+GEMINI_TRUNCATED_USAGE: Final = {"promptTokenCount": 13, "candidatesTokenCount": 64, "totalTokenCount": 77}
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamFailsAfter(httpx.SyncByteStream, httpx.AsyncByteStream):
+    body: bytes
+    error: Exception
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.body
+        raise self.error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.body
+        raise self.error
+
+
+def _chunks_until_error(stream: litellm.CustomStreamWrapper) -> Iterator[ModelResponseStream | Exception]:
+    try:
+        yield from stream
+    except Exception as e:
+        yield e
+
+
+async def _async_chunks_until_error(
+    stream: litellm.CustomStreamWrapper,
+) -> AsyncIterator[ModelResponseStream | Exception]:
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as e:
+        yield e
+
+
+async def _read_gemini_image_stream(sync: bool) -> tuple[tuple[ModelResponseStream, ...], Exception | None]:
+    messages: Final = [{"role": "user", "content": "Draw a window"}]
+    response: Final = (
+        litellm.completion(
+            model="gemini/gemini-3.1-flash-image", messages=messages, max_tokens=64, stream=True, api_key="test-api-key"
+        )
+        if sync
+        else await litellm.acompletion(
+            model="gemini/gemini-3.1-flash-image", messages=messages, max_tokens=64, stream=True, api_key="test-api-key"
+        )
+    )
+    assert isinstance(response, litellm.CustomStreamWrapper)
+    items: Final = (
+        tuple(_chunks_until_error(response))
+        if sync
+        else tuple([item async for item in _async_chunks_until_error(response)])
+    )
+    return (
+        tuple(item for item in items if isinstance(item, ModelResponseStream)),
+        next((item for item in items if isinstance(item, Exception)), None),
+    )
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_leaves_thought_images_out_of_images_and_thinking_blocks(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"role": "model", "parts": GEMINI_THOUGHT_IMAGE_PARTS}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1290, "totalTokenCount": 1303},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].message.images == [GEMINI_FINAL_IMAGE]
+    assert response.choices[0].message.reasoning_content == "Sketching the layout first"
+    assert response.choices[0].message.thinking_blocks == [GEMINI_THOUGHT_TEXT_BLOCK]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_leaves_thought_images_out_of_images(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(
+            *(
+                {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                for part in GEMINI_THOUGHT_IMAGE_PARTS
+            ),
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}
+                ],
+                "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1290, "totalTokenCount": 1303},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
+
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_FINAL_IMAGE]
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_cut_off_before_final_image_returns_last_thought_image(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS},
+                        "finishReason": "MAX_TOKENS",
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        max_tokens=64,
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.images == [GEMINI_LAST_THOUGHT_IMAGE]
+
+
+@pytest.mark.parametrize(
+    ("events", "finish_reason"),
+    [
+        pytest.param(
+            (
+                *(
+                    {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+                ),
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": "", "thoughtSignature": "c2ln"}]},
+                            "finishReason": "MAX_TOKENS",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": GEMINI_TRUNCATED_USAGE,
+                },
+            ),
+            "length",
+            id="finish-in-its-own-chunk",
+        ),
+        pytest.param(
+            (
+                *(
+                    {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS[:-1]
+                ),
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS[-1:]},
+                            "finishReason": "MAX_TOKENS",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": GEMINI_TRUNCATED_USAGE,
+                },
+            ),
+            "length",
+            id="finish-with-the-last-thought-image",
+        ),
+        pytest.param(
+            (
+                *(
+                    {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+                ),
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": ""}]},
+                            "finishReason": "FINISH_REASON_UNSPECIFIED",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": GEMINI_TRUNCATED_USAGE,
+                },
+            ),
+            "stop",
+            id="finish-reason-unspecified",
+        ),
+    ],
+)
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_cut_off_before_final_image_sends_last_thought_image(
+    respx_mock: respx.MockRouter,
+    events: tuple[dict[str, object], ...],
+    finish_reason: str,
+    sync: bool,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(*({**event, "responseId": "gemini-response"} for event in events))
+    )
+
+    chunks, error = await _read_gemini_image_stream(sync)
+
+    assert error is None
+    assert {chunk.id for chunk in chunks} == {"gemini-response"}
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [finish_reason]
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_LAST_THOUGHT_IMAGE]
+    ]
+
+
+@pytest.mark.parametrize(
+    "stream_error",
+    [httpx.ReadError("connection dropped"), ValueError("connection dropped")],
+    ids=["connection-dropped", "unreadable-chunk"],
+)
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_dropped_after_thought_image_sends_it_before_failing(
+    respx_mock: respx.MockRouter,
+    sync: bool,
+    stream_error: Exception,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_StreamFailsAfter(
+                "".join(
+                    f"data: {json.dumps({'candidates': [{'content': {'role': 'model', 'parts': [part]}, 'index': 0}]})}\r\n\r\n"
+                    for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+                ).encode(),
+                stream_error,
+            ),
+        )
+    )
+
+    chunks, error = await _read_gemini_image_stream(sync)
+
+    assert error is not None and "connection dropped" in str(error)
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == [
+        [GEMINI_LAST_THOUGHT_IMAGE]
+    ]
+
+
+@pytest.mark.parametrize("native_finish_reason", ["IMAGE_SAFETY", "IMAGE_RECITATION", "NO_IMAGE"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_stream_blocked_before_final_image_sends_no_thought_image(
+    respx_mock: respx.MockRouter,
+    native_finish_reason: str,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(
+            *(
+                {"candidates": [{"content": {"role": "model", "parts": [part]}, "index": 0}]}
+                for part in GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS
+            ),
+            {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": ""}]},
+                        "finishReason": native_finish_reason,
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in response]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["content_filter"]
+    assert [images for chunk in chunks if (images := getattr(chunk.choices[0].delta, "images", None))] == []
+
+
+@pytest.mark.parametrize("native_finish_reason", ["IMAGE_RECITATION", "NO_IMAGE"])
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_blocked_before_final_image_returns_no_thought_image(
+    respx_mock: respx.MockRouter,
+    native_finish_reason: str,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_THOUGHT_IMAGE_MODEL_URL}:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS},
+                        "finishReason": native_finish_reason,
+                    }
+                ],
+                "usageMetadata": GEMINI_TRUNCATED_USAGE,
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a window"}],
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].finish_reason == "content_filter"
+    assert not getattr(response.choices[0].message, "images", None)
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_gemini_thinking(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
@@ -2673,6 +3039,73 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
         "tool_calls"
     ]
+
+
+_GEMINI_CUT_STREAM_PARTS: Final[Mapping[str, dict[str, object]]] = {
+    "text": {"text": "One, two,"},
+    "thought": {"text": "Thinking about the request", "thought": True},
+    "tool_call": {"functionCall": {"name": "get_weather", "args": {"location": "Lima, Peru"}}},
+}
+_GEMINI_STREAM_USAGE: Final = {"promptTokenCount": 8, "candidatesTokenCount": 4, "totalTokenCount": 12}
+
+
+def _gemini_stream_chunk(part: Mapping[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    candidate: Final = {"content": {"role": "model", "parts": [part]}, "index": 0}
+    if finish_reason is None:
+        return {"candidates": [candidate]}
+    return {"candidates": [{**candidate, "finishReason": finish_reason}], "usageMetadata": _GEMINI_STREAM_USAGE}
+
+
+def _gemini_stream_finish_reasons(respx_mock: respx.MockRouter, *events: dict[str, object]) -> list[str]:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(*events)
+    )
+    response: Final = litellm.completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Count to three"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    return [chunk.choices[0].finish_reason for chunk in response if chunk.choices and chunk.choices[0].finish_reason]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("part", _GEMINI_CUT_STREAM_PARTS.values(), ids=_GEMINI_CUT_STREAM_PARTS.keys())
+def test_gemini_stream_cut_before_any_finish_reason_raises(
+    respx_mock: respx.MockRouter, part: Mapping[str, object]
+) -> None:
+    with pytest.raises(
+        litellm.exceptions.MidStreamFallbackError, match="Stream ended before a finish_reason was received"
+    ):
+        _gemini_stream_finish_reasons(respx_mock, _gemini_stream_chunk(part))
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_stream_that_ends_on_an_unspecified_finish_reason_still_completes(respx_mock: respx.MockRouter) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk({"text": "One, two,"}, finish_reason="FINISH_REASON_UNSPECIFIED")
+    )
+
+    assert finish_reasons == ["stop"]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("first_part", "expected"),
+    [(_GEMINI_CUT_STREAM_PARTS["text"], "stop"), (_GEMINI_CUT_STREAM_PARTS["tool_call"], "tool_calls")],
+    ids=["text", "tool_call"],
+)
+def test_gemini_stream_that_names_its_finish_after_earlier_chunks_completes(
+    respx_mock: respx.MockRouter, first_part: Mapping[str, object], expected: str
+) -> None:
+    finish_reasons: Final = _gemini_stream_finish_reasons(
+        respx_mock, _gemini_stream_chunk(first_part), _gemini_stream_chunk({"text": ""}, finish_reason="STOP")
+    )
+
+    assert finish_reasons == [expected]
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -12655,6 +13088,188 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+_MALFORMED_USAGE: Final = {"promptTokenCount": 9098, "candidatesTokenCount": 381, "totalTokenCount": 9479}
+_MESSAGE_OUTPUTS: Final = ("content", "tool_calls", "function_call", "images", "audio")
+_EMPTY_MALFORMED: Final = {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"}
+_WEATHER_FUNCTION: Final = {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+
+async def _ask_gemini_4_carbon(
+    candidates: Sequence[Mapping[str, object]], usage: Mapping[str, int] = _MALFORMED_USAGE, **extra: object
+) -> ModelResponse:
+    body: Final = {"candidates": list(candidates), "usageMetadata": dict(usage)}
+    return cast(
+        ModelResponse,
+        await litellm.acompletion(
+            model="gemini/gemini-4-carbon",
+            messages=[{"role": "user", "content": "What is the weather in Oslo?"}],
+            api_key="test-api-key",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body))),
+            **extra,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "candidates",
+    (
+        (_EMPTY_MALFORMED,),
+        ({"finishReason": "MALFORMED_RESPONSE", "index": 0},),
+        ({"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "MALFORMED_FUNCTION_CALL"},),
+        (
+            {
+                "content": {"role": "model", "parts": [{"text": "Call get_weather for Oslo.", "thought": True}]},
+                "finishReason": "MALFORMED_FUNCTION_CALL",
+            },
+        ),
+        (
+            {**_EMPTY_MALFORMED, "index": 0},
+            {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_RESPONSE", "index": 1},
+        ),
+    ),
+    ids=("function-call-no-parts", "response-no-content", "empty-text-part", "thoughts-only", "every-candidate"),
+)
+async def test_gemini_malformed_finish_with_no_output_raises_a_retriable_500(
+    candidates: Sequence[Mapping[str, object]],
+) -> None:
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await _ask_gemini_4_carbon(candidates)
+
+    assert raised.value.status_code == 500
+    assert f"{candidates[0]['finishReason']} and returned no output" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_gemini_malformed_finish_stays_a_retriable_500_whatever_token_count_google_bills() -> None:
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await _ask_gemini_4_carbon(
+            (_EMPTY_MALFORMED,), usage={"promptTokenCount": 429, "candidatesTokenCount": 403, "totalTokenCount": 832}
+        )
+
+    assert raised.value.status_code == 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("candidates", "extra", "expected"),
+    (
+        (
+            ({"content": {"parts": [{"text": "Oslo is 4C."}]}, "finishReason": "MALFORMED_FUNCTION_CALL"},),
+            {},
+            (("stop", "content"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Oslo"}}}]},
+                    "finishReason": "MALFORMED_FUNCTION_CALL",
+                },
+            ),
+            {},
+            (("tool_calls", "tool_calls"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Oslo"}}}]},
+                    "finishReason": "MALFORMED_FUNCTION_CALL",
+                },
+            ),
+            {"functions": [_WEATHER_FUNCTION]},
+            (("function_call", "function_call"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]},
+                    "finishReason": "MALFORMED_RESPONSE",
+                },
+            ),
+            {},
+            (("stop", "images"),),
+        ),
+        (
+            (
+                {
+                    "content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": "UklGRgAAAAA="}}]},
+                    "finishReason": "MALFORMED_RESPONSE",
+                },
+            ),
+            {},
+            (("stop", "audio"),),
+        ),
+        (({"content": {"role": "model", "parts": []}, "finishReason": "STOP"},), {}, (("stop", None),)),
+        (({"content": {"parts": [{"text": "Oslo is 4C."}]}},), {}, (("stop", "content"),)),
+        (
+            (
+                {**_EMPTY_MALFORMED, "index": 0},
+                {"content": {"parts": [{"text": "Oslo is 4C."}]}, "finishReason": "STOP", "index": 1},
+            ),
+            {},
+            (("stop", None), ("stop", "content")),
+        ),
+    ),
+    ids=(
+        "malformed-with-text",
+        "malformed-with-tool-call",
+        "malformed-with-legacy-function-call",
+        "malformed-with-image",
+        "malformed-with-audio",
+        "empty-stop",
+        "no-finish-reason",
+        "one-good-candidate",
+    ),
+)
+async def test_gemini_reply_with_any_output_keeps_its_200_shape(
+    candidates: Sequence[Mapping[str, object]],
+    extra: Mapping[str, object],
+    expected: tuple[tuple[str, str | None], ...],
+) -> None:
+    response: Final = await _ask_gemini_4_carbon(candidates, **extra)
+
+    assert (
+        tuple(
+            (
+                choice.finish_reason,
+                next((name for name in _MESSAGE_OUTPUTS if getattr(choice.message, name, None)), None),
+            )
+            for choice in response.choices
+        )
+        == expected
+    )
+    assert response.usage.completion_tokens == 381
+
+
+class _FailureCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: Final[list[Mapping[str, object]]] = []
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, Mapping[str, object]], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures.append(kwargs["standard_logging_object"])
+
+
+@pytest.mark.asyncio
+async def test_gemini_malformed_finish_with_no_output_bills_the_tokens_on_the_failure_log(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture: Final = _FailureCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+
+    with pytest.raises(litellm.InternalServerError):
+        await _ask_gemini_4_carbon((_EMPTY_MALFORMED,))
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert len(capture.failures) == 1
+    assert capture.failures[0]["completion_tokens"] == 381
+    assert capture.failures[0]["prompt_tokens"] == 9098
+    assert cast(float, capture.failures[0]["response_cost"]) > 0
 
 
 @pytest.mark.parametrize(

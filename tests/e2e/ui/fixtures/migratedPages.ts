@@ -10,7 +10,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
   "api-keys": { segment: "api-keys", linkName: "Virtual Keys", content: { role: "heading", name: "Virtual Keys" } },
   models: {
     segment: "models-and-endpoints",
-    linkName: "Models + Endpoints",
+    linkName: "Model Management",
     content: { role: "heading", name: "Model Management" },
   },
   "llm-playground": { segment: "playground", linkName: "Playground", content: { role: "tab", name: "Chat" } },
@@ -58,7 +58,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     segment: "vector-stores",
     linkName: "Vector Stores",
     group: "Tools",
-    content: { role: "heading", name: "Vector Store Management" },
+    content: { role: "heading", name: "Vector Stores" },
   },
   memory: { segment: "memory", linkName: "Memory", group: "Agentic", content: { role: "heading", name: "Memory" } },
   policies: { segment: "policies", linkName: "Policies", content: { role: "tab", name: "Policy Simulator" } },
@@ -81,7 +81,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     segment: "cost-tracking",
     linkName: "Cost Tracking",
     group: "Settings",
-    content: { text: "Cost Tracking Settings" },
+    content: { role: "heading", name: "Cost Tracking" },
   },
   "transform-request": {
     segment: "transform-request",
@@ -93,14 +93,14 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     segment: "ui-theme",
     linkName: "UI Theme",
     group: "Settings",
-    content: { role: "heading", name: "UI Theme Customization" },
+    content: { role: "heading", name: "UI Theme" },
   },
   logs: { segment: "logs", linkName: "Logs", content: { role: "tab", name: "Request Logs" } },
   "admin-panel": {
     segment: "admin-panel",
     linkName: "Admin Settings",
     group: "Settings",
-    content: { role: "heading", name: "Admin Access" },
+    content: { role: "heading", name: "Admin Settings" },
   },
   "logging-and-alerts": {
     segment: "logging-and-alerts",
