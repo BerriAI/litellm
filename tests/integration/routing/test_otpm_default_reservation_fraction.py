@@ -13,6 +13,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import JsonValue
 from integration._support.client import JSON_OBJECT, gateway_from_environment
 from integration._support.openai_wire import chat_reply
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
@@ -101,7 +102,7 @@ def _chat(rig: Rig, group: str, **params: int | bool) -> httpx.Response:
     )
 
 
-def _await_forwarded_stream(upstream: Wire) -> dict[str, object]:
+def _await_forwarded_stream(upstream: Wire) -> dict[str, JsonValue]:
     request: Final = upstream.received.get(timeout=60)
     body: Final = None if is_model_info_probe(request) else JSON_OBJECT.validate_json(request.body)
     return body if body is not None and body.get("stream") is True else _await_forwarded_stream(upstream)
