@@ -91613,6 +91613,15 @@
         "output_cost_per_token": 1.2505e-06,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/tencent/hy4-flash": {
+        "cache_read_input_token_cost": 3e-09,
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.81e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/tencent/hy4-preview": {
         "cache_read_input_token_cost": 4.2e-08,
         "input_cost_per_token": 8.34e-07,
