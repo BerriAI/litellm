@@ -3116,6 +3116,9 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
     return tuple({**_GET_WEATHER, "name": f"get_weather_{index}"} for index in range(count))
 
 
+_MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
+
+
 @pytest.fixture
 def checked_in_cost_map() -> None:
     assert isinstance(
@@ -3127,7 +3130,8 @@ def checked_in_cost_map() -> None:
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
 # xAI grok-4.3 on 2026-10-29, usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
 # 2026-10-30, and usage.input_tokens that POST /v1/messages billed through xAI grok-4.3-latest, Kyma grok-4.3, Azure AI
-# Foundry grok-4-1-fast-non-reasoning and grok-4.3, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3 on 2026-11-17
+# Foundry grok-4-1-fast-non-reasoning and grok-4.3, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3 on 2026-11-17,
+# except the request with no tools through Azure AI Foundry grok-4.3, billed on 2026-11-21
 @pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -3171,6 +3175,7 @@ def checked_in_cost_map() -> None:
         (_AZURE_GROK_4_1_NON_REASONING, None, _THREE_TOOLS, 457),
         (_AZURE_GROK_4_1_NON_REASONING, None, (_FILL_FORM,), 562),
         (_AZURE_GROK_4_1_NON_REASONING, _WEATHER_SYSTEM, (_GET_WEATHER,), 380),
+        (_AZURE_GROK_4_3, None, (), 11),
         (_AZURE_GROK_4_3, None, (_GET_WEATHER,), 96),
         (_AZURE_GROK_4_3, None, _THREE_TOOLS, 215),
         (_AZURE_GROK_4_3, None, (_FILL_FORM,), 343),
@@ -3213,7 +3218,7 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 # usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
@@ -3269,7 +3274,7 @@ async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_s
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 def _single_deployment_router(litellm_params: dict[str, object], model_info: dict[str, object]) -> Router:
