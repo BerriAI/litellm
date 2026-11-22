@@ -37,12 +37,20 @@ class Wire:
         return tuple(self.received.get_nowait() for _ in range(self.received.qsize()))
 
 
+def _await_release(gate: threading.Event, closing: threading.Event) -> bool:
+    while not closing.is_set():
+        if gate.wait(timeout=0.05):
+            return True
+    return gate.is_set()
+
+
 @contextmanager
 def wire_server(respond: Callable[[Request], Reply]) -> Iterator[Wire]:
     """Owned TCP peer; requests traverse the real HTTP client and serialization."""
     received: Final[SimpleQueue[Request]] = SimpleQueue()
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
     disconnected: Final[SimpleQueue[str]] = SimpleQueue()
+    closing: Final = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -77,8 +85,12 @@ def wire_server(respond: Callable[[Request], Reply]) -> Iterator[Wire]:
                             break
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                         self.wfile.flush()
-                        if index == 0 and reply.gate_after_first is not None:
-                            assert reply.gate_after_first.wait(timeout=5), "Stream barrier was never released"
+                        if (
+                            index == 0
+                            and reply.gate_after_first is not None
+                            and not _await_release(reply.gate_after_first, closing)
+                        ):
+                            break
                     else:
                         self.wfile.write(b"0\r\n\r\n")
                         self.wfile.flush()
@@ -105,6 +117,7 @@ def wire_server(respond: Callable[[Request], Reply]) -> Iterator[Wire]:
         try:
             yield Wire(f"http://127.0.0.1:{server.server_port}", received, disconnected)
         finally:
+            closing.set()
             server.shutdown()
             thread.join(timeout=6)
             assert not thread.is_alive(), "Owned HTTP server survived cleanup"
