@@ -73,6 +73,19 @@ async def terminate(
     if row.status == "terminated" or not await store.end_if_current(row.id, row.upstream_subscription_id):
         return
     await store.drop_deliveries(row.id)
+    await notify_termination(row, failure, settings, runtime, post, lookup, notify=notify)
+
+
+async def notify_termination(
+    row: SubscriptionRow,
+    failure: EventsFailure,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+    post: Poster,
+    lookup: Callable[[str], MCPServer | None],
+    *,
+    notify: bool = True,
+) -> None:
     secret: Final = parse_secret(row.client_secret)
     if notify and secret is not None and row.status != "pending":
         body: Final = terminated_body(failure)

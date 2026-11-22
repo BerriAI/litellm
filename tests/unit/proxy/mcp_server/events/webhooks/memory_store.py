@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Final
 
+from litellm.proxy.mcp_server.events.webhooks.settlement import SUSPEND_AFTER_FAILURES, SettlementOutcome
 from litellm.proxy.mcp_server.events.webhooks.store import (
     LIVE_STATUSES,
     PENDING_TTL,
@@ -12,7 +13,7 @@ from litellm.proxy.mcp_server.events.webhooks.store import (
     SubscriptionRow,
     pending_row,
 )
-from litellm.types.mcp_server.events import CallbackFailure
+from litellm.types.mcp_server.events import CallbackFailure, GapEnvelope
 
 
 @dataclass
@@ -56,7 +57,13 @@ class MemoryStore:
         current: Final = self.rows.get(subscription_id)
         if current is None or current.status not in from_statuses:
             return False
-        return self._update_live(subscription_id, status="active", consecutive_failures=0, **activation.model_dump())
+        return self._update_live(
+            subscription_id,
+            status="active",
+            generation=uuid.uuid4().hex,
+            consecutive_failures=0,
+            **activation.model_dump(),
+        )
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
         self._update_live(
@@ -219,3 +226,37 @@ class MemoryStore:
         for key in [key for key, item in self.queue.items() if item.subscription_id == subscription_id]:
             self.queue.pop(key)
             self.leases.pop(key, None)
+
+    async def settle(
+        self, delivery: QueuedDelivery, generation: str, at: datetime, outcome: SettlementOutcome, *, gap: bool = False
+    ) -> bool:
+        row: Final = self.rows.get(delivery.subscription_id)
+        if (
+            row is None
+            or row.generation != generation
+            or row.status not in ("active", "suspended")
+            or delivery.claim_id is None
+            or not self._holds(delivery)
+        ):
+            return False
+        if gap:
+            gap_id: Final = f"msg_gap_{delivery.delivery_id}"
+            await self.enqueue(
+                QueuedDelivery(
+                    delivery_id=gap_id,
+                    subscription_id=row.id,
+                    body=GapEnvelope(cursor=row.cursor).model_dump_json(),
+                    webhook_id=gap_id,
+                    prepared=True,
+                    next_attempt_at=at,
+                )
+            )
+        await self.finish(delivery, at)
+        if outcome == "delivered":
+            await self.mark_delivered(row.id, at)
+        elif outcome == "terminated":
+            await self.terminate(row.id)
+            await self.drop_deliveries(row.id)
+        elif outcome != "discarded":
+            await self.mark_failed(row.id, outcome, at, SUSPEND_AFTER_FAILURES)
+        return True
