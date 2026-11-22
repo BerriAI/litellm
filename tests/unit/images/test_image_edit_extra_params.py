@@ -120,6 +120,48 @@ def test_image_edit_flattens_nested_provider_params():
     assert "generation_config" not in fields
 
 
+def test_image_edit_forwards_bracketed_image_config_fields_to_a_provider_without_image_config():
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        **{"imageConfig[aspectRatio]": "9:16"},
+    )
+
+    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert fields["imageConfig[aspectRatio]"] == "9:16"
+    assert "imageConfig" not in fields
+
+
+def test_image_edit_sends_no_drop_controls_or_dropped_params_to_the_provider():
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        drop_params="true",
+        additional_drop_params=["seed"],
+        imageConfig={"aspectRatio": "9:16"},
+        seed=42,
+        style_preset="noir",
+    )
+
+    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert fields["style_preset"] == "noir"
+    assert not {"drop_params", "additional_drop_params", "imageConfig[aspectRatio]", "seed"} & fields.keys()
+
+
 def test_image_edit_forwards_scalar_array_as_repeated_fields():
     """A list-valued provider param must reach the backend as one repeated part
     per element, not collapse to its last element under dict.update."""

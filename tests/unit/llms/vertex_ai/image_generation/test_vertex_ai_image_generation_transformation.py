@@ -1334,6 +1334,25 @@ def test_vertex_gemini_generation_image_config_overrides_the_size_in_either_key_
     }
 
 
+@pytest.mark.parametrize(
+    ("param", "value"),
+    (("background", "auto"), ("background", "opaque"), ("moderation", "auto"), ("output_compression", 100)),
+)
+def test_vertex_gemini_generation_sends_nothing_for_openai_params_at_their_no_op_defaults(
+    param: str, value: object
+) -> None:
+    assert _sent_gemini_generation_config(**{param: value}) == {"responseModalities": ["IMAGE"]}
+
+
+def test_vertex_gemini_generation_accepts_the_snake_case_image_config() -> None:
+    assert _sent_gemini_generation_config(image_config={"aspect_ratio": "9:16"}) == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": {"aspectRatio": "9:16"},
+    }
+    with pytest.raises(litellm.UnsupportedParamsError, match="`image_config`"):
+        _sent_gemini_generation_request(image_config="banana")
+
+
 @pytest.mark.parametrize(("param", "value"), (("background", "transparent"), ("moderation", "low"), ("output_compression", 50)))
 def test_vertex_gemini_generation_rejects_openai_only_params_unless_dropping_params(param: str, value: object) -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`"):

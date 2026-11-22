@@ -2,7 +2,7 @@ import asyncio
 import contextvars
 import importlib
 from collections.abc import Collection, Coroutine, Mapping
-from functools import partial
+from functools import partial, reduce
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 from pydantic import TypeAdapter, ValidationError
@@ -79,6 +79,8 @@ _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
     LlmProviders.QWENCLOUD,
     LlmProviders.QWEN_AI_PLATFORM,
 )
+
+IMAGE_CONFIG_FIELDS: Final = ("imageConfig", "image_config")
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
@@ -1014,10 +1016,15 @@ def image_edit(
         provider_supported_params: Final[frozenset[str]] = frozenset(
             image_edit_provider_config.get_supported_openai_params(model)
         )
+        edit_params: Final = reduce(
+            _get_ImageEditRequestUtils().fold_bracket_form_fields,
+            (field for field in IMAGE_CONFIG_FIELDS if field in provider_supported_params),
+            local_vars,
+        )
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                local_vars,
+                edit_params,
                 provider_supported_params=provider_supported_params.intersection(non_default_params),
             )
         )
@@ -1037,9 +1044,15 @@ def image_edit(
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
             dropped_form_params: Final = header_auth_params(custom_llm_provider)
+            dropped_edit_params: Final = (
+                dropped_form_params
+                | _DROP_PARAM_KWARGS
+                | (_IMAGE_EDIT_OPENAI_PARAMS - provider_supported_params)
+                | frozenset(additional_drop_params)
+            )
             image_edit_request_params.update(
                 flatten_form_field_values(
-                    {key: value for key, value in non_default_params.items() if key not in dropped_form_params},
+                    {key: value for key, value in non_default_params.items() if key not in dropped_edit_params},
                     (
                         {key: value for key, value in extra_body.items() if key not in dropped_form_params}
                         if isinstance(extra_body, dict)
