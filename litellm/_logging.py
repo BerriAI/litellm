@@ -141,15 +141,22 @@ def redact_internal_details_from_client_message(value: str) -> str:
 
 _CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
 _CLIENT_ITEMS: Final = TypeAdapter(list[object])
+_CREDENTIAL_KEY_PROBE: Final = "key-name-probe"
 
 
 def _redacted_client_key(key: str) -> str:
     return redact_internal_details(redact_structured_value(None, key))
 
 
+def _names_a_credential(key: str | None) -> bool:
+    return redact_structured_value(key, _CREDENTIAL_KEY_PROBE) != _CREDENTIAL_KEY_PROBE
+
+
 def _redacted_client_field(key: str | None, value: object) -> object:
     if isinstance(value, str):
         return redact_internal_details(redact_structured_value(key, value))
+    if isinstance(value, (dict, list, tuple)) and _names_a_credential(key):
+        return REDACTED
     if isinstance(value, dict):
         return {
             _redacted_client_key(child_key): _redacted_client_field(child_key, child)
@@ -163,10 +170,14 @@ def _redacted_client_field(key: str | None, value: object) -> object:
     return value if redact_structured_value(key, text) == text else REDACTED
 
 
-def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+def redact_internal_details_from_client_value(value: object) -> object:
     if not _ENABLE_SECRET_REDACTION:
-        return fields
-    return _redacted_client_field(None, dict(fields))
+        return value
+    return _redacted_client_field(None, value)
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    return redact_internal_details_from_client_value(dict(fields))
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:

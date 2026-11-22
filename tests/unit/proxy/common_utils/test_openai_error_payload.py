@@ -341,3 +341,23 @@ def test_relayed_provider_specific_fields_redact_a_secret_from_carried_fields_an
     assert relayed is not None
     assert relayed["code"] == "content_filter"
     assert secret not in json.dumps(relayed)
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [{"value": "opaque-upstream-credential"}, [{"value": "opaque-upstream-credential"}]],
+    ids=["object", "list_of_objects"],
+)
+def test_relayed_provider_specific_fields_redact_a_structured_value_under_a_credential_key(credential: object) -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="qwen",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", "client_secret": credential, "upstream": {"region": "eu"}},
+    )
+
+    relayed: Final = relayed_provider_specific_fields(rejected)
+
+    assert relayed is not None
+    assert relayed["upstream"] == {"region": "eu"}
+    assert "opaque-upstream-credential" not in json.dumps(relayed)

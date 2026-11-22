@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
+    get_error_message,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1434,6 +1435,55 @@ def test_openrouter_upstream_500_still_maps_to_api_error():
             custom_llm_provider="openrouter",
         )
     assert excinfo.value.status_code == 500
+
+
+_OPAQUE_CREDENTIAL: Final = "opaque-upstream-credential"
+_SHAPED_KEY: Final = "sk-9876543210abcdef9876543210"
+
+
+def _openai_sdk_bad_request(body: dict[str, object]) -> openai.BadRequestError:  # mutable-ok: the SDK takes a dict
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    response: Final = httpx.Response(400, json={"error": body}, request=request)
+    return openai.BadRequestError(message=json.dumps({"error": body}), response=response, body=body)
+
+
+def test_get_error_message_redacts_a_credential_beside_a_structured_message():
+    structured: Final = {"detail": [{"loc": ["body", "max_tokens"], "msg": "must be >= 0"}]}
+
+    message: Final = get_error_message(
+        _openai_sdk_bad_request({"message": structured, "api_key": [_OPAQUE_CREDENTIAL]})
+    )
+
+    assert message is not None
+    assert _OPAQUE_CREDENTIAL not in message
+    assert json.loads(message)["message"] == structured
+
+
+@pytest.mark.parametrize(
+    ("body", "kept"),
+    [
+        ({"message": f"upstream rejected key {_SHAPED_KEY}", "code": 400}, "upstream rejected key"),
+        ({"message": "Provider returned error", "metadata": {"raw": f"bad key {_SHAPED_KEY}"}}, "bad key"),
+        (
+            {"message": "Provider returned error", "metadata": {"raw": {"api_key": _OPAQUE_CREDENTIAL, "why": "denied"}}},
+            "denied",
+        ),
+    ],
+    ids=["message", "raw_text", "raw_object"],
+)
+def test_openrouter_error_message_redacts_a_credential_from_the_provider_body(
+    body: dict[str, object],  # mutable-ok: the SDK takes a dict
+    kept: str,
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="openrouter/qwen",
+            original_exception=_openai_sdk_bad_request(body),
+            custom_llm_provider="openrouter",
+        )
+
+    assert kept in caught.value.message
+    assert [leak for leak in (_SHAPED_KEY, _OPAQUE_CREDENTIAL) if leak in caught.value.message] == []
 
 
 def test_branchless_provider_upstream_500_still_maps_to_internal_server_error():
