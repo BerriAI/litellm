@@ -991,7 +991,8 @@ def _bedrock_pricing_info(
         return None
     registration: Final = _bedrock_cost_registration(model)
     profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
-    if profile is None or not _declares_rates(profile):
+    profile_prices: Final = cost_map_key_declared_prices(profile["key"]) if profile is not None else None
+    if profile is None or not profile_prices:
         return _cost_map_model_info(registration[0], None) if registration is not None else None
     overrides: Final = registration[1] if registration is not None and registration[0] != profile["key"] else {}
     served_rates: Final = _served_model_rates(model, profile["key"])
@@ -1001,9 +1002,7 @@ def _bedrock_pricing_info(
         ModelInfo,
         {
             **{field: value for field, value in profile.items() if not is_server_derived_pricing_key(field)},
-            **pricing_with_overrides(
-                pricing_with_overrides(served_rates, cost_map_key_declared_prices(profile["key"])), overrides
-            ),
+            **pricing_with_overrides(pricing_with_overrides(served_rates, profile_prices), overrides),
         },
     )
 
@@ -1012,9 +1011,7 @@ def _served_model_rates(model: str, profile_key: str) -> Mapping[str, object]:
     served: Final = _cost_map_model_info(model, "bedrock")
     if served is None or served["key"] == profile_key:
         return {}
-    return {
-        field: value for field, value in served.items() if value is not None and is_server_derived_pricing_key(field)
-    }
+    return _declared_pricing_fields(declared_cost_map_pricing(served["key"], model, "bedrock"))
 
 
 def cost_map_key_prices_anything(key: str) -> bool:
@@ -1022,11 +1019,14 @@ def cost_map_key_prices_anything(key: str) -> bool:
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
-def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
-    entry: Final = _raw_cost_map_entry(key) or {}
+def _declared_pricing_fields(entry: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType(
         {field: value for field, value in entry.items() if value is not None and is_server_derived_pricing_key(field)}
     )
+
+
+def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
+    return _declared_pricing_fields(_raw_cost_map_entry(key) or {})
 
 
 def _declares_rates(model_info: ModelInfo | None) -> bool:
