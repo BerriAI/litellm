@@ -197,6 +197,25 @@ def test_create_requires_the_session_model(
     assert started_sidebands == []
 
 
+@pytest.mark.parametrize(
+    "transport",
+    [None, {"type": "sip", "to": "sip:+15550100@example.com"}, {"sdp": "v=0 offer"}],
+    ids=["missing", "sip", "untyped"],
+)
+def test_create_refuses_a_transport_other_than_webrtc_without_calling_the_provider(
+    live_client: TestClient, started_sidebands: list[_LiveSession], transport: dict[str, object] | None
+) -> None:
+    body: Final = {"session": {"model": "live-group"}, **({} if transport is None else {"transport": transport})}
+    with respx.mock(assert_all_called=False) as provider:
+        create: Final = provider.post("https://api.openai.com/v1/live/sessions").mock(return_value=httpx.Response(201))
+        response: Final = live_client.post("/v1/live/sessions", json=body)
+
+    assert response.status_code == 400, response.text
+    assert "Only the webrtc transport is supported" in response.text
+    assert not create.called
+    assert started_sidebands == []
+
+
 def test_create_refuses_a_session_the_proxy_could_not_join_to_meter(
     live_client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -216,3 +235,27 @@ def test_create_refuses_a_session_the_proxy_could_not_join_to_meter(
     assert response.status_code == 503, response.text
     assert "v=0 answer" not in response.text, "without the SDP answer the browser cannot start an unmetered session"
     assert "could not join this session to meter it" in response.text
+
+
+def test_create_starts_a_session_without_a_sideband_when_webrtc_metering_is_turned_off(
+    live_client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/live/sessions").mock(
+        return_value=httpx.Response(
+            201, json={"session": {"id": "live_upstream"}, "transport": {"type": "webrtc", "sdp": "v=0 answer"}}
+        )
+    )
+    started: Final[list[_LiveSession]] = []
+
+    async def _record(session: _LiveSession, _auth: UserAPIKeyAuth) -> bool:
+        started.append(session)
+        return False
+
+    monkeypatch.setattr(live_endpoints, "_start_live_billing_sideband", _record)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"meter_webrtc_calls": False})
+
+    response: Final = live_client.post("/v1/live/sessions", json=_CREATE_BODY)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["transport"] == {"type": "webrtc", "sdp": "v=0 answer"}
+    assert started == []

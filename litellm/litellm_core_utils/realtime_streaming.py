@@ -495,11 +495,13 @@ class RealTimeStreaming:
         translation_session: bool = False,
         bridges_beta_client_to_ga: bool = False,
         drop_params: bool = False,
+        listens_only: bool = False,
         lazy_setup_deadline_seconds: float = REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
         lazy_setup_content_grace_seconds: float = REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ):
         self.websocket: _ClientWebSocket = websocket
+        self._listens_only: Final = listens_only
         self._clock: Final = clock
         self._lazy_setup_deadline: Final = clock() + lazy_setup_deadline_seconds
         self._lazy_setup_content_grace_seconds: Final = lazy_setup_content_grace_seconds
@@ -1619,11 +1621,15 @@ class RealTimeStreaming:
 
     _maybe_inject_guardrail_auto_response_disable = maybe_inject_guardrail_auto_response_disable
 
+    def _guardrail_callbacks(self) -> Sequence[object]:
+        """A session that only listens to a call it does not carry cannot hold back or replace a turn, so it screens nothing."""
+        return () if self._listens_only else litellm.callbacks
+
     def _has_realtime_guardrails_for_event_hooks(
         self,
         event_hooks: Sequence["GuardrailEventHooks"],
     ) -> bool:
-        return _guardrails_run_for_event_hooks(self.request_data, event_hooks, litellm.callbacks)
+        return _guardrails_run_for_event_hooks(self.request_data, event_hooks, self._guardrail_callbacks())
 
     def _has_audio_transcription_guardrails(self) -> bool:
         """Return True when a guardrail is configured for the audio/VAD transcript path.
@@ -1681,7 +1687,7 @@ class RealTimeStreaming:
             "user",
             event_hooks or (GuardrailEventHooks.realtime_input_transcription,),
             {**self.request_data, "stream": True},
-            litellm.callbacks,
+            self._guardrail_callbacks(),
         ):
             raise TypeError(f"Realtime guardrails cannot screen a {type(transcript).__name__} transcript")
         return False
@@ -1735,7 +1741,7 @@ class RealTimeStreaming:
             event_hooks if event_hooks is not None else (GuardrailEventHooks.realtime_input_transcription,),
             self.request_data,
             self.user_api_key_dict,
-            litellm.callbacks,
+            self._guardrail_callbacks(),
         )
         if not isinstance(block, RealtimeGuardrailBlock):
             return block
@@ -1953,7 +1959,10 @@ class RealTimeStreaming:
         try:
             await self._relay_backend_messages()
         except websockets.exceptions.ConnectionClosed as e:
-            verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
+            if self._listens_only:
+                verbose_logger.warning("The provider closed the connection the proxy listens to a call on - %s", e)
+            else:
+                verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
             self._flush_unbilled_transcription_usage()
             await self._log_session_end(e if self._backend_refused_session(close) else None)

@@ -4,6 +4,7 @@ import json
 import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -20,8 +21,8 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
     require_get,
 )
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, get_key_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -40,6 +41,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.realtime_endpoints.sideband import (
     join_sideband,
     realtime_call_id,
+    webrtc_calls_are_metered,
 )
 from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
 from litellm.types.realtime import (
@@ -298,6 +300,7 @@ def _encode_realtime_token_payload(
     session_type: str = "realtime",
     caller_auth: Mapping[str, object] | None = None,
     deployment_id: str | None = None,
+    key: str | None = None,
 ) -> str:
     """
     Encode metadata with the upstream ephemeral key so /realtime/calls can
@@ -312,19 +315,77 @@ def _encode_realtime_token_payload(
         "expires_at": expires_at,
         "session_type": session_type,
         **({} if caller_auth is None else {"caller_auth": caller_auth}),
+        **({} if key is None else {"key": key}),
         **({} if deployment_id is None else {"deployment_id": deployment_id}),
     }
     return json.dumps(payload, separators=(",", ":"))
 
 
-def _caller_auth_for_token(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
-    return user_api_key_dict.model_dump(mode="json", exclude_none=True, exclude={"api_key", "parent_otel_span"})
+_NOT_CARRIED_IN_TOKEN: Final = frozenset({"api_key", "parent_otel_span"})
+_REVOKED_KEY_REFUSAL: Final = json.dumps({"error": "The key that created this token can no longer be used"})
 
 
-def _caller_auth_from_token(
+async def _stored_key(key_hash: str | None) -> UserAPIKeyAuth | None:
+    """The key as the database holds it now, or None when the database holds no such key."""
+    from litellm.proxy.proxy_server import master_key, prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.utils import hash_token
+
+    master_key_hash: Final = None if master_key is None else hash_token(master_key)
+    if not key_hash or prisma_client is None or key_hash == master_key_hash:
+        return None
+    try:
+        return await get_key_object(
+            hashed_token=key_hash,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=True,
+        )
+    except ProxyException as e:
+        if e.type == ProxyErrorTypes.token_not_found_in_db:
+            return None
+        raise
+
+
+def _caller_auth_for_token(
+    user_api_key_dict: UserAPIKeyAuth, stored_key: UserAPIKeyAuth | None = None
+) -> Mapping[str, object]:
+    """What the token must carry to rebuild the caller: all of it, or only what differs from the stored key."""
+    if stored_key is None:
+        return user_api_key_dict.model_dump(mode="json", exclude_none=True, exclude=set(_NOT_CARRIED_IN_TOKEN))
+    stored: Final = stored_key.model_dump(mode="json", exclude=set(_NOT_CARRIED_IN_TOKEN))
+    return {
+        name: value
+        for name, value in user_api_key_dict.model_dump(mode="json", exclude=set(_NOT_CARRIED_IN_TOKEN)).items()
+        if stored.get(name) != value
+    }
+
+
+def _is_usable(stored_key: UserAPIKeyAuth) -> bool:
+    expires: Final = stored_key.expires
+    if stored_key.blocked or expires is None:
+        return not stored_key.blocked
+    expiry: Final = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+    return (expiry if expiry.tzinfo is not None else expiry.replace(tzinfo=timezone.utc)) >= datetime.now(timezone.utc)
+
+
+async def _caller_auth_from_token(
     decoded_payload: Mapping[str, object] | None, user_id: str | None, team_id: str | None
-) -> UserAPIKeyAuth:
+) -> UserAPIKeyAuth | None:
+    """The caller that minted the token, read from its stored key as it is now, or None when that key is gone."""
     caller_auth: Final = None if decoded_payload is None else as_str_mapping(decoded_payload.get("caller_auth"))
+    key: Final = None if decoded_payload is None else decoded_payload.get("key")
+    if isinstance(key, str) and key:
+        stored_key: Final = await _stored_key(key)
+        if stored_key is None or not _is_usable(stored_key):
+            return None
+        return UserAPIKeyAuth.model_validate(
+            {
+                **stored_key.model_dump(mode="json", exclude=set(_NOT_CARRIED_IN_TOKEN)),
+                **(caller_auth or {}),
+                "api_key": key,
+            }
+        )
     if caller_auth is None:
         return UserAPIKeyAuth(user_id=user_id, team_id=team_id)
     return UserAPIKeyAuth.model_validate({**caller_auth, "api_key": caller_auth.get("token")})
@@ -560,6 +621,7 @@ async def create_realtime_client_secret(
     # can recover model without requiring query params.
     raw_value: Final = upstream_json.get("value", "")
     expires_at: Final = upstream_json.get("expires_at")
+    stored_key: Final = await _stored_key(user_api_key_dict.token)
     token_payload: Final = _encode_realtime_token_payload(
         ephemeral_key=raw_value if isinstance(raw_value, str) else "",
         model_id=model,
@@ -567,8 +629,9 @@ async def create_realtime_client_secret(
         team_id=getattr(user_api_key_dict, "team_id", None),
         expires_at=expires_at if isinstance(expires_at, int) else None,
         session_type=session_type,
-        caller_auth=_caller_auth_for_token(user_api_key_dict),
+        caller_auth=_caller_auth_for_token(user_api_key_dict, stored_key),
         deployment_id=deployment_id,
+        key=None if stored_key is None else user_api_key_dict.token,
     )
     encrypted_token: Final[str] = encrypt_value_helper(token_payload)
 
@@ -691,7 +754,11 @@ async def proxy_realtime_calls(
         team_id = None
         session_type = "realtime"
 
-    token_caller_auth: Final = _caller_auth_from_token(decoded_payload, user_id, team_id)
+    token_caller_auth: Final = await _caller_auth_from_token(decoded_payload, user_id, team_id)
+    if token_caller_auth is None:
+        return Response(
+            content=_REVOKED_KEY_REFUSAL, status_code=http_status.HTTP_401_UNAUTHORIZED, media_type="application/json"
+        )
     raw_deployment_id: Final = None if decoded_payload is None else decoded_payload.get("deployment_id")
     token_deployment_id: Final = raw_deployment_id if isinstance(raw_deployment_id, str) else None
 
@@ -772,7 +839,8 @@ async def proxy_realtime_calls(
     location: Final = upstream_resp.headers.get("location")
     answered: Final = 200 <= upstream_resp.status_code < 300 and not is_translation_request
     call_id: Final = realtime_call_id(location) if answered else None
-    if call_id is not None and token_caller_auth.token:
+    calls_are_metered: Final = webrtc_calls_are_metered(general_settings)  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy settings dict
+    if call_id is not None and token_caller_auth.token and calls_are_metered:
         metered: Final = await _start_realtime_billing_sideband(
             call_id=call_id, model=model, caller_auth=token_caller_auth, deployment_id=token_deployment_id
         )

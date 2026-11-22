@@ -7,6 +7,7 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 import functools
 import json
 import time
+from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2011,6 +2012,132 @@ def test_realtime_calls_refuse_a_call_the_proxy_could_not_join_to_meter(
     assert response.status_code == 503, response.text
     assert b"v=0" not in response.content, "without the SDP answer the browser cannot start an unmetered call"
     assert "could not join this call to meter it" in response.text
+
+
+def _post_realtime_call(proxy_app, mock_add_litellm_data, mock_pre_call_hook, token_payload: str) -> httpx.Response:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.route_request",
+            side_effect=_upstream_sdp_answer_route("/v1/realtime/calls/rtc_abc"),
+        ),
+        patch("litellm.proxy.proxy_server.add_litellm_data_to_request", side_effect=mock_add_litellm_data),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        mock_logging.post_call_failure_hook = AsyncMock()
+        return TestClient(proxy_app).post(
+            "/v1/realtime/calls",
+            headers={"Authorization": f"Bearer {encrypt_value_helper(token_payload)}"},
+            content=b"v=0\r\n",
+        )
+
+
+def test_realtime_calls_start_without_a_sideband_when_webrtc_metering_is_turned_off(
+    proxy_app, monkeypatch: pytest.MonkeyPatch, mock_add_litellm_data, mock_pre_call_hook
+) -> None:
+    from litellm.proxy.realtime_endpoints import endpoints as realtime_endpoints
+
+    started: Final[list[object]] = []
+
+    async def _record(**call: object) -> bool:
+        started.append(call)
+        return False
+
+    monkeypatch.setattr(realtime_endpoints, "_start_realtime_billing_sideband", _record)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"meter_webrtc_calls": False})
+
+    response: Final = _post_realtime_call(
+        proxy_app,
+        mock_add_litellm_data,
+        mock_pre_call_hook,
+        _encode_realtime_token_payload(
+            ephemeral_key="fake_upstream_epk",
+            model_id="gpt-realtime",
+            user_id=None,
+            team_id=None,
+            expires_at=int(time.time()) + 3600,
+            caller_auth={"token": "caller-key-hash"},
+        ),
+    )
+
+    assert (response.status_code, response.content) == (201, b"v=0\r\n"), response.text
+    assert started == []
+
+
+def _stored_keys(monkeypatch: pytest.MonkeyPatch, keys: dict[str, UserAPIKeyAuth]) -> None:
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.realtime_endpoints import endpoints as realtime_endpoints
+
+    async def _get_key_object(hashed_token: str, **_lookup: object) -> UserAPIKeyAuth:
+        if hashed_token not in keys:
+            raise ProxyException(message="gone", type=ProxyErrorTypes.token_not_found_in_db, param="key", code=401)
+        return keys[hashed_token].model_copy()
+
+    monkeypatch.setattr(realtime_endpoints, "get_key_object", _get_key_object)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+
+
+def test_a_token_minted_by_a_stored_key_carries_the_key_and_only_what_the_request_added() -> None:
+    from litellm.proxy.realtime_endpoints.endpoints import _caller_auth_for_token
+
+    stored: Final = UserAPIKeyAuth(token="caller-key-hash", team_id="team-a", rpm_limit=10, models=["realtime-group"])
+    caller: Final = stored.model_copy(update={"end_user_id": "customer-7"})
+
+    assert _caller_auth_for_token(caller, stored) == {"end_user_id": "customer-7"}
+    assert _caller_auth_for_token(caller)["rpm_limit"] == 10, "a caller with no stored key is carried whole"
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected_status", "expected_caller"),
+    [
+        (
+            UserAPIKeyAuth(token="caller-key-hash", team_id="team-a", rpm_limit=3),
+            201,
+            [("caller-key-hash", "team-a", 3, "customer-7")],
+        ),
+        (None, 401, []),
+        (UserAPIKeyAuth(token="caller-key-hash", blocked=True), 401, []),
+        (UserAPIKeyAuth(token="caller-key-hash", expires=datetime(2020, 1, 1, tzinfo=timezone.utc)), 401, []),
+    ],
+    ids=["read-as-it-is-now", "deleted", "blocked", "expired"],
+)
+def test_realtime_calls_read_the_minting_key_as_it_is_stored_when_the_call_starts(
+    proxy_app,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+    stored: UserAPIKeyAuth | None,
+    expected_status: int,
+    expected_caller: list[tuple[str, str, int, str]],
+) -> None:
+    from litellm.proxy.realtime_endpoints import endpoints as realtime_endpoints
+
+    started: Final[list[tuple[str | None, str | None, int | None, str | None]]] = []
+
+    async def _record(call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None) -> bool:
+        started.append((caller_auth.token, caller_auth.team_id, caller_auth.rpm_limit, caller_auth.end_user_id))
+        return True
+
+    monkeypatch.setattr(realtime_endpoints, "_start_realtime_billing_sideband", _record)
+    _stored_keys(monkeypatch, {} if stored is None else {"caller-key-hash": stored})
+
+    response: Final = _post_realtime_call(
+        proxy_app,
+        mock_add_litellm_data,
+        mock_pre_call_hook,
+        _encode_realtime_token_payload(
+            ephemeral_key="fake_upstream_epk",
+            model_id="gpt-realtime",
+            user_id=None,
+            team_id=None,
+            expires_at=int(time.time()) + 3600,
+            caller_auth={"end_user_id": "customer-7"},
+            key="caller-key-hash",
+        ),
+    )
+
+    assert response.status_code == expected_status, response.text
+    assert started == expected_caller
 
 
 def test_a_webrtc_call_stays_on_the_deployment_that_minted_its_client_secret(

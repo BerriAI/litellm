@@ -931,6 +931,7 @@ from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
 from litellm.proxy.realtime_endpoints.live_delegation import authorize_live_delegation, live_delegation_denial
+from litellm.proxy.realtime_endpoints.sideband import SESSION_NOT_ADMITTED_CODE
 from litellm.proxy.spend_tracking.spend_event_producer import (
     CollectorSettings,
     SpendEventProducer,
@@ -14433,9 +14434,17 @@ async def _route_realtime_websocket_session(
             route_type="_arealtime",
         )
     except Exception as e:
-        verbose_proxy_logger.exception("Realtime pre-call error")
+        if sideband_call_id is None and live_attach is None:
+            verbose_proxy_logger.exception("Realtime pre-call error")
+        else:
+            verbose_proxy_logger.warning("The proxy's sideband was not admitted to its call: %s", e)
         await _reject_realtime_session(
-            websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
+            websocket,
+            user_api_key_dict,
+            code=1011,
+            reason="Pre-call error",
+            error_message=str(e),
+            error_code=None if sideband_call_id is None and live_attach is None else SESSION_NOT_ADMITTED_CODE,
         )
         return
     except BaseException:

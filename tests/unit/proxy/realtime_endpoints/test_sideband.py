@@ -101,6 +101,7 @@ _DROPPED: Final = ('{"type":"session.created"}',)
 _REFUSED: Final = ('{"type":"error","error":{"message":"Upstream realtime handshake rejected with HTTP 404"}}',)
 _RATE_LIMITED: Final = ('{"type":"error","error":{"message":"Upstream realtime handshake rejected with HTTP 429"}}',)
 _UNREACHABLE: Final = ('{"type":"error","error":{"message":"Cannot connect to host"}}',)
+_NOT_ADMITTED: Final = ('{"type":"error","error":{"message":"Rate limit exceeded","code":"session_not_admitted"}}',)
 _CLOSED_BY_PROVIDER: Final = ('{"type":"session.started"}', '{"type":"session.closed"}')
 
 
@@ -112,7 +113,9 @@ _CLOSED_BY_PROVIDER: Final = ('{"type":"session.started"}', '{"type":"session.cl
         ((_DROPPED, _REFUSED, _DROPPED), 2),
         ((_CLOSED_BY_PROVIDER, _DROPPED), 1),
         ((_DROPPED, _RATE_LIMITED, _UNREACHABLE, _DROPPED, _CLOSED_BY_PROVIDER), 5),
-        ((_DROPPED, _UNREACHABLE, _UNREACHABLE, _UNREACHABLE, _DROPPED), 4),
+        ((_DROPPED, _UNREACHABLE, _UNREACHABLE, _UNREACHABLE, _UNREACHABLE, _UNREACHABLE, _DROPPED), 6),
+        ((_DROPPED, _NOT_ADMITTED, _NOT_ADMITTED, _NOT_ADMITTED, _DROPPED), 4),
+        ((_DROPPED, _NOT_ADMITTED, _UNREACHABLE, _NOT_ADMITTED, _DROPPED, _CLOSED_BY_PROVIDER), 6),
     ],
     ids=[
         "rejoined-after-each-drop-until-the-session-closes",
@@ -120,6 +123,8 @@ _CLOSED_BY_PROVIDER: Final = ('{"type":"session.started"}', '{"type":"session.cl
         "session-closed",
         "a-rejoin-that-fails-is-tried-again",
         "given-up-on-after-the-last-delay",
+        "given-up-on-after-the-proxy-refused-three-rejoins",
+        "a-rejoin-the-proxy-refused-twice-still-joins",
     ],
 )
 async def test_a_joined_sideband_is_reopened_when_it_drops_while_the_call_still_runs(
@@ -137,7 +142,7 @@ async def test_a_joined_sideband_is_reopened_when_it_drops_while_the_call_still_
         if len(opened) == sessions_opened:
             idle.set()
 
-    assert await join_sideband("/v1/realtime", _session, rejoin_delays=(0, 0, 0)) is True
+    assert await join_sideband("/v1/realtime", _session, rejoin_delays=(0, 0, 0, 0, 0)) is True
     await asyncio.wait_for(idle.wait(), 1)
     for _ in range(20):
         await asyncio.sleep(0)

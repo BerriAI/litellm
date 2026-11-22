@@ -22,6 +22,7 @@ _SIDEBAND_WIND_DOWN_SECONDS: Final = 5.0
 _SIDEBAND_REJOIN_DELAYS_SECONDS: Final = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0)
 _RETRYABLE_REFUSALS: Final = frozenset({408, 429})
 _SIDEBAND_MAX_REJOINS: Final = 10
+_SIDEBAND_MAX_OWN_REFUSALS: Final = 3
 
 _SIDEBAND_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: holds each task until it finishes
 _SIDEBAND_SUPERVISORS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: holds each task until it finishes
@@ -45,6 +46,19 @@ def _says_call_is_gone(data: str) -> bool:
     return status is not None and 400 <= status < 500 and status not in _RETRYABLE_REFUSALS
 
 
+def webrtc_calls_are_metered(general_settings: Mapping[str, object]) -> bool:
+    return general_settings.get("meter_webrtc_calls") is not False
+
+
+SESSION_NOT_ADMITTED_CODE: Final = "session_not_admitted"
+
+
+def _says_proxy_refused(data: str) -> bool:
+    """Whether the frame is the route's notice that the proxy turned the session away before asking the provider."""
+    error: Final = as_str_mapping(_event(data).get("error"))
+    return error is not None and error.get("code") == SESSION_NOT_ADMITTED_CODE
+
+
 def _is_session_event(data: str) -> bool:
     """Whether the frame is an event of the session, and not the route's notice that it could not join."""
     return _event_type(data) not in (None, "error")
@@ -62,12 +76,18 @@ class SidebandClientWebSocket:
         self._joined: Final[list[bool]] = []  # mutable-ok: written once, when the first frame or the close arrives
         self._ended: Final = asyncio.Event()
         self._gone: Final = asyncio.Event()
+        self._refused_by_proxy: Final = asyncio.Event()
         self._billed: Final[list[float]] = []  # mutable-ok: written once, when the session reports what it billed
 
     @property
     def call_gone(self) -> bool:
         """Whether the provider refused this session in a way that trying again cannot change."""
         return self._gone.is_set()
+
+    @property
+    def refused_by_proxy(self) -> bool:
+        """Whether the proxy turned this session away itself, as it does for a key at its rate limit or over budget."""
+        return self._refused_by_proxy.is_set()
 
     @property
     def refused(self) -> bool:
@@ -111,6 +131,8 @@ class SidebandClientWebSocket:
             self._ended.set()
         if _says_call_is_gone(data):
             self._gone.set()
+        if _says_proxy_refused(data):
+            self._refused_by_proxy.set()
         self.settle(_is_session_event(data))
 
     async def close(self, code: int = 1000, reason: str | None = None) -> None:
@@ -163,10 +185,18 @@ async def _joined_session(
 
 
 async def _rejoined(
-    path: str, start: SidebandSession, metered_seconds: float, delays: Sequence[float]
+    path: str,
+    start: SidebandSession,
+    metered_seconds: float,
+    delays: Sequence[float],
+    own_refusals_left: int = _SIDEBAND_MAX_OWN_REFUSALS,
 ) -> _JoinedSession | None:
-    """Try to rejoin the call after each delay, until one try joins, the provider says the call is gone, or none are left."""
-    if not delays:
+    """Try to rejoin the call after each delay, until one try joins, the provider says the call is gone, or none are left.
+
+    A try the proxy refuses itself never asks the provider whether the call is still running, and a call that
+    ended looks the same as one that dropped. So only `own_refusals_left` such tries are made.
+    """
+    if not delays or own_refusals_left <= 0:
         return None
     await asyncio.sleep(delays[0])
     attempt: Final = await _joined_session(
@@ -174,7 +204,11 @@ async def _rejoined(
     )
     if isinstance(attempt, _JoinedSession):
         return attempt
-    return None if attempt.call_gone else await _rejoined(path, start, metered_seconds, delays[1:])
+    if attempt.call_gone:
+        return None
+    return await _rejoined(
+        path, start, metered_seconds, delays[1:], own_refusals_left - (1 if attempt.refused_by_proxy else 0)
+    )
 
 
 async def _stay_joined(

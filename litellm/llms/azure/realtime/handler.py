@@ -265,11 +265,12 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     translation_session=realtime_mode == "translation",
                     bridges_beta_client_to_ga=bridges_beta_client_to_ga,
                     drop_params=drop_params,
+                    listens_only=bool((query_params or {}).get("call_id")),
                 )
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatus as e:
-            verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
+            verbose_proxy_logger.warning("Azure refused the realtime handshake with HTTP %s", e.response.status_code)
             await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")

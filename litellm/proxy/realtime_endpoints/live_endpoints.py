@@ -21,7 +21,7 @@ from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_live_websocket
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.realtime_endpoints.live_delegation import authorize_live_delegation, live_delegation_denial
-from litellm.proxy.realtime_endpoints.sideband import join_sideband
+from litellm.proxy.realtime_endpoints.sideband import join_sideband, webrtc_calls_are_metered
 from litellm.realtime_api.main import live_guardrails_configured, live_session_upstream
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -180,6 +180,11 @@ async def create_live_session(
     if requested is None:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="session.model is required")
     body, session, model = requested
+    transport: Final = as_str_mapping(body.get("transport"))
+    if transport is None or transport.get("type") != "webrtc":
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST, detail="Only the webrtc transport is supported"
+        )
     if llm_router is None:
         raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No router is configured")
     await can_key_call_resolved_model(
@@ -229,7 +234,8 @@ async def create_live_session(
         model=model,
         deployment_id=deployment_id if isinstance(deployment_id, str) else "",
     )
-    if not await _start_live_billing_sideband(live_session, user_api_key_dict):
+    metered: Final = webrtc_calls_are_metered(general_settings)  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy settings dict
+    if metered and not await _start_live_billing_sideband(live_session, user_api_key_dict):
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The proxy could not join this session to meter it, so the session was not started",
