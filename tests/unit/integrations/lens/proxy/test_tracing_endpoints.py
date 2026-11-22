@@ -5,6 +5,7 @@ Tests for the agent tracing endpoints (litellm/integrations/lens/proxy/tracing_e
 import asyncio
 import gzip
 import json
+from queue import Queue
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -35,8 +36,9 @@ from litellm.integrations.lens.generated.models import TraceQueryHelp
 from litellm.integrations.lens.generated.responses import TraceSQLResponse
 from litellm.integrations.lens.generated.types import TraceScope
 from litellm.integrations.lens.proxy import tracing_endpoints
+from litellm.integrations.lens.proxy.buffering import FORWARD_BUFFER_BUDGET
 from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
-from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
+from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, RemoteTraceStore
 from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgent, TraceAgentList
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
@@ -174,7 +176,7 @@ def _assert_validation_error(response: Response, error_type: str, location: tupl
         ),
     ),
 )
-def test_trace_read_permissions_with_retired_uploads(
+def test_trace_read_permissions(
     client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, scope: TraceScope | None
 ) -> None:
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
@@ -185,10 +187,6 @@ def test_trace_read_permissions_with_retired_uploads(
         receiver.list_traces.assert_not_awaited()
     else:
         receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None)
-
-    write: Final = client.post("/v1/traces", json={})
-    assert write.status_code == 410
-    receiver.ingest.assert_not_called()
 
 
 @pytest.fixture
@@ -216,21 +214,122 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-@pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"))
 @pytest.mark.parametrize("media_type", ("application/json", "application/x-protobuf"))
-def test_gateway_uploads_return_setup_guidance_without_reading_the_body(
-    client: TestClient, receiver: MagicMock, endpoint: str, media_type: str
+def test_log_uploads_return_setup_guidance_without_reading_the_body(
+    client: TestClient, receiver: MagicMock, media_type: str
 ) -> None:
     from google.rpc.status_pb2 import Status
 
-    response: Final = client.post(endpoint, content=b"invalid payload", headers={"content-type": media_type})
+    response: Final = client.post("/v1/logs", content=b"invalid payload", headers={"content-type": media_type})
     assert response.status_code == 410
     assert response.headers["content-type"] == media_type
     message: Final = (
         response.json()["message"] if media_type == "application/json" else Status.FromString(response.content).message
     )
-    assert message == "Send traces and logs directly to the Lens endpoint shown in Lens setup."
+    assert message == "Send logs directly to the Lens endpoint shown in Lens setup."
     receiver.ingest.assert_not_called()
+
+
+AGENT_SPANS: Final = b"\x0a\x02agent spans exactly as the agent sent them"
+
+
+def _forward_agent_spans(client: TestClient, lens: httpx.MockTransport, headers: Mapping[str, str]) -> Response:
+    tracing: Final = TraceReceiver(
+        storage=LensTraceStorage(RemoteTraceStore(httpx.AsyncClient(base_url="http://lens", transport=lens)))
+    )
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+    return client.post("/v1/traces", content=AGENT_SPANS, headers=headers)
+
+
+def test_agent_spans_reach_lens_unchanged_under_the_owner_of_the_key_that_sent_them(client: TestClient) -> None:
+    received: Final = Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return httpx.Response(200, content=b"stored")
+
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-key", team_id="team-a", org_id="org-a", user_id="user-a"
+    )
+    response: Final = _forward_agent_spans(
+        client,
+        httpx.MockTransport(accept),
+        {
+            "content-type": "application/x-protobuf",
+            "content-encoding": "gzip",
+            "x-litellm-api-key-hash": "another-key",
+            "x-litellm-team-id": "another-team",
+        },
+    )
+
+    forwarded: Final = received.get_nowait()
+    owner: Final = {name: value for name, value in forwarded.headers.items() if name.startswith("x-litellm-")}
+    assert (response.status_code, response.content, response.headers["content-type"]) == (
+        200,
+        b"stored",
+        "application/x-protobuf",
+    )
+    assert (forwarded.url.path, forwarded.content, forwarded.headers["content-encoding"]) == (
+        "/v1/traces",
+        AGENT_SPANS,
+        "gzip",
+    )
+    assert owner == {
+        "x-litellm-api-key-hash": "hashed-key",
+        "x-litellm-team-id": "team-a",
+        "x-litellm-org-id": "org-a",
+        "x-litellm-user-id": "user-a",
+    }
+
+
+@pytest.mark.parametrize("media_type", ("application/json", "application/x-protobuf"))
+def test_agent_spans_are_retried_later_when_lens_cannot_be_reached(client: TestClient, media_type: str) -> None:
+    from google.rpc.status_pb2 import Status
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("lens is down", request=request)
+
+    response: Final = _forward_agent_spans(client, httpx.MockTransport(refuse), {"content-type": media_type})
+
+    message: Final = (
+        response.json()["message"] if media_type == "application/json" else Status.FromString(response.content).message
+    )
+    assert (response.status_code, message, response.headers["retry-after"]) == (
+        503,
+        "Lens is unavailable. Please try again.",
+        str(tracing_endpoints.OTLP_RETRY_AFTER_SECONDS),
+    )
+
+
+def test_agent_spans_larger_than_the_forwarding_limit_are_refused_before_lens_sees_them(client: TestClient) -> None:
+    received: Final = Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return httpx.Response(200)
+
+    tracing: Final = TraceReceiver(
+        storage=LensTraceStorage(
+            RemoteTraceStore(httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)))
+        )
+    )
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+
+    response: Final = client.post(
+        "/v1/traces", content=bytes(MAX_RESPONSE_BYTES + 1), headers={"content-type": "application/x-protobuf"}
+    )
+
+    assert (response.status_code, received.empty()) == (413, True)
+    FORWARD_BUFFER_BUDGET.reserve(FORWARD_BUFFER_BUDGET.capacity)
+    FORWARD_BUFFER_BUDGET.release(FORWARD_BUFFER_BUDGET.capacity)
+
+
+def test_agent_spans_are_refused_on_a_gateway_without_tracing(client: TestClient) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: None
+
+    response: Final = client.post("/v1/traces", content=AGENT_SPANS, headers={"content-type": "application/json"})
+
+    assert (response.status_code, response.json()["message"]) == (501, "Agent tracing is not enabled on this gateway.")
 
 
 def test_list_traces_passes_scope_window_and_cursor(client, receiver):
@@ -1148,6 +1247,39 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
 
 
 @pytest.mark.asyncio
+async def test_the_trace_lens_receives_holds_the_message_without_claude_code_reminders(
+    monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+
+    async with manage_tracing(
+        True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), client_factory=_in_process_lens
+    ):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "<system-reminder>\nContents of AGENTS.md\n</system-reminder>\nwhat is the capital of France",
+                }
+            ],
+            mock_response="Paris",
+        )
+        await asyncio.sleep(0.2)
+
+    traces: Final = tuple(
+        ExportTraceServiceRequest.FromString(body) for path, _, body in lens_uploads if path == "/v1/traces" and body
+    )
+    spans: Final = _spans(chain.from_iterable(trace.resource_spans for trace in traces))
+    attributes: Final = {attribute.key: attribute.value.string_value for attribute in spans[0].attributes}
+    assert "what is the capital of France" in attributes["gen_ai.input.messages"]
+    assert "AGENTS.md" not in attributes["gen_ai.input.messages"]
+
+
+@pytest.mark.asyncio
 async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call_as_a_step(
     monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
 ) -> None:
@@ -1207,5 +1339,7 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         "gen_ai.tool.call.result": "a.txt",
         "gen_ai.conversation.id": "session-1",
         "gen_ai.agent.name": "claude-code",
+        "langsmith.metadata.ls_integration": "claude-code",
+        "lens.task": "list the files",
     }
     assert tool_step.start_time_unix_nano == tool_step.end_time_unix_nano

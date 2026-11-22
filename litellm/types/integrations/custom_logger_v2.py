@@ -366,6 +366,24 @@ class ZeroCost(Record):
 class Cost(Record):
     response_cost: Scalar | None = None
     zero_cost: ZeroCost | None = None
+    cost_finalized: bool | None = None
+    response_cost_failure_debug_info: str | None = None
+    failure_row_response_cost: F64 | None = None
+
+
+class SpendLogId(Record):
+    id: str | None = None
+
+
+class BilledRetryAttempt(Record):
+    position: I64 | None = None
+    spend_log_id: SpendLogId | None = None
+    litellm_call_id: str | None = None
+    parent_request_id: str | None = None
+    attempted_retries: I64 | None = None
+    deployment_id: str | None = None
+    response_cost: F64 | None = None
+    usage: UsageRecord | None = None
 
 
 class ModelInfo(Record):
@@ -492,6 +510,7 @@ def coerce_value(owner: str, adapter: TypeAdapter[ValueT], raw: object) -> Value
 __all__ = [
     "AgentPolicy",
     "AttemptTiming",
+    "BilledRetryAttempt",
     "BudgetPlan",
     "BudgetPlanCounter",
     "BudgetReservation",
@@ -521,6 +540,7 @@ __all__ = [
     "ReservationEntry",
     "Scalar",
     "ScalarItem",
+    "SpendLogId",
     "Strict",
     "Stringified",
     "Usage",

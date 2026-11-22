@@ -5,7 +5,7 @@ Now supports selecting a tag via `config["tag"]`; falls back to branch ("main").
 
 import base64
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Protocol, TypedDict
+from typing import Final, Protocol, TypedDict
 from urllib.parse import quote
 
 from typing_extensions import ReadOnly
@@ -90,7 +90,7 @@ class GitLabClient:
     - Directory listing via the repository tree API
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: Mapping[str, object]):
         """
         Initialize the GitLab client.
 
@@ -104,18 +104,18 @@ class GitLabClient:
                 - base_url: Base GitLab API URL (default: "https://gitlab.com/api/v4")
         """
         project: Final = config.get("project")
-        access_token: Final = config.get("access_token")
+        access_token: Final[object] = config.get("access_token")
         if project is None or access_token is None:
             raise ValueError("project and access_token are required")
 
-        self.project: str | int = project
+        self.project: object = project
         self.access_token: str = str(access_token)
-        self.auth_method: str = config.get("auth_method", "token")  # 'token' or 'oauth'
+        self.auth_method: object = config.get("auth_method", "token")  # 'token' or 'oauth'
         self.branch = config.get("branch", None)
         if not self.branch:
             self.branch = "main"
         self.tag = config.get("tag")
-        self.base_url: str = config.get("base_url", "https://gitlab.com/api/v4")
+        self.base_url: object = config.get("base_url", "https://gitlab.com/api/v4")
 
         if not all([self.project, self.access_token]):
             raise ValueError("project and access_token are required")

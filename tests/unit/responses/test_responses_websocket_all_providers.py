@@ -4639,6 +4639,37 @@ class TestNativeWebSocketUrlConstruction:
         ], f"Expected model in URL, got: {captured_urls[0]}"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("api_base", "sends_tls_settings"),
+        [("http://127.0.0.1:8000/v1", False), ("https://api.openai.com/v1", True)],
+    )
+    async def test_backend_socket_gets_tls_settings_only_for_a_tls_api_base(
+        self, api_base: str, sends_tls_settings: bool
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        backend_connect: Final = MagicMock(side_effect=Exception("stop"))
+        client_ws: Final = MagicMock(close=AsyncMock())
+
+        with patch("websockets.connect", backend_connect):
+            await BaseLLMHTTPHandler().async_responses_websocket(
+                model="gpt-4o-mini",
+                websocket=client_ws,
+                logging_obj=MagicMock(),
+                responses_api_provider_config=OpenAIResponsesAPIConfig(),
+                api_base=api_base,
+                api_key="sk-test",
+            )
+
+        assert backend_connect.call_count == 1, backend_connect.call_args_list
+        ssl_setting: Final = backend_connect.call_args.kwargs["ssl"]
+        assert (ssl_setting is not None) is sends_tls_settings, (
+            f"websockets rejects any ssl value on a ws:// URL, got ssl={ssl_setting!r} for {api_base}"
+        )
+
+    @pytest.mark.asyncio
     async def test_ws_url_preserves_existing_params_and_adds_model(self):
         """When api_base already has query params, model is added alongside them."""
         from unittest.mock import AsyncMock, MagicMock, patch

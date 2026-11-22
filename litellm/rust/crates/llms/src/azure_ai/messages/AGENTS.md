@@ -12,4 +12,5 @@
 
 # references
 
+- Python counterpart `litellm/llms/azure_ai/anthropic/messages_transformation.py` (`AzureAnthropicMessagesConfig`)
 - https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude

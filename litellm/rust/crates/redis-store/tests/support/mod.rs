@@ -35,6 +35,21 @@ pub fn connect(deployment: &RedisDeployment) -> RedisClient {
     connect_with(deployment, None, None)
 }
 
+/// A standalone client for whatever listens on `port`, such as a `TcpProxy` in front of a server.
+pub fn connect_port(port: u16) -> RedisClient {
+    client(
+        Target::Url(RedisUrl {
+            url: litellm_secret_value::SecretValue::new(format!("redis://127.0.0.1:{port}")),
+            tls: None,
+            db: None,
+            username: None,
+            password: None,
+        }),
+        None,
+        None,
+    )
+}
+
 /// `client` with `RedisCache`'s default TTL when `litellm.default_redis_ttl` is unset.
 pub fn remote(client: RedisClient) -> Remote {
     Remote {
@@ -121,6 +136,14 @@ fn connect_with(
             tls: None,
         }),
     };
+    client(endpoint, breaker, events)
+}
+
+fn client(
+    endpoint: Target,
+    breaker: Option<litellm_circuit_breaker::Breaker>,
+    events: Option<Arc<dyn RedisEvents>>,
+) -> RedisClient {
     RedisClient::new(RedisConfig {
         target: endpoint,
         credentials: Credentials::NONE,

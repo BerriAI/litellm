@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.utils import premium_user_check
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import *
@@ -116,6 +117,10 @@ async def should_proceed_based_on_api_key(user_api_key_dict: UserAPIKeyAuth, gua
 
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[str | dict[str, object]])
 _MODIFY_GUARDRAILS_PERMISSION: Final = TypeAdapter(dict[Literal["modify_guardrails"], StrictBool])
+_STRING_KEYED: Final = TypeAdapter(Mapping[str, object])
+_GUARDRAIL_LIST: Final = TypeAdapter(list[object])
+_REJECT_UNREGISTERED_GUARDRAILS_SETTING: Final = "reject_unregistered_guardrails"
+_REJECT_UNREGISTERED_GUARDRAILS_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
 
 
 def _guardrail_entry_names(entries: object) -> frozenset[str] | None:
@@ -142,13 +147,92 @@ def _malformed_guardrails_message(entries: object) -> str:
     )
 
 
-async def registered_guardrail_names(names: frozenset[str], prisma_client: "PrismaClient | None") -> frozenset[str]:
-    loaded_names: Final = frozenset(
+def loaded_guardrail_names() -> frozenset[str]:
+    return frozenset(
         callback.guardrail_name
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
-        if isinstance(callback, CustomGuardrail)
+        if isinstance(callback, CustomGuardrail) and callback.guardrail_name
     )
-    loaded: Final = names & loaded_names
+
+
+def reject_unregistered_guardrails_enabled(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(_REJECT_UNREGISTERED_GUARDRAILS_SETTING)
+    try:
+        return _REJECT_UNREGISTERED_GUARDRAILS_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            _REJECT_UNREGISTERED_GUARDRAILS_SETTING,
+            raw_value,
+        )
+        return False
+
+
+def _entry_guardrail_names(entry: object) -> frozenset[str]:
+    if isinstance(entry, str):
+        return frozenset((entry,))
+    try:
+        return frozenset(_STRING_KEYED.validate_python(entry))
+    except ValidationError:
+        return frozenset()
+
+
+def _listed_guardrail_names(bucket: object) -> frozenset[str]:
+    try:
+        entries: Final = _STRING_KEYED.validate_python(bucket).get("guardrails")
+    except ValidationError:
+        return frozenset()
+    try:
+        listed: Final = _GUARDRAIL_LIST.validate_python(entries, strict=True)
+    except ValidationError:
+        return _entry_guardrail_names(entries)
+    return frozenset(chain.from_iterable(_entry_guardrail_names(entry) for entry in listed))
+
+
+def _unregistered_metadata_guardrails(metadata: object, loaded: frozenset[str]) -> frozenset[str]:
+    try:
+        entries: Final = _STRING_KEYED.validate_python(metadata).get("guardrails")
+        toggles: Final = _STRING_KEYED.validate_python(entries, strict=True)
+    except ValidationError:
+        return _listed_guardrail_names(metadata) - loaded
+    return frozenset(
+        name
+        for name in toggles.keys() - loaded
+        if toggles[name] is not False and name not in litellm.guardrail_name_config_map
+    )
+
+
+def reject_unregistered_request_guardrails(
+    data: Mapping[str, object], *, pipeline_names: frozenset[str] = frozenset()
+) -> None:
+    loaded: Final = loaded_guardrail_names()
+    unregistered: Final = (
+        ((_listed_guardrail_names(data) | _listed_guardrail_names(data.get("litellm_metadata"))) - loaded)
+        | _unregistered_metadata_guardrails(data.get("metadata"), loaded)
+        | frozenset(name for name in pipeline_names if PipelineExecutor.find_guardrail_callback(name) is None)
+    )
+    if not unregistered:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Unknown guardrail(s): {', '.join(sorted(unregistered))}. "
+            + "The request names guardrails that are not registered on this proxy, and "
+            + "general_settings.reject_unregistered_guardrails is on. "
+            + "Check the names against /v2/guardrails/list."
+        },
+    )
+
+
+def reject_unregistered_deployment_guardrails(guardrails: object) -> None:
+    from litellm.proxy.proxy_server import current_general_settings
+
+    if reject_unregistered_guardrails_enabled(current_general_settings()):
+        reject_unregistered_request_guardrails({"guardrails": guardrails})
+
+
+async def registered_guardrail_names(names: frozenset[str], prisma_client: "PrismaClient | None") -> frozenset[str]:
+    loaded: Final = names & loaded_guardrail_names()
     missing: Final = names - loaded
     if not missing or prisma_client is None:
         return loaded
