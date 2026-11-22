@@ -153,8 +153,9 @@ class PrismaEventStore:
         activation: Activation,
         from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
     ) -> bool:
+        eligible: Final = [state for state in LIVE_STATUSES if state in from_statuses]
         updated: Final = await self._subscriptions.update_many(
-            where={"id": subscription_id, "status": {"in": list(from_statuses)}},
+            where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
             data={
                 "status": "active",
                 "client_secret": _encrypt(activation.client_secret),
