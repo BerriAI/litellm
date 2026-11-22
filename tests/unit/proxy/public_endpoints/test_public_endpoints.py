@@ -391,6 +391,38 @@ def test_nvidia_riva_provider_fields():
     assert fields_by_key["nvcf_function_id"]["required"] is False
 
 
+def test_gmi_provider_fields():
+    """GMI Cloud must be selectable in the Add Model flow.
+
+    The dropdown is driven entirely by /public/providers/fields, so GMI needs an
+    entry here (and in LlmProviders for /public/providers) to show up as a
+    provider even though its models are already in the cost map.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    gmi = next((p for p in providers if p["provider"] == "GMI"), None)
+    assert gmi is not None, "GMI Cloud provider entry not found"
+
+    assert gmi["provider_display_name"] == "GMI Cloud"
+    assert gmi["litellm_provider"] == LlmProviders.GMI.value
+    assert gmi["default_model_placeholder"].startswith("gmi/")
+
+    fields_by_key = {f["key"]: f for f in gmi["credential_fields"]}
+
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["placeholder"] == "https://api.gmi-serving.com/v1"
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 def test_cognition_provider_fields():
     """Cognition must be selectable in the Add Model flow (LIT-5348).
 
