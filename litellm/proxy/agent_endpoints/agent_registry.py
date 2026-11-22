@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
 from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
-from litellm.proxy.agent_endpoints.token_exchange import TOKEN_EXCHANGE_PLAIN_KEYS
+from litellm.proxy.agent_endpoints.token_exchange import TOKEN_EXCHANGE_PARAM, TOKEN_EXCHANGE_PLAIN_FIELDS
 from litellm.proxy.management_helpers.object_permission_utils import (
     prepare_object_permission_upsert,
 )
@@ -209,8 +209,21 @@ _AGENT_PARAMS_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAda
 _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _is_secret_agent_param(key: str) -> bool:
-    return key not in TOKEN_EXCHANGE_PLAIN_KEYS and _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+_NO_PLAIN_FIELDS: Final[frozenset[str]] = frozenset()
+
+
+def _is_token_exchange_block(key: str, value: object) -> bool:
+    return key == TOKEN_EXCHANGE_PARAM and isinstance(value, Mapping)
+
+
+def _is_secret_agent_param(key: str, value: object, plain_fields: frozenset[str]) -> bool:
+    if _is_token_exchange_block(key, value) or key in plain_fields:
+        return False
+    return _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+
+
+def _child_plain_fields(key: str, value: object) -> frozenset[str]:
+    return TOKEN_EXCHANGE_PLAIN_FIELDS if _is_token_exchange_block(key, value) else _NO_PLAIN_FIELDS
 
 
 def redact_sensitive_agent_litellm_params(litellm_params: object, _depth: int = 0) -> object:
@@ -238,7 +251,7 @@ def redact_sensitive_agent_litellm_params(litellm_params: object, _depth: int = 
     return _redact_agent_params_tree(litellm_params, _depth)
 
 
-def _redact_agent_params_tree(value: object, _depth: int) -> object:
+def _redact_agent_params_tree(value: object, _depth: int, plain_fields: frozenset[str] = _NO_PLAIN_FIELDS) -> object:
     """Structural recursion over an already-parsed litellm_params value: a
     dict redacts sensitive keys and recurses into the rest, a list redacts
     each element (so a secret nested inside a list of provider configs is
@@ -256,8 +269,8 @@ def _redact_agent_params_tree(value: object, _depth: int) -> object:
     return {
         key: (
             REDACTED_BY_LITELM_STRING
-            if _is_secret_agent_param(key)
-            else _redact_agent_params_tree(nested_value, _depth + 1)
+            if _is_secret_agent_param(key, nested_value, plain_fields)
+            else _redact_agent_params_tree(nested_value, _depth + 1, _child_plain_fields(key, nested_value))
         )
         for key, nested_value in typed_params.items()
     }
@@ -311,7 +324,9 @@ _MISSING_AGENT_PARAM: Final = object()
 _RESTORE_AGENT_PARAMS_MAX_DEPTH: Final = 10
 
 
-def _restore_redacted_nested_value(incoming_value: object, existing_value: object, _depth: int) -> object:
+def _restore_redacted_nested_value(
+    incoming_value: object, existing_value: object, _depth: int, plain_fields: frozenset[str] = _NO_PLAIN_FIELDS
+) -> object:
     """Recurse into a non-sensitively-named dict/list value so a secret
     nested underneath it (e.g. inside a list of per-provider configs) is
     still restored, not just top-level keys. Mirrors the shapes
@@ -346,7 +361,7 @@ def _restore_redacted_nested_value(incoming_value: object, existing_value: objec
             if isinstance(existing_value, Mapping)
             else _EMPTY_LITELLM_PARAMS
         )
-        return _restore_redacted_litellm_params(typed_incoming_map, existing_map, _depth + 1)
+        return _restore_redacted_litellm_params(typed_incoming_map, existing_map, _depth + 1, plain_fields)
     if isinstance(incoming_value, (list, tuple)):
         typed_incoming_seq: Final = _AGENT_PARAMS_SEQUENCE_ADAPTER.validate_python(incoming_value)
         existing_seq: Final = (
@@ -370,15 +385,16 @@ def _resolved_agent_param_value(
     incoming: Mapping[str, object],
     existing: Mapping[str, object],
     _depth: int,
+    plain_fields: frozenset[str],
 ) -> object:
     """The value ``key`` should end up with in a restored litellm_params, or
     ``_MISSING_AGENT_PARAM`` when it should be dropped entirely."""
     if key in incoming:
         value: Final = incoming[key]
-        if _is_secret_agent_param(key):
+        if _is_secret_agent_param(key, value, plain_fields):
             return existing.get(key, _MISSING_AGENT_PARAM) if value == REDACTED_BY_LITELM_STRING else value
-        return _restore_redacted_nested_value(value, existing.get(key), _depth)
-    if _is_secret_agent_param(key):
+        return _restore_redacted_nested_value(value, existing.get(key), _depth, _child_plain_fields(key, value))
+    if _is_secret_agent_param(key, existing.get(key), plain_fields):
         return existing.get(key, _MISSING_AGENT_PARAM)
     return _MISSING_AGENT_PARAM
 
@@ -399,6 +415,7 @@ def _restore_redacted_litellm_params(
     incoming: Mapping[str, object],
     existing: Mapping[str, object],
     _depth: int = 0,
+    plain_fields: frozenset[str] = _NO_PLAIN_FIELDS,
 ) -> dict[str, object]:
     """Restore the real credential behind any litellm_params value the caller
     echoed back as ``REDACTED_BY_LITELM_STRING``, and behind any sensitive key
@@ -417,7 +434,8 @@ def _restore_redacted_litellm_params(
     return {
         key: value
         for key in all_keys
-        if (value := _resolved_agent_param_value(key, incoming, existing, _depth)) is not _MISSING_AGENT_PARAM
+        if (value := _resolved_agent_param_value(key, incoming, existing, _depth, plain_fields))
+        is not _MISSING_AGENT_PARAM
     }
 
 

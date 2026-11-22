@@ -204,21 +204,67 @@ async def test_an_unset_env_reference_is_a_500_naming_the_field_and_never_reache
     assert idp.forms == []
 
 
-@pytest.mark.parametrize("disabled", [{}, False, None])
-async def test_a_falsy_token_exchange_block_keeps_the_agents_static_auth(disabled: object) -> None:
-    agent = AgentResponse(
-        agent_id="agent-plain",
-        agent_name="plain-agent",
-        agent_card_params={"url": "https://agent.example.com"},
-        litellm_params={"token_exchange": disabled, "api_key": "static-key"},
-    )
-
+@pytest.mark.parametrize("disabled", [False, None])
+async def test_a_null_or_false_token_exchange_keeps_the_agents_static_auth(disabled: object) -> None:
     auth = await _resolve_backend_auth(
         {"token_exchange": disabled, "api_key": "static-key"},
         None,
-        agent=agent,
+        agent=_agent(),
         request_headers={},
         user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key"),
     )
 
     assert auth.header == {"Authorization": "Bearer static-key"}
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("block", "reason"),
+    [({}, "missing token_exchange_endpoint, client_id, client_secret"), ("", "mapping"), (0, "mapping")],
+)
+async def test_an_empty_or_garbage_token_exchange_block_is_a_500_not_the_static_credential(
+    block: object, reason: str
+) -> None:
+    idp = respx.route(host="idp.example.com")
+
+    with pytest.raises(HTTPException) as refused:
+        await _resolve_backend_auth(
+            {"token_exchange": block, "api_key": "static-key"},
+            None,
+            agent=_agent(),
+            request_headers={"authorization": f"Bearer {_SUBJECT}"},
+            user_api_key_auth=_jwt_caller(),
+        )
+
+    assert refused.value.status_code == 500
+    assert reason in str(refused.value.detail)
+    assert not idp.called
+
+
+async def test_an_unset_env_reference_inside_scopes_is_a_500_naming_scopes() -> None:
+    idp = _IdP()
+
+    with pytest.raises(HTTPException) as refused:
+        await _exchange(idp, {**_BLOCK, "scopes": ["os.environ/A2A_OBO_SCOPE_NOT_SET", "ok"]})
+
+    assert refused.value.status_code == 500
+    assert "scopes" in str(refused.value.detail)
+    assert idp.forms == []
+
+
+async def test_env_references_inside_scopes_are_expanded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("A2A_OBO_SCOPE", "api://agent/.default")
+    idp = _IdP()
+
+    await _exchange(idp, {**_BLOCK, "scopes": ["os.environ/A2A_OBO_SCOPE", "offline_access"]})
+
+    assert idp.forms[0]["scope"] == "api://agent/.default offline_access"
+
+
+def _agent() -> AgentResponse:
+    return AgentResponse(
+        agent_id="agent-plain",
+        agent_name="plain-agent",
+        agent_card_params={"url": "https://agent.example.com"},
+        litellm_params={},
+    )

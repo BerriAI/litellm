@@ -1706,3 +1706,50 @@ async def test_editing_a_token_exchange_block_keeps_the_stored_secret_unless_a_n
 
     stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
     assert stored_params["token_exchange"] == {**edited, "client_secret": stored_secret}
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "plain-secret-string",
+        json.dumps(_OBO_BLOCK),
+        [_OBO_BLOCK],
+    ],
+)
+def test_redact_sensitive_agent_litellm_params_masks_a_token_exchange_value_that_is_not_a_mapping(stored: object):
+    assert redact_sensitive_agent_litellm_params({"token_exchange": stored}) == {
+        "token_exchange": REDACTED_BY_LITELM_STRING
+    }
+
+
+def test_redact_sensitive_agent_litellm_params_only_exempts_token_exchange_fields_inside_the_block():
+    redacted = redact_sensitive_agent_litellm_params(
+        {"other": {"token_exchange_endpoint": "https://u:pw@idp.example.com/", "subject_token_type": "x"}}
+    )
+
+    assert redacted == {
+        "other": {"token_exchange_endpoint": REDACTED_BY_LITELM_STRING, "subject_token_type": REDACTED_BY_LITELM_STRING}
+    }
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"token_exchange": "plain-secret-string"},
+        {"other": {"token_exchange_endpoint": "https://u:pw@idp.example.com/"}},
+        {"token_exchange": _OBO_BLOCK},
+    ],
+)
+def test_restore_redacted_litellm_params_round_trips_what_the_read_masked(stored: Mapping[str, object]):
+    redacted = redact_sensitive_agent_litellm_params(stored)
+    assert isinstance(redacted, dict)
+
+    assert _restore_redacted_litellm_params(redacted, stored) == stored
+
+
+def test_restore_redacted_litellm_params_lets_an_edit_drop_a_plain_token_exchange_field():
+    edited = {key: value for key, value in _OBO_BLOCK.items() if key != "subject_token_type"}
+
+    restored = _restore_redacted_litellm_params({"token_exchange": edited}, {"token_exchange": _OBO_BLOCK})
+
+    assert restored == {"token_exchange": edited}

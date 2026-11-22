@@ -13,8 +13,8 @@ from litellm.proxy.mcp_server.outbound_credentials.types import CredError, Serve
 from litellm.secret_managers.main import get_secret_str
 
 TOKEN_EXCHANGE_PARAM: Final = "token_exchange"
-TOKEN_EXCHANGE_PLAIN_KEYS: Final = frozenset(
-    {TOKEN_EXCHANGE_PARAM, "token_exchange_endpoint", "subject_token_type", "token_endpoint_auth_method"}
+TOKEN_EXCHANGE_PLAIN_FIELDS: Final = frozenset(
+    {"token_exchange_endpoint", "subject_token_type", "token_endpoint_auth_method"}
 )
 _CONFIG_FIELDS: Final = (
     "profile",
@@ -26,12 +26,15 @@ _CONFIG_FIELDS: Final = (
     "subject_token_type",
     "token_endpoint_auth_method",
 )
+_REQUIRED_FIELDS: Final = ("token_exchange_endpoint", "client_id", "client_secret")
 _BLOCK: Final = TypeAdapter(Mapping[str, object])
+_ITEMS: Final = TypeAdapter(tuple[object, ...])
 _EXCHANGER: Final = build_token_exchanger()
 
 
 def has_token_exchange(litellm_params: Mapping[str, object]) -> bool:
-    return bool(litellm_params.get(TOKEN_EXCHANGE_PARAM))
+    block: Final = litellm_params.get(TOKEN_EXCHANGE_PARAM)
+    return block is not None and block is not False
 
 
 def without_token_exchange(
@@ -44,15 +47,28 @@ def _expand(value: object) -> object:
     return get_secret_str(value) if isinstance(value, str) and value.startswith("os.environ/") else value
 
 
+def _expand_field(value: object) -> object:
+    return tuple(_expand(item) for item in _ITEMS.validate_python(value)) if isinstance(value, list) else _expand(value)
+
+
+def _unresolved(raw: object, expanded: object) -> bool:
+    if isinstance(expanded, tuple):
+        return None in expanded
+    return expanded is None and raw is not None
+
+
 def _token_exchange_config(litellm_params: Mapping[str, object]) -> TokenExchangeConfig | str:
     try:
         block: Final = _BLOCK.validate_python(litellm_params.get(TOKEN_EXCHANGE_PARAM))
     except ValidationError:
         return "it must be a mapping"
-    fields: Final = {name: _expand(block[name]) for name in _CONFIG_FIELDS if name in block}
-    unresolved: Final = tuple(name for name, value in fields.items() if value is None and block[name] is not None)
+    fields: Final = {name: _expand_field(block[name]) for name in _CONFIG_FIELDS if name in block}
+    unresolved: Final = tuple(name for name, value in fields.items() if _unresolved(block[name], value))
     if unresolved:
         return f"unresolved os.environ/ reference in {', '.join(unresolved)}"
+    missing: Final = tuple(name for name in _REQUIRED_FIELDS if not fields.get(name))
+    if missing:
+        return f"missing {', '.join(missing)}"
     try:
         return TokenExchangeConfig.model_validate(fields)
     except ValidationError:
