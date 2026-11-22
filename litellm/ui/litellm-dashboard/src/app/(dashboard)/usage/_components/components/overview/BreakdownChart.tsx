@@ -84,7 +84,7 @@ export function BreakdownControls({
 }
 
 /** Provider logo on a soft tile with a series-colored dot, so mixed logo styles still read as a set. */
-function ModelMark({ model, color }: { model: string; color: string }) {
+export function ModelMark({ model, color }: { model: string; color: string }) {
   const provider = providerForModel(model);
   return (
     <span className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-md border bg-background">

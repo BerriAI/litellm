@@ -48,10 +48,11 @@ from litellm.llms.volcengine.responses.transformation import (
     VolcEngineResponsesAPIConfig,
 )
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.types.utils import GenericStreamingChunk
 
 if TYPE_CHECKING:
-    from litellm.caching.dual_cache import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.responses.streaming_iterator import ResponsesWsTurnAdmission
     from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
@@ -1299,43 +1300,131 @@ class TestWebSocketErrorHandling:
     """Test error handling in WebSocket mode"""
 
     @pytest.mark.asyncio
-    async def test_managed_handler_handles_invalid_json(self):
-        """Test that invalid JSON in response.create is handled gracefully"""
-        from unittest.mock import AsyncMock, MagicMock
-
+    async def test_managed_handler_handles_invalid_json(self) -> None:
         from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.responses.streaming_iterator import (
-            ManagedResponsesWebSocketHandler,
-        )
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
 
-        mock_websocket = MagicMock()
-        mock_websocket.send_text = AsyncMock()
-        mock_websocket.recv = AsyncMock(return_value="invalid json {{{")
-
-        mock_logging_obj = Logging(
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
             model="test-model",
-            messages=[],
-            stream=True,
-            call_type="aresponses",
-            start_time=0,
-            litellm_call_id="test-id",
-            function_id="test-func",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
         )
 
-        handler = ManagedResponsesWebSocketHandler(
-            websocket=mock_websocket,
-            model="test-model",
-            logging_obj=mock_logging_obj,
-        )
-
-        # Process invalid JSON
         await handler._process_response_create("invalid json {{{")
 
-        # Should have sent an error event
-        mock_websocket.send_text.assert_called_once()
-        error_event = mock_websocket.send_text.call_args[0][0]
-        assert "error" in error_event
-        assert "Invalid JSON" in error_event
+        websocket.send_text.assert_called_once()
+        error_event: Final = json.loads(websocket.send_text.call_args[0][0])
+        assert error_event["status"] == 400
+        assert error_event["error"]["type"] == "invalid_request_error"
+        assert "Invalid JSON" in error_event["error"]["message"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("provider_answer", "expected_status"),
+        [
+            (httpx.Response(400, json={"error": {"message": "bad input", "type": "invalid_request_error"}}), 400),
+            (httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}), 429),
+            (httpx.Response(503, json={"error": {"message": "overloaded", "type": "server_error"}}), 503),
+            (httpx.ConnectError("connection refused"), 500),
+        ],
+        ids=["400", "429", "503", "transport-error"],
+    )
+    async def test_provider_failure_frame_carries_the_http_status_the_failure_raised(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        provider_answer: httpx.Response | httpx.ConnectError,
+        expected_status: int,
+    ) -> None:
+        """Codex ignores error frames without a top-level status and hangs until its idle timeout."""
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        provider: Final = respx_mock.post("https://provider.test/v1/responses").mock(side_effect=[provider_answer])
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="openai/gpt-6.2-sol",
+            logging_obj=Logging(
+                model="openai/gpt-6.2-sol",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            api_key="sk-fake",
+            api_base="https://provider.test/v1",
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert provider.call_count == 1
+        websocket.send_text.assert_called_once()
+        error_event: Final = json.loads(websocket.send_text.call_args[0][0])
+        assert (error_event["type"], error_event["status"], error_event["error"]["type"]) == (
+            "error",
+            expected_status,
+            "server_error",
+        )
+
+    @pytest.mark.asyncio
+    async def test_unexpected_failure_reaching_run_sends_a_500_frame(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        class _BrokenQuotaStore:
+            async def enforce_project_io_token_quota_for_frame(
+                self,
+                user_api_key_dict: UserAPIKeyAuth | None,
+                requested_model: str | None,
+                estimated_input_tokens: int,
+                estimated_output_tokens: int,
+            ) -> None:
+                raise RuntimeError("quota store down")
+
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=json.dumps({"type": "response.create", "input": "hi"}),
+            quota_callbacks=[_BrokenQuotaStore()],
+        )
+
+        await handler.run()
+
+        websocket.send_text.assert_called_once()
+        assert json.loads(websocket.send_text.call_args[0][0]) == {
+            "type": "error",
+            "status": 500,
+            "error": {"type": "server_error", "message": "Internal server error: quota store down"},
+        }
 
 
 class TestWebSocketProjectQuotaEnforcement:
@@ -1693,7 +1782,7 @@ def _guard_blocking(word: str):
     return guard
 
 
-def _guard_recording(bill_refusal: MagicMock):
+def _guard_recording(bill_refusal: AsyncMock):
     from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
@@ -1704,8 +1793,8 @@ def _guard_recording(bill_refusal: MagicMock):
     return guard
 
 
-_OPENED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:otpm:12-34"
-_TURNED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:otpm:12-35"
+_OPENED_ON: Final = UsageCounter("global_router", "ws-dep", "openai/gpt-5-mini", "12-34", "otpm")
+_TURNED_ON: Final = UsageCounter("global_router", "ws-dep", "openai/gpt-5-mini", "12-35", "otpm")
 _OPENED_AT: Final = datetime(2026, 1, 1, 12, 34, 56, tzinfo=timezone.utc)
 _TURNED_AT: Final = datetime(2026, 1, 1, 12, 35, 5, tzinfo=timezone.utc)
 _WS_DEPLOYMENT: Final = {
@@ -1731,12 +1820,12 @@ def _turn_completed() -> str:
     )
 
 
-async def _socket_opened_on(dual_cache: "DualCache") -> Mapping[str, object]:
+async def _socket_opened_on(usage: RouterUsageStore) -> Mapping[str, object]:
     from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
 
-    await dual_cache.async_increment_cache(key=_OPENED_ON, value=_OTHER_USAGE, ttl=60)
-    await dual_cache.async_increment_cache(key=_TURNED_ON, value=_OTHER_USAGE, ttl=60)
-    return await async_admit_io_token_turn(dual_cache, _WS_DEPLOYMENT, _OPENED_AT)
+    usage.increment_local(CounterIncrement(_OPENED_ON, _OTHER_USAGE, 60))
+    usage.increment_local(CounterIncrement(_TURNED_ON, _OTHER_USAGE, 60))
+    return await async_admit_io_token_turn(usage, _WS_DEPLOYMENT, _OPENED_AT)
 
 
 def _turns_finish_at(monkeypatch: pytest.MonkeyPatch, finished_at: datetime) -> None:
@@ -1745,13 +1834,13 @@ def _turns_finish_at(monkeypatch: pytest.MonkeyPatch, finished_at: datetime) -> 
     )
 
 
-def _later_turns_admitted_through(dual_cache: "DualCache") -> "ResponsesWsTurnAdmission":
+def _later_turns_admitted_through(usage: RouterUsageStore) -> "ResponsesWsTurnAdmission":
     from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
 
-    return partial(async_admit_io_token_turn, dual_cache, _WS_DEPLOYMENT, _TURNED_AT)
+    return partial(async_admit_io_token_turn, usage, _WS_DEPLOYMENT, _TURNED_AT)
 
 
-_ITPM_OPENED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:itpm:12-34"
+_ITPM_OPENED_ON: Final = UsageCounter("global_router", "ws-dep", "openai/gpt-5-mini", "12-34", "itpm")
 _ITPM_DEPLOYMENT: Final = {
     "litellm_params": {"model": "openai/gpt-5-mini", "itpm": 40_000},
     "model_info": {"id": "ws-dep"},
@@ -1776,6 +1865,16 @@ def _turn_completed_reading_cache(cached_tokens: int) -> str:
             },
         }
     )
+
+
+def _memory_usage() -> RouterUsageStore:
+    return RouterUsageStore(connect(None).router_usage())
+
+
+def _rate_limit_check(usage: RouterUsageStore) -> "ModelRateLimitingCheck":
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+    return ModelRateLimitingCheck(usage=usage)
 
 
 def _connection_logged_through(rate_limits: "ModelRateLimitingCheck", opened_with: Mapping[str, object]) -> "Logging":
@@ -2137,13 +2236,11 @@ class TestWebSocketTurnAdmission:
     ) -> None:
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        from litellm.caching.dual_cache import DualCache
         from litellm.responses.streaming_iterator import drain_logging_tasks
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         _turns_finish_at(monkeypatch, _TURNED_AT)
-        dual_cache: Final = DualCache()
-        opened_with: Final = await _socket_opened_on(dual_cache)
+        usage: Final = _memory_usage()
+        opened_with: Final = await _socket_opened_on(usage)
         first, second, third = _turn_frames()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
@@ -2154,18 +2251,18 @@ class TestWebSocketTurnAdmission:
             websocket=_ClientSocket(second, third),
             backend_ws=backend_ws,
             request_data={},
-            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            logging_obj=_connection_logged_through(_rate_limit_check(usage), opened_with),
             first_message=first,
-            turn_admission=_later_turns_admitted_through(dual_cache),
+            turn_admission=_later_turns_admitted_through(usage),
         )
 
         await handler.client_to_backend()
         await handler.backend_to_client()
         await drain_logging_tasks()
 
-        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE
+        assert usage.get_local(_OPENED_ON) == _OTHER_USAGE
         assert (
-            await dual_cache.async_get_cache(key=_TURNED_ON)
+            usage.get_local(_TURNED_ON)
             == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
         )
 
@@ -2182,14 +2279,12 @@ class TestWebSocketTurnAdmission:
     ) -> None:
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        from litellm.caching.dual_cache import DualCache
         from litellm.responses.streaming_iterator import drain_logging_tasks
         from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         _turns_finish_at(monkeypatch, _OPENED_AT)
-        dual_cache: Final = DualCache()
-        opened_with: Final = await async_admit_io_token_turn(dual_cache, _ITPM_DEPLOYMENT, _OPENED_AT)
+        usage: Final = _memory_usage()
+        opened_with: Final = await async_admit_io_token_turn(usage, _ITPM_DEPLOYMENT, _OPENED_AT)
         first, _, _ = _turn_frames()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
@@ -2198,7 +2293,7 @@ class TestWebSocketTurnAdmission:
             websocket=_ClientSocket(),
             backend_ws=backend_ws,
             request_data={},
-            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            logging_obj=_connection_logged_through(_rate_limit_check(usage), opened_with),
             first_message=first,
         )
 
@@ -2206,7 +2301,7 @@ class TestWebSocketTurnAdmission:
         await handler.backend_to_client()
         await drain_logging_tasks()
 
-        assert await dual_cache.async_get_cache(key=_ITPM_OPENED_ON) == counted_input_tokens
+        assert usage.get_local(_ITPM_OPENED_ON) == counted_input_tokens
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2219,25 +2314,23 @@ class TestWebSocketTurnAdmission:
     async def test_managed_relay_counts_every_turn_on_the_minute_it_finishes(
         self, monkeypatch: pytest.MonkeyPatch, failing_turns: frozenset[int], first_turn_tokens: int
     ) -> None:
-        from litellm.caching.dual_cache import DualCache
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         _turns_finish_at(monkeypatch, _TURNED_AT)
-        dual_cache: Final = DualCache()
-        opened_with: Final = await _socket_opened_on(dual_cache)
+        usage: Final = _memory_usage()
+        opened_with: Final = await _socket_opened_on(usage)
 
         await _run_managed_relay(
             monkeypatch,
             _TwoOutputTokenTurns(failing_turns),
-            ModelRateLimitingCheck(dual_cache),
+            _rate_limit_check(usage),
             _turn_frames(),
-            _later_turns_admitted_through(dual_cache),
+            _later_turns_admitted_through(usage),
             opened_with,
         )
 
-        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE
+        assert usage.get_local(_OPENED_ON) == _OTHER_USAGE
         assert (
-            await dual_cache.async_get_cache(key=_TURNED_ON)
+            usage.get_local(_TURNED_ON)
             == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
         )
 
@@ -2246,26 +2339,24 @@ class TestWebSocketTurnAdmission:
         self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
     ) -> None:
         import litellm
-        from litellm.caching.dual_cache import DualCache
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         _turns_finish_at(monkeypatch, _TURNED_AT)
         provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=_provider_turn_stream)
         client_metadata: Final = {"session": "abc", "team": "search"}
-        dual_cache: Final = DualCache()
+        usage: Final = _memory_usage()
 
         await _relay_turns_to(
             monkeypatch,
             "openai/gpt-5-mini",
-            ModelRateLimitingCheck(dual_cache),
+            _rate_limit_check(usage),
             tuple(
                 json.dumps({"type": "response.create", "input": word, "metadata": client_metadata})
                 for word in ("one", "two")
             ),
-            _later_turns_admitted_through(dual_cache),
-            await _socket_opened_on(dual_cache),
+            _later_turns_admitted_through(usage),
+            await _socket_opened_on(usage),
             api_key="sk-fake",
         )
 
@@ -2273,7 +2364,7 @@ class TestWebSocketTurnAdmission:
             client_metadata,
             client_metadata,
         ]
-        assert await dual_cache.async_get_cache(key=_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
+        assert usage.get_local(_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
 
     @pytest.mark.asyncio
     async def test_native_relay_sends_the_provider_only_the_metadata_the_socket_opened_with(
@@ -2510,7 +2601,7 @@ class TestWebSocketTurnAdmission:
         assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [json.loads(first)]
         assert turn_admission.await_count == 1
         assert [(status, error["type"]) for status, error in _errors(websocket)] == [
-            (None, "invalid_request_error"),
+            (400, "invalid_request_error"),
             (429, "rate_limit_exceeded"),
         ]
 
@@ -2559,20 +2650,20 @@ class TestWebSocketTurnAdmission:
         assert answered == ["one"]
         assert turn_admission.await_count == 1
         assert [(status, error["type"]) for status, error in _errors(websocket)] == [
-            (None, "invalid_request_error"),
+            (400, "invalid_request_error"),
             (429, "rate_limit_exceeded"),
         ]
 
 
     @pytest.mark.asyncio
-    async def test_native_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(self):
+    async def test_native_relay_bills_a_refused_turn_and_returns_it_as_the_close_time_failure(self):
         from unittest.mock import AsyncMock
 
         from litellm.exceptions import RateLimitError
 
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
@@ -2589,8 +2680,40 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.bidirectional_forward()
 
         assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
         assert close_time_failure is refusal
+
+    @pytest.mark.asyncio
+    async def test_native_relay_forwards_no_later_turn_until_the_refused_turn_is_billed(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.exceptions import RateLimitError
+
+        first, second, third = _turn_frames()
+        events: Final[list[str]] = []
+
+        async def bill_refusal(rejection: Exception) -> None:
+            await asyncio.sleep(0.01)
+            events.append("billed")
+
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock(side_effect=lambda frame: events.append(json.loads(frame)["input"]))
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=asyncio.Event().wait)
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(second, third),
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            frame_guard=_guard_recording(AsyncMock(side_effect=bill_refusal)),
+            turn_admission=AsyncMock(
+                side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), {}]
+            ),
+        )
+
+        _ = await handler.bidirectional_forward()
+
+        assert events == ["one", "billed", "three"]
 
     @pytest.mark.asyncio
     async def test_a_refused_turn_is_recorded_even_when_the_relay_is_cancelled_while_answering_it(self):
@@ -2600,7 +2723,7 @@ class TestWebSocketTurnAdmission:
 
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
@@ -2621,10 +2744,10 @@ class TestWebSocketTurnAdmission:
         with pytest.raises(asyncio.CancelledError):
             await relay
 
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
 
     @pytest.mark.asyncio
-    async def test_managed_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(
+    async def test_managed_relay_bills_a_refused_turn_and_returns_it_as_the_close_time_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         from unittest.mock import AsyncMock
@@ -2648,7 +2771,7 @@ class TestWebSocketTurnAdmission:
         monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         handler: Final = ManagedResponsesWebSocketHandler(
             websocket=_ClientSocket(second, third),
             model="test-model",
@@ -2669,7 +2792,7 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.run()
 
         assert answered == ["one", "three"]
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
         assert close_time_failure is refusal
 
     @pytest.mark.asyncio
@@ -3641,8 +3764,9 @@ class TestNativeWebSocketGuardrailMasking:
         assert msg["response"]["model"] == "auth-model"
         assert msg["model"] == "auth-model"
 
+    @pytest.mark.parametrize("event_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
-    async def test_unmask_response_event_completed(self):
+    async def test_unmask_response_event_completed(self, event_type):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
             request_data={
@@ -3653,7 +3777,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         event = json.dumps(
             {
-                "type": "response.completed",
+                "type": event_type,
                 "response": {
                     "output": [
                         {
@@ -3931,8 +4055,9 @@ class TestNativeWebSocketGuardrailMasking:
             "<EMAIL_ADDRESS_1>": "alice@example.com"
         }
 
+    @pytest.mark.parametrize("terminal_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
-    async def test_backend_to_client_suppresses_deltas_and_masks_completed(self):
+    async def test_backend_to_client_suppresses_deltas_and_masks_the_terminal_event(self, terminal_type):
         from unittest.mock import AsyncMock
 
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
@@ -3948,7 +4073,7 @@ class TestNativeWebSocketGuardrailMasking:
                 ),
                 json.dumps(
                     {
-                        "type": "response.completed",
+                        "type": terminal_type,
                         "response": {
                             "output": [
                                 {
@@ -3982,7 +4107,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         websocket.send_text.assert_awaited_once()
         forwarded = json.loads(websocket.send_text.await_args[0][0])
-        assert forwarded["type"] == "response.completed"
+        assert forwarded["type"] == terminal_type
         assert (
             forwarded["response"]["output"][0]["content"][0]["text"]
             == "contact <EMAIL_ADDRESS_1>"
@@ -4512,6 +4637,37 @@ class TestNativeWebSocketUrlConstruction:
         assert qs.get("model") == [
             "gpt-4o-mini"
         ], f"Expected model in URL, got: {captured_urls[0]}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("api_base", "sends_tls_settings"),
+        [("http://127.0.0.1:8000/v1", False), ("https://api.openai.com/v1", True)],
+    )
+    async def test_backend_socket_gets_tls_settings_only_for_a_tls_api_base(
+        self, api_base: str, sends_tls_settings: bool
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        backend_connect: Final = MagicMock(side_effect=Exception("stop"))
+        client_ws: Final = MagicMock(close=AsyncMock())
+
+        with patch("websockets.connect", backend_connect):
+            await BaseLLMHTTPHandler().async_responses_websocket(
+                model="gpt-4o-mini",
+                websocket=client_ws,
+                logging_obj=MagicMock(),
+                responses_api_provider_config=OpenAIResponsesAPIConfig(),
+                api_base=api_base,
+                api_key="sk-test",
+            )
+
+        assert backend_connect.call_count == 1, backend_connect.call_args_list
+        ssl_setting: Final = backend_connect.call_args.kwargs["ssl"]
+        assert (ssl_setting is not None) is sends_tls_settings, (
+            f"websockets rejects any ssl value on a ws:// URL, got ssl={ssl_setting!r} for {api_base}"
+        )
 
     @pytest.mark.asyncio
     async def test_ws_url_preserves_existing_params_and_adds_model(self):

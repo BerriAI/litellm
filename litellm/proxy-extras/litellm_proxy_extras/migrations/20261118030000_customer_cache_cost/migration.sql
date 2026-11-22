@@ -1,0 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
+ALTER TABLE "LiteLLM_DailyCustomerMemberSpend"
+    ADD COLUMN IF NOT EXISTS "cache_cost" DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS "priced_cache_tokens" BIGINT NOT NULL DEFAULT 0;

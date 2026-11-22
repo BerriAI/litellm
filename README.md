@@ -116,7 +116,7 @@ os.environ["OPENAI_API_KEY"] = "your-openai-key"
 os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
 
 # OpenAI
-response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content": "Hello!"}])
+response = completion(model="openai/gpt-6.1-sol", messages=[{"role": "user", "content": "Hello!"}])
 
 # Anthropic  
 response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"role": "user", "content": "Hello!"}])
@@ -128,7 +128,7 @@ response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"ro
 
 ```shell
 uv tool install 'litellm[proxy]'
-litellm --model gpt-4o
+litellm --model gpt-6.1-sol
 ```
 
 ```python
@@ -136,7 +136,7 @@ import openai
 
 client = openai.OpenAI(api_key="anything", base_url="http://0.0.0.0:4000")
 response = client.chat.completions.create(
-    model="gpt-4o",
+    model="gpt-6.1-sol",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 ```
@@ -281,7 +281,7 @@ async with stdio_client(server_params) as (read, write):
 
         # Use with any LiteLLM model
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-6.1-sol",
             messages=[{"role": "user", "content": "What's 3 + 5?"}],
             tools=tools
         )
@@ -298,7 +298,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
   -H 'Authorization: Bearer <your-master-key>' \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "gpt-4o",
+    "model": "gpt-6.1-sol",
     "messages": [{"role": "user", "content": "Summarize the latest open PR"}],
     "tools": [{
       "type": "mcp",
@@ -352,6 +352,8 @@ print(result.text, result.cost, [f.path for f in result.files])
 Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call the agent makes goes through your AI Gateway, tagged `harness,claude_code`. Drop the `litellm_proxy/` prefix to call a provider directly. Install `starlette uvicorn` plus the agent's CLI (`claude`, `codex`, `opencode` or `pi`), or `deepagents langchain-litellm` for Deep Agents.
 
 [**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
+
+Use `litellm.agent_eval(tasks, targets, trials=3)` to compare harness and model targets with typed tasks and success checks. If your runner already schedules cases, use `await litellm.aagent_eval_attempt(task, target, trial=trial, suite_id=run_id)` for each attempt. It returns the same `EvalRun` used by the suite, including the agent result, check, usage and costs. Both paths prepare a fresh workspace, run setup, execute the agent, grade its output and clean up. Your runner owns concurrency, progress, checkpoint storage and resuming unfinished attempts.
 
 </details>
 

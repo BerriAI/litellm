@@ -30,8 +30,10 @@ UPSTREAM_REPLY: Final = json.dumps(
 
 
 def _respond(request: Request) -> Reply:
-    assert request.method == "POST" and request.target == "/v1/chat/completions", request.target
+    assert request.method == "POST" and request.target.endswith("/v1/chat/completions"), request.target
     assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+    if request.target.startswith("/down/"):
+        return Reply(status=500, body=b'{"error": {"message": "upstream down"}}')
     return Reply(body=UPSTREAM_REPLY)
 
 
@@ -45,7 +47,7 @@ def _proxy(tmp_path_factory: pytest.TempPathFactory, saturation_threshold: float
         "priority_reservation_settings": {
             "default_priority": 1.0,
             "saturation_threshold": saturation_threshold,
-            "team_model_limit_borrows_idle_capacity_from_other_teams": True,
+            "model_limit_borrowing_config": {"borrow_idle_capacity": ["team"]},
         },
     }
     path: Final = directory / "team_model_limit_borrowing.yaml"
@@ -79,9 +81,7 @@ def _team_calls(
             tpm=MODEL_TPM,
             rpm=MODEL_RPM,
         )
-        cap: Final = (
-            {} if max_borrow_multiple is None else {"team_model_limit_max_borrow_multiple": max_borrow_multiple}
-        )
+        cap: Final = {} if max_borrow_multiple is None else {"model_limit_max_borrow_multiple": max_borrow_multiple}
         key: Final = scenario.key(
             team_id=scenario.team(
                 metadata={limit: {model: TEAM_TPM if limit == "model_tpm_limit" else TEAM_RPM}, **cap}
@@ -121,6 +121,40 @@ def test_team_is_held_to_its_model_limit_once_the_model_saturates(
     assert first.headers.get("rate_limit_type") == rate_limit_type, dict(first.headers)
     assert f"Team {limit} reached" in first.json()["error"]["message"], first.text
     assert "no idle capacity to borrow" in first.json()["error"]["message"], first.text
+
+
+def test_a_fallback_target_is_held_to_the_teams_share_on_it_once_it_saturates(
+    saturated_model: tuple[Gateway, str],
+) -> None:
+    owned, upstream = saturated_model
+    with owned.scenario() as scenario:
+        source: Final = scenario.model(
+            name=f"down-{uuid.uuid4().hex[:8]}",
+            model=f"openai/{OPENAI_MODEL}",
+            api_base=f"{upstream}/down/v1",
+            api_key="synthetic-openai-key",
+        )
+        target: Final = scenario.model(
+            model=f"openai/{OPENAI_MODEL}",
+            api_base=f"{upstream}/v1",
+            api_key="synthetic-openai-key",
+            tpm=MODEL_TPM,
+            rpm=MODEL_RPM,
+        )
+        owned.post("/config/update", {"router_settings": {"num_retries": 0, "fallbacks": [{source: [target]}]}})
+        key: Final = scenario.key(team_id=scenario.team(metadata={"model_rpm_limit": {target: 1}}))
+        responses: Final = tuple(
+            owned.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": source, "messages": [{"role": "user", "content": f"fallback borrowing {uuid.uuid4().hex}"}]},
+                key=key,
+            )
+            for _ in range(2)
+        )
+    assert responses[0].status_code == 200, responses[0].text
+    assert responses[0].headers.get("x-litellm-attempted-fallbacks") == "1", dict(responses[0].headers)
+    assert responses[1].status_code != 200, responses[1].text
 
 
 @pytest.mark.parametrize(

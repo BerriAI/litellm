@@ -10,6 +10,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, T
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
 from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.proxy.auth.auth_utils import MODEL_ROUTING_HEADER_NAME
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -25,6 +26,8 @@ from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEAD
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _google_repeated_field(value: JsonValue) -> JsonValue:
@@ -161,7 +164,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
 
     validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
     contents: Final = [dict(content) for content in validated_data.contents]
-    messages: Final = (
+    messages: Final = _DECODED_JSON.validate_python(
         GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
     )
     system: Final = (
@@ -182,12 +185,14 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         }
         for declaration in declarations
     ]
-    return TokenCountRequest(
-        model=model_name,
-        contents=contents,
-        messages=messages,
-        system=system,
-        tools=tools or None,
+    return TokenCountRequest.model_validate(
+        {
+            "model": model_name,
+            "contents": contents,
+            "messages": messages,
+            "system": system,
+            "tools": tools or None,
+        }
     )
 
 
@@ -487,6 +492,10 @@ async def create_interaction(
         )
 
 
+def _interaction_model_group(request: Request) -> str | None:
+    return request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME)
+
+
 @router.get(
     "/v1beta/interactions/{interaction_id}",
     dependencies=[Depends(user_api_key_auth)],
@@ -524,7 +533,8 @@ async def get_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    model: Final = _interaction_model_group(request)
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -538,7 +548,7 @@ async def get_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -592,7 +602,8 @@ async def delete_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    model: Final = _interaction_model_group(request)
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -606,7 +617,7 @@ async def delete_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -660,7 +671,8 @@ async def cancel_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    model: Final = _interaction_model_group(request)
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -674,7 +686,7 @@ async def cancel_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,

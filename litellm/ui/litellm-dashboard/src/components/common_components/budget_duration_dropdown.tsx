@@ -12,6 +12,7 @@ const DURATION_LABELS: Record<string, ParseKeys> = {
   "24h": "budgetDurationDropdown.periods.daily",
   "7d": "budgetDurationDropdown.periods.weekly",
   "30d": "budgetDurationDropdown.periods.monthly",
+  "12mo": "budgetDurationDropdown.periods.annual",
 };
 
 interface BudgetDurationDropdownProps {
@@ -51,6 +52,7 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
         <SelectItem value="24h">{t("budgetDurationDropdown.periods.daily")}</SelectItem>
         <SelectItem value="7d">{t("budgetDurationDropdown.periods.weekly")}</SelectItem>
         <SelectItem value="30d">{t("budgetDurationDropdown.periods.monthly")}</SelectItem>
+        <SelectItem value="12mo">{t("budgetDurationDropdown.periods.annual")}</SelectItem>
       </SelectContent>
     </Select>
   );
@@ -64,6 +66,7 @@ export const getBudgetDurationLabel = (value: string | null | undefined, t: TFun
     "24h": "budgetDurationDropdown.periods.daily",
     "7d": "budgetDurationDropdown.periods.weekly",
     "30d": "budgetDurationDropdown.periods.monthly",
+    "12mo": "budgetDurationDropdown.periods.annual",
   };
 
   return Object.hasOwn(budgetDurationMap, value) ? t(budgetDurationMap[value]) : value;

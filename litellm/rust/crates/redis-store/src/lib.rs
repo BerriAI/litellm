@@ -1,5 +1,8 @@
+pub mod active_teams;
 pub mod auth_cache;
+pub mod cache_invalidation;
 mod codec;
+pub mod deployment_health;
 mod dual_cache;
 mod error;
 mod failure_log;
@@ -9,16 +12,21 @@ pub mod rate_limits;
 mod remote;
 mod request;
 pub mod router_cooldowns;
+pub mod router_session_pins;
+mod router_tiers;
 pub mod router_usage;
 pub mod sensitive_route_pins;
 pub mod spend_counters;
+#[cfg(test)]
+mod test_support;
 mod value;
 
 pub use codec::DecodeError;
 pub use dual_cache::TierPolicy;
 pub use error::{Error, ErrorKind};
-pub use memory::{Clock, system_clock};
+pub use memory::{Clock, UpdateGuard, UpdateLock, system_clock};
 pub use number::Number;
 pub use remote::Remote;
-pub use request::{Pending, RequestRedis, Send};
+pub use request::{DeadlineTag, Pending, PostCallDrain, RequestRedis, Send};
+pub use router_tiers::RouterTiers;
 pub use value::{FromValue, IntoValue};

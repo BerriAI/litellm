@@ -91,6 +91,9 @@ def test_staging_stamps_release_version_without_modifying_sources(
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"shared {name}")
+    for name in BUILD.PROXY_SOURCES:
+        (source / name).parent.mkdir(parents=True, exist_ok=True)
+        (source / name).write_text(f"shared {name}")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "9.8.7rc1"\n')
     manifest: Final = source / "litellm" / "packaging" / package / "pyproject.toml"
     manifest.parent.mkdir(parents=True)
@@ -104,6 +107,7 @@ def test_staging_stamps_release_version_without_modifying_sources(
     if package == "litellm-proxy":
         assert staged_project["tool"]["maturin"]["targets"] == [{"name": "litellm-gateway", "kind": "bin"}]
         assert not (stage / "litellm" / "__init__.py").exists()
+        assert all((stage / name).read_bytes() == (source / name).read_bytes() for name in BUILD.PROXY_SOURCES)
         assert all(
             (stage / name).exists()
             for name in (
@@ -218,6 +222,18 @@ def test_core_sdist_preserves_native_build_configuration(distribution_directory:
     with tarfile.open(sdists[0]) as archive:
         name: Final = f"{sdists[0].name.removesuffix('.tar.gz')}/{relative_path}"
         assert name in archive.getnames(), f"Core source distribution is missing {relative_path}"
+        content: Final = archive.extractfile(name)
+        assert content is not None
+        assert content.read() == (ROOT / relative_path).read_bytes()
+
+
+def test_proxy_sdist_carries_the_license_key_the_gateway_embeds(tmp_path: Path) -> None:
+    BUILD.build_core_distribution(tmp_path, sdist_only=True, package="litellm-proxy")
+    sdist: Final = next(tmp_path.glob("litellm_proxy-*.tar.gz"))
+    relative_path: Final = "litellm/proxy/auth/public_key.pem"
+    with tarfile.open(sdist) as archive:
+        name: Final = f"{sdist.name.removesuffix('.tar.gz')}/{relative_path}"
+        assert name in archive.getnames(), f"Proxy source distribution is missing {relative_path}"
         content: Final = archive.extractfile(name)
         assert content is not None
         assert content.read() == (ROOT / relative_path).read_bytes()

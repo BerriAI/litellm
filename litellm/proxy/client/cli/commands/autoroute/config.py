@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
@@ -33,7 +33,7 @@ class _RawModelListing(LiteLLMBaseModel):
 _RAW_MODEL_LISTING_ADAPTER: Final = TypeAdapter(list[_RawModelListing])
 
 
-def parse_discovered_models(raw: list[JsonValue]) -> tuple[DiscoveredModel, ...]:
+def parse_discovered_models(raw: Sequence[object]) -> tuple[DiscoveredModel, ...]:
     """Validate a raw `/v1/models` response into typed models."""
     parsed: Final = _RAW_MODEL_LISTING_ADAPTER.validate_python(raw)
     return tuple(DiscoveredModel(name=item.id, mode=item.mode) for item in parsed)

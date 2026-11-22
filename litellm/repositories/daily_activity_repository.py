@@ -1,6 +1,7 @@
 import asyncio
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import groupby
 from types import MappingProxyType
@@ -12,8 +13,10 @@ from typing_extensions import assert_never
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, redact_credentials_in_payload
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
+    EXPORT_METADATA_DROPPED_KEYS,
     ExportCursor,
     SqlQuery,
     adjust_dates_for_timezone,
@@ -97,6 +100,9 @@ class _DailyActivityDatabase(Protocol):
     def litellm_dailyenduserspend(self) -> TableActions[DailyActivityRow]: ...
 
     @property
+    def litellm_dailycustomermemberspend(self) -> TableActions[DailyActivityRow]: ...
+
+    @property
     def litellm_dailyagentspend(self) -> TableActions[DailyActivityRow]: ...
 
 
@@ -133,6 +139,7 @@ class _CustomerDailyRow(BaseModel):
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
     guardrail_spend: float
+    customer_margin_spend: float
     spend: float
     api_requests: int
     successful_requests: int
@@ -178,10 +185,86 @@ def _daily_rows_table(
         return prisma_client.db.litellm_dailyorganizationspend
     if table is DailyActivityTable.CUSTOMER:
         return prisma_client.db.litellm_dailyenduserspend
+    if table is DailyActivityTable.CUSTOMER_MEMBER:
+        return prisma_client.db.litellm_dailycustomermemberspend
     if table is DailyActivityTable.AGENT:
         return prisma_client.db.litellm_dailyagentspend
     assert_never(table)
     raise AssertionError("unreachable")
+
+
+_EXPORT_UNSEPARATED_CREDENTIAL_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "apikey",
+        "apitoken",
+        "accesskey",
+        "accesstoken",
+        "authkey",
+        "authtoken",
+        "bearertoken",
+        "clientsecret",
+        "passwd",
+        "privatekey",
+        "pwd",
+        "refreshtoken",
+        "secretkey",
+        "sessiontoken",
+        "signingkey",
+        "webhooksecret",
+    }
+)
+_EXPORT_METADATA_MASKER: Final = SensitiveDataMasker(
+    non_sensitive_overrides=frozenset(),
+    extra_sensitive_patterns=_EXPORT_UNSEPARATED_CREDENTIAL_NAMES,
+    split_camel_case=True,
+)
+
+
+_EXPORT_CREDENTIAL_KEYS: Final[frozenset[str]] = frozenset(
+    {"apikeys", "bearer", "credentials", "jwt", "passphrase", "secrets", "tokens"}
+)
+_EXPORT_CREDENTIAL_KEY_SUFFIXES: Final = ("connectionstring", "databaseurl", "dsn", "passphrase", "webhookurl")
+_CREDENTIAL_VALUE: Final = re.compile(
+    r"^\s*(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}\s*$"
+    r"|(?<![A-Za-z0-9])[sr]k_(?:live|test)_[A-Za-z0-9]{10,}"
+    r"|(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}\b"
+    r"|(?<![A-Za-z0-9])(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"
+    r"|(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}"
+    r"|(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{10,}"
+    r"|\b(?i:[a-z][a-z0-9+.-]{0,31})://[^\s/:@]*:[^\s/@]+@"
+    r"|(?i:authorization)\\?[\"']?\s*[:=]\s*\S"
+    r"|(?i:https?://hooks\.slack\.com/)"
+    r"|(?i:https?://(?:[a-z0-9-]+\.)?(?:discord|discordapp)\.com/api/(?:v\d+/)?webhooks/)"
+)
+_SK_KEY_RUN: Final = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{10,}")
+
+
+def _has_sk_key(value: str) -> bool:
+    return any(any(char.isdigit() for char in run.group()) for run in _SK_KEY_RUN.finditer(value))
+
+
+def _is_export_credential(key: str, value: object) -> bool:
+    normalized_key: Final = key.lower().replace("_", "").replace("-", "")
+    if normalized_key in _EXPORT_CREDENTIAL_KEYS or normalized_key.endswith(_EXPORT_CREDENTIAL_KEY_SUFFIXES):
+        return True
+    return isinstance(value, str) and (_CREDENTIAL_VALUE.search(value) is not None or _has_sk_key(value))
+
+
+def _redacted_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return redact_credentials_in_payload(
+        metadata,
+        _EXPORT_METADATA_MASKER,
+        dropped_keys=EXPORT_METADATA_DROPPED_KEYS,
+        is_credential=_is_export_credential,
+    )
+
+
+def _with_redacted_metadata(row: ExportRow) -> ExportRow:
+    if not row.key_metadata and not row.user_metadata:
+        return row
+    return replace(
+        row, key_metadata=_redacted_metadata(row.key_metadata), user_metadata=_redacted_metadata(row.user_metadata)
+    )
 
 
 def _next_export_cursor(batch: tuple[ExportRow, ...], export_type: ExportType) -> ExportCursor:
@@ -302,15 +385,25 @@ class DailyActivityRepository:
         query: Final = build_cache_leakage_keys_sql(scope, limit=limit)
         return _KEY_SPEND_ADAPTER.validate_python(await self._query(query))
 
-    async def export_rows(self, scope: DailyActivityScope, *, export_type: ExportType) -> AsyncIterator[ExportRow]:
+    async def export_rows(
+        self, scope: DailyActivityScope, *, export_type: ExportType, include_metadata: bool = False
+    ) -> AsyncIterator[ExportRow]:
         batch_size: Final = constants.USAGE_EXPORT_BATCH_SIZE
         cursor: ExportCursor | None = None  # rebind-ok: each page advances the export keyset cursor
         while True:
             batch: tuple[ExportRow, ...] = _EXPORT_ADAPTER.validate_python(
-                await self._query(build_export_sql(scope, export_type=export_type, after=cursor, batch_size=batch_size))
+                await self._query(
+                    build_export_sql(
+                        scope,
+                        export_type=export_type,
+                        after=cursor,
+                        batch_size=batch_size,
+                        include_metadata=include_metadata,
+                    )
+                )
             )
             for row in batch:
-                yield row
+                yield _with_redacted_metadata(row)
             if len(batch) < batch_size:
                 return
             cursor = _next_export_cursor(batch, export_type)
@@ -392,6 +485,8 @@ class DailyActivityRepository:
         )
         conditions: Final = {
             "date": {"gte": adjusted_start, "lte": adjusted_end},
+            **({"app_id": scope.app_id} if scope.app_id is not None else {}),
+            **({"app_group_id": scope.app_group_id} if scope.app_group_id is not None else {}),
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
             **(

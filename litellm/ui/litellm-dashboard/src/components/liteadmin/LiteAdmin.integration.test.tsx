@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { Fragment, useEffect, type ComponentType } from "react";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { AriaUsageTrigger, LiteAdminFrame, LiteAdminPage, AriaSidebarLink } from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -26,6 +27,7 @@ vi.unmock("@/lib/toast");
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 const MANAGEMENT = "https://management.test/proxy";
+const browserCrypto = globalThis.crypto;
 const INFERENCE = "https://management.test/inference";
 const EXTERNAL_INFERENCE = "https://inference.test/proxy";
 const NEW_KEY = "sk-created-for-widget-test";
@@ -121,7 +123,9 @@ function renderWidget(
           {Menu && <Menu onLogout={() => undefined} />}
           <LiteAdminFrame>
             <Page />
-            <AriaSidebarLink active={page} />
+            <SidebarProvider>
+              <AriaSidebarLink active={page} />
+            </SidebarProvider>
             {page && <LiteAdminPage />}
             {usage && (
               <>
@@ -148,6 +152,7 @@ interface GatewayOptions {
   read?: () => Promise<Response>;
   usage?: () => Promise<Response>;
   settings?: { target: string; status: number } | ((request: Request) => Promise<Response>);
+  uiSettings?: () => Promise<Response>;
   useSiTerminology?: boolean;
 }
 
@@ -191,6 +196,7 @@ function gateway(
       if (typeof settings === "function") return settings(request);
       return json({ PROXY_BASE_URL: MANAGEMENT, LITELLM_UI_API_DOC_BASE_URL: settings.target }, settings.status);
     }
+    if (path.endsWith("/get/ui_settings")) return options.uiSettings ? options.uiSettings() : json({ values: {} });
     if (path.endsWith("/model_group/info"))
       return json({
         data: options.models ?? [
@@ -251,9 +257,107 @@ beforeEach(() => {
 afterEach(() => {
   toast.dismiss();
   document.cookie = "token=; Max-Age=0; Path=/";
+  vi.stubGlobal("crypto", browserCrypto);
 });
 
 describe("Aria Agent in the gateway", () => {
+  it("sends a question and displays the answer without a secure browser context", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });
+    const requests = gateway([answer("Your gateway is ready.")]);
+    renderWidget(undefined, false, true);
+    const input = await screen.findByPlaceholderText("Ask Aria…");
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "Is my gateway ready?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("Is my gateway ready?")).toBeInTheDocument();
+    expect(await screen.findByText("Your gateway is ready.")).toBeInTheDocument();
+    const completion = requests.find((request) => request.url.endsWith("/chat/completions"));
+    expect(completion?.body.messages).toContainEqual({ role: "user", content: "Is my gateway ready?" });
+  });
+
+  it.each(["internal_user", "internal_user_viewer"])("hides Aria for %s with no internal access", async (role) => {
+    session(role);
+    gateway([], { uiSettings: async () => json({ values: { aria_internal_user_access: "none" } }) });
+    const { client } = renderWidget(undefined, false, true);
+    await screen.findByText("Session ready");
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["internal_user", "own_usage", false],
+    ["internal_user", "own_and_team_usage", true],
+    ["proxy_admin", "none", true],
+    ["proxy_admin_viewer", "none", true],
+  ] as const)("applies internal access %s %s to team tools", async (role, access, teamTool) => {
+    session(role, "first-admin", { premium_user: true });
+    const requests = gateway([answer("Ready.")], {
+      uiSettings: async () => json({ values: { aria_internal_user_access: access } }),
+    });
+    renderWidget(undefined, false, true);
+    const input = await screen.findByPlaceholderText("Ask Aria…");
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "What usage can I see?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByText("Ready.");
+    const completion = requests.find((request) => request.url.endsWith("/chat/completions"));
+    const names = completion?.body.tools.map((tool: { function: { name: string } }) => tool.function.name);
+    expect(names).toContain("get_usage_data");
+    expect(names.includes("get_team_usage_data")).toBe(teamTool);
+    if (role === "internal_user") expect(names).toHaveLength(teamTool ? 3 : 2);
+  });
+  it.each([
+    ["proxy_admin", true],
+    ["proxy_admin", false],
+    ["proxy_admin_viewer", true],
+    ["internal_user", true],
+    ["internal_user_viewer", false],
+    ["org_admin", true],
+  ] as const)("hides every Aria entry point for %s with premium=%s when disabled", async (role, premium) => {
+    session(role, "first-admin", { premium_user: premium });
+    const requests = gateway([], { uiSettings: async () => json({ values: { disable_aria: true } }) });
+    const { client } = renderWidget(undefined, false, true);
+    await screen.findByText("Session ready");
+    await waitFor(() => expect(requests.some((request) => request.url === `${MANAGEMENT}/get/ui_settings`)).toBe(true));
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Ask Aria" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "j", metaKey: true });
+    fireEvent.keyDown(document, { key: "j", ctrlKey: true });
+    expect(push).not.toHaveBeenCalled();
+    expect(requests.some((request) => request.url.endsWith("/models"))).toBe(false);
+  });
+
+  it("waits for settings and does not show Aria when the initial read fails", async () => {
+    const settings = deferred<Response>();
+    gateway([], { uiSettings: () => settings.promise });
+    const { client } = renderWidget(undefined, false, true);
+    await screen.findByText("Session ready");
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    await act(async () => settings.resolve(json({ error: "Unavailable" }, 503)));
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Ask Aria" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+  });
+
+  it("waits for the destination gateway's settings instead of reusing an enabled gateway", async () => {
+    const settings = deferred<Response>();
+    gateway([], {
+      uiSettings: async () =>
+        localStorage.getItem("litellm_worker_url") ? settings.promise : json({ values: { disable_aria: false } }),
+    });
+    const view = renderWidget(undefined, false, true, { showPage: false });
+    await screen.findByRole("link", { name: "Ask Aria" });
+    switchToWorkerUrl("https://other-gateway.test");
+    view.refresh();
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    await act(async () => settings.resolve(json({ values: { disable_aria: true } })));
+    await waitFor(() => expect(view.client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Ask Aria" })).not.toBeInTheDocument();
+  });
+
   it.each([true, false])(
     "keeps the answer, draft and model when returning to Aria with premium=%s",
     async (premium) => {
@@ -476,11 +580,11 @@ describe("Aria Agent in the gateway", () => {
     const view = renderWidget();
     await openWidget();
     act(() => send("Prepare a key for approval"));
-    const review = await screen.findByRole("region", { name: "Create a virtual key" });
+    const review = await screen.findByRole("region", { name: "Create a Virtual Key" });
     expect(review).toHaveFocus();
     view.refresh(false, false, false);
     view.refresh(false, false, true);
-    await waitFor(() => expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("region", { name: "Create a Virtual Key" })).toHaveFocus());
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
   });
 
@@ -643,7 +747,7 @@ describe("Aria Agent in the gateway", () => {
       const { client } = renderWidget(undefined, true);
       await screen.findByText("Session ready");
       await waitFor(() => expect(client.isFetching()).toBe(0));
-      expect(screen.getByRole("link", { name: "Aria Agent" })).toBeVisible();
+      expect(await screen.findByRole("link", { name: "Aria Agent" })).toBeVisible();
       expect(screen.queryByRole("region", { name: "Ask Aria Agent", hidden: true })).not.toBeInTheDocument();
       await waitFor(() => expect(screen.getByPlaceholderText("Ask Aria…")).toBeEnabled());
       act(() => send("Show my usage"));
@@ -920,7 +1024,7 @@ describe("Aria Agent in the gateway", () => {
     await openWidget();
     send("Remove the key from its team");
     const review = await screen.findByRole("region", {
-      name: "Remove a virtual key from its team without deleting the key",
+      name: "Remove a Virtual Key from its team without deleting the key",
     });
     expect(review).toHaveTextContent("team id");
     expect(review).toHaveTextContent("null");
@@ -945,7 +1049,7 @@ describe("Aria Agent in the gateway", () => {
     const view = renderWidget();
     await openWidget();
     send("Create a key for the team");
-    const review = await screen.findByRole("region", { name: "Create a virtual key" });
+    const review = await screen.findByRole("region", { name: "Create a Virtual Key" });
     expect(screen.getAllByRole("region", { name: "Aria Agent", exact: true })).toHaveLength(1);
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
     expect(within(review).getByText("Widget key")).toBeInTheDocument();
@@ -956,7 +1060,7 @@ describe("Aria Agent in the gateway", () => {
     fireEvent.click(confirm);
     expect(screen.getByRole("button", { name: "Start over" })).toBeDisabled();
     act(() => fireEvent.click(screen.getByRole("button", { name: "Start over" })));
-    expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveTextContent("Applying");
+    expect(screen.getByRole("region", { name: "Create a Virtual Key" })).toHaveTextContent("Applying");
     expect(screen.queryByRole("button", { name: "Stop request" })).not.toBeInTheDocument();
     view.refresh(false, false, false);
     view.refresh(false, false, true);
@@ -964,7 +1068,7 @@ describe("Aria Agent in the gateway", () => {
     expect(await screen.findByText("Created the key.")).toBeInTheDocument();
     expect(screen.getByText(NEW_KEY)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy generated key" })).toBeInTheDocument();
-    expect(screen.getAllByRole("region", { name: "Create a virtual key" })).toHaveLength(1);
+    expect(screen.getAllByRole("region", { name: "Create a Virtual Key" })).toHaveLength(1);
     expect(screen.getByLabelText("Aria Agent conversation")).toHaveTextContent(
       /Here is the requested change\.[\s\S]*Completed[\s\S]*Created the key\./,
     );
@@ -1040,19 +1144,20 @@ describe("Aria Agent in the gateway", () => {
   });
 
   it.each(
-    ["account", "gateway", "destination", "permission"].flatMap((transition) =>
+    ["account", "gateway", "destination", "permission", "visibility"].flatMap((transition) =>
       ["pending", "approval", "draft"].map((stage) => [transition, stage] as const),
     ),
   )("should clear the conversation when %s changes during %s", async (transition, stage) => {
     const pending = deferred<ModelReply>();
     const settings = { target: INFERENCE, status: 200 };
+    const visibility = { disable_aria: false };
     const replies = [
       answer("Old answer."),
       ...(stage === "pending" ? [pending.promise] : []),
       ...(stage === "approval" ? [toolReply("key_create", keyArguments)] : []),
       answer("Fresh session."),
     ];
-    const requests = gateway(replies, { settings });
+    const requests = gateway(replies, { settings, uiSettings: async () => json({ values: visibility }) });
     const view = renderWidget(undefined, true);
     await openWidget();
     act(() => send("Old question"));
@@ -1079,6 +1184,13 @@ describe("Aria Agent in the gateway", () => {
     } else if (transition === "destination") {
       settings.target = INFERENCE + "/updated";
       await act(async () => view.client.invalidateQueries({ queryKey: ["proxySettings"] }));
+    } else if (transition === "visibility") {
+      visibility.disable_aria = true;
+      await act(async () => view.client.invalidateQueries({ queryKey: ["uiSettings"] }));
+      await waitFor(() => expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument());
+      expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+      visibility.disable_aria = false;
+      await act(async () => view.client.invalidateQueries({ queryKey: ["uiSettings"] }));
     } else {
       session("proxy_admin_viewer", "first-admin", { premium_user: true }, "sk-session-first-admin-viewer");
       view.refresh();
@@ -1254,7 +1366,7 @@ describe("Aria Agent in the gateway", () => {
     send("Create a key");
     fireEvent.click(await screen.findByRole("button", { name: "Confirm change" }));
     expect(await screen.findByText("Check result")).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveTextContent(
+    expect(screen.getByRole("region", { name: "Create a Virtual Key" })).toHaveTextContent(
       /Check.*before trying again/,
     );
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(1);

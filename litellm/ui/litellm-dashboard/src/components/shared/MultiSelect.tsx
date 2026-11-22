@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Combobox,
@@ -22,10 +22,12 @@ export interface MultiSelectOption {
   value: string;
   description?: string;
   disabled?: boolean;
+  icon?: ReactNode;
 }
 
 interface MultiSelectProps {
   id?: string;
+  "aria-describedby"?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -46,16 +48,15 @@ const splitOnCommas = (raw: string): string[] =>
 
 const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
-  return (
-    !normalizedQuery ||
-    option.label.toLowerCase().includes(normalizedQuery) ||
-    option.value.toLowerCase().includes(normalizedQuery) ||
-    (option.description?.toLowerCase().includes(normalizedQuery) ?? false)
-  );
+  if (!normalizedQuery) return true;
+  if (option.label.toLowerCase().includes(normalizedQuery)) return true;
+  if (option.value.toLowerCase().includes(normalizedQuery)) return true;
+  return option.description?.toLowerCase().includes(normalizedQuery) ?? false;
 };
 
 export function MultiSelect({
   id,
+  "aria-describedby": describedBy,
   options,
   value = [],
   onValueChange,
@@ -91,6 +92,7 @@ export function MultiSelect({
       : safeOptions;
 
   const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
+  const inputPlaceholder = selectedOptions.length ? undefined : placeholder;
 
   const handleValueChange = (selected: MultiSelectOption[]) => {
     const next = allowCustomValues
@@ -113,23 +115,32 @@ export function MultiSelect({
       filter={matchesQuery}
       disabled={disabled || loading}
     >
-      <ComboboxChips render={<div ref={anchor} />} className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
+      <ComboboxChips
+        render={<div ref={anchor} />}
+        className={`relative min-h-8 min-w-0 py-1 text-sm has-data-[slot=combobox-clear]:pr-8 ${className ?? ""}`}
+      >
         <ComboboxValue>
           {(selected: MultiSelectOption[]) => (
             <>
               {selected.map((option) => (
-                <ComboboxChip key={option.value} aria-label={option.label}>
-                  {option.label}
+                <ComboboxChip key={option.value} aria-label={option.label} className="min-w-0 max-w-full">
+                  {option.icon && (
+                    <span aria-hidden="true" className="shrink-0">
+                      {option.icon}
+                    </span>
+                  )}
+                  <span className="truncate">{option.label}</span>
                 </ComboboxChip>
               ))}
               <ComboboxChipsInput
                 id={id}
-                placeholder={loading ? t("shared.multiSelect.loading") : placeholder}
-                className="min-w-24"
+                aria-describedby={describedBy}
+                placeholder={loading ? t("shared.multiSelect.loading") : inputPlaceholder}
+                className="min-w-8"
                 aria-label={placeholder || undefined}
               />
               {canClear(selected) && (
-                <ComboboxClear className="ml-auto self-center" aria-label={t("shared.multiSelect.clearAll")} />
+                <ComboboxClear className="absolute top-1 right-1" aria-label={t("shared.multiSelect.clearAll")} />
               )}
             </>
           )}
@@ -140,11 +151,18 @@ export function MultiSelect({
         <ComboboxList>
           {(option: MultiSelectOption) => (
             <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
-              <span className="min-w-0">
-                <span className="block truncate">{option.label}</span>
-                {option.description && (
-                  <span className="block truncate text-xs text-muted-foreground">{option.description}</span>
+              <span className="flex min-w-0 items-center gap-2">
+                {option.icon && (
+                  <span aria-hidden="true" className="shrink-0">
+                    {option.icon}
+                  </span>
                 )}
+                <span className="min-w-0">
+                  <span className="block truncate">{option.label}</span>
+                  {option.description && (
+                    <span className="block truncate text-xs text-muted-foreground">{option.description}</span>
+                  )}
+                </span>
               </span>
             </ComboboxItem>
           )}

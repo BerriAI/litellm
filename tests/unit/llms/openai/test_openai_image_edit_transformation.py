@@ -1,10 +1,14 @@
+from datetime import datetime
 from io import BufferedReader, BytesIO
-from typing import Dict
+from typing import Dict, Final
 
+import httpx
 import pytest
 
 from litellm import image_edit
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.azure.image_edit.transformation import AzureImageEditConfig
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -12,6 +16,25 @@ from litellm.types.router import GenericLiteLLMParams
 @pytest.fixture
 def image_edit_config() -> OpenAIImageEditConfig:
     return OpenAIImageEditConfig()
+
+
+@pytest.mark.parametrize("config", [OpenAIImageEditConfig(), AzureImageEditConfig()])
+def test_transform_image_edit_response_retains_svg_authoring_usage(config: OpenAIImageEditConfig) -> None:
+    svg_usage: Final = {
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 5, "total_tokens": 30,
+    }
+    logging_obj: Final = Logging(
+        model="gpt-image-2.6-flare", messages=[], stream=False, call_type="image_edit",
+        start_time=datetime(2026, 1, 1), litellm_call_id="svg-edit", function_id="svg-edit",
+    )
+    result: Final = config.transform_image_edit_response(
+        model="gpt-image-2.6-flare",
+        raw_response=httpx.Response(200, json={"created": 1234567890, "data": [], "svg_usage": svg_usage}),
+        logging_obj=logging_obj,
+    )
+    assert result.svg_usage is not None
+    assert result.svg_usage.model_dump() == svg_usage
 
 
 def test_transform_image_edit_request_basic(image_edit_config: OpenAIImageEditConfig):

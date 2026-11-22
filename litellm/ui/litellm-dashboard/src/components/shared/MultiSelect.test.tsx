@@ -69,6 +69,17 @@ describe("MultiSelect", () => {
     expect(screen.getByLabelText("beta-kb (vs-beta)")).toBeInTheDocument();
   });
 
+  it("points the input at the text that describes it", () => {
+    render(
+      <>
+        <MultiSelect options={OPTIONS} onValueChange={vi.fn()} aria-describedby="stores-help" />
+        <p id="stores-help">Limits the team to these stores.</p>
+      </>,
+    );
+
+    expect(screen.getByRole("combobox")).toHaveAccessibleDescription("Limits the team to these stores.");
+  });
+
   it("labels an unknown selected value with its raw id", () => {
     renderMultiSelect({ value: ["vs-deleted"] });
 

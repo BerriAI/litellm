@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,13 +15,14 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import scratch_database
 from integration._support.process import LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, owned_proxy_process
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES
 from psycopg import sql
 from psycopg.rows import class_row
 
 pytestmark: Final = pytest.mark.timeout(240)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
+PRISMA_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras"
 PARTITION_SCRIPT: Final = REPO_ROOT / "litellm/scripts" / "db" / "partition_spend_logs.sql"
 SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
@@ -44,6 +46,7 @@ INDEXES_IN_PLACE: Final = "Request-log indexes are all in place"
 INDEX_BUILD_LINES: Final = ("Building index", "Attached index")
 BUILD_SECONDS: Final = 60
 SPEND_LOGS_INDEXES: Final = ("LiteLLM_SpendLogs_api_key_startTime_idx", "LiteLLM_SpendLogs_litellm_call_id_idx")
+JOB_ONLY_INDEXES: Final = tuple(index.name for index in REQUEST_LOG_INDEXES if index.name not in SPEND_LOGS_INDEXES)
 POPULATED_PARTITIONS: Final = MappingProxyType(
     {
         "LiteLLM_SpendLogs_p2026_08": ("2026-08-01", "2026-09-01"),
@@ -325,7 +328,8 @@ def test_the_migration_job_leaves_a_plain_table_that_applied_the_original_index_
         job: Final = migration_job(database_url, resolver)
         assert job.returncode == 0, job.stdout + job.stderr
         assert INDEXES_IN_PLACE in job.stderr + job.stdout, job.stdout + job.stderr
-        assert "Building index" not in job.stderr + job.stdout, job.stdout + job.stderr
+        built: Final = re.findall(r"Building index (\S+) on ", job.stderr + job.stdout)
+        assert built == list(JOB_ONLY_INDEXES), job.stdout + job.stderr
         assert ledger(database_url) == {name: True for name in SHIPPED_MIGRATIONS}
         assert index_oids(database_url) == before
         assert_the_serving_proxy_boots_and_finds_the_indexes_in_place(gateway, tmp_path, database_url, resolver)
