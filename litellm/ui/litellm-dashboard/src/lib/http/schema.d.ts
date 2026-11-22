@@ -54984,6 +54984,8 @@ export interface components {
         UserAPIKeyAuth: {
             /** Access Group Ids */
             access_group_ids?: string[] | null;
+            /** Agent Binding Revision */
+            agent_binding_revision?: string | null;
             /** Agent Id */
             agent_id?: string | null;
             /**
