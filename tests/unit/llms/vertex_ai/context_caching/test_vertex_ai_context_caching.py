@@ -2591,19 +2591,21 @@ def _recording_gemini_client(calls: list[httpx.Request]) -> HTTPHandler:
     return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_gemini_route(calls))))
 
 
-async def _gemini_calls(messages: list[AllMessageValues], use_async: bool) -> list[httpx.Request]:
+async def _gemini_calls(
+    messages: list[AllMessageValues], use_async: bool, model: str = "gemini/gemini-flash-latest"
+) -> list[httpx.Request]:
     calls: Final[list[httpx.Request]] = []
     transport: Final = httpx.MockTransport(_gemini_route(calls))
     if use_async:
         await litellm.acompletion(
-            model="gemini/gemini-flash-latest",
+            model=model,
             messages=messages,
             api_key="test-key",
             client=AsyncHTTPHandler(transport=transport),
         )
     else:
         litellm.completion(
-            model="gemini/gemini-flash-latest",
+            model=model,
             messages=messages,
             api_key="test-key",
             client=HTTPHandler(client=httpx.Client(transport=transport)),
@@ -2721,6 +2723,22 @@ def _button_question(image_url: ChatCompletionImageUrlObject) -> AllMessageValue
     }
 
 
+def _button_link_opening(url: str) -> tuple[AllMessageValues, ...]:
+    return _button_question({"url": url}), {"role": "assistant", "content": "Deploy."}
+
+
+def _system_link_opening(url: str) -> tuple[AllMessageValues, ...]:
+    return (
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Match our house style."},
+                {"type": "image_url", "image_url": {"url": url}},
+            ],
+        },
+    )
+
+
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 async def test_a_web_image_before_the_mark_reaches_the_gemini_cache_inlined(
     local_model_cost_map: None, served_images: list[str], use_async: bool
@@ -2794,6 +2812,29 @@ async def test_an_image_in_a_cached_system_message_is_never_downloaded(
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_system_image_is_inlined_into_the_gemini_cache_when_the_system_prompt_is_sent_as_a_turn(
+    local_model_cost_map: None, served_images: list[str], use_async: bool
+) -> None:
+    image_url: Final = f"https://images.example.com/house-style-{use_async}.png"
+    calls: Final = await _gemini_calls(
+        _conversation_cached_through_notes(*_system_link_opening(image_url)),
+        use_async,
+        model="gemini/house-style-tuned-model",
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert served_images == [image_url]
+    assert "system_instruction" not in created
+    assert created["contents"][0]["parts"][1] == {
+        "inline_data": {"data": base64.b64encode(_SERVED_IMAGE).decode(), "mime_type": "image/png"}
+    }
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 async def test_a_files_api_file_before_the_mark_reaches_the_gemini_cache_as_a_link(
     local_model_cost_map: None, served_images: list[str], use_async: bool
 ) -> None:
@@ -2814,23 +2855,9 @@ async def test_a_files_api_file_before_the_mark_reaches_the_gemini_cache_as_a_li
     assert created["contents"][0]["parts"][1] == {"file_data": {"mime_type": "image/png", "file_uri": file_uri}}
 
 
-@pytest.mark.parametrize(
-    "image_url",
-    [
-        {"url": "https://images.example.com/button.png"},
-        {"url": "https://www.youtube.com/watch?v=jNQXAC9IVRw", "format": "video/mp4"},
-    ],
-    ids=["image-link", "youtube-link"],
-)
-@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-async def test_a_web_link_vertex_fetches_itself_leaves_the_request_uncached_with_its_tools(
-    local_model_cost_map: None, served_images: list[str], image_url: ChatCompletionImageUrlObject, use_async: bool
-) -> None:
-    messages: Final = _conversation_cached_through_notes(
-        _button_question(image_url), {"role": "assistant", "content": "Deploy."}
-    )
-    tools: Final = [{"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]}]
-    optional_params: Final[dict[str, object]] = {"tools": tools}
+async def _vertex_cache_check(
+    messages: list[AllMessageValues], optional_params: dict[str, object], model: str, use_async: bool
+) -> tuple[tuple[list[AllMessageValues], dict, str | None], list[httpx.Request]]:
     calls: Final[list[httpx.Request]] = []
     transport: Final = httpx.MockTransport(_gemini_route(calls))
     request: Final = {
@@ -2838,7 +2865,7 @@ async def test_a_web_link_vertex_fetches_itself_leaves_the_request_uncached_with
         "optional_params": optional_params,
         "api_key": "",
         "api_base": None,
-        "model": "gemini-2.5-flash",
+        "model": model,
         "timeout": 30.0,
         "logging_obj": MagicMock(),
         "custom_llm_provider": "vertex_ai",
@@ -2846,7 +2873,6 @@ async def test_a_web_link_vertex_fetches_itself_leaves_the_request_uncached_with
         "vertex_location": "us-central1",
         "vertex_auth_header": "test-token",
     }
-
     result: Final = (
         await ContextCachingEndpoints().async_check_and_create_cache(
             client=AsyncHTTPHandler(transport=transport), **request
@@ -2856,7 +2882,78 @@ async def test_a_web_link_vertex_fetches_itself_leaves_the_request_uncached_with
             client=HTTPHandler(client=httpx.Client(transport=transport)), **request
         )
     )
+    return result, calls
+
+
+@pytest.mark.parametrize(
+    ("model", "opening"),
+    [
+        ("gemini-2.5-flash", _button_link_opening("https://images.example.com/button.png")),
+        (
+            "gemini-2.5-flash",
+            (
+                _button_question({"url": "https://www.youtube.com/watch?v=jNQXAC9IVRw", "format": "video/mp4"}),
+                {"role": "assistant", "content": "Deploy."},
+            ),
+        ),
+        (
+            "gemini-2.5-flash",
+            (
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this spec."},
+                        {"type": "file", "file": {"file_id": "https://docs.example.com/spec.pdf"}},
+                    ],
+                },
+                {"role": "assistant", "content": "Deploy."},
+            ),
+        ),
+        ("house-style-tuned-model", _system_link_opening("https://images.example.com/house-style.png")),
+    ],
+    ids=["image-link", "typed-video-link", "pdf-file-link", "system-image-link-sent-as-a-turn"],
+)
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_link_vertex_fetches_itself_leaves_the_request_uncached_with_its_tools(
+    local_model_cost_map: None,
+    served_images: list[str],
+    model: str,
+    opening: tuple[AllMessageValues, ...],
+    use_async: bool,
+) -> None:
+    messages: Final = _conversation_cached_through_notes(*opening)
+    tools: Final = [{"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]}]
+
+    result, calls = await _vertex_cache_check(messages, {"tools": tools}, model, use_async)
 
     assert result == (messages, {"tools": tools}, None)
     assert served_images == []
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("opening_for", "url_template", "downloads"),
+    [
+        (_system_link_opening, "https://images.example.com/vertex-house-style-{}.png", 0),
+        (_button_link_opening, "http://images.example.com/plain-button-{}.png", 1),
+        (_button_link_opening, "https://images.example.com/untyped-button-{}", 1),
+    ],
+    ids=["system-image-link", "plain-http-image-link", "untyped-image-link"],
+)
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_vertex_caches_a_prefix_whose_web_media_it_downloads_or_reads_as_instruction(
+    local_model_cost_map: None,
+    served_images: list[str],
+    opening_for: Callable[[str], tuple[AllMessageValues, ...]],
+    url_template: str,
+    downloads: int,
+    use_async: bool,
+) -> None:
+    url: Final = url_template.format(use_async)
+
+    result, _ = await _vertex_cache_check(
+        _conversation_cached_through_notes(*opening_for(url)), {}, "gemini-2.5-flash", use_async
+    )
+
+    assert result[2] == "cachedContents/created"
+    assert served_images == [url] * downloads

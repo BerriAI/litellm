@@ -24,7 +24,7 @@ from litellm.llms.openai.openai import AllMessageValues
 from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
 
-from ..common_utils import GEMINI_FILES_API_URI_PREFIX, VertexAIError, get_vertex_base_url
+from ..common_utils import GEMINI_FILES_API_URI_PREFIX, VertexAIError, get_supports_system_message, get_vertex_base_url
 from ..gemini.transformation import should_inline_remote_media
 from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
@@ -129,43 +129,63 @@ def _prompt_cache_min_tokens(models: Sequence[str], custom_llm_provider: str) ->
     )
 
 
-def _conversation_turns(messages: Iterable[AllMessageValues]) -> Iterator[AllMessageValues]:
-    return (message for message in messages if message["role"] != "system")
+def _is_conversation_turn(message: AllMessageValues, system_is_instruction: bool) -> bool:
+    return message["role"] != "system" or not system_is_instruction
+
+
+def _conversation_turns(
+    messages: Iterable[AllMessageValues], system_is_instruction: bool
+) -> Iterator[AllMessageValues]:
+    return (message for message in messages if _is_conversation_turn(message, system_is_instruction))
 
 
 def _with_conversation_turns(
-    messages: Sequence[AllMessageValues], turns: Iterable[AllMessageValues]
+    messages: Sequence[AllMessageValues], turns: Iterable[AllMessageValues], system_is_instruction: bool
 ) -> Sequence[AllMessageValues]:
     remaining_turns: Final = iter(turns)
-    return [message if message["role"] == "system" else next(remaining_turns) for message in messages]
+    return [
+        next(remaining_turns) if _is_conversation_turn(message, system_is_instruction) else message
+        for message in messages
+    ]
 
 
 def _links_web_media_vertex_fetches(
-    cached_messages: Sequence[AllMessageValues], custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"]
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> bool:
     should_inline: Final = should_inline_remote_media(custom_llm_provider)
+    system_is_instruction: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     return has_remote_media(
-        _conversation_turns(cached_messages),
+        _conversation_turns(cached_messages, system_is_instruction),
         lambda media: not should_inline(media) and not media.url.startswith(GEMINI_FILES_API_URI_PREFIX),
     )
 
 
 def _inline_cached_turns(
-    cached_messages: Sequence[AllMessageValues], custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"]
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> Sequence[AllMessageValues]:
+    system_is_instruction: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     turns: Final = inline_remote_media(
-        list(_conversation_turns(cached_messages)), should_inline=should_inline_remote_media(custom_llm_provider)
+        list(_conversation_turns(cached_messages, system_is_instruction)),
+        should_inline=should_inline_remote_media(custom_llm_provider),
     )
-    return _with_conversation_turns(cached_messages, turns)
+    return _with_conversation_turns(cached_messages, turns, system_is_instruction)
 
 
 async def _async_inline_cached_turns(
-    cached_messages: Sequence[AllMessageValues], custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"]
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> Sequence[AllMessageValues]:
+    system_is_instruction: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     turns: Final = await async_inline_remote_media(
-        list(_conversation_turns(cached_messages)), should_inline=should_inline_remote_media(custom_llm_provider)
+        list(_conversation_turns(cached_messages, system_is_instruction)),
+        should_inline=should_inline_remote_media(custom_llm_provider),
     )
-    return _with_conversation_turns(cached_messages, turns)
+    return _with_conversation_turns(cached_messages, turns, system_is_instruction)
 
 
 def _context_caching_skip_reason(
@@ -186,7 +206,7 @@ def _context_caching_skip_reason(
             "Vertex AI context caching: cached message block ends on a model turn once "
             "system messages are extracted, which the cachedContents API rejects."
         )
-    if _links_web_media_vertex_fetches(cached_messages, custom_llm_provider):
+    if _links_web_media_vertex_fetches(cached_messages, cache_model, custom_llm_provider):
         return (
             "Vertex AI context caching: a cached turn links web media that Vertex fetches itself, and the "
             "cachedContents API only takes gs:// links."
@@ -563,7 +583,7 @@ class ContextCachingEndpoints(VertexBase):
         ## TRANSFORM REQUEST
         cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
             model=target.model,
-            messages=list(_inline_cached_turns(cached_messages, custom_llm_provider)),
+            messages=list(_inline_cached_turns(cached_messages, target.model, custom_llm_provider)),
             cache_key=generated_cache_key,
             custom_llm_provider=custom_llm_provider,
             vertex_project=target.project,
@@ -715,7 +735,7 @@ class ContextCachingEndpoints(VertexBase):
             ## TRANSFORM REQUEST
             cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
                 model=target.model,
-                messages=list(await _async_inline_cached_turns(cached_messages, custom_llm_provider)),
+                messages=list(await _async_inline_cached_turns(cached_messages, target.model, custom_llm_provider)),
                 cache_key=generated_cache_key,
                 custom_llm_provider=custom_llm_provider,
                 vertex_project=target.project,
