@@ -945,6 +945,9 @@ class CustomStreamWrapper:
         """
         Strip the role from the delta.
         """
+        self._choice_indexes_given_role = self._choice_indexes_given_role | frozenset(
+            choice.index for choice in model_response.choices[1:] if choice.delta.role is not None
+        )
         if self._claim_role_for_choice(model_response.choices[0].index):
             model_response.choices[0].delta["role"] = "assistant"
         elif hasattr(model_response.choices[0].delta, "role"):
