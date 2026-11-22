@@ -670,3 +670,23 @@ def test_spend_metadata_merge_reads_request_metadata_that_is_a_read_only_mapping
     )
 
     assert merged == {"user_api_key_hash": "hash", "model_group": "claude"}
+
+
+@pytest.mark.parametrize(
+    ("planted", "logged"),
+    [
+        ({"user_api_key_hash": "hash"}, {"team": "search"}),
+        ({"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "planted"}}, {"team": "planted"}),
+    ],
+)
+def test_a_planted_litellm_metadata_keeps_the_callers_spend_logs_metadata(
+    planted: dict[str, object], logged: dict[str, str]
+) -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "search"}},
+            "litellm_metadata": planted,
+        }
+    }
+
+    assert get_litellm_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == logged

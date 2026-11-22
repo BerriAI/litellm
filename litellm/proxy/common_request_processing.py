@@ -4870,12 +4870,12 @@ class ProxyBaseLLMRequestProcessing:
             if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
                 # First check direct model_info path (set by router.py with selected deployment)
                 model_info = _logging_obj.litellm_params.get("model_info") or {}
-                model_id = model_info.get("id", None)
+                model_id = model_info.get("id", None) if isinstance(model_info, dict) else None
 
                 # Fallback to nested metadata path
                 if not model_id:
                     metadata = _logging_obj.litellm_params.get("metadata") or {}
-                    model_info = metadata.get("model_info") or {}
+                    model_info = metadata.get("model_info") or {} if isinstance(metadata, dict) else {}
                     model_id = model_info.get("id", None)
 
             # 2. Fallback to kwargs (initial)

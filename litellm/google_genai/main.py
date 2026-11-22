@@ -71,8 +71,8 @@ def _custom_generate_content_handler(provider: str) -> CustomLLM | None:
 def _start_endpoint_attempt(logging_obj: LiteLLMLoggingObj | None, marker: str, is_async: bool) -> None:
     if logging_obj is None:
         return
-    logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
     logging_obj.start_endpoint_attempt()
+    logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
 
 
 class GenerateContentSetupResult(LiteLLMBaseModel):

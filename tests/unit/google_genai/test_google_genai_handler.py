@@ -374,6 +374,7 @@ class _LoggedEvents(CustomLogger):
         self.response_costs: list[float] = []
         self.session_ids: list[str | None] = []
         self.messages: list[object] = []
+        self.prices: list[tuple[object, object]] = []
 
     def _record(self, outcome: str, kwargs: _CallbackKwargs) -> None:
         payload: Final = kwargs["standard_logging_object"]
@@ -381,6 +382,9 @@ class _LoggedEvents(CustomLogger):
         self.response_costs.append(payload["response_cost"])
         self.session_ids.append(kwargs["litellm_params"].get("litellm_session_id"))
         self.messages.append(payload["messages"])
+        self.prices.append(
+            (kwargs["litellm_params"].get("input_cost_per_token"), kwargs["litellm_params"].get("output_cost_per_token"))
+        )
 
     def log_success_event(
         self, kwargs: _CallbackKwargs, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
@@ -1270,6 +1274,66 @@ async def test_generate_content_fallback_to_gemini_logs_the_messages_a_direct_ge
         )
         direct: Final = await logged_messages("gemini-group", "direct-gemini-call")
         fallback: Final = await logged_messages("grok-group", "fallback-gemini-call")
+
+    assert fallback == direct
+
+
+@pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
+@pytest.mark.asyncio
+async def test_generate_content_fallback_to_gemini_logs_the_pricing_a_direct_gemini_call_logs(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str, stream: bool
+):
+    from litellm.litellm_core_utils.rules import Rules
+    from litellm.utils import function_setup
+
+    logged: Final = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    contents: Final = [{"role": "user", "parts": [{"text": "Hello"}]}]
+    router: Final = litellm.Router(
+        model_list=[
+            _grok_deployment(),
+            {
+                "model_name": "gemini-group",
+                "litellm_params": {"model": "gemini/gemini-2.0-flash", "api_base": "http://gemini.test", "api_key": "k"},
+            },
+        ],
+        fallbacks=[{"grok-group": ["gemini-group"]}],
+    )
+
+    async def logged_prices(model: str, call_id: str) -> tuple[object, object]:
+        logging_obj, _ = function_setup(
+            entrypoint, Rules(), datetime.datetime.now(), model=model, contents=contents, litellm_call_id=call_id
+        )
+        response: Final = await getattr(router, entrypoint)(
+            model=model, contents=contents, litellm_call_id=call_id, litellm_logging_obj=logging_obj
+        )
+        if stream:
+            await _drain(response)
+        await await_until(
+            lambda: any(event[0] == "success" and event[2] == call_id for event in logged.events),
+            message=f"{call_id} success was logged",
+        )
+        return next(
+            prices for event, prices in zip(logged.events, logged.prices) if event[0] == "success" and event[2] == call_id
+        )
+
+    gemini_reply: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 4},
+    }
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "upstream overloaded"}})
+        )
+        upstream.route(host="gemini.test").mock(
+            return_value=httpx.Response(
+                200,
+                content=f"data: {json.dumps(gemini_reply)}\n\n".encode() if stream else json.dumps(gemini_reply).encode(),
+                headers={"content-type": "text/event-stream" if stream else "application/json"},
+            )
+        )
+        direct: Final = await logged_prices("gemini-group", "direct-gemini-call")
+        fallback: Final = await logged_prices("grok-group", "fallback-gemini-call")
 
     assert fallback == direct
 

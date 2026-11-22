@@ -13,6 +13,7 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -74,6 +75,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
     proxy_stamped_used_client_oauth_token,
@@ -560,6 +562,13 @@ def mask_api_base_credentials(api_base: str) -> str:
     return api_base[:key_end] + "*" * 5 + api_base[-4:]
 
 
+@dataclass(frozen=True, slots=True)
+class EndpointRequest:
+    messages: Sequence[object] | None
+    stream_options: object
+    custom_pricing: bool
+
+
 def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, datetime.datetime):
         return moment.timestamp()
@@ -625,6 +634,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def _model_call_details_view(self) -> Mapping[str, object]:
         return self.model_call_details
 
+    @property
+    def _litellm_params_view(self) -> Mapping[str, object]:
+        params: Final[object] = self.litellm_params
+        return params if is_str_keyed_dict(params) else {}
+
     def __init__(
         self,
         model: str,
@@ -669,7 +683,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.logged_call_type: str | None = None
-        self.endpoint_request: tuple[Sequence[object] | None, object] | None = None
+        self.endpoint_request: EndpointRequest | None = None
         self.relays_llm_passthrough: Final = call_type in (
             CallTypes.llm_passthrough_route.value,
             CallTypes.allm_passthrough_route.value,
@@ -977,11 +991,11 @@ class Logging(LiteLLMLoggingBaseClass):
         if not hasattr(self, "litellm_params"):
             return None
         for key in ("litellm_metadata", "metadata"):
-            meta = self.litellm_params.get(key, {}) or {}
-            info = meta.get("model_info", {}) or {}
+            meta = as_str_mapping(self._litellm_params_view.get(key)) or {}
+            info = as_str_mapping(meta.get("model_info")) or {}
             model_id = info.get("id")
             if model_id is not None:
-                return model_id
+                return str(model_id)
         return None
 
     def get_deployment_model_for_cost(self) -> str | None:
@@ -2402,7 +2416,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self, messages: Sequence[AllMessageValues], stream_options: ChatCompletionStreamOptionsParam | None
     ) -> None:
         if self.endpoint_request is None:
-            self.endpoint_request = (self.messages, self.stream_options)
+            self.endpoint_request = EndpointRequest(
+                messages=self.messages,
+                stream_options=self.stream_options,
+                custom_pricing=self.custom_pricing,
+            )
+            self.endpoint_litellm_params = dict(self._litellm_params_view)
         self.messages = messages
         self.model_call_details["messages"] = messages
         self.stream_options = stream_options
@@ -2411,11 +2430,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self.logged_call_type = None
         if self.endpoint_request is None:
             return
-        messages, stream_options = self.endpoint_request
+        endpoint_request: Final = self.endpoint_request
         self.endpoint_request = None
-        self.messages = messages
-        self.model_call_details["messages"] = messages
-        self.stream_options = stream_options
+        self.messages = endpoint_request.messages
+        self.model_call_details["messages"] = endpoint_request.messages
+        self.stream_options = endpoint_request.stream_options
+        self.litellm_params = self.endpoint_litellm_params
+        self.model_call_details["litellm_params"] = self.litellm_params
+        self.custom_pricing = endpoint_request.custom_pricing
 
     def payload_call_type(self) -> str:
         if self.logged_call_type is not None:
@@ -3538,8 +3560,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
-            litellm_params = self.litellm_params or {}
-            litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
+            litellm_metadata: Final = as_str_mapping(self._litellm_params_view.get("litellm_metadata")) or {}
             if (
                 litellm_metadata.get("batch_ignore_default_logging", False) is True
             ):  # polling job will query these frequently, don't spam db logs
