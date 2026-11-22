@@ -3276,6 +3276,26 @@ def test_assistant_image_item_without_url_takes_no_history_signature() -> None:
             },
             id="non-string-image-url",
         ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{**_generated_image("Y2F0"), "provider_specific_fields": {"thought_signature": 123}}],
+            },
+            id="non-string-image-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": 123, "index": 0, "type": "image_url"}],
+            },
+            id="non-object-image-url",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": "Here is your cat.", "images": ["data:image/png;base64,Y2F0"]},
+            id="non-object-image-entry",
+        ),
     ],
 )
 @pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
@@ -3311,6 +3331,34 @@ def test_malformed_assistant_image_history_answers_bad_request(
             },
             (("Here is your cat.", None), ("Y2F0", "sig-cat")),
             id="non-string-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{**_generated_image("Y2F0"), "provider_specific_fields": {"thought_signature": 123}}],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat")),
+            id="non-string-image-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": 123, "index": 0, "type": "image_url"}, _generated_image("Y2F0", "sig-cat")],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-object-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": ["data:image/png;base64,Y2F0", _generated_image("Y2F0", "sig-cat")],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-object-image-entry",
         ),
     ],
 )
@@ -3360,6 +3408,33 @@ def test_assistant_image_signatures_are_only_sent_to_an_image_model(
     custom_llm_provider: str,
 ) -> None:
     assert _model_turn_signatures(assistant_message, model=model, custom_llm_provider=custom_llm_provider) == expected
+
+
+def test_assistant_image_with_string_image_url_keeps_its_signature() -> None:
+    assistant_message: Final = {
+        "role": "assistant",
+        "content": None,
+        "images": [{**_generated_image("Y2F0", "sig-cat"), "image_url": "data:image/png;base64,Y2F0"}],
+    }
+
+    assert _model_turn_signatures(assistant_message) == (("Y2F0", "sig-cat"),)
+
+
+def test_image_model_deployment_registered_as_chat_still_gets_its_image_signature() -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "image-editor",
+                "litellm_params": {"model": "vertex_ai/gemini-3.1-flash-image"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+    assistant_message: Final = {"role": "assistant", "content": None, "images": [_generated_image("Y2F0", "sig-cat")]}
+
+    assert _model_turn_signatures(
+        assistant_message, model="gemini-3.1-flash-image", custom_llm_provider="vertex_ai"
+    ) == (("Y2F0", "sig-cat"),)
 
 
 @pytest.mark.parametrize(
