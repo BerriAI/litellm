@@ -21405,13 +21405,47 @@
     "opening": "正在打开 Lens…",
     "frameTitle": "Lens",
     "unsupported": {
-      "title": "请升级 Lens 后在此使用",
-      "body": "此页面显示的是该网关所连接的 Lens 服务提供的 Lens 界面。当前连接的 Lens 版本较旧，尚不能在控制台内显示。请升级 Lens，或在 Lens 自己的地址打开它。",
-      "open": "打开 Lens"
+      "title": "更新 Lens 以在此使用",
+      "body": "Lens 已连接，但此版本不支持在网关内打开。请更新 Lens 部署，以在此使用工作区。",
+      "open": "打开 Lens",
+      "noBrowserUrl": "如需单独打开 Lens，请让管理员配置浏览器可访问的 Lens 地址。"
     },
     "unavailable": {
-      "title": "无法连接 Lens",
-      "body": "此页面显示的是该网关所连接的 Lens 服务提供的 Lens 界面。网关无法加载它。请检查是否已设置 LITELLM_LENS_URL，以及 Lens 是否正在运行。"
+      "title": "无法连接到 Lens",
+      "body": "无法验证 Lens 连接。如果已配置 Lens，请检查服务是否正在运行以及网关是否具有连接凭据，然后重试。"
+    },
+    "retry": "检查连接",
+    "docs": "Lens 文档",
+    "introduction": {
+      "title": "帮助智能体持续改进的网关",
+      "description": "将记录的智能体运行转化为关联具体步骤的发现，了解发生了什么以及如何改进。",
+      "setup": "设置 Lens",
+      "tracing": "追踪",
+      "sampleTrace": "示例追踪 · 14.2s",
+      "timeline": "示例追踪时间线",
+      "failed": "失败",
+      "benchmarkError": "错误：基准测试运行器不可用 (503)",
+      "sampleAnswer": "“对于您的工作负载，列存储比行存储快 40%。”",
+      "findings": "Lens 发现",
+      "sampleRuns": "已审查 500 次示例运行",
+      "claimTitle": "声称未经测量的数值",
+      "claimBody": "基准测试失败后仍报告性能提升。",
+      "claimQuote": "“…对于您的工作负载，比行存储快 40%。”",
+      "claimAction": "报告基准测试失败，而不是估算结果。",
+      "claimPriority": "38 次关联运行 · 高优先级",
+      "followupTitle": "承诺跟进后却停止运行",
+      "followupBody": "订单查询超时后，智能体承诺继续检查，却结束了运行。",
+      "followupPriority": "12 次关联运行 · 中优先级",
+      "nextStep": "下一步",
+      "highlight": "{{name}}，{{duration}} 秒。突出显示相关发现",
+      "output": "{{name}} · 输出",
+      "duration": "{{duration}}s",
+      "gateway": "LiteLLM 网关",
+      "agents": "智能体集群",
+      "agentSteps": "每次运行，每个记录的步骤",
+      "infrastructure": "集中管理，运行于您的基础设施",
+      "findProblems": "找到需要修复的问题",
+      "nextRun": "为下次运行提供洞察"
     }
   }
 }

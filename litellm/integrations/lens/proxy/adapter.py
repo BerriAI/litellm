@@ -3,6 +3,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
+from ipaddress import ip_address
 from typing import Annotated, Final
 from urllib.parse import urlencode, urlsplit
 
@@ -116,6 +117,35 @@ class ServiceConnection(BaseModel):
     status: ServiceStatus
     configured: bool = False
     release: str = ""
+    browser_url: str = ""
+
+
+def _local_host(host: str) -> bool:
+    normalized: Final = host.rstrip(".").lower()
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    try:
+        address: Final = ip_address(normalized)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
+def lens_browser_url(lens_url: str, gateway_url: str) -> str:
+    try:
+        target: Final = urlsplit(lens_url)
+        gateway: Final = urlsplit(gateway_url)
+        if target.scheme not in ("http", "https") or not target.hostname:
+            return ""
+        if target.username is not None or target.password is not None:
+            return ""
+        if target.query or target.fragment:
+            return ""
+        if _local_host(target.hostname) and not _local_host(gateway.hostname or ""):
+            return ""
+        return lens_url.rstrip("/")
+    except ValueError:
+        return ""
 
 
 async def service_status(connection: Connection, client: httpx.AsyncClient) -> ServiceStatus:
@@ -130,7 +160,7 @@ async def service_status(connection: Connection, client: httpx.AsyncClient) -> S
     return ServiceStatus()
 
 
-async def service_connection(identity: Identity) -> ServiceConnection:
+async def service_connection(identity: Identity, gateway_url: str = "") -> ServiceConnection:
     connection: Final = Connection.from_env()
     status: Final = (
         await service_status(connection, connection.remote.control_client()) if connection else ServiceStatus()
@@ -141,6 +171,7 @@ async def service_connection(identity: Identity) -> ServiceConnection:
         status=status,
         configured=bool(os.environ.get("LITELLM_LENS_URL")),
         release=status.release,
+        browser_url=lens_browser_url(os.environ.get("LITELLM_LENS_PUBLIC_URL", ""), gateway_url),
     )
 
 

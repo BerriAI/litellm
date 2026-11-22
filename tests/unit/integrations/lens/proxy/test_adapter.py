@@ -19,7 +19,6 @@ from litellm.integrations.lens.proxy.adapter import (
 )
 from litellm.integrations.lens.proxy.buffering import request_body
 from litellm.integrations.lens.proxy.pages import forward, lens_request
-from litellm.integrations.lens.proxy.buffering import BufferBudget
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
@@ -381,6 +380,36 @@ def test_lens_login_redirects_a_signed_in_user_to_lens_with_a_sign_in_only_token
     }
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["referrer-policy"] == "no-referrer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gateway_url", "lens_url", "browser_url"),
+    (
+        ("https://gateway.test", "https://lens.test/team-a/", "https://lens.test/team-a"),
+        ("http://localhost:4000", "http://localhost:4318", "http://localhost:4318"),
+        ("http://127.0.0.1:4000", "http://[::1]:4318", "http://[::1]:4318"),
+        ("https://gateway.test", "http://localhost:4318", ""),
+        ("https://gateway.test", "http://127.2.3.4:4318", ""),
+        ("https://gateway.test", "http://[::1]:4318", ""),
+        ("https://gateway.test", "http://0.0.0.0:4318", ""),
+        ("https://gateway.test", "http://lens.localhost.:4318", ""),
+        ("https://gateway.test", "file:///tmp/lens", ""),
+        ("https://gateway.test", "https://user:password@lens.test", ""),
+        ("https://gateway.test", "https://lens.test?token=fixture", ""),
+        ("https://gateway.test", "https://lens.test#fixture", ""),
+        ("https://gateway.test", "http://[invalid", ""),
+        ("https://gateway.test", "", ""),
+    ),
+)
+async def test_service_check_only_offers_browser_destinations_for_the_current_gateway(
+    monkeypatch: pytest.MonkeyPatch, identity: Identity, gateway_url: str, lens_url: str, browser_url: str
+) -> None:
+    monkeypatch.delenv("LENS_GATEWAY_SECRET", raising=False)
+    monkeypatch.setenv("LITELLM_LENS_PUBLIC_URL", lens_url)
+    status: Final = await service_connection(identity, gateway_url)
+    assert status.browser_url == browser_url
+    assert status.url == lens_url.rstrip("/")
 
 
 def test_lens_login_token_names_the_signed_in_user_and_request_tokens_never_do(
