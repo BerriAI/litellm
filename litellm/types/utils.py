@@ -4857,6 +4857,7 @@ class LlmProviders(str, Enum):
     ASSEMBLYAI = "assemblyai"
     AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
+    CROWLLM = "crowllm"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
     GRADIENT_AI = "gradient_ai"
