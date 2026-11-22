@@ -4,7 +4,6 @@ from typing import Final
 
 import pytest
 
-from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_request_body_for_spend_logs_payload
 from litellm.responses.litellm_completion_transformation.provider_signed_state import (
@@ -37,6 +36,7 @@ def test_an_altered_thinking_block_is_left_out_and_its_whole_neighbors_stay(alte
         "provider_specific_fields": {"thinking_blocks": [altered_block]},
     }
 
+    assert holds_altered_provider_state({"choices": [{"message": message}]})
     assert without_altered_provider_state({"choices": [{"message": message}]}) == {
         "choices": [
             {
@@ -53,15 +53,16 @@ def test_an_altered_thinking_block_is_left_out_and_its_whole_neighbors_stay(alte
 @pytest.mark.parametrize("key", ["thought_signature", "response_thought_signature"])
 def test_an_altered_thought_signature_is_left_out_and_the_call_it_signed_stays(key: str):
     call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    stored: Final = {**call, "provider_specific_fields": {key: _cut(_LONG), "a": 1}}
 
-    replayed: Final = without_altered_provider_state({**call, "provider_specific_fields": {key: _cut(_LONG), "a": 1}})
-
-    assert replayed == {**call, "provider_specific_fields": {"a": 1}}
+    assert holds_altered_provider_state(stored)
+    assert without_altered_provider_state(stored) == {**call, "provider_specific_fields": {"a": 1}}
 
 
 def test_altered_text_signatures_are_left_out_of_the_message_they_signed():
     fields: Final = {"thought_signatures": ["EmwKAhgB==", _cut(_LONG)], "grounding": "kept"}
 
+    assert holds_altered_provider_state({"content": "954", "provider_specific_fields": fields})
     assert without_altered_provider_state({"content": "954", "provider_specific_fields": fields}) == {
         "content": "954",
         "provider_specific_fields": {"grounding": "kept"},
@@ -76,6 +77,7 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
         "encrypted_content": _cut(json.dumps([{"type": "thinking", "thinking": "Count.", "signature": _LONG}])),
     }
 
+    assert holds_altered_provider_state([reasoning])
     assert without_altered_provider_state([reasoning]) == [
         {key: value for key, value in reasoning.items() if key != "encrypted_content"}
     ]
@@ -96,7 +98,6 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
         ),
         pytest.param({"id": _cut(_LONG), "type": "function"}, id="cut-unsigned-call-id"),
         pytest.param([{**_WHOLE_THINKING, "thinking": f"It holds {_cut(_LONG)} now."}], id="signed-text-quoting-a-cut"),
-        pytest.param([{**_WHOLE_THINKING, "thinking": REDACTED_BY_LITELM_STRING}], id="signed-text-naming-a-mask"),
         pytest.param([{"type": ["string", "null"]}, {"type": {"enum": ["thinking"]}}], id="schemas-typed-by-no-name"),
         pytest.param(_cut(_LONG), id="plain-string-input"),
         pytest.param(None, id="nothing-stored"),
@@ -108,25 +109,29 @@ def test_whole_state_and_unsigned_text_replay_unchanged(stored: object):
 
 
 @pytest.mark.parametrize(
-    "item",
+    ("item", "loses_a_signature"),
     [
-        pytest.param({"id": "", "type": "function"}, id="chat-tool-call"),
-        pytest.param({"call_id": "", "type": "function_call"}, id="function-call"),
-        pytest.param({"call_id": "", "type": "function_call_output"}, id="function-call-output"),
-        pytest.param({"id": "", "type": "tool_use"}, id="tool-use"),
-        pytest.param({"tool_use_id": "", "type": "tool_result"}, id="tool-result"),
-        pytest.param({"tool_call_id": "", "role": "tool"}, id="chat-tool-output"),
+        pytest.param({"id": "", "type": "function"}, True, id="chat-tool-call"),
+        pytest.param({"call_id": "", "type": "function_call"}, True, id="function-call"),
+        pytest.param({"call_id": "", "type": "custom_tool_call"}, True, id="custom-tool-call"),
+        pytest.param({"id": "", "type": "tool_use"}, True, id="tool-use"),
+        pytest.param({"call_id": "", "type": "function_call_output", "output": "14"}, False, id="function-call-output"),
+        pytest.param({"call_id": "", "type": "apply_patch_call_output"}, False, id="call-output-that-says-nothing"),
+        pytest.param({"tool_use_id": "", "type": "tool_result"}, False, id="tool-result"),
+        pytest.param({"tool_call_id": "", "role": "tool"}, False, id="chat-tool-output"),
+        pytest.param({"id": ""}, False, id="typed-by-no-name"),
     ],
 )
 @pytest.mark.parametrize("call_id", ["call_1", ""], ids=["id-and-signature", "signature-only"])
 @pytest.mark.parametrize("signature", [_LONG, f"A{THOUGHT_SIGNATURE_SEPARATOR}{_LONG}"], ids=["plain", "nested"])
 def test_a_cut_signed_call_id_replays_as_the_unsigned_id_it_starts_with(
-    item: dict[str, str], call_id: str, signature: str
+    item: dict[str, str], loses_a_signature: bool, call_id: str, signature: str
 ):
     cut_id: Final = _cut(f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}{signature}")
     stored: Final = {key: value or cut_id for key, value in item.items()}
 
     assert without_altered_provider_state([stored]) == [{key: value or call_id for key, value in item.items()}]
+    assert holds_altered_provider_state([stored]) == loses_a_signature
 
 
 @pytest.mark.parametrize("key", [0, "a"], ids=["lists", "objects"])

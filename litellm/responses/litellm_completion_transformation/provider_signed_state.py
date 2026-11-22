@@ -18,6 +18,7 @@ THOUGHT_SIGNATURE_KEYS: Final = frozenset({"thought_signature", "thought_signatu
 SIGNED_TOOL_CALL_ID_KEYS: Final = frozenset({"id", "call_id"})
 _REPLAYED_TOOL_CALL_ID_KEYS: Final = SIGNED_TOOL_CALL_ID_KEYS | {"tool_call_id", "tool_use_id"}
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+_CALL_BLOCK_TYPES: Final = frozenset({"function", "tool_use"})
 
 
 def _block_type(block: Mapping[str, object]) -> str | None:
@@ -80,8 +81,13 @@ def without_altered_provider_state(stored: object, depth: int = 0) -> object:
     }
 
 
+def _makes_a_call(fields: Mapping[str, object]) -> bool:
+    block_type: Final = _block_type(fields)
+    return block_type is not None and (block_type in _CALL_BLOCK_TYPES or block_type.endswith("_call"))
+
+
 def _lost_the_signature_of_its_call(fields: Mapping[str, object]) -> bool:
-    return "output" not in fields and any(
+    return _makes_a_call(fields) and any(
         is_provider_signed(fields, key, fields.get(key)) and _is_altered_text(fields.get(key))
         for key in SIGNED_TOOL_CALL_ID_KEYS
     )

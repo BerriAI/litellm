@@ -139,12 +139,14 @@ from .tool_search import (
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    chat_config_builds_anthropic_request,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    provider_chat_config,
     request_runs_tool_search,
     route_runs_tool_search,
     tool_search_call_ids,
@@ -386,6 +388,18 @@ def _target_keeps_item_marks(model: str, custom_llm_provider: str | None, drop_p
     if custom_llm_provider == "databricks":
         return "claude" in model.lower()
     return custom_llm_provider == "bedrock" and _bedrock_target_keeps_item_marks(model, drop_params)
+
+
+def _target_may_bind_reasoning_to_earlier_turns(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    if "claude" in model.lower():
+        return True
+    try:
+        chat_config: Final = provider_chat_config(model, custom_llm_provider)
+    except litellm.BadRequestError:
+        return False
+    return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
 
 
 def _refuses_marks_on_tool_blocks(model: str, custom_llm_provider: str | None) -> bool:
@@ -1101,7 +1115,9 @@ class LiteLLMCompletionResponsesConfig:
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools: Final = litellm_completion_request.get("tools") or []
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=tools
+            messages=combined_messages,
+            tools=tools,
+            keep_stored_arguments=_target_may_bind_reasoning_to_earlier_turns(model, provider),
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -1757,6 +1773,7 @@ class LiteLLMCompletionResponsesConfig:
             | Message
         ],
         tools: Sequence[object] | None = None,
+        keep_stored_arguments: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1773,6 +1790,7 @@ class LiteLLMCompletionResponsesConfig:
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
+            keep_stored_arguments: Whether a repeated call leaves the arguments storage holds unchanged
 
         Returns:
             List of messages with tool_calls added to assistant messages when needed
@@ -1789,7 +1807,7 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionResponseMessage
             | ChatCompletionMessageToolCall
             | Message
-        ] = list(copy.deepcopy(without_repeated_tool_calls(messages)))
+        ] = list(copy.deepcopy(without_repeated_tool_calls(messages, keep_stored_arguments=keep_stored_arguments)))
         messages_to_remove: Final = []
 
         # Count non-tool messages to avoid removing all messages

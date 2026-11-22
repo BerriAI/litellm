@@ -2,11 +2,20 @@ from typing import Final
 
 import pytest
 
-from litellm.constants import LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
-from litellm.litellm_core_utils.db_truncation import TRUNCATION_MARKER, truncated_for_db, was_truncated_for_db
+from litellm.litellm_core_utils.db_truncation import (
+    TRUNCATION_MARKER,
+    is_truncation_of,
+    truncated_for_db,
+    was_truncated_for_db,
+)
 
 _LONG: Final = "Count the triples. " * 1000
 _QUOTED_CUT: Final = truncated_for_db(_LONG, 100)
+_NOTES_STORED_ROWS_CARRY: Final = (
+    "",
+    ". Truncation is a DB storage safeguard. Full, untruncated data is logged to logging callbacks (OTEL, Datadog, "
+    "etc.). To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env.",
+)
 
 
 @pytest.mark.parametrize("max_length", [20, 99, 125, 126, 180, 2047, 2048, 2049, 10000])
@@ -17,12 +26,39 @@ def test_a_value_over_the_limit_keeps_its_ends_and_reads_as_cut_whatever_the_lim
     assert was_truncated_for_db(cut)
 
 
-@pytest.mark.parametrize("max_length", [99, 126, 2048])
-def test_a_value_cut_by_a_release_without_the_note_reads_as_cut(max_length: int):
-    cut: Final = truncated_for_db(_LONG, max_length).replace(f". {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}", "")
+@pytest.mark.parametrize("note", _NOTES_STORED_ROWS_CARRY, ids=["no-note", "note"])
+@pytest.mark.parametrize(("kept_start", "kept_end"), [(34, 64), (44, 81), (716, 1331)])
+def test_a_value_an_earlier_release_stored_cut_still_reads_as_cut(kept_start: int, kept_end: int, note: str):
+    skipped: Final = len(_LONG) - kept_start - kept_end
+    stored: Final = (
+        f"{_LONG[:kept_start]}... (litellm_truncated skipped {skipped} chars{note}) ...{_LONG[-kept_end:]}"
+    )
 
-    assert LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE not in cut
-    assert was_truncated_for_db(cut)
+    assert was_truncated_for_db(stored)
+    assert is_truncation_of(stored, _LONG)
+
+
+def test_only_the_marker_this_release_writes_splits_text_the_safeguard_cut():
+    assert TRUNCATION_MARKER.split("Ask... (litellm_truncated skipped 9 chars) ...again") == [
+        "Ask... (litellm_truncated skipped 9 chars) ...again"
+    ]
+
+
+@pytest.mark.parametrize(
+    "whole",
+    [
+        pytest.param(f"-{_LONG}", id="another-start"),
+        pytest.param(f"{_LONG}-", id="another-end"),
+        pytest.param("", id="empty"),
+    ],
+)
+def test_a_cut_value_is_no_truncation_of_a_value_with_other_ends(whole: str):
+    assert is_truncation_of(truncated_for_db(_LONG, 100), _LONG)
+    assert not is_truncation_of(truncated_for_db(_LONG, 100), whole)
+
+
+def test_a_whole_value_is_no_truncation_of_itself():
+    assert not is_truncation_of(_LONG, _LONG)
 
 
 @pytest.mark.parametrize("value", ["", "Count.", _LONG])

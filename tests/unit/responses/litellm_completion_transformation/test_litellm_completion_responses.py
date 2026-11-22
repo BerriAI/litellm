@@ -6237,45 +6237,71 @@ def test_no_cache_control_when_absent():
 
 
 @pytest.mark.asyncio
-async def test_outputs_of_parallel_calls_follow_the_stored_turn_that_made_them_when_this_process_remembers_the_calls():
-    calls: Final = [
-        {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
-        for call_id in ("toolu_paris", "toolu_rome", "toolu_oslo")
-    ]
-    stored_turns: Final = [
-        {"role": "user", "content": "Weather in Paris, Rome and Oslo?"},
-        {"role": "assistant", "content": None, "tool_calls": calls},
-    ]
+@pytest.mark.parametrize(
+    ("provider", "model", "target_gets_whole_arguments"),
+    [
+        ("anthropic", "anthropic/claude-sonnet-5-5", False),
+        ("anthropic", "anthropic/house-model", False),
+        ("vertex_ai", "vertex_ai/claude-sonnet-5-5", False),
+        ("bedrock", "bedrock/converse/house-model", False),
+        ("snowflake", "snowflake/Claude-Sonnet-5-5", False),
+        ("gemini", "gemini/gemini-3.8-flash", True),
+        ("hosted_vllm", "hosted_vllm/house-model", True),
+        (None, "house-model", True),
+    ],
+)
+@pytest.mark.parametrize(
+    "stored_arguments", ['{"city": "Paris"}', "{}"], ids=["arguments-stored-whole", "arguments-redacted-in-storage"]
+)
+@pytest.mark.parametrize("call_ids", [("toolu_1",), ("toolu_1", "toolu_2", "toolu_3")], ids=["one-call", "parallel"])
+async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this_process_remembers_them(
+    call_ids: tuple[str, ...],
+    stored_arguments: str,
+    provider: str | None,
+    model: str,
+    target_gets_whole_arguments: bool,
+):
+    def calls(arguments: str) -> list[dict[str, object]]:
+        return [
+            {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": arguments}}
+            for call_id in call_ids
+        ]
+
+    question: Final = {"role": "user", "content": "What is the weather?"}
+    remembered_calls: Final = calls('{"city": "Paris"}')
 
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
-        return ChatCompletionSession(messages=stored_turns, litellm_session_id=None)
+        return ChatCompletionSession(
+            messages=[question, {"role": "assistant", "content": None, "tool_calls": calls(stored_arguments)}],
+            litellm_session_id=None,
+        )
 
     outputs: Final = cast(
         ResponseInputParam,
-        [{"type": "function_call_output", "call_id": call["id"], "output": "14"} for call in calls],
+        [{"type": "function_call_output", "call_id": call_id, "output": "14"} for call_id in call_ids],
     )
-    config: Final = LiteLLMCompletionResponsesConfig
-    for call in calls:
-        TOOL_CALLS_CACHE.set_cache(key=call["id"], value=call)
+    for call_id, call in zip(call_ids, remembered_calls):
+        TOOL_CALLS_CACHE.set_cache(key=call_id, value=call)
     try:
-        request: Final = await config.async_responses_api_session_handler(
+        request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
             previous_response_id="resp_parallel",
-            litellm_completion_request=config.transform_responses_api_request_to_chat_completion_request(
-                model="anthropic/claude-sonnet-5-5",
+            litellm_completion_request=LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model=model,
                 input=outputs,
                 responses_api_request={"previous_response_id": "resp_parallel"},
-                custom_llm_provider="anthropic",
+                custom_llm_provider=provider,
             ),
             instructions=None,
             session_lookup=session_lookup,
         )
     finally:
-        for call in calls:
-            TOOL_CALLS_CACHE.delete_cache(key=call["id"])
+        for call_id in call_ids:
+            TOOL_CALLS_CACHE.delete_cache(key=call_id)
 
-    assert request["messages"][:2] == stored_turns
+    replayed_calls: Final = remembered_calls if target_gets_whole_arguments else calls(stored_arguments)
+    assert request["messages"][:2] == [question, {"role": "assistant", "content": None, "tool_calls": replayed_calls}]
     assert [(message["role"], message["tool_call_id"]) for message in request["messages"][2:]] == [
-        ("tool", call["id"]) for call in calls
+        ("tool", call_id) for call_id in call_ids
     ]
 
 
