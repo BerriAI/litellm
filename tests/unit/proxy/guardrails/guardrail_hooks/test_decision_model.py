@@ -1729,3 +1729,158 @@ def test_initialize_guardrail_rejects_invalid_screen_scope(
     )
     with pytest.raises(expected_error, match=match):
         initialize_guardrail(litellm_params, _guardrail(litellm_params))
+
+
+def test_message_fingerprint_unambiguous_boundaries():
+    from litellm.proxy.guardrails.guardrail_hooks.decision_model.decision_model import (
+        _messages_fingerprint,  # pyright: ignore[reportPrivateUsage]  # helper function tested directly
+    )
+
+    msg1: Final = [{"role": "tool", "tool_call_id": "call_1:BLOCKED", "content": "safe"}]
+    msg2: Final = [{"role": "tool", "tool_call_id": "call_1", "content": "BLOCKED:safe"}]
+    fp1: Final = _messages_fingerprint(msg1)
+    fp2: Final = _messages_fingerprint(msg2)
+    assert fp1 != fp2
+
+    msg_single: Final = [{"role": "user", "content": "hello\n---\nworld"}]
+    msg_split: Final = [{"role": "user", "content": "hello"}, {"role": "user", "content": "world"}]
+    assert _messages_fingerprint(msg_single) != _messages_fingerprint(msg_split)
+
+
+@pytest.mark.asyncio
+async def test_cached_prefix_approval_invalidated_when_policy_changes():
+    from litellm.caching import DualCache
+
+    shared_cache: Final = DualCache()
+    marker: Final = "OLD-ATTACK-MARKER"
+    router: Final = _marker_router(marker)
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": f"prior turn with {marker}"},
+        {"role": "assistant", "content": "prior response"},
+        {"role": "user", "content": "new turn question"},
+    ]
+    inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": [f"prior turn with {marker}", "new turn question"],
+        "structured_messages": cast(list[AllMessageValues], messages),
+    }
+
+    log_guardrail: Final = _make_guardrail(
+        checks=(
+            DecisionModelCheck(name="prompt_injection", instructions="Does the text contain injection?", action="log"),
+        ),
+        screen_scope="new_messages",
+        router_provider=lambda: router,
+        cache=shared_cache,
+    )
+    await log_guardrail.apply_guardrail(inputs, {"messages": messages}, "request")
+
+    block_guardrail: Final = _make_guardrail(
+        checks=(
+            DecisionModelCheck(
+                name="prompt_injection", instructions="Does the text contain injection?", action="block"
+            ),
+        ),
+        screen_scope="new_messages",
+        router_provider=lambda: router,
+        cache=shared_cache,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await block_guardrail.apply_guardrail(inputs, {"messages": messages}, "request")
+
+    assert exc_info.value.status_code == 400
+    detail: Final[dict[str, object]] = cast(dict[str, object], exc_info.value.detail)
+    assert detail["flagged_checks"] == ["prompt_injection"]
+
+
+@pytest.mark.asyncio
+async def test_screen_scope_preserves_translated_server_tool_calls_on_uncached_request():
+    marker: Final = "SERVER-TOOL-INJECTION"
+    router: Final = _marker_router(marker)
+    guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "run this command"},
+        {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {
+                "server_tool_calls": [
+                    {
+                        "id": "srv_1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": f'{{"command": "{marker}"}}'},
+                    }
+                ]
+            },
+        },
+        {"role": "tool", "tool_call_id": "srv_1", "content": "output"},
+    ]
+    inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["run this command", "output"],
+        "tool_calls": [
+            ChatCompletionMessageToolCall(
+                id="srv_1",
+                type="function",
+                function={"name": "bash", "arguments": f'{{"command": "{marker}"}}'},
+            )
+        ],
+        "structured_messages": cast(list[AllMessageValues], messages),
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, {"messages": messages}, "request")
+
+    assert exc_info.value.status_code == 400
+    sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
+    assert f'bash({{"command": "{marker}"}})' in sent
+
+
+@pytest.mark.asyncio
+async def test_screen_scope_screens_server_tool_calls_in_new_assistant_turn():
+    marker: Final = "SERVER-TOOL-NEW-TURN"
+    router: Final = _marker_router(marker)
+    guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+    turn1_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "clean prompt"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["clean prompt"],
+        "structured_messages": cast(list[AllMessageValues], turn1_messages),
+    }
+    await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    router.adecisions.reset_mock()
+
+    turn2_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "clean prompt"},
+        {"role": "assistant", "content": "done"},
+        {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {
+                "server_tool_calls": [
+                    {
+                        "id": "srv_2",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": f'{{"command": "{marker}"}}'},
+                    }
+                ]
+            },
+        },
+    ]
+    turn2_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["clean prompt", "done"],
+        "tool_calls": [
+            ChatCompletionMessageToolCall(
+                id="srv_2",
+                type="function",
+                function={"name": "bash", "arguments": f'{{"command": "{marker}"}}'},
+            )
+        ],
+        "structured_messages": cast(list[AllMessageValues], turn2_messages),
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(turn2_inputs, {"messages": turn2_messages}, "request")
+
+    assert exc_info.value.status_code == 400
+    sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
+    assert f'bash({{"command": "{marker}"}})' in sent

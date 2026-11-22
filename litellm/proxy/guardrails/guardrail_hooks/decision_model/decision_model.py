@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from asyncio import AbstractEventLoop, Semaphore
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -77,11 +78,7 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_SEQ_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
-_ToolCall: TypeAlias = (
-    ChatCompletionToolCallChunk
-    | ChatCompletionAssistantToolCall
-    | ChatCompletionMessageToolCall
-)
+_ToolCall: TypeAlias = ChatCompletionToolCallChunk | ChatCompletionAssistantToolCall | ChatCompletionMessageToolCall
 
 
 def _message_field(message: object, key: str) -> object | None:
@@ -95,15 +92,21 @@ def _tool_call_text(
 ) -> str | None:
     if isinstance(tool_call, dict):
         function: Final = tool_call.get("function")
-        dict_arguments: Final = function.get("arguments") if function else None
-        if not isinstance(dict_arguments, str) or not dict_arguments.strip():
+        raw_arguments: Final = _message_field(function, "arguments")
+        if not isinstance(raw_arguments, str) or not raw_arguments.strip():
             return None
-        dict_name: Final = function.get("name") if function else None
-        return f"{dict_name or ''}({dict_arguments})"
-    arguments: Final = tool_call.function.arguments
-    if not arguments or not arguments.strip():
+        raw_name: Final = _message_field(function, "name")
+        dict_name: Final = raw_name if isinstance(raw_name, str) else ""
+        return f"{dict_name}({raw_arguments})"
+    arguments_attr: Final = tool_call.function.arguments
+    if not arguments_attr or not arguments_attr.strip():
         return None
-    return f"{tool_call.function.name or ''}({arguments})"
+    return f"{tool_call.function.name or ''}({arguments_attr})"
+
+
+def _tool_call_id(tool_call: object) -> str | None:
+    call_id: Final = _message_field(tool_call, "id")
+    return str(call_id) if isinstance(call_id, (str, int)) else None
 
 
 def _structured_tool_calls(inputs: GenericGuardrailAPIInputs) -> Iterator[ChatCompletionAssistantToolCall]:
@@ -146,9 +149,7 @@ def _new_messages(
     last_non_assistant: Final = _last_index_where(messages, lambda m: _message_role(m) != "assistant")
     if last_non_assistant is None:
         return tuple(messages)
-    prior_assistant: Final = _last_index_where(
-        messages[:last_non_assistant], lambda m: _message_role(m) == "assistant"
-    )
+    prior_assistant: Final = _last_index_where(messages[:last_non_assistant], lambda m: _message_role(m) == "assistant")
     if prior_assistant is None:
         return tuple(messages)
     return tuple(messages[prior_assistant + 1 :])
@@ -174,13 +175,43 @@ def _message_content_texts(message: object) -> Iterator[str]:
 
 def _message_tool_calls(message: object) -> Iterator[_ToolCall]:
     role: Final = _message_role(message)
-    if role == "assistant":
-        tool_calls: Final = _message_field(message, "tool_calls")
-        if isinstance(tool_calls, (list, tuple)):
-            call_list: Final = _OBJECT_SEQ_ADAPTER.validate_python(tool_calls)
-            for call in call_list:
+    if role != "assistant":
+        return
+    tool_calls: Final = _message_field(message, "tool_calls")
+    if isinstance(tool_calls, (list, tuple)):
+        call_list: Final = _OBJECT_SEQ_ADAPTER.validate_python(tool_calls)
+        for call in call_list:
+            if isinstance(call, (ChatCompletionMessageToolCall, dict)):
+                yield call  # pyright: ignore[reportReturnType]  # dict matches TypedDict
+    provider_specific: Final = _message_field(message, "provider_specific_fields")
+    if provider_specific is not None:
+        server_calls: Final = _message_field(provider_specific, "server_tool_calls")
+        if isinstance(server_calls, (list, tuple)):
+            server_list: Final = _OBJECT_SEQ_ADAPTER.validate_python(server_calls)
+            for call in server_list:
                 if isinstance(call, (ChatCompletionMessageToolCall, dict)):
                     yield call  # pyright: ignore[reportReturnType]  # dict matches TypedDict
+    function_call: Final = _message_field(message, "function_call")
+    if function_call is not None and not isinstance(function_call, (list, tuple)):
+        yield {"type": "function", "function": function_call}  # pyright: ignore[reportReturnType]  # dict matches TypedDict
+
+
+def _policy_digest(decision_model: str, checks: Sequence[DecisionModelCheck]) -> str:
+    sorted_checks: Final = sorted(checks, key=lambda c: c.name)
+    payload: Final = {
+        "decision_model": decision_model,
+        "checks": [
+            {
+                "name": c.name,
+                "instructions": c.instructions,
+                "threshold": c.threshold,
+                "action": c.action,
+            }
+            for c in sorted_checks
+        ],
+    }
+    encoded: Final = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
 
 
 _MAX_SCREENED_PREFIXES: Final = 10000
@@ -192,20 +223,25 @@ def _non_assistant_messages(
     return tuple(m for m in messages if _message_role(m) != "assistant")
 
 
-def _message_fingerprint(message: object) -> str:
-    role: Final = _message_role(message) or ""
+def _message_fingerprint_structure(message: object) -> Mapping[str, object]:
+    role: Final = _message_role(message)
+    name: Final = _message_field(message, "name")
     tool_call_id: Final = _message_field(message, "tool_call_id")
-    call_id_str: Final = tool_call_id if isinstance(tool_call_id, str) else ""
-    content_text: Final = "\n".join(_message_content_texts(message))
-    tool_texts: Final = "\n".join(
-        text for text in map(_tool_call_text, _message_tool_calls(message)) if text is not None
-    )
-    return f"{role}:{call_id_str}:{content_text}:{tool_texts}"
+    contents: Final = tuple(_message_content_texts(message))
+    tool_calls: Final = tuple(text for text in map(_tool_call_text, _message_tool_calls(message)) if text is not None)
+    return {
+        "role": str(role) if role is not None else None,
+        "name": str(name) if name is not None else None,
+        "tool_call_id": str(tool_call_id) if tool_call_id is not None else None,
+        "contents": contents,
+        "tool_calls": tool_calls,
+    }
 
 
 def _messages_fingerprint(messages: Sequence[object]) -> str:
-    parts: Final = tuple(_message_fingerprint(m) for m in messages)
-    return hashlib.sha256("\n---\n".join(parts).encode("utf-8")).hexdigest()
+    structured: Final = tuple(map(_message_fingerprint_structure, messages))
+    encoded: Final = json.dumps(structured, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class DecisionModelGuardrail(CustomGuardrail):
@@ -241,6 +277,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         )
         self.decision_model = decision_model
         self.checks = _resolve_checks(tuple(checks))
+        self._policy_digest: Final = _policy_digest(self.decision_model, self.checks)
         self.unreachable_fallback = unreachable_fallback
         self.max_input_chars = max_input_chars
         self._router_provider = router_provider or default_router_provider
@@ -252,9 +289,7 @@ class DecisionModelGuardrail(CustomGuardrail):
             self.streaming_buffer_until_moderated = streaming_buffer_until_moderated
         self.screen_scope: Final[Literal["all", "new_messages", "latest_turn"]] = screen_scope
         self._cache: Final[DualCache] = cache if cache is not None else self._incremental_scan_cache()
-        self._screened_prefixes: Final[OrderedDict[str, None]] = (  # mutable-ok: in-memory LRU cache of screened prefix fingerprints
-            OrderedDict()
-        )
+        self._screened_prefixes: Final[OrderedDict[str, None]] = OrderedDict()  # mutable-ok: in-memory cache
         self._semaphores_by_loop: dict[AbstractEventLoop, Semaphore] = {}  # mutable-ok: per-loop semaphore registry
 
     @classmethod
@@ -330,11 +365,12 @@ class DecisionModelGuardrail(CustomGuardrail):
         return fallback_cache
 
     def _screened_cache_key(self, fingerprint: str) -> str:
-        return f"decision_model_screened:{self.guardrail_name}:{fingerprint}"
+        return f"decision_model_screened:{self.guardrail_name}:{self._policy_digest}:{fingerprint}"
 
     def _record_screened_in_memory(self, fingerprint: str) -> None:
-        self._screened_prefixes[fingerprint] = None
-        self._screened_prefixes.move_to_end(fingerprint)
+        memory_key: Final = f"{self._policy_digest}:{fingerprint}"
+        self._screened_prefixes[memory_key] = None
+        self._screened_prefixes.move_to_end(memory_key)
         if len(self._screened_prefixes) > _MAX_SCREENED_PREFIXES:
             self._screened_prefixes.popitem(last=False)
 
@@ -342,8 +378,9 @@ class DecisionModelGuardrail(CustomGuardrail):
         if not non_assistant_messages:
             return False
         fingerprint: Final = _messages_fingerprint(non_assistant_messages)
-        if fingerprint in self._screened_prefixes:
-            self._screened_prefixes.move_to_end(fingerprint)
+        memory_key: Final = f"{self._policy_digest}:{fingerprint}"
+        if memory_key in self._screened_prefixes:
+            self._screened_prefixes.move_to_end(memory_key)
             return True
         try:
             key: Final = self._screened_cache_key(fingerprint)
@@ -396,12 +433,12 @@ class DecisionModelGuardrail(CustomGuardrail):
 
         last_non_assistant: Final = _last_index_where(raw_messages, lambda m: _message_role(m) != "assistant")
         if last_non_assistant is None:
-            return self._extract_messages_texts(raw_messages)
+            return tuple(dict.fromkeys(self._extract_messages_texts(raw_messages) + _tool_call_texts(inputs)))
         prior_assistant: Final = _last_index_where(
             raw_messages[:last_non_assistant], lambda m: _message_role(m) == "assistant"
         )
         if prior_assistant is None:
-            return self._extract_messages_texts(raw_messages)
+            return tuple(dict.fromkeys(self._extract_messages_texts(raw_messages) + _tool_call_texts(inputs)))
 
         prefix: Final = raw_messages[: prior_assistant + 1]
         prefix_non_assistant: Final = _non_assistant_messages(prefix)
@@ -411,10 +448,23 @@ class DecisionModelGuardrail(CustomGuardrail):
                 "decision_model guardrail %s: unverified assistant turn prefix; screening full conversation",
                 self.guardrail_name,
             )
-            return self._extract_messages_texts(raw_messages)
+            return tuple(dict.fromkeys(self._extract_messages_texts(raw_messages) + _tool_call_texts(inputs)))
 
         new_msgs: Final = _new_messages(raw_messages)
-        return self._extract_messages_texts(new_msgs)
+        new_assistant_tool_ids: Final = frozenset(
+            _tool_call_id(c)
+            for c in chain.from_iterable(map(_message_tool_calls, new_msgs))
+            if _tool_call_id(c) is not None
+        )
+        matched_input_calls: Final = tuple(
+            c
+            for c in (inputs.get("tool_calls") or ())
+            if _tool_call_id(c) is not None and _tool_call_id(c) in new_assistant_tool_ids
+        )
+        matched_call_texts: Final = tuple(
+            text for text in map(_tool_call_text, matched_input_calls) if text is not None
+        )
+        return tuple(dict.fromkeys(self._extract_messages_texts(new_msgs) + matched_call_texts))
 
     def _check_verdict(
         self, check: DecisionModelCheck, answers_by_call: Sequence[Mapping[str | None, object]]
@@ -518,8 +568,7 @@ class DecisionModelGuardrail(CustomGuardrail):
             return inputs
 
         questions: Final = [
-            {"type": "predicate", "name": check.name, "instructions": check.instructions or ""}
-            for check in self.checks
+            {"type": "predicate", "name": check.name, "instructions": check.instructions or ""} for check in self.checks
         ]
         semaphore: Final = self._get_decision_semaphore()
         auth: Final = attached_auth(request_data)
