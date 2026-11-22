@@ -354,8 +354,9 @@ async def get_cost_margin_config(
         # Get cost_margin_config from litellm_settings
         litellm_settings: Final = config.get("litellm_settings", {})
         cost_margin_config: Final = litellm_settings.get("cost_margin_config", {})
+        source: Final = proxy_config.litellm_settings.source("cost_margin_config")
 
-        return {"values": cost_margin_config}
+        return {"values": cost_margin_config, "source": source, "editable": source != "config"}
     except Exception as e:
         verbose_proxy_logger.error("Error fetching cost margin config: %s", e)
         return {"values": {}}
@@ -493,6 +494,8 @@ async def update_cost_margin_config(
             "status": "success",
             "values": cost_margin_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error("Error updating cost margin config: %s", e)
         raise HTTPException(
