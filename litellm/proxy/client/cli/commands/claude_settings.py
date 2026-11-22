@@ -83,8 +83,6 @@ TELEMETRY_ENV: Final = MappingProxyType(
         "OTEL_LOG_ASSISTANT_RESPONSES": "1",
         "OTEL_LOG_TOOL_DETAILS": "1",
         "OTEL_LOG_TOOL_CONTENT": "1",
-        "OTEL_LOG_RAW_API_BODIES": "1",
-        "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "1048576",
     }
 )
 ANTHROPIC_DEFAULT_MODEL_ENV_KEYS: Final = (
@@ -503,28 +501,7 @@ TELEMETRY_CONTENT_KEYS: Final = (
     "OTEL_LOG_ASSISTANT_RESPONSES",
     "OTEL_LOG_TOOL_DETAILS",
     "OTEL_LOG_TOOL_CONTENT",
-    "OTEL_LOG_RAW_API_BODIES",
-    "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH",
 )
-RAW_API_BODIES_KEY: Final = "OTEL_LOG_RAW_API_BODIES"
-# A raw body repeats what each of these exports, so one the user turned off keeps raw bodies off too
-_CONTENT_SWITCHES_IN_RAW_BODIES: Final = (
-    "OTEL_LOG_USER_PROMPTS",
-    "OTEL_LOG_ASSISTANT_RESPONSES",
-    "OTEL_LOG_TOOL_DETAILS",
-    "OTEL_LOG_TOOL_CONTENT",
-)
-
-
-def _content_defaults(current_env: Mapping[str, JsonValue]) -> tuple[tuple[str, str], ...]:
-    """The content switches' values for a user who set none of them. Raw bodies default to off when the user
-    turned another content switch off, since a body carries the prompts, replies and tool output regardless."""
-    opted_out: Final = any(
-        key in current_env and current_env[key] != TELEMETRY_ENV[key] for key in _CONTENT_SWITCHES_IN_RAW_BODIES
-    )
-    return tuple(
-        (key, "0" if opted_out and key == RAW_API_BODIES_KEY else TELEMETRY_ENV[key]) for key in TELEMETRY_CONTENT_KEYS
-    )
 
 
 def _telemetry_env(base_url: str, credential: ClaudeCredential) -> tuple[tuple[str, str], ...]:
@@ -569,7 +546,7 @@ def merge_claude_settings(
             (
                 (ENABLE_TOOL_SEARCH_KEY, ENABLE_TOOL_SEARCH_VALUE),
                 (ENABLE_GATEWAY_MODEL_DISCOVERY_KEY, ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE),
-                *_content_defaults(current_env),
+                *((key, TELEMETRY_ENV[key]) for key in TELEMETRY_CONTENT_KEYS),
             ),
             (
                 (key, value)
