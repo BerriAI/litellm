@@ -478,6 +478,21 @@ def test_a_turn_that_moves_from_unspaced_to_spaced_text_only_extends_the_emitted
     assert _streamed_deltas(partials, "我喜欢用 LiteLLM 网关 很好。") == ("我喜欢", "用 LiteLLM", " 网关")
 
 
+def test_live_chinese_partials_with_provisional_trailing_punctuation_stream_only_kept_text():
+    # Captured from the live ElevenLabs realtime API (scribe_v2_realtime, language_code=zh) on 2026-11-21.
+    partials: Final = (
+        "今天天气-",
+        "今天天气很好。",
+        "今天天气很好，我们一起去公园。",
+        "今天天气很好，我们一起去公园散步吧。",
+        "今天天气很好，我们一起去公园散步吧。下午我们",
+        "今天天气很好，我们一起去公园散步吧，下午我们再回来喝茶。",
+    )
+    committed: Final = "今天天气很好，我们一起去公园散步吧，下午我们再回来喝茶。"
+
+    assert _streamed_deltas(partials, committed) == ("今天天气", "很好", "，我们一起去公园", "散步吧")
+
+
 @pytest.mark.parametrize(
     ("partials", "committed", "expected"),
     [

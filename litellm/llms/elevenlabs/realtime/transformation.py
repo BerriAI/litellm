@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import unicodedata
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -258,12 +259,19 @@ def _new_words(emitted: str, words: tuple[str, ...]) -> str:
     return stable[len(emitted) :] if stable.startswith(emitted) else ""
 
 
+def _without_trailing_punctuation(text: str) -> str:
+    end: Final = next(
+        (index for index in range(len(text), 0, -1) if not unicodedata.category(text[index - 1]).startswith("P")), 0
+    )
+    return text[:end]
+
+
 def _new_text(emitted: str, previous: str | None, text: str) -> str:
     if text.isascii() or any(char.isspace() for char in text):
         return _new_words(emitted, tuple(text.split()[:-1]))
     if previous is None:
         return ""
-    stable: Final = os.path.commonprefix((previous, text))[: len(text) - 1]
+    stable: Final = _without_trailing_punctuation(os.path.commonprefix((previous, text))[: len(text) - 1])
     return stable[len(emitted) :] if stable.startswith(emitted) else ""
 
 
