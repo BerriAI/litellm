@@ -208,6 +208,14 @@ def _turns_server_side_tools_off(params: Mapping[str, object]) -> bool:
     return any(params.get(key) is False for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS)
 
 
+def _forces_a_function_call(params: Mapping[str, object]) -> bool:
+    match params.get("tool_choice"):
+        case "required" | {"function": {"name": str()}}:
+            return True
+        case _:
+            return False
+
+
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
@@ -486,8 +494,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return next((flag for flag in flags if isinstance(flag, bool)), False)
 
     def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
-        opted_out: Final = any(_turns_server_side_tools_off(params) for params in param_sources)
-        return not opted_out and self._supports_search_tools_with_functions(model)
+        keeps_the_old_drop: Final = any(
+            _turns_server_side_tools_off(params) or _forces_a_function_call(params) for params in param_sources
+        )
+        return not keeps_the_old_drop and self._supports_search_tools_with_functions(model)
 
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
