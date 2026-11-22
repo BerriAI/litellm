@@ -8,9 +8,10 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
+from ..credentials import AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -44,6 +45,8 @@ from .models import (
     SAPUserMessage,
 )
 from .reasoning import normalize_reasoning_blocks
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -194,11 +197,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
-                cfg: AICoreConfiguration = client.get(
-                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
+                cfg = _DECODED_JSON.validate_python(
+                    client.get(
+                        join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
+                        headers=self.headers,
+                    ).json()
+                )
+                if require_get(cfg).get("executableId") == "orchestration":
                     valid.append((dep["deploymentUrl"], dep["createdAt"]))
             # newest first
         return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]

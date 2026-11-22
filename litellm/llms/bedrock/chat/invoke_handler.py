@@ -220,7 +220,7 @@ def _stream_decoder(
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 
 
-_StreamChunk: Final = TypeVar("_StreamChunk")
+_StreamChunk = TypeVar("_StreamChunk")
 
 
 def _with_served_service_tier(chunk: _StreamChunk, served_tier: str | None) -> _StreamChunk:

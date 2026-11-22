@@ -629,8 +629,8 @@ class ConfiguredModelInfo:
 _UNCONFIGURED: Final = ConfiguredModelInfo()
 _NO_CONFIGURED: Final[Mapping[str, ConfiguredModelInfo]] = MappingProxyType({})
 _ALL_PROXY_MODELS: Final = "all-proxy-models"
-_Pinned: Final = TypeVar("_Pinned", bound=Hashable)
-_Fetched: Final = TypeVar("_Fetched", bound=LiteLLMBaseModel)
+_Pinned = TypeVar("_Pinned", bound=Hashable)
+_Fetched = TypeVar("_Fetched", bound=LiteLLMBaseModel)
 
 
 def _public_name(deployment: _Deployment) -> str:
@@ -1437,7 +1437,7 @@ def _launch(
         raise click.ClickException(str(e))
 
 
-_Decorated: Final = TypeVar("_Decorated", bound=Callable[..., object] | click.Command)
+_Decorated = TypeVar("_Decorated", bound=Callable[..., object] | click.Command)
 
 
 def _subscription_option(binary: str) -> Callable[[_Decorated], _Decorated]:
