@@ -1385,6 +1385,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _map_function(
         self,
+        value: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
+        outside_declarations: JsonValue = None,
+        tool_choice: object = None,
+    ) -> list[Tools]:  # mutable-ok: mirrors override contract
+        return with_pins_that_fit(
+            partial(
+                self._build_function_tools,
+                value,
+                optional_params,
+                send_integer_enums,
+                allow_parameters_json_schema=allow_parameters_json_schema,
+                outside_declarations=outside_declarations,
+                tool_choice=tool_choice,
+            ),
+            has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
+        )
+
+    def _build_function_tools(
+        self,
         value: list[dict],
         optional_params: dict,
         send_integer_enums: bool = False,
@@ -1599,16 +1621,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         send_integer_enums: bool = False,
         allow_parameters_json_schema: bool = True,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return with_pins_that_fit(
-            partial(
-                self._map_function,
-                value,
-                optional_params,
-                send_integer_enums,
-                allow_parameters_json_schema=allow_parameters_json_schema,
-            ),
-            has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
-        )
+        return self._map_function(value, optional_params, send_integer_enums, allow_parameters_json_schema)
 
     def _map_response_schema(
         self,
@@ -2094,7 +2107,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_parameters_json_schema: bool,
     ) -> Callable[[bool, bool], Sequence[Tools]]:
         return partial(
-            self._map_function,
+            self._build_function_tools,
             cast(list[dict], request_params[param]),  # cast-ok: the caller checked it is a non-empty tools list
             optional_params,
             allow_parameters_json_schema=allow_parameters_json_schema,
