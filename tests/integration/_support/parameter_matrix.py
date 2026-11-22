@@ -1,12 +1,15 @@
 import itertools
+import os
 import re
 import typing
 from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
+from unittest import mock
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import assert_never
@@ -51,6 +54,7 @@ ATTRIBUTES: Final[Mapping[Endpoint, tuple[str, ...]]] = MappingProxyType(
 )
 
 _PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
+AMBIENT: Final = re.compile(r"_API_KEY$|_API_BASE$|_TOKEN$|^AWS_|^AZURE_|^GOOGLE_|^VERTEX")
 _MODES: Final = frozenset({"chat", "responses"})
 
 _RESPONSES_BRIDGE: Final[Mapping[str, str]] = MappingProxyType(
@@ -149,6 +153,11 @@ class Sample:
     otherwise: tuple["Sample", ...] = ()
 
 
+def _unconfigured() -> AbstractContextManager[object]:
+    kept: Final = {name: value for name, value in os.environ.items() if not AMBIENT.search(name)}
+    return mock.patch.dict(os.environ, kept, clear=True)
+
+
 def _listed_route(key: str, listing: _Listing) -> Model | None:
     provider: Final = listing.litellm_provider
     if provider is None or provider not in _PROVIDERS:
@@ -167,7 +176,8 @@ def _route(key: str, listing: _Listing) -> Model | None:
 @lru_cache(maxsize=1)
 def _routes() -> tuple[tuple[str, Model | None], ...]:
     listings: Final = TypeAdapter(dict[str, _Listing]).validate_python(litellm.model_cost)
-    return tuple((key, _route(key, listing)) for key, listing in sorted(listings.items()) if listing.mode in _MODES)
+    with _unconfigured():
+        return tuple((key, _route(key, listing)) for key, listing in sorted(listings.items()) if listing.mode in _MODES)
 
 
 def models() -> tuple[Model, ...]:
@@ -263,7 +273,8 @@ def _group(endpoint: Endpoint, members: tuple[_Member, ...]) -> Group:
 
 @lru_cache(maxsize=None)
 def groups(endpoint: Endpoint) -> tuple[Group, ...]:
-    members: Final = sorted((_member(model, endpoint) for model in models()), key=_pattern)
+    with _unconfigured():
+        members: Final = sorted((_member(model, endpoint) for model in models()), key=_pattern)
     return tuple(_group(endpoint, tuple(batch)) for _, batch in itertools.groupby(members, key=_pattern))
 
 

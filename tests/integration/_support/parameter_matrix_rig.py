@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.forward_proxy import ForwardProxy, refusing_forward_proxy
 from integration._support.parameter_matrix import (
+    AMBIENT,
     BRIDGE_SESSION_STATE,
     SAMPLES,
     Cell,
@@ -43,13 +44,15 @@ _PIXEL: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8B
 _DEADLINE_SECONDS: Final = 120
 _CANDIDATES: Final = 3
 _REASON_LENGTH: Final = 400
-_SILENT: Final = "LiteLLM answered without sending the provider a request"
+SILENT: Final = "LiteLLM answered without sending the provider a request"
+_ELSEWHERE: Final = "LiteLLM sent the request to {hosts} instead of the api_base it was given"
 _HANDLED_BY_LITELLM: Final = PROVIDER_UNVALIDATED_PARAMS | {"metadata"}
 _PROMPT_CONTENT: Final = frozenset({"instructions", "system"})
 _SENT_ONLY_TO_THE_PROVIDERS_OWN_HOST: Final = frozenset(
     {("mistral", "prompt_cache_key"), ("codestral", "prompt_cache_key")}
 )
-_AMBIENT: Final = re.compile(r"_API_KEY$|_API_BASE$|_TOKEN$|^AWS_|^AZURE_|^GOOGLE_|^VERTEX")
+_FIXED_HOST_PROVIDERS: Final = frozenset({"replicate"})
+_FIXED_HOST_MODELS: Final = frozenset({"vertex_ai/gemma-4-26b-a4b-it", "vertex_ai/deep-research-preview-04-2026"})
 _VOLATILE: Final = re.compile(
     r"authorization|key|token|date|amz|signature|content-length|stainless|idempot|request-id|cookie|user-agent"
     r"|trace|host|accept|connection|x-goog-user|content-type",
@@ -122,6 +125,7 @@ class Rig:
     elsewhere: ForwardProxy
     rerouted: AsyncHTTPHandler
     credentials: Mapping[str, Mapping[str, str]]
+    environment: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +137,7 @@ class Failure:
 @dataclass(frozen=True, slots=True)
 class Exchange:
     requests: tuple[Request, ...]
-    strayed: bool
+    strayed: frozenset[str]
     failure: Failure | None
 
 
@@ -142,6 +146,7 @@ class Baseline:
     model: Model
     view: Mapping[str, str]
     unstable: frozenset[str]
+    beside: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +214,7 @@ def _credentials(peer: str) -> Mapping[str, Mapping[str, str]]:
             "vertex_ai": {
                 "vertex_credentials": service_account_json("matrix-project", peer),
                 "vertex_project": "matrix-project",
-                "vertex_location": "us-central1",
+                "vertex_location": "global",
             },
             "oci": {
                 "oci_user": "ocid1.user.oc1..matrix",
@@ -236,6 +241,7 @@ def _environment(scratch: Path, elsewhere: str) -> Mapping[str, str]:
             "AWS_ACCESS_KEY_ID": "matrix-access-key",
             "AWS_SECRET_ACCESS_KEY": "matrix",
             "AWS_REGION_NAME": "us-east-1",
+            "AWS_EC2_METADATA_DISABLED": "true",
             "GITHUB_COPILOT_TOKEN_DIR": str(tokens),
             "ANTHROPIC_AWS_WORKSPACE_ID": "wrkspc_matrix",
             "HTTP_PROXY": elsewhere,
@@ -248,11 +254,11 @@ def _environment(scratch: Path, elsewhere: str) -> Mapping[str, str]:
     )
 
 
-def _isolate(patch: pytest.MonkeyPatch, scratch: Path, elsewhere: str) -> None:
+def isolate(patch: pytest.MonkeyPatch, rig: Rig) -> None:
     for name in tuple(os.environ):
-        if _AMBIENT.search(name):
+        if AMBIENT.search(name):
             patch.delenv(name)
-    for name, value in _environment(scratch, elsewhere).items():
+    for name, value in rig.environment.items():
         patch.setenv(name, value)
     patch.setattr(litellm, "suppress_debug_info", True)
 
@@ -264,12 +270,10 @@ async def _rerouting_client(peer: str) -> AsyncHTTPHandler:
 @contextmanager
 def matrix_rig(scratch: Path) -> Iterator[Rig]:
     with (
-        pytest.MonkeyPatch.context() as patch,
         wire_server(_peer) as provider,
         refusing_forward_proxy() as elsewhere,
         asyncio.Runner() as runner,
     ):
-        _isolate(patch, scratch, elsewhere.url)
         rerouted: Final = runner.run(_rerouting_client(provider.url))
         try:
             yield Rig(
@@ -278,6 +282,7 @@ def matrix_rig(scratch: Path) -> Iterator[Rig]:
                 elsewhere=elsewhere,
                 rerouted=rerouted,
                 credentials=_credentials(provider.url),
+                environment=_environment(scratch, elsewhere.url),
             )
         finally:
             runner.run(rerouted.close())
@@ -432,7 +437,7 @@ def exchange(rig: Rig, group: Group, model: Model, drop_params: bool, parameters
         failure: Final = rig.runner.run(_within_deadline(_call(rig, group, model, parameters)))
     return Exchange(
         requests=tuple(request for request in rig.provider.drain() if not request.target.startswith("/_oauth/")),
-        strayed=bool(rig.elsewhere.drain()),
+        strayed=frozenset(rig.elsewhere.targets()),
         failure=failure,
     )
 
@@ -461,6 +466,10 @@ def view(requests: tuple[Request, ...]) -> Mapping[str, str]:
     )
 
 
+def fixed_host(group: Group, model: Model) -> bool:
+    return group.provider in _FIXED_HOST_PROVIDERS or model.key in _FIXED_HOST_MODELS
+
+
 def _differing(first: Mapping[str, str], second: Mapping[str, str]) -> frozenset[str]:
     return frozenset(name for name in first.keys() | second.keys() if first.get(name) != second.get(name))
 
@@ -485,11 +494,16 @@ def baseline(rig: Rig, group: Group, drop_params: bool) -> Baseline | Unobservab
     if last.requests:
         repeat: Final = exchange(rig, group, model, drop_params, {})
         seen: Final = view(last.requests)
-        return Baseline(model=model, view=seen, unstable=_differing(seen, view(repeat.requests)))
+        return Baseline(
+            model=model,
+            view=seen,
+            unstable=_differing(seen, view(repeat.requests)),
+            beside=last.strayed | repeat.strayed,
+        )
     first_model, first = attempts[0]
-    if any(attempt.strayed for _, attempt in attempts):
+    if any(attempt.strayed and fixed_host(group, tried) for tried, attempt in attempts):
         return Unobservable(model=first_model)
-    return Unbuildable(model=first_model, reason=first.failure.reason if first.failure is not None else _SILENT)
+    return Unbuildable(model=first_model, reason=first.failure.reason if first.failure is not None else SILENT)
 
 
 def _ways(sample: Sample) -> tuple[Sample, ...]:
@@ -520,10 +534,11 @@ def _observe(rig: Rig, cell: Cell, found: Baseline, way: int, value: JsonValue) 
     parameters: Final = {**sample.companions, cell.attribute: value}
     sent: Final = exchange(rig, cell.group, found.model, cell.drop_params, parameters)
     if not sent.requests:
-        if sent.strayed:
-            return Unobservable(model=found.model)
+        elsewhere: Final = sent.strayed - found.beside
+        if elsewhere:
+            return Broken(reason=_ELSEWHERE.format(hosts=", ".join(sorted(elsewhere))))
         if sent.failure is None:
-            return Broken(reason=_SILENT)
+            return Broken(reason=SILENT)
         return Refused(reason=sent.failure.reason) if sent.failure.refusal else Broken(reason=sent.failure.reason)
     reference: Final = _reference(rig, cell.group, cell.drop_params, cell.attribute, way)
     if reference is None:
@@ -556,7 +571,8 @@ def verdict(rig: Rig, cell: Cell) -> Outcome:
     ):
         return Unobservable(model=found.model)
     first: Final = _observe(rig, cell, found, 0, sample.value)
-    if isinstance(first, Forwarded) or (cell.drop_params and isinstance(first, Dropped)):
+    expected_drop: Final = cell.drop_params and cell.attribute not in cell.group.supported
+    if isinstance(first, Forwarded) or (expected_drop and isinstance(first, Dropped)):
         return first
     if any(isinstance(outcome, Forwarded) for outcome in _alternatives(rig, cell, found, sample)):
         return Forwarded()
@@ -582,14 +598,17 @@ def _consumed_by_litellm(cell: Cell) -> bool:
 
 def _dropped(cell: Cell) -> Gap | None:
     attribute: Final = cell.attribute
-    if cell.drop_params or _consumed_by_litellm(cell):
+    if _consumed_by_litellm(cell):
         return None
     if attribute in cell.group.supported:
+        setting: Final = "on" if cell.drop_params else "off"
         return Gap(
             GapKind.LISTED_NOT_SENT,
-            f"{_claim(cell)}, but with drop_params off the request it sends the provider is the same with and "
+            f"{_claim(cell)}, but with drop_params {setting} the request it sends the provider is the same with and "
             f"without {attribute}",
         )
+    if cell.drop_params:
+        return None
     return Gap(
         GapKind.UNLISTED_VANISHES,
         f"LiteLLM does not list {attribute} as supported for {cell.group.provider} on {cell.group.endpoint.value}, "
