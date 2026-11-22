@@ -135,6 +135,7 @@ _CLAUDE_ROUTES_ON_ANTHROPIC_API_VERSIONS: Final = (
     pytest.param(AzureAnthropicMessagesConfig, "claude-sonnet-4-6", id="azure_ai"),
     pytest.param(AmazonMantleMessagesConfig, "anthropic.claude-sonnet-4-6", id="bedrock_mantle"),
     pytest.param(BedrockClaudePlatformMessagesConfig, "claude-sonnet-4-6", id="bedrock_claude_platform"),
+    pytest.param(VertexAIPartnerModelsAnthropicMessagesConfig, "claude-sonnet-4-6", id="vertex_ai"),
 )
 
 
@@ -200,10 +201,7 @@ def test_a_later_dated_anthropic_version_also_drops_sampling_params() -> None:
         pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", "latest", id="anthropic-undated"),
         pytest.param(AzureAnthropicMessagesConfig, "claude-sonnet-4-6", "2023-06-01", id="azure_ai-2023-06-01"),
         pytest.param(
-            VertexAIPartnerModelsAnthropicMessagesConfig,
-            "claude-sonnet-4-6",
-            "2026-10-21",
-            id="vertex_ai-sends-its-own-version",
+            VertexAIPartnerModelsAnthropicMessagesConfig, "claude-sonnet-4-6", "2023-06-01", id="vertex_ai-2023-06-01"
         ),
         pytest.param(
             AmazonAnthropicClaudeMessagesConfig,

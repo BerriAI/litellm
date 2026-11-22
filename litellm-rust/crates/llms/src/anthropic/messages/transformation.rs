@@ -375,7 +375,7 @@ pub(crate) fn drop_sampling_params_removed_by_requested_version(
     drop_sampling_params_removed_by_version(request, requested_api_version(headers), drop_params)
 }
 
-fn drop_sampling_params_removed_by_version(
+pub(crate) fn drop_sampling_params_removed_by_version(
     request: MessagesRequest,
     api_version: &str,
     drop_params: bool,
