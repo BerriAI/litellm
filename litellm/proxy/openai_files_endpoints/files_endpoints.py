@@ -83,6 +83,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
+    router_default_drop_params,
     validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
@@ -530,7 +531,11 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+        response = await litellm.acreate_file(
+            **_create_file_request,
+            **router_default_drop_params(llm_router, _create_file_request),
+            custom_llm_provider=custom_llm_provider,
+        )
 
     return response
 

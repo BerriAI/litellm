@@ -2750,7 +2750,7 @@ _RESPONSES_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "pa
 
 @pytest.mark.parametrize("model", ["gemini-3.8-flash", "claude-sonnet-4-6"])
 @pytest.mark.parametrize(
-    ("url", "body"),
+    ("url", "body", "unsent_server"),
     [
         pytest.param(
             "/v1/chat/completions",
@@ -2760,6 +2760,7 @@ _RESPONSES_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "pa
                 "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
                 "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
             },
+            "deepwiki",
             id="chat-no-mcp-tool",
         ),
         pytest.param(
@@ -2770,6 +2771,7 @@ _RESPONSES_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "pa
                 "tools": [_RESPONSES_WEATHER_TOOL],
                 "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
             },
+            "deepwiki",
             id="responses-no-mcp-tool",
         ),
         pytest.param(
@@ -2780,12 +2782,18 @@ _RESPONSES_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "pa
                 "tools": [_DEEPWIKI_SERVER, _RESPONSES_WEATHER_TOOL],
                 "tool_choice": {"type": "mcp", "server_label": "docs"},
             },
+            "docs",
             id="responses-another-server",
         ),
     ],
 )
 def test_batch_row_is_refused_like_a_real_time_call_when_its_mcp_tool_choice_names_a_server_it_does_not_send(
-    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object]
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    url: str,
+    body: Mapping[str, object],
+    unsent_server: str,
 ) -> None:
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
@@ -2801,4 +2809,8 @@ def test_batch_row_is_refused_like_a_real_time_call_when_its_mcp_tool_choice_nam
     assert (
         "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
         in exc_info.value.message
+    )
+    assert exc_info.value.message.endswith(
+        f"This request sends no hosted MCP tool with server_label `{unsent_server}`. "
+        "Send that tool or remove the tool_choice."
     )

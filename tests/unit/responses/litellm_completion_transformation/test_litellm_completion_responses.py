@@ -7019,7 +7019,7 @@ def test_a_responses_mcp_tool_choice_naming_a_server_the_request_did_not_send_st
     monkeypatch.setattr(litellm, "drop_params", False)
     gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*")
 
-    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'"):
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'") as exc:
         litellm.responses(
             model="gemini/gemini-3.8-flash",
             input="Weather in Paris?",
@@ -7029,6 +7029,7 @@ def test_a_responses_mcp_tool_choice_naming_a_server_the_request_did_not_send_st
             api_key="gemini-test-key",
         )
 
+    assert "This request sends no hosted MCP tool with server_label `unsent`." in exc.value.message
     assert not gemini.called
 
 

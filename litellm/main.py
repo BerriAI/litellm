@@ -119,7 +119,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-from litellm.litellm_core_utils.tool_fields import tool_params_without_forced_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
@@ -5805,15 +5805,10 @@ def completion(
                 provider=LlmProviders(custom_llm_provider),
                 base_model=base_model,
             )
-        routed_tool_params: Final = tool_params_without_forced_hosted_mcp(
+        raise_if_a_forced_hosted_tool_stays(
             cast(  # cast-ok: widening untyped tool kwargs to object is always sound, the helper validates them
                 Mapping[str, object],
-                {
-                    "tools": tools,
-                    "tool_choice": tool_choice,
-                    "parallel_tool_calls": parallel_tool_calls,
-                    "functions": functions,
-                },
+                {"tools": tools, "tool_choice": tool_choice},
             ),
             model=model,
             route=custom_llm_provider,
@@ -5871,13 +5866,13 @@ def completion(
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
-            "tools": routed_tool_params.get("tools"),
-            "tool_choice": None if drops_tool_choice else routed_tool_params.get("tool_choice"),
+            "tools": tools,
+            "tool_choice": None if drops_tool_choice else tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
             "api_version": api_version,
-            "parallel_tool_calls": routed_tool_params.get("parallel_tool_calls"),
+            "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
             "reasoning_effort": reasoning_effort,
             "verbosity": verbosity,

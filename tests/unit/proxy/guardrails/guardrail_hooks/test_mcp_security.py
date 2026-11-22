@@ -267,7 +267,7 @@ def _prisma_whose_toolset_read_fails() -> MagicMock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
-async def test_blocks_the_name_with_the_policy_result_when_the_toolset_read_fails(guardrail, call_type):
+async def test_blocks_the_name_with_a_retryable_503_when_the_toolset_read_fails(guardrail, call_type):
     data: Final = {
         "tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/research"}],
         "guardrails": ["test-mcp-security"],
@@ -280,11 +280,46 @@ async def test_blocks_the_name_with_the_policy_result_when_the_toolset_read_fail
         pytest.raises(HTTPException) as exc,
     ):
         await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 503
+    assert exc.value.detail["error"] != "Violated guardrail policy"
     assert exc.value.detail["unregistered_servers"] == []
     assert exc.value.detail["unverified_servers"] == ["research"]
     assert "could not read the saved toolset of MCP server(s): research" in exc.value.detail["detection_message"]
+    assert exc.value.detail["detection_message"].endswith("Try again.")
     assert "unregistered" not in exc.value.detail["detection_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+async def test_a_server_known_to_be_unregistered_keeps_the_policy_400_when_another_toolset_read_fails(
+    guardrail, call_type
+):
+    async def find_toolset(*, where: dict[str, str]) -> MCPToolset | None:
+        if where["toolset_name"] == "research":
+            raise RuntimeError("toolset table unavailable")
+        return None
+
+    prisma: Final = _prisma_whose_toolset_read_fails()
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(side_effect=find_toolset)
+    data: Final = {
+        "tools": [
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/research"},
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/evil_server"},
+        ],
+        "guardrails": ["test-mcp-security"],
+    }
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"] == "Violated guardrail policy"
+    assert exc.value.detail["unregistered_servers"] == ["evil_server"]
+    assert exc.value.detail["unverified_servers"] == ["research"]
 
 
 @pytest.mark.asyncio
@@ -382,5 +417,6 @@ async def test_a_batch_upload_is_refused_instead_of_dropping_a_record_when_the_t
             user_api_key_dict=UserAPIKeyAuth(),
             proxy_logging_obj=_proxy_logging_running(guardrail),
         )
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 503
     assert exc.value.detail["unverified_servers"] == ["research"]
+    assert exc.value.detail["detection_message"].endswith("Try again.")

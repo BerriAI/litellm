@@ -1040,6 +1040,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                         route="bedrock",
                         drop_params=drop_params,
                         remedy=hosted_mcp_remedy,
+                        handling="drops",
                     )
                 ),
             )
@@ -1072,6 +1073,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     route="bedrock",
                     drop_params=drop_params,
                     remedy=hosted_mcp_remedy,
+                    handling="drops",
                 ),
                 optional_params={},
                 model=model,
@@ -1095,6 +1097,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 route="bedrock",
                 drop_params=drop_params,
                 remedy=hosted_mcp_remedy,
+                handling="drops",
             ),
         }
 
