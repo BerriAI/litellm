@@ -10612,3 +10612,30 @@ def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every
     assert "deepwiki" not in json.dumps(mapped)
     assert "get_weather" in json.dumps(mapped["tools"])
     assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
+@pytest.mark.respx(assert_all_called=True)
+@_SERVED_TIER_BY_TRAFFIC_TYPE
+def test_vertex_stream_reports_the_served_tier_on_its_finish_chunk(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str, traffic_type: str, served_tier: str | None
+) -> None:
+    respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:streamGenerateContent.*").mock(
+        return_value=_gemini_sse(_vertex_response_with_traffic_type(traffic_type))
+    )
+
+    chunks: Final = list(
+        completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            service_tier="priority",
+            stream=True,
+            vertex_credentials=_cached_vertex_credentials,
+            vertex_project="test-project",
+            vertex_location="global",
+            client=HTTPHandler(),
+        )
+    )
+    finish_chunks: Final = [chunk for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason]
+
+    assert len(finish_chunks) == 1
+    assert getattr(finish_chunks[0], "service_tier", None) == served_tier
