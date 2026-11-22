@@ -16,6 +16,7 @@ from litellm.types.utils import Choices, ModelResponse, ModelResponseStream
 from litellm.utils import CustomStreamWrapper
 
 MODEL: Final = "gemini/gemini-3.8-flash"
+IMAGE_MODEL: Final = "gemini/gemini-3.1-flash-image"
 VERTEX_MINTED: Final = base64.b64encode(b"minted-by-vertex").decode()
 VERTEX_MINTED_TEXT: Final = base64.b64encode(b"minted-by-vertex-for-text").decode()
 AI_STUDIO_MINTED: Final = base64.b64encode(b"minted-by-ai-studio").decode()
@@ -118,9 +119,10 @@ async def _complete(
     backend: Callable[[httpx.Request], httpx.Response],
     is_async: bool,
     stream: bool,
+    model: str = MODEL,
 ) -> str:
     kwargs: Final = {
-        "model": MODEL,
+        "model": model,
         "messages": list(messages),
         "tools": list(TOOLS),
         "stream": stream,
@@ -250,6 +252,7 @@ async def test_image_signature_rejected_by_the_other_backend_is_resent_once_with
         _replay((_rejected(AI_STUDIO_REJECTION), _answer(stream)), sent),
         is_async,
         stream,
+        IMAGE_MODEL,
     )
     assert answer == "Berlin is 12C."
     assert len(sent) == 2
