@@ -1,5 +1,5 @@
 use litellm_llms::{
-    base_llm::messages::transformation::BaseMessagesConfig,
+    base_llm::messages::transformation::MessagesReply,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
 };
 use litellm_llms_types::formats::messages::MessagesResponse;

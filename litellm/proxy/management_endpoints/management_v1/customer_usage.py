@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AfterValidator, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem, reject_unknown_query_params
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
@@ -22,9 +24,10 @@ from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V
 from litellm.proxy.management_endpoints.management_v1.customers import (
     raise_public,
     reject_duplicate_list_params,
-    require_customer_admin,
 )
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
+from litellm.proxy.management_helpers.app_access import granted_app_ids
+from litellm.proxy.management_helpers.app_groups import AppGroupRepository
 from litellm.proxy.management_helpers.apps import AppRepository
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure, PrismaRecord
 from litellm.proxy.management_helpers.utils import (
@@ -110,6 +113,14 @@ async def validate_app_filter(prisma_client: PrismaClient, app_id: str | None) -
         raise HTTPException(status_code=404, detail="App not found.")
 
 
+async def validate_group_filter(prisma_client: PrismaClient, app_group_id: str | None) -> None:
+    if app_group_id is None:
+        return
+    row: Final = await AppGroupRepository(prisma_client).table.find_unique(where={"app_group_id": app_group_id})
+    if row is None:
+        raise HTTPException(status_code=404, detail="App group not found.")
+
+
 async def customer_activity(
     prisma_client: PrismaClient,
     entity: CustomerEntity,
@@ -122,8 +133,10 @@ async def customer_activity(
     page: int,
     page_size: int,
     app_id: str | None = None,
+    app_group_id: str | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     await validate_app_filter(prisma_client, app_id)
+    await validate_group_filter(prisma_client, app_group_id)
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailycustomermemberspend",
@@ -138,15 +151,29 @@ async def customer_activity(
         page=page,
         page_size=page_size,
         app_id=app_id,
+        app_group_id=app_group_id,
         resolve_entity_metadata=partial(page_aliases, metadata_table(prisma_client, entity), entity),
     )
+
+
+async def require_usage_access(
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    prisma_client: Annotated[PrismaClient, Depends(get_customer_usage_prisma)],
+    app_id: Annotated[str | None, Query(include_in_schema=False)] = None,
+) -> None:
+    """Proxy admins read all usage. Anyone else must name an app granted to them through object_permission.apps."""
+    if auth.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    database: Final = require_attributes(prisma_client, DatabaseClient, "db").db
+    if app_id is None or app_id not in await granted_app_ids(database, auth.user_id):
+        raise_public(Failure(ErrorCode.FORBIDDEN))
 
 
 router: Final = APIRouter(
     prefix=MANAGEMENT_V1_PREFIX,
     tags=["customer usage"],
     dependencies=(
-        Depends(require_customer_admin),
+        Depends(require_usage_access),
         Depends(reject_unknown_query_params),
         Depends(reject_duplicate_list_params),
     ),
@@ -193,8 +220,12 @@ async def customer_organization_daily_activity_aggregated(
     app_id: Annotated[
         str | None, Query(min_length=1, description="One app ID within the selected customer scope")
     ] = None,
+    app_group_id: Annotated[
+        str | None, Query(min_length=1, description="Group attributed when the request ran, including apps since moved")
+    ] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     await validate_app_filter(prisma_client, app_id)
+    await validate_group_filter(prisma_client, app_group_id)
     date_error: Final = aggregated_date_range_error(start_date, end_date)
     if date_error is not None:
         raise_activity_error(InvalidDateRange(reason=date_error))
@@ -224,7 +255,7 @@ async def customer_organization_daily_activity_aggregated(
     )
     return await get_daily_activity_aggregated(
         daily_activity_repository(prisma_client),
-        replace(scope, app_id=app_id),
+        replace(scope, app_id=app_id, app_group_id=app_group_id),
         entity_metadata_field=aliases,
         include_entity_breakdown=True,
         api_key_limit=1,
@@ -251,6 +282,9 @@ async def customer_organization_daily_activity(
     app_id: Annotated[
         str | None, Query(min_length=1, description="One app ID within the selected customer scope")
     ] = None,
+    app_group_id: Annotated[
+        str | None, Query(min_length=1, description="Group attributed when the request ran, including apps since moved")
+    ] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     return await customer_activity(
         prisma_client,
@@ -264,6 +298,7 @@ async def customer_organization_daily_activity(
         page,
         page_size,
         app_id,
+        app_group_id,
     )
 
 
@@ -287,6 +322,9 @@ async def customer_team_daily_activity(
     app_id: Annotated[
         str | None, Query(min_length=1, description="One app ID within the selected customer scope")
     ] = None,
+    app_group_id: Annotated[
+        str | None, Query(min_length=1, description="Group attributed when the request ran, including apps since moved")
+    ] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     return await customer_activity(
         prisma_client,
@@ -300,6 +338,7 @@ async def customer_team_daily_activity(
         page,
         page_size,
         app_id,
+        app_group_id,
     )
 
 
@@ -323,6 +362,9 @@ async def customer_member_daily_activity(
     app_id: Annotated[
         str | None, Query(min_length=1, description="One app ID within the selected customer scope")
     ] = None,
+    app_group_id: Annotated[
+        str | None, Query(min_length=1, description="Group attributed when the request ran, including apps since moved")
+    ] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     return await customer_activity(
         prisma_client,
@@ -336,4 +378,5 @@ async def customer_member_daily_activity(
         page,
         page_size,
         app_id,
+        app_group_id,
     )

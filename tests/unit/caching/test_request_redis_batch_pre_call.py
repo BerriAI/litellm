@@ -21,15 +21,18 @@ from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores._route import route
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.router_cooldowns import ActiveCooldowns, RouterCooldownStore
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsageStore, UsageCounter
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils import routing_prefetch
+from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.routing_prefetch import arm_cooldowns, read_cooldowns
 from litellm.router_utils.routing_read_batch import RoutingReadBatch
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.router_usage_double import FakeUsageRead
+from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
 from .redis_batch_double import (
     FakeNativePending,
@@ -274,8 +277,83 @@ async def test_simple_shuffle_cooldown_prefetch_does_not_arm_usage_reads_or_read
     assert redis_cache.alone == []
 
 
+def _router_recording_cooldown_reads() -> tuple[Router, FakeCooldowns]:
+    """A router beside other groups whose cooldown store records the ids of every read it is asked for."""
+    handle: Final = FakeCooldowns(has_redis=True)
+    router: Final = Router(
+        model_list=[
+            _deployment("dep-a"),
+            _deployment("dep-b"),
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "test", "mock_response": "pong"},
+                "model_info": {"id": "dep-wild"},
+            },
+            {
+                "model_name": "other",
+                "litellm_params": {"model": "anthropic/other", "api_key": "test", "mock_response": "pong"},
+                "model_info": {"id": "dep-other"},
+            },
+        ],
+        model_group_alias={"claude-alias": _MODEL_GROUP},
+        routing_strategy="simple-shuffle",
+    )
+    router.cooldown_cache = CooldownCache(store=RouterCooldownStore(handle), default_cooldown_time=60)
+    return router, handle
+
+
+def _reads(handle: FakeCooldowns) -> list[frozenset[str]]:
+    return [frozenset(ids) for ids in handle.declared]
+
+
+async def _pick(router: Router, model: str) -> str:
+    deployment: Final = await router.async_get_available_deployment(model=model, messages=_PING, request_kwargs={})
+    return deployment["model_info"]["id"]
+
+
+_CLAUDE: Final = frozenset({"dep-a", "dep-b"})
+_WILD: Final = frozenset({"dep-wild"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("armed_for", "routed", "reads", "pickable"),
+    [
+        pytest.param(
+            None, _MODEL_GROUP, [_CLAUDE | {"dep-wild", "dep-other"}], _CLAUDE, id="no_model_reads_every_deployment"
+        ),
+        pytest.param(_MODEL_GROUP, _MODEL_GROUP, [_CLAUDE], _CLAUDE, id="group"),
+        pytest.param("claude-alias", "claude-alias", [_CLAUDE], _CLAUDE, id="alias"),
+        pytest.param("openai/gpt-4o", "openai/gpt-4o", [_WILD], _WILD, id="wildcard"),
+        pytest.param("other", _MODEL_GROUP, [frozenset({"dep-other"}), _CLAUDE], _CLAUDE, id="uncovered"),
+        pytest.param("bedrock/nothing-serves-this", _MODEL_GROUP, [_CLAUDE], _CLAUDE, id="no_candidates_arms_nothing"),
+    ],
+)
+async def test_the_auth_cooldown_prefetch_reads_only_the_requested_models_candidates_and_routing_takes_it(
+    armed_for: str | None, routed: str, reads: list[frozenset[str]], pickable: frozenset[str]
+):
+    router, handle = _router_recording_cooldown_reads()
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        RoutingContext(router).arm_cooldown_prefetch(armed_for)
+        picked: Final = await _pick(router, routed)
+
+    assert (_reads(handle), picked in pickable) == (reads, True)
+
+
+@pytest.mark.asyncio
+async def test_the_request_cooldown_prefetch_reads_only_the_requested_groups_candidates_and_routing_takes_it():
+    router, handle = _router_recording_cooldown_reads()
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        RoutingContext(router).arm_read_prefetch(_MODEL_GROUP, {"metadata": {"user_api_key_team_id": "team-1"}})
+        picked: Final = await _pick(router, _MODEL_GROUP)
+
+    assert (_reads(handle), picked in _CLAUDE) == ([_CLAUDE], True)
+
+
 def _user_entry() -> tuple[_CacheEntry, LiteLLM_UserTable]:
-    entry = _CacheEntry("user-1", "user_row", LiteLLM_UserTable, 42)
+    entry = _CacheEntry(AuthObject.user("user-1"), "user_row", LiteLLM_UserTable, 42)
     return entry, LiteLLM_UserTable(user_id="user-1", max_budget=None, spend=0.0)
 
 
@@ -285,7 +363,7 @@ async def test_auth_write_back_rides_the_native_pre_call_batch_and_the_scope_dra
     natives: Final = FakeNatives()
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await _write_back([_user_entry()], cache)
-        assert cache.get_local("user-1")["user_id"] == "user-1"
+        assert cache.get_local(AuthObject.user("user-1"))["user_id"] == "user-1"
         assert natives.built[0].events == ["declare write_back (('user-1', 42),)"]
         await request.flush_pre_call()
     assert natives.built[0].events[-1] == "flush_pre"
@@ -300,44 +378,35 @@ async def test_auth_write_back_outside_a_scope_writes_through_as_before():
 
 
 @pytest.mark.asyncio
-async def test_a_key_the_request_read_as_absent_is_not_read_again_by_a_per_key_get():
-    cache, fake = shared_cache()
-    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        await prefetch_identity_keys(["absent-key"], cache)
-        assert await cache.async_get_cache("absent-key") is None
-        await cache.async_set_cache("absent-key", {"v": 1}, ttl=5)
-        assert await cache.async_get_cache("absent-key") == {"v": 1}
-        await request.flush_pre_call()
-    assert fake.commands == []
-
-
-@pytest.mark.asyncio
 async def test_management_object_writes_inside_a_request_ride_its_pipeline_and_write_through_outside():
     cache, fake = shared_cache()
     natives: Final = FakeNatives()
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        await cache.async_set_cache("team_id:t1", {"team_id": "t1"}, ttl=60)
-        await cache.async_set_cache("hashed-key-object", {"token": "hashed-key-object"}, ttl=60)
-        assert cache.get_local("team_id:t1") == {"team_id": "t1"}
-        assert await cache.async_get_cache("hashed-key-object") == {"token": "hashed-key-object"}
+        await cache.async_set_cache(AuthObject.team("t1"), {"team_id": "t1"}, ttl=60)
+        await cache.async_set_cache(AuthObject.virtual_key("hashed-key-object"), {"token": "hashed-key-object"}, ttl=60)
+        assert cache.get_local(AuthObject.team("t1")) == {"team_id": "t1"}
+        assert await cache.async_get_cache(AuthObject.virtual_key("hashed-key-object")) == {
+            "token": "hashed-key-object"
+        }
         await request.flush_pre_call()
     assert natives.built[0].events == [
-        "declare set team_id:t1 ttl=60.0",
-        "declare set hashed-key-object ttl=60.0",
+        "declare set team_id:t1 ttl=60",
+        "declare set hashed-key-object ttl=60",
         "flush_pre",
     ]
-    await cache.async_set_cache("team_id:t2", {"team_id": "t2"}, ttl=60)
+    await cache.async_set_cache(AuthObject.team("t2"), {"team_id": "t2"}, ttl=60)
     assert fake.commands == [("SET", "team_id:t2", 60.0)]
 
 
 @pytest.mark.asyncio
 async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_one_pipeline_before_returning():
     redis_cache = FakeRedisCache()
-    cache, fake = shared_cache(connection=redis_cache)
+    cache, fake = shared_cache()
+    cache.attach_redis_cache(redis_cache)
     usage_cache = DualCache(redis_cache=redis_cache)
     usage_cache.in_memory_cache.set_cache("team_id:t1", "stale team")
     usage_cache.in_memory_cache.set_cache("team_alias:alpha", "stale alias")
-    cache.set_local("team_alias:alpha", "stale alias", None)
+    cache.set_local(AuthObject.team_alias("alpha"), "stale alias", None)
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.internal_usage_cache = InternalUsageCache(dual_cache=usage_cache)
     team = LiteLLM_TeamTableCachedObj(team_id="t1", team_alias="alpha")
@@ -345,14 +414,14 @@ async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_on
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await cache_team_object("t1", team, cache, proxy_logging_obj)
         assert natives.built[0].events == [
-            "declare set team_id:t1 ttl=60.0",
+            "declare set team_id:t1 ttl=60",
             "declare del team_alias:alpha",
             "flush_pre",
         ], "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
         assert usage_cache.in_memory_cache.get_cache("team_id:t1") is None
         assert usage_cache.in_memory_cache.get_cache("team_alias:alpha") is None
-        assert cache.get_local("team_alias:alpha") is None
-        assert cache.get_local("team_id:t1")["team_id"] == "t1"
+        assert cache.get_local(AuthObject.team_alias("alpha")) is None
+        assert cache.get_local(AuthObject.team("t1"))["team_id"] == "t1"
         await request.flush_pre_call()
     assert fake.commands == [] and redis_cache.alone == []
 
@@ -360,21 +429,25 @@ async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_on
 @pytest.mark.asyncio
 async def test_a_changed_default_in_memory_ttl_reaches_the_native_store():
     cache, fake = shared_cache()
-    cache.update_cache_ttl(default_in_memory_ttl=5, default_redis_ttl=None)
+    cache.update_cache_ttl(default_in_memory_ttl=5)
     assert [settings.memory_ttl for settings in fake.settings] == [None, 5]
 
 
 @pytest.mark.asyncio
-async def test_identity_prefetch_is_one_read_after_which_hits_and_misses_alike_cost_no_read():
+async def test_identity_prefetch_is_one_read_after_which_a_hit_costs_no_read_and_a_miss_is_asked_of_the_request():
     cache, fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
     natives: Final = FakeNatives()
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
-        await prefetch_identity_keys(["key-hit", "end_user_id:eu-miss", "key-hit"], cache)
-        assert await cache.async_get_cache("key-hit") == {"k": "key-hit"}
-        assert await cache.async_get_cache("end_user_id:eu-miss") is None
+        await prefetch_identity_keys(
+            [AuthObject.virtual_key("key-hit"), AuthObject.end_user("eu-miss"), AuthObject.virtual_key("key-hit")],
+            cache,
+        )
+        assert await cache.async_get_cache(AuthObject.virtual_key("key-hit")) == {"k": "key-hit"}
+        assert fake.commands == []
+        await cache.async_get_cache(AuthObject.end_user("eu-miss"))
     assert natives.built[0].events == ["declare auth_cache end_user_id:eu-miss,key-hit", "flush_pre"]
-    assert fake.commands == []
-    assert cache.get_local("end_user_id:eu-miss") is None
+    assert fake.requests[-1] == ("get", natives.built[0])
+    assert cache.get_local(AuthObject.end_user("eu-miss")) is None
 
 
 @pytest.mark.asyncio
@@ -384,7 +457,9 @@ async def test_the_auth_prefetch_and_the_armed_cooldown_read_go_out_in_one_nativ
     natives: Final = FakeNatives()
 
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: arm_cooldowns(cooldowns, ["dep-a"]))
+        await prefetch_identity_keys(
+            [AuthObject.virtual_key("key-hit")], cache, before_read=lambda: arm_cooldowns(cooldowns, ["dep-a"])
+        )
         arm_cooldowns(cooldowns, ["dep-a"])
         active = await read_cooldowns(cooldowns, ["dep-a"], None)
         await request.flush_pre_call()
@@ -398,11 +473,13 @@ async def test_the_auth_prefetch_and_the_armed_cooldown_read_go_out_in_one_nativ
 @pytest.mark.asyncio
 async def test_a_prefetch_served_from_memory_arms_no_early_cooldown_read():
     cache, _fake = shared_cache()
-    cache.set_local("key-hit", {"k": "key-hit"}, None)
+    cache.set_local(AuthObject.virtual_key("key-hit"), {"k": "key-hit"}, None)
     armed: Final[list[str]] = []  # mutable-ok: records the arming callback
 
     with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
-        await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: armed.append("armed"))
+        await prefetch_identity_keys(
+            [AuthObject.virtual_key("key-hit")], cache, before_read=lambda: armed.append("armed")
+        )
 
     assert armed == []
 

@@ -28,7 +28,7 @@ from models import ChatResponse, TeamInfoResponse
 
 pytestmark = pytest.mark.e2e
 
-TEAM_MODEL = "gemini-2.5-flash"
+TEAM_MODEL = "gemini-3.8-flash"
 OUTSIDE_MODEL = "gpt-5.5"
 
 

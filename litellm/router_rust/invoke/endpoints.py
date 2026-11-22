@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import without
 from litellm.litellm_core_utils.routing_common_utils import without_router_only_kwargs
+from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.shaping import (
@@ -1003,6 +1004,21 @@ def attempt_call(
             return AttemptCall(plan.host_op, kwargs, kwargs, requested, group)
 
 
+_INPUT_ITEMS_CALLER_ONLY_KEYS: Final = INPUT_ITEMS_QUERY_KEYS | {"extra_query"}
+
+
+def _caller_only_keys(endpoint: str) -> frozenset[str]:
+    return _INPUT_ITEMS_CALLER_ONLY_KEYS if endpoint == "alist_input_items" else frozenset()
+
+
+def _deployment_call_params(
+    endpoint: str, data: Mapping[str, object], kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    params: Final = without_retrieve_stream_defaults(data, kwargs)
+    caller_only_keys: Final = _caller_only_keys(endpoint)
+    return without(params, *caller_only_keys) if caller_only_keys else params
+
+
 def _generic_attempt(
     core: EndpointCore,
     plan: Plan,
@@ -1026,6 +1042,7 @@ def _generic_attempt(
         function_name="_ageneric_api_call_with_fallbacks",
         splits_stream_timeout=handler in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
         opens_responses_socket=socket,
+        caller_only_keys=_caller_only_keys(plan.endpoint),
     )
     model_name: Final = str(data.get("model"))
     endpoint: Final = kwargs.get("endpoint")
@@ -1044,7 +1061,7 @@ def _generic_attempt(
         )
     provider: Final = _generic_provider(data)
     final: Final = {
-        **without_retrieve_stream_defaults(data, kwargs),
+        **_deployment_call_params(plan.endpoint, data, kwargs),
         "caching": core.shaping.cache_responses,
         **kwargs,
         "model": model_name,

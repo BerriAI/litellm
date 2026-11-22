@@ -6,8 +6,9 @@ from functools import cached_property
 from typing import Final, Literal
 
 import httpx
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
@@ -19,7 +20,9 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..chat.handler import GenAIHubOrchestrationError
-from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
+from ..credentials import get_token_creator
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class Usage(LiteLLMBaseModel):
@@ -102,17 +105,25 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments: Final = []
-            deployments: Final[AICoreDeploymentList] = client.get(
-                join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-            ).json()
-            for deployment in deployments.get("resources", []):
-                if deployment["scenarioId"] == "orchestration":
-                    config_details: AICoreConfiguration = client.get(
-                        join_api_base(self.base_url, f"lm/configurations/{deployment['configurationId']}"),
-                        headers=self.headers,
-                    ).json()
-                    if config_details["executableId"] == "orchestration":
-                        valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
+            deployments: Final = require_get(
+                _DECODED_JSON.validate_python(
+                    client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
+                )
+            )
+            for deployment in iter_items(deployments.get("resources", [])):
+                if subscript(deployment, "scenarioId") == "orchestration":
+                    config_details = _DECODED_JSON.validate_python(
+                        client.get(
+                            join_api_base(
+                                self.base_url, f"lm/configurations/{subscript(deployment, 'configurationId')}"
+                            ),
+                            headers=self.headers,
+                        ).json()
+                    )
+                    if subscript(config_details, "executableId") == "orchestration":
+                        valid_deployments.append(
+                            (subscript(deployment, "deploymentUrl"), subscript(deployment, "createdAt"))
+                        )
             return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
     def get_error_class(self, error_message, status_code, headers):
