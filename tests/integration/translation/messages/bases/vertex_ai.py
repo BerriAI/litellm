@@ -10,7 +10,19 @@ from integration.translation.templates.vertex_ai import (
 )
 
 GEMINI_3_5_FLASH_THOUGHT_SIGNATURE: Final = "AY89a1+kriNs9YsPegJQxgjTWsMlxsqPU/UkHDyz4EK+3FRrE52ygqPIHTvkblgKKiO5Fn8R9D3iu//i+YnuuZ+e7W0yxUoFScas89b5rn3vZHsihnUA7VTe3b7beth1IftteoTGZ3F8OSLrSIP8HKn4xTIx35eeNEt5oiD3K5rTQrdklqO277HvTDhu/LuZhZ0pzaWciGQEc61epIBBpC2ygu8V4L8TekUVZnz6qzSzxipdiQStQ8dZou43334hMnxOR6JjJCGxqt/1K+C0vXX6YP6f+Bph5VhPSnvy2Z1uApi3TUxAcsDDyVewIr+ha2G6DPhN1Oi5uZZNhmbvH01Uq5OOquF1uEICq2m/35LhJIbDNM9N7oI1Z6L94P9xdugeFXM2S7wdJfc8sdg09vEzNeA++GK25zRuB4hU7XyaG4XnWjmu2kswi4sf+EyrO/K0P2tb/ZCJu7kJTtWTiD1wgSIl1eqS8ORKKsXDN2hIbFrtsNR50WIvVzd6"
-CLAUDE_HAIKU_5_5_MESSAGES_THINKING_SIGNATURE: Final = "CAQS4wYKEggSEAIYAjgBQgh0aGlua2luZxIMgzBnOw4aYVVqPKRPGgyphQhlJ0pt7tgasWIiMOWM4ATud/TWad7qo/Eh9ZSXhK3IcgnwdgqVeXog9D1q/y69qnyrHdN3a8RYUrAgtyr+BYkQvRW/cF0vH0l86vIM95N77usMXdZKRX3I8XW68KpQedYwFoR12sS9q7A24CcN5UMyQljcF76GhmAFnvpk4yEs7pk8b7ZRSXzBsU6wJfMYCoGXC9r3hZN8m4sBHLJGJRv5ekzEVGVvGCYooE1fBZ8ik/j2DCNOyVdDs4/7xzkqRo7dgFsNJI9Nm7+HgwEdvb1rORObJWooeYb8tfofTFVO43qvNdvM2p2d1Dcf6lsQmvE5fgDFc0t75AuvSZUrgDNe2bMXd2USxxL9YtJ1I9ae96hZAnyOqYZlyiuZf5lZtQQSRouVIdZvFUNonOHLy/Uyw/BGF2bO1/5rIFJBDJC8C6BpbyfDQPpal4YkALulDdgeJWI6dmJYUiK+A+3zcVgQh7at5JPbG5n0tQgO2IFkayqLjCf67AaGS6Xq8J97F+FSwppKvS0TvRbTEvIK1iO3HZZRwcRIcFBn5Llvv6R9JFknXEtohUqvfTnZfuPQ104vxqm91G2rFK1R6C1md6Ze3pJWD0wgkgZyQ7PIKsAmBF1qNoniFi5GVRJx6XHSzr4ZAPDDO1aYABIRl5OWilrkQP3xedj5pcAjJqFuto3cXlhQSNUrocOpEV5IIXxSJc5g5VwYAybpMU4FVImzkCJGJaHLWQKRo0k4IcvXLxBPNXZhop2CkEeazZskF4de0jn1dJa3sQ9rT+7fNVEWPvP+lkBqu/lfObBPVh5jGeouDrRcJvyeYKNZ0NQBdznM5rv4rN8HczeYg1WaYuNOMBvkqT5Zg/UhLHhHV7NWBSa0zt9DPevU/S3OBR1E0YIzCtPFTa0Ia4gGTX40hEc+supCA3h4HpehqMqETGe++Ah+U10HRhlb6lVfRhkU0ypdPqtpodgw/OdUOy7f3/sc31xknudQMoEQqv48F4gR34ee18Op+w1MGn0FAzAFE95D2BuJObRqUhZ6N6nWtlWOqJjCPR+0OrwR3JlxWh19Vxps/ASL6HaJKjClVG2ffojvmVnY8aHjEfI8ifbHE6EYAQ=="
+CLAUDE_HAIKU_5_5_MESSAGES_THINKING_SIGNATURE: Final = (
+    "CAQSjAYKEggUEAIYAjgBQgh0aGlua2luZxIMrSidazk3ktKpmQpeGgwTA2lAt2W83VRPLlAiMLq3TMv2CGOoAe6yCDeUOYr5gxqn"
+    "OP14sWSd/KMcxDo3NLY6L+VrGJDE+Z1zY6kh8iqnBR3OjHaDlw6lZb9x0AUegPN0SWaw2zxbK6mJm/qqBxLGaUaX06VTH/53MgTq"
+    "DmKTVtivawDDuwu95wf9Mk1O22SHCBP135bJL5tkHsK2kNQFDUDmB/sT4Qc1Rf4uI3GXvIxFT6l5PyQaJLflemgTF5tWVMOAuoHh"
+    "8QL/6ZilKWwOH5pQf+3L0KP3w76FXi3c9GXMSXC3by7+mkKat0A9qdMyv/NVEMRBK33/tBlqgmZUVyWvTVqnL847Zdpckg1PiNYI"
+    "1IAgUh3hlAnoGjwBmDZqlqVZaXV/Z5Kk8KDRXM4AwdtXzAZUmEtOLr21kK0Wp9vnrEaz0ApjxVkYAjijQsltVZpb179/LyK82j/F"
+    "HWRjEGEuMVt4WF1AEA/D8gR1CREqvZ432bSE4lhXSDPbH/XeCs17gw06sGD548jQEfoknMtZ2h8F/O+BeLe3TPdLchmkKipAqNmg"
+    "eJGHgMVG7b/9Scf+U0FEiDj29hLN0XyvaR58jKAk2GypZR3b4Sux6HIgmavD9jnErPj4whfLfGHCJSoy/xL3V+NZHH+TZrCk7pnI"
+    "1ZrYU1F6B2qvuhElCGdf4nhjqkBJyOn3ce2DmrMiuVv0JYdy3GQqpraQB5QIneOInewshn/hXwvnIc0xXoVu+JVWwVYCxq2CkksV"
+    "7IwL1iMu4lc1ZedE2+Bvf18dRpn5rMmYBbQNZURn4NuJN2vMvtf8OHf/7HGqGd6YDFbF/kKVSBBXjGPXw8usi6D/QNiP6s59PwEZ"
+    "1FtjbfNm2K4rSCB81kCsYCtIGwNONWFxUNbYBW3/YOoccMeCxZR263cPyHvO1+L9NGuhwv8kwiZRMfuIQUYpKjMTb3C4M0ilZblG"
+    "qfJ9nYJcJBhXTiiapuoCGxxARXiXiJyq5hyMhDlP2A26z00YAQ=="
+)
 
 CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -33,7 +45,7 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_vrtx_011CfjuyLkoJCtCANzSshqj7",
+        "id": "msg_vrtx_011ChJAfB5i24QvdEdakXtBm",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -47,26 +59,28 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
     expected_litellm_response={
-        "model": "vertex_ai/claude-haiku-4-5@20251001",
-        "id": "msg_vrtx_011CfjuyLkoJCtCANzSshqj7",
+        "id": "msg_vrtx_011ChJAfB5i24QvdEdakXtBm",
         "type": "message",
         "role": "assistant",
+        "model": "vertex_ai/claude-haiku-4-5@20251001",
         "content": [{"type": "text", "text": "Hello."}],
-        "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
-        "stop_details": None,
         "usage": {
             "input_tokens": 17,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
+        "container": None,
+        "stop_details": None,
     },
 )
 
@@ -91,7 +105,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-4-6",
-        "id": "msg_vrtx_011CfjuxNMG2o9mmi6TvgC48",
+        "id": "msg_vrtx_011ChJAfA4BznmhBWM3F3gsc",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello!"}],
@@ -105,26 +119,28 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
     expected_litellm_response={
-        "model": "vertex_ai/claude-sonnet-4-6@default",
-        "id": "msg_vrtx_011CfjuxNMG2o9mmi6TvgC48",
+        "id": "msg_vrtx_011ChJAfA4BznmhBWM3F3gsc",
         "type": "message",
         "role": "assistant",
+        "model": "vertex_ai/claude-sonnet-4-6@default",
         "content": [{"type": "text", "text": "Hello!"}],
-        "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
-        "stop_details": None,
         "usage": {
             "input_tokens": 18,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
+        "container": None,
+        "stop_details": None,
     },
 )
 
@@ -149,7 +165,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-5",
-        "id": "msg_vrtx_011CfjuyZQJsY8CfdZxY6C9E",
+        "id": "msg_vrtx_011ChJAfB6hQq1QVZW3r6Gn3",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -164,19 +180,18 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
     expected_litellm_response={
-        "model": "vertex_ai/claude-sonnet-5@default",
-        "id": "msg_vrtx_011CfjuyZQJsY8CfdZxY6C9E",
+        "id": "msg_vrtx_011ChJAfB6hQq1QVZW3r6Gn3",
         "type": "message",
         "role": "assistant",
+        "model": "vertex_ai/claude-sonnet-5@default",
         "content": [{"type": "text", "text": "Hello."}],
-        "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
-        "stop_details": None,
         "usage": {
             "input_tokens": 21,
             "cache_creation_input_tokens": 0,
@@ -184,7 +199,10 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
+        "container": None,
+        "stop_details": None,
     },
 )
 
@@ -209,7 +227,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-opus-4-8",
-        "id": "msg_vrtx_011Cfjuyk5joSiAW8h6nktJh",
+        "id": "msg_vrtx_011ChJAfFsSeXBjLjmDPH9du",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -224,19 +242,18 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
     expected_litellm_response={
-        "model": "vertex_ai/claude-opus-4-8@default",
-        "id": "msg_vrtx_011Cfjuyk5joSiAW8h6nktJh",
+        "id": "msg_vrtx_011ChJAfFsSeXBjLjmDPH9du",
         "type": "message",
         "role": "assistant",
+        "model": "vertex_ai/claude-opus-4-8@default",
         "content": [{"type": "text", "text": "Hello."}],
-        "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
-        "stop_details": None,
         "usage": {
             "input_tokens": 21,
             "cache_creation_input_tokens": 0,
@@ -244,7 +261,10 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
+        "container": None,
+        "stop_details": None,
     },
 )
 
@@ -303,17 +323,18 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
 )
 
 CLAUDE_SONNET_5_5_MESSAGES_THINKING_SIGNATURE_0: Final = (
-    "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"
+    "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"
 )
 
 CLAUDE_SONNET_5_5_MESSAGES_THINKING_SIGNATURE_1: Final = (
@@ -330,16 +351,15 @@ CLAUDE_SONNET_5_5_MESSAGES_THINKING_SIGNATURE_1: Final = (
 )
 
 CLAUDE_OPUS_5_5_MESSAGES_THINKING_SIGNATURE_0: Final = (
-    "CAQSuAUKEggSEAIYAjgBQgh0aGlua2luZxIMuvOumb0X7WEvCG/pGgyEiubGiCWEMWg7YgQiMOhK4Mj8OKMMZOczi5roOTadgSLN"
-    "L6MOk46J66LvPfihwIwowsxxkYa+EszhqUBYXSrTBIe+i63dRgUJd70m96/EnLB3GHAq+Q0ZhpE/USuwpJTc+MvI7KpuGtExRfnk"
-    "OXzocJOw+R6FxqDO2dHHp00t9+I1gKCFUTqrSfKO0YZspMYfJGzSRjx5vx1equok7iV0k0CoQ8kMpRLhD1zTvf862EX8GpMcNkQs"
-    "unrK/y7sQAhjPEDtSW4V8ipJF6E6RfJv5YOEsQKVx1kugmQEmItq4TLSMZd06Cip5CIkYrSsGhLYBfv5S2PFjXQGSOSkG9MDqjbI"
-    "kPzA/1H38oIpdRjvQYMnrfAo+SaXuXybcUM36Svtj/+KCfG0A7Qb+Xhs2fT322lCpneyN1hXpqu6C0xGipHn2UDmIKxXcuOcet6J"
-    "cCsjUB5BGf1H28hTtqZxunXUpZ9amTkDnyiXEEd7cwcdvFaqVd3/vRPJMSHLwbL8zY0VkWProBV54vW8GgPCFVWFw9B6LxjoPpbn"
-    "7DiDlPPpQMik03iC3z2K3HPunID3Zx5LQ80nhueu0pec6rmWKijzQy/KVP5YRd8e2w2WpEqi8OwbJzFqUC7Eb8YIpjSs629/vhW2"
-    "xJt09F0z2sbrs6JS8XZf0zzxWWLjoToWw/YKoJ/GOnJKxWJNI/4FutZ2Z79Xtdtk40DVQbjD4HT6MTw4r2z2UbnwkvACfUhqc5yE"
-    "kH4lsmx5tSzh1kLfJEAmqwYrHDwYCvT3AUrl9f0EMPQiZpE0yPu1A52y4Ko/6uQWGHddGqtG96kLqb8BhPQR4p+XapjW/6MW6gmn"
-    "kqrPPK6cl3CzcCy83Qojr1P3tt4CHu+bOeIYAQ=="
+    "CAQS2gQKEggUEAIYAjgBQgh0aGlua2luZxIM36PQDmg4s3sKb0cHGgwhJpsNmEMbfgiRK70iMBlG0eVS8MsuqvDWDoyz9tiLAiKo"
+    "FuJLBL/cFzZ4b/vE6GNPqRdxKdJbxRDojG3CTir1A6DpayBeRwdqN1nJRahs1oR6pMJ+Fi/QxaNIPMlJEJ06l7CPWM7FhOPlgiTL"
+    "Z7BpiOIEEzrZsV9kXtkar1H54r6wuI2R95ZZ2hqE1TyZhXvLO9Hl/xd9wBR+JbOzkEa6k37j8mxybLKR87+/NE0BS25Vf2x11Tt2"
+    "cO4SnIBnrJs1LDOqAOoucz94+h9faxI9WI8/hBaVoNv+u7XV9DLF5QttePYigcvAyofp6T3Pj71vq1FHCG1IMntU2WvmnGzD6RqO"
+    "JAeU6wz0dCLmaI+Q5+SlE+1cwOB+9aQgNGuPRFT244/F27fkFbqwDE0Qn3+2ZsSs9xsCt15x0scKBSmku7jwT6bQGgcEAFJuvfbv"
+    "Kg3i0n7RlgQNnvEI88tefNY3GAl0MzcaXY3txfBvkOiYP84saKZsZxSWj9pWvlTOoTcQE/WvfNeGmMtp7Ekun6BvRXoIXpKlDxNP"
+    "Azym6zJTFoFefV7Fi4jrOWEbdD5w4u3vJmgidkO+sH4VbxQGvdGFr1YwyqifZoBM04I6pQWgyOruoPSjcZiW3GAZH+t5fZICy6Wa"
+    "MD6NIQW5TV8yIgni5uQFO+34tj9BcaaxEpCX0DGDZNjqkg3370KUv5jthf9Y5aANyfNlXaqowZ3b1ZuhHxeJTdVK/UbnAghG9i6j"
+    "8+qhqEzr4hgB"
 )
 
 GEMINI_3_8_FLASH_MESSAGES_THOUGHT_SIGNATURE_0: Final = (
@@ -406,34 +426,34 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                     "client for this project review. Consider zero, negative and non-integer quantities before choosing "
                     "the next file to inspect."
                 ),
-            },
+            }
         ],
         "tools": MESSAGES_REQUEST["tools"],
     },
     mock_provider_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
         "model": "claude-sonnet-5-5",
-        "id": "msg_vrtx_011Cg38paXLscBt8ARDQWjmd",
+        "id": "msg_vrtx_011ChJAfLXjaofuNiBirf4mD",
         "content": [
             {
                 "type": "thinking",
                 "thinking": (
-                    "Since the user asked for the validation file first, I'll focus there rather than reading tests in "
-                    "parallel. I'll pull a range around line 18, say lines 1-60, to get enough context.\n\n"
+                    "I'm going to read the validation file first, since that's what the user asked for. There's also "
+                    "a mention of a messages client tool that isn't available to me, so I'll leave that aside and not"
+                    "e it in my explanation.\n\n"
                 ),
                 "signature": CLAUDE_SONNET_5_5_MESSAGES_THINKING_SIGNATURE_0,
             },
             {
-                "type": "thinking",
-                "thinking": (
-                    "Next I'll check `shop/validation.py` to see how `validate_quantity` handles zero, negative, and "
-                    "non-integer values, starting from the top of the file around line 18.\n\n"
+                "type": "text",
+                "text": (
+                    "I need `shop/validation.py` next. `validate_quantity` is defined there, so it should show how ze"
+                    "ro, negative and non-integer quantities are treated. I'll read the area around line 18."
                 ),
-                "signature": CLAUDE_SONNET_5_5_MESSAGES_THINKING_SIGNATURE_1,
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_01UHVgrFsbouYKZ8mjVaM2wj",
+                "id": "toolu_vrtx_01HVKAmTJu1Cj5t4W9s1ysy7",
                 "name": "read_file",
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
@@ -443,34 +463,28 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 257,
-            "output_tokens_details": {"thinking_tokens": 159},
+            "output_tokens": 278,
+            "output_tokens_details": {"thinking_tokens": 119},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
+        "id": "msg_vrtx_011ChJAfLXjaofuNiBirf4mD",
         "model": "vertex_ai/claude-sonnet-5-5@default",
-        "id": "msg_vrtx_011Cg38paXLscBt8ARDQWjmd",
         "content": [
             {
                 "type": "thinking",
-                "thinking": (
-                    "Since the user asked for the validation file first, I'll focus there rather than reading tests in "
-                    "parallel. I'll pull a range around line 18, say lines 1-60, to get enough context.\n\n"
-                ),
+                "thinking": "I'm going to read the validation file first, since that's what the user asked for. There's also a mention of a messages client tool that isn't available to me, so I'll leave that aside and note it in my explanation.\n\n",
                 "signature": CLAUDE_SONNET_5_5_MESSAGES_THINKING_SIGNATURE_0,
             },
             {
-                "type": "thinking",
-                "thinking": (
-                    "Next I'll check `shop/validation.py` to see how `validate_quantity` handles zero, negative, and "
-                    "non-integer values, starting from the top of the file around line 18.\n\n"
-                ),
-                "signature": CLAUDE_SONNET_5_5_MESSAGES_THINKING_SIGNATURE_1,
+                "type": "text",
+                "text": "I need `shop/validation.py` next. `validate_quantity` is defined there, so it should show how zero, negative and non-integer quantities are treated. I'll read the area around line 18.",
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_01UHVgrFsbouYKZ8mjVaM2wj",
+                "id": "toolu_vrtx_01HVKAmTJu1Cj5t4W9s1ysy7",
                 "name": "read_file",
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
@@ -480,8 +494,9 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 257,
-            "output_tokens_details": {"thinking_tokens": 159},
+            "output_tokens": 278,
+            "output_tokens_details": {"thinking_tokens": 119},
+            "speed": "standard",
         },
     },
 )
@@ -506,34 +521,34 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                     "client for this project review. Consider zero, negative and non-integer quantities before choosing "
                     "the next file to inspect."
                 ),
-            },
+            }
         ],
         "tools": MESSAGES_REQUEST["tools"],
     },
     mock_provider_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
         "model": "claude-haiku-5-5",
-        "id": "msg_vrtx_011Cg8BfjWDUi4ZYQxpy6aVM",
+        "id": "msg_vrtx_011ChJAfLmcvdEELdVb3Yerp",
         "content": [
             {
                 "type": "thinking",
                 "thinking": (
-                    "I found validate_quantity defined around line 18, so I'll read the validation.py file from the start "
-                    "through roughly line 60 to capture the full context, keeping in mind I'll need to check how it handles "
-                    "zero, negative, and non-integer cases.\n\n"
+                    "I'm going to read shop/validation.py, the file the user asked for, and I'll take lines 1 to 60 s"
+                    "ince I don't know its length. The system note says to keep zero, negative, and non-integer quant"
+                    "ities in mind before picking the next file, so I'll check that as I read.\n\n"
                 ),
                 "signature": CLAUDE_HAIKU_5_5_MESSAGES_THINKING_SIGNATURE,
             },
             {
                 "type": "text",
                 "text": (
-                    "I'll read `shop/validation.py` first. The search put `validate_quantity` at line 18, so I'll start "
-                    "there and include the lines around it to see how zero, negative, and non-integer values are handled."
+                    "I'll read `shop/validation.py`, starting with the top of the file and the `validate_quantity` fu"
+                    "nction at line 18, to see how zero, negative, and non-integer quantities are handled."
                 ),
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_01YSY1kAV4ayCLVdBJkSv4dt",
+                "id": "toolu_vrtx_01Xjr9GFueWkfoqG6jQjDuJm",
                 "name": "read_file",
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
@@ -543,34 +558,28 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 292,
-            "output_tokens_details": {"thinking_tokens": 129},
+            "output_tokens": 257,
+            "output_tokens_details": {"thinking_tokens": 98},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
+        "id": "msg_vrtx_011ChJAfLmcvdEELdVb3Yerp",
         "model": "vertex_ai/claude-haiku-5-5@default",
-        "id": "msg_vrtx_011Cg8BfjWDUi4ZYQxpy6aVM",
         "content": [
             {
                 "type": "thinking",
-                "thinking": (
-                    "I found validate_quantity defined around line 18, so I'll read the validation.py file from the start "
-                    "through roughly line 60 to capture the full context, keeping in mind I'll need to check how it handles "
-                    "zero, negative, and non-integer cases.\n\n"
-                ),
+                "thinking": "I'm going to read shop/validation.py, the file the user asked for, and I'll take lines 1 to 60 since I don't know its length. The system note says to keep zero, negative, and non-integer quantities in mind before picking the next file, so I'll check that as I read.\n\n",
                 "signature": CLAUDE_HAIKU_5_5_MESSAGES_THINKING_SIGNATURE,
             },
             {
                 "type": "text",
-                "text": (
-                    "I'll read `shop/validation.py` first. The search put `validate_quantity` at line 18, so I'll start "
-                    "there and include the lines around it to see how zero, negative, and non-integer values are handled."
-                ),
+                "text": "I'll read `shop/validation.py`, starting with the top of the file and the `validate_quantity` function at line 18, to see how zero, negative, and non-integer quantities are handled.",
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_01YSY1kAV4ayCLVdBJkSv4dt",
+                "id": "toolu_vrtx_01Xjr9GFueWkfoqG6jQjDuJm",
                 "name": "read_file",
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
@@ -580,12 +589,26 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 292,
-            "output_tokens_details": {"thinking_tokens": 129},
+            "output_tokens": 257,
+            "output_tokens_details": {"thinking_tokens": 98},
+            "speed": "standard",
         },
     },
 )
 
+
+CLAUDE_OPUS_5_5_MESSAGES_CAPTURE_SIGNATURE_1: Final = (
+    "CAQS4QUKEwgUEAIYAjgBQgluYXJyYXRpb24SDI0mrtSUHHRYJ4daxhoMV4MVPPqMgdN7ggcPIjBH2+6CD84m+2t2Y06SxuHZVa6z"
+    "Qlk+k5HiYZMItQAaA6L9IIMXLvzTLQyMy2iROuIq+wR2BAlW+FUnon0LhHGtjbQaQWF046gb1+dMe2gvaeaRi96TVyj2JPUYHJKj"
+    "AnNqeUx+QX6kgNbv7F7SEDfkwzAwLZEFXBa078iQCrK9IqDRQL+QC3IUvW0x3/+sZB/L3aL9VjnV59u2LAnh99wo42LKP3an5HbU"
+    "d8BkNNPaYoS/xO3wvtCrm2yrSxX0i+u7c9FQKjEV0p8VfoMfYZ40x5nzMwn9ikNngZ4aHSEs2AVQ4fh5TYlgf/NStjJW1DAHIcs1"
+    "K7ExehgoOAsKL36CSxBIfJp4bvxzaPkjmu3ts1s8VoYAEHw5oZtYpJ7kPufejDiA/HOcdK1NKp2608mX4A93m7bq68rdFVxGvjZZ"
+    "n4/OJReRm0bSMp6iYPisfi6q+nXuxb/bIknZTm/piTMli44W9L7Wu4FQBmaoiisN/1l8aeGQYCsNoBCwi3tqHcJujxfWJvRK2lcq"
+    "xlHkKDffPRo+X7dx6/zIljQGX9DNR2ke4gJziBLD5XaEc/SsHCpkGNgDzGgQY00FwZ93ELuBwisyDjQP+PYUh68bSX727Ej9JY0A"
+    "M0QnTeDRBEtw8nIa2pSwqFXw7mP/c2kayd5Eh6tREQo6XCqzYWdOtkhd0wohTaPH0VVNFhYFizwBeGe3yHGorMAkBCqMj28Pmgub"
+    "shkGQn8gUneS0aVgyClhYc3CdBNlQN/HLJc52l39GG357+Hd6RVqWzurkPCi+r23ET4+hMP/nyI6reqLkjEYAWBWNn0Uj+/O9VNG"
+    "KtJmqltoFhGdQsJDyN63mR9j25bGxFizrliRdk1iAQ27Hz0Ny6FEY9eqgEpeg9AkJbQK3VR76Lc5axTOEB+l+uYSqxgB"
+)
 
 CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -606,35 +629,36 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                     "client for this project review. Consider zero, negative and non-integer quantities before choosing "
                     "the next file to inspect."
                 ),
-            },
+            }
         ],
         "tools": MESSAGES_REQUEST["tools"],
     },
     mock_provider_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
         "model": "claude-opus-5-5",
-        "id": "msg_vrtx_011Cg38pLy1pX8GQEfjq6NFo",
+        "id": "msg_vrtx_011ChJAfNM8Tcg88dTJwHEJE",
         "content": [
             {
                 "type": "thinking",
                 "thinking": (
-                    'Since the user said "first," I\'ll focus on reading the validation file around line 18 before moving '
-                    "on to the test file.\n\n"
+                    "I'm reading the validation file first since the user asked for that, even though the tests don't"
+                    " depend on each other. Once that's done, I'll explain which file should come next.\n\n"
                 ),
                 "signature": CLAUDE_OPUS_5_5_MESSAGES_THINKING_SIGNATURE_0,
             },
             {
-                "type": "text",
-                "text": (
-                    "I'll start with `shop/validation.py`. `validate_quantity` is defined at line 18, so I'll read the "
-                    "lines around it. That should show how zero, negative and non-integer quantities are handled."
+                "type": "thinking",
+                "thinking": (
+                    "I'm reading `validate_quantity` at line 18 in `shop/validation.py` to see how it handles zero, n"
+                    "egative, float, string and boolean inputs.\n\n"
                 ),
+                "signature": CLAUDE_OPUS_5_5_MESSAGES_CAPTURE_SIGNATURE_1,
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_018jLLjmUz5DQCg8xZ76kMFY",
+                "id": "toolu_vrtx_01UnVtkxjAvqa8NEnCKXqC4H",
                 "name": "read_file",
-                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 50},
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
         ],
         "usage": {
@@ -642,35 +666,31 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 233,
-            "output_tokens_details": {"thinking_tokens": 70},
+            "output_tokens": 216,
+            "output_tokens_details": {"thinking_tokens": 43},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
+        "id": "msg_vrtx_011ChJAfNM8Tcg88dTJwHEJE",
         "model": "vertex_ai/claude-opus-5-5@default",
-        "id": "msg_vrtx_011Cg38pLy1pX8GQEfjq6NFo",
         "content": [
             {
                 "type": "thinking",
-                "thinking": (
-                    'Since the user said "first," I\'ll focus on reading the validation file around line 18 before moving '
-                    "on to the test file.\n\n"
-                ),
+                "thinking": "I'm reading the validation file first since the user asked for that, even though the tests don't depend on each other. Once that's done, I'll explain which file should come next.\n\n",
                 "signature": CLAUDE_OPUS_5_5_MESSAGES_THINKING_SIGNATURE_0,
             },
             {
-                "type": "text",
-                "text": (
-                    "I'll start with `shop/validation.py`. `validate_quantity` is defined at line 18, so I'll read the "
-                    "lines around it. That should show how zero, negative and non-integer quantities are handled."
-                ),
+                "type": "thinking",
+                "thinking": "I'm reading `validate_quantity` at line 18 in `shop/validation.py` to see how it handles zero, negative, float, string and boolean inputs.\n\n",
+                "signature": CLAUDE_OPUS_5_5_MESSAGES_CAPTURE_SIGNATURE_1,
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_018jLLjmUz5DQCg8xZ76kMFY",
+                "id": "toolu_vrtx_01UnVtkxjAvqa8NEnCKXqC4H",
                 "name": "read_file",
-                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 50},
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
         ],
         "usage": {
@@ -678,8 +698,9 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 233,
-            "output_tokens_details": {"thinking_tokens": 70},
+            "output_tokens": 216,
+            "output_tokens_details": {"thinking_tokens": 43},
+            "speed": "standard",
         },
     },
 )

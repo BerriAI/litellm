@@ -1499,13 +1499,13 @@ CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                 "content": [
                     {
                         "type": "tool_use",
-                        "id": "toolu_vrtx_014y2somv8RVnNoX3s7i7RwH",
+                        "id": "toolu_vrtx_0111YYvDCpAoYh7N9RNuoTuk",
                         "name": "search_code",
                         "input": {"query": "retries_remaining"},
                     },
                     {
                         "type": "tool_use",
-                        "id": "toolu_vrtx_01B8D9djnyoPnNQSccNW99Hi",
+                        "id": "toolu_vrtx_01LSqYvQvzZhDhr426HFDrn2",
                         "name": "run_tests",
                         "input": {"path": "tests/test_retry.py"},
                     },
@@ -1516,13 +1516,13 @@ CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                 "content": [
                     {
                         "type": "tool_result",
-                        "tool_use_id": "toolu_vrtx_014y2somv8RVnNoX3s7i7RwH",
+                        "tool_use_id": "toolu_vrtx_0111YYvDCpAoYh7N9RNuoTuk",
                         "content": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining = '
                         'retries_remaining(3, attempts)"}]}',
                     },
                     {
                         "type": "tool_result",
-                        "tool_use_id": "toolu_vrtx_01B8D9djnyoPnNQSccNW99Hi",
+                        "tool_use_id": "toolu_vrtx_01LSqYvQvzZhDhr426HFDrn2",
                         "content": '{"exit_code": 1, "output": "FAILED tests/test_retry.py::test_retries_remaining - '
                         'assert 4 == 2"}',
                     },
