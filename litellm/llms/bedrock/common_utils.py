@@ -2103,15 +2103,6 @@ def build_bedrock_stream_event_error(
     )
 
 
-def _unmodeled_stream_error_message(response_dict: BedrockEventStreamResponseDict) -> str:
-    parts: Final = (
-        bedrock_event_stream_header(response_dict["headers"], ":error-code"),
-        bedrock_event_stream_header(response_dict["headers"], ":error-message"),
-        response_dict["body"].decode(errors="replace"),
-    )
-    return " ".join(part for part in parts if part)
-
-
 def build_bedrock_stream_error(
     response_dict: BedrockEventStreamResponseDict,
     response_stream_shape: Shape | None,
@@ -2126,9 +2117,7 @@ def build_bedrock_stream_error(
     exception_type: Final = bedrock_event_stream_header(response_dict["headers"], ":exception-type")
     if exception_type is None:
         return BedrockError(
-            status_code=response_dict["status_code"],
-            message=_unmodeled_stream_error_message(response_dict),
-            headers=headers,
+            status_code=response_dict["status_code"], message=response_dict["body"].decode(), headers=headers
         )
 
     member: Final = _structure_members(response_stream_shape).get(exception_type)
