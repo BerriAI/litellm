@@ -6,7 +6,8 @@ Why separate file? Make it easy to see how transformation works
 
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
@@ -16,6 +17,7 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -779,6 +781,228 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
+@dataclass(frozen=True, slots=True)
+class _AssistantImageSource:
+    url: str
+    format: str | None
+    detail: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetModel:
+    model: str | None
+    custom_llm_provider: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _MalformedHistory:
+    message: str
+
+
+def _outputs_images(info: Mapping[str, object]) -> bool:
+    modalities: Final = info.get("supported_output_modalities")
+    return info.get("mode") == "image_generation" or (isinstance(modalities, list) and "image" in modalities)
+
+
+def _bundled_model_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
+    bundled: Final = litellm.utils.get_bundled_model_cost_map()
+    entries: Final = (as_str_mapping(bundled.get(key)) for key in (model, f"{custom_llm_provider}/{model}"))
+    return next((entry for entry in entries if entry is not None), None)
+
+
+def _generates_images(target: _TargetModel) -> bool:
+    model: Final = target.model
+    if model is None:
+        return False
+    info: Final = litellm.utils.lookup_model_info_for_registration(model, target.custom_llm_provider)
+    registered: Final[Mapping[str, object]] = {} if isinstance(info, litellm.utils.ModelInfoLookupMiss) else info
+    bundled: Final = _bundled_model_entry(model, target.custom_llm_provider)
+    return _outputs_images(registered) or (bundled is not None and _outputs_images(bundled))
+
+
+def _message_thought_signatures(
+    assistant_msg: ChatCompletionAssistantMessage, *, drop_params: bool
+) -> tuple[str, ...] | _MalformedHistory:
+    fields: Final = as_str_mapping(assistant_msg.get("provider_specific_fields"))
+    entries: Final = (as_object_list(fields.get("thought_signatures")) if fields is not None else None) or ()
+    signatures: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    if len(signatures) < len(entries) and not drop_params:
+        return _MalformedHistory("provider_specific_fields.thought_signatures entries must be strings")
+    return signatures
+
+
+def _own_image_thought_signature(
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> str | None | _MalformedHistory:
+    fields: Final = as_str_mapping(image_item.get("provider_specific_fields"))
+    signature: Final = fields.get("thought_signature") if fields is not None else None
+    if signature is not None and not isinstance(signature, str) and not drop_params:
+        return _MalformedHistory("images[].provider_specific_fields.thought_signature must be a string")
+    return signature if isinstance(signature, str) and signature else None
+
+
+def _assistant_image_source(
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> _AssistantImageSource | None | _MalformedHistory:
+    raw_image_url: Final = image_item.get("image_url")
+    image_url: Final = {"url": raw_image_url} if isinstance(raw_image_url, str) else as_str_mapping(raw_image_url)
+    if raw_image_url is not None and image_url is None and not drop_params:
+        return _MalformedHistory("images[].image_url must be an object or a string")
+    url: Final = image_url.get("url") if image_url is not None else None
+    if image_url is None or not url or (drop_params and not isinstance(url, str)):
+        return None
+    if not isinstance(url, str):
+        return _MalformedHistory("images[].image_url.url must be a string")
+    format_hint: Final = image_url.get("format") or image_url.get("mime_type") or image_url.get("content_type")
+    detail: Final = image_url.get("detail")
+    return _AssistantImageSource(
+        url=url,
+        format=format_hint if isinstance(format_hint, str) else None,
+        detail=detail if isinstance(detail, str) else None,
+    )
+
+
+def _right_aligned(signatures: Sequence[str], count: int) -> tuple[str | None, ...]:
+    claimed: Final = min(count, len(signatures))
+    return (None,) * (count - claimed) + tuple(signatures[len(signatures) - claimed :])
+
+
+def _sourced_assistant_image(
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> tuple[_AssistantImageSource, str | None] | None | _MalformedHistory:
+    source: Final = _assistant_image_source(image_item, drop_params=drop_params)
+    if source is None or isinstance(source, _MalformedHistory):
+        return source
+    signature: Final = _own_image_thought_signature(image_item, drop_params=drop_params)
+    if isinstance(signature, _MalformedHistory):
+        return signature
+    return (source, signature)
+
+
+def _sourced_assistant_images(
+    images: object, *, drop_params: bool
+) -> tuple[tuple[_AssistantImageSource, str | None], ...] | _MalformedHistory:
+    entries: Final = as_object_list(images) or ()
+    items: Final = tuple(item for item in map(as_str_mapping, entries) if item is not None)
+    if len(items) < len(entries) and not drop_params:
+        return _MalformedHistory("images entries must be objects")
+    sourced: Final = tuple(_sourced_assistant_image(item, drop_params=drop_params) for item in items)
+    failure: Final = next((result for result in sourced if isinstance(result, _MalformedHistory)), None)
+    if failure is not None:
+        return failure
+    return tuple(result for result in sourced if isinstance(result, tuple))
+
+
+def _has_text(content: object) -> bool:
+    if isinstance(content, str):
+        return content != ""
+    elements: Final = tuple(filter(None, map(as_str_mapping, as_object_list(content) or ())))
+    return any(element.get("type") == "text" and bool(element.get("text")) for element in elements)
+
+
+def _assistant_text_thought_signature(
+    message_signatures: Sequence[str],
+    own_image_signatures: frozenset[str],
+    tool_call_signatures: frozenset[str],
+) -> str | None:
+    first: Final = next((signature for signature in message_signatures if signature not in own_image_signatures), None)
+    return first if first is not None and first not in tool_call_signatures else None
+
+
+def _signed_assistant_images(
+    sourced_images: tuple[tuple[_AssistantImageSource, str | None], ...],
+    message_signatures: Sequence[str],
+    claimed_signatures: frozenset[str],
+) -> tuple[tuple[_AssistantImageSource, str | None], ...]:
+    if any(signature for _, signature in sourced_images):
+        return sourced_images
+    pool: Final = tuple(signature for signature in message_signatures if signature not in claimed_signatures)
+    return tuple(zip((source for source, _ in sourced_images), _right_aligned(pool, len(sourced_images)), strict=True))
+
+
+def _assistant_image_part(
+    source: _AssistantImageSource,
+    thought_signature: str | None,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+) -> PartType:
+    part: Final = _process_gemini_media(
+        image_url=source.url,
+        format=source.format,
+        media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
+        model=model,
+        vertex_project=vertex_project,
+        vertex_credentials=vertex_credentials,
+    )
+    return part if thought_signature is None else {**part, "thoughtSignature": thought_signature}
+
+
+def _signed_text_and_image_parts(
+    assistant_msg: ChatCompletionAssistantMessage,
+    target: _TargetModel,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+) -> tuple[PartType, ...] | _MalformedHistory:
+    tool_call_signatures: Final = _collect_tool_call_thought_signatures(assistant_msg)
+    message_signatures: Final = _message_thought_signatures(assistant_msg, drop_params=drop_params)
+    if isinstance(message_signatures, _MalformedHistory):
+        return message_signatures
+    sourced_images: Final = _sourced_assistant_images(assistant_msg.get("images"), drop_params=drop_params)
+    if isinstance(sourced_images, _MalformedHistory):
+        return sourced_images
+    signing_images: Final = sourced_images if sourced_images and _generates_images(target) else ()
+    content: Final = assistant_msg.get("content")
+    text_signature: Final = (
+        _assistant_text_thought_signature(
+            message_signatures,
+            frozenset(signature for _, signature in signing_images if signature is not None),
+            tool_call_signatures,
+        )
+        if _has_text(content) or not signing_images
+        else None
+    )
+    signed_images: Final = (
+        _signed_assistant_images(
+            signing_images, message_signatures, tool_call_signatures | frozenset(filter(None, (text_signature,)))
+        )
+        if signing_images
+        else tuple((source, None) for source, _ in sourced_images)
+    )
+    image_parts: Final = tuple(
+        _assistant_image_part(source, signature, target.model, vertex_project, vertex_credentials)
+        for source, signature in signed_images
+    )
+    if not isinstance(content, str):
+        return image_parts
+    text_part: Final = (
+        PartType(text=content) if text_signature is None else PartType(text=content, thoughtSignature=text_signature)
+    )
+    return (text_part, *image_parts)
+
+
+def _assistant_text_and_image_parts(
+    assistant_msg: ChatCompletionAssistantMessage,
+    target: _TargetModel,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+) -> tuple[PartType, ...]:
+    parts: Final = _signed_text_and_image_parts(
+        assistant_msg, target, vertex_project, vertex_credentials, drop_params=drop_params
+    )
+    if isinstance(parts, _MalformedHistory):
+        raise BadRequestError(
+            message=f"Invalid assistant message: {parts.message}",
+            model=target.model,
+            llm_provider=target.custom_llm_provider or "vertex_ai",
+        )
+    return parts
+
+
 def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
@@ -998,62 +1222,16 @@ def gemini_convert_messages_with_history(
                                 _parts.append(video_part)
 
                     assistant_content.extend(_parts)
-                elif _message_content is not None and isinstance(_message_content, str):
-                    assistant_text = _message_content
-                    # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
-                    thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
 
-                    # A signature that is already carried by one of this message's
-                    # tool-call parts must not be attached to the text part too:
-                    # Gemini bills every replayed copy as the previous turn's full
-                    # reasoning token count on gemini-3 and newer models
-                    tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
-
-                    if (
-                        thought_signatures
-                        and isinstance(thought_signatures, list)
-                        and len(thought_signatures) > 0
-                        and thought_signatures[0] not in tool_call_signatures
-                    ):
-                        # Use the first signature for the text part (Gemini expects one signature per part)
-                        assistant_content.append(
-                            PartType(
-                                text=assistant_text,
-                                thoughtSignature=thought_signatures[0],
-                            )
-                        )
-                    else:
-                        assistant_content.append(PartType(text=assistant_text))
-
-                ## HANDLE ASSISTANT IMAGES FIELD
-                # Process images field if present (for generated images from assistant)
-                assistant_images = assistant_msg.get("images")
-                if assistant_images is not None and isinstance(assistant_images, list):
-                    for image_item in assistant_images:
-                        if isinstance(image_item, dict):
-                            image_url_obj = image_item.get("image_url")
-                            if isinstance(image_url_obj, dict):
-                                assistant_image_url = image_url_obj.get("url")
-                                format = (
-                                    image_url_obj.get("format")
-                                    or image_url_obj.get("mime_type")
-                                    or image_url_obj.get("content_type")
-                                )
-                                detail = image_url_obj.get("detail")
-                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
-                                if assistant_image_url:
-                                    _part = _process_gemini_media(
-                                        image_url=assistant_image_url,
-                                        format=format,
-                                        media_resolution_enum=media_resolution_enum,
-                                        model=model,
-                                        vertex_project=vertex_project,
-                                        vertex_credentials=vertex_credentials,
-                                    )
-                                    assistant_content.append(_part)
+                assistant_content.extend(
+                    _assistant_text_and_image_parts(
+                        assistant_msg,
+                        _TargetModel(model=model, custom_llm_provider=custom_llm_provider),
+                        vertex_project,
+                        vertex_credentials,
+                        drop_params=drop_params,
+                    )
+                )
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
