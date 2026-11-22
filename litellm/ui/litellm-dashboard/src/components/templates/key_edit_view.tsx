@@ -1,7 +1,6 @@
 import { canDetachKeyProject, KeyProjectField } from "./KeyProjectField";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +37,7 @@ import {
   KeyRateLimitFields,
   KeyTypeSelect,
   labelWithHint,
+  moveMetadataBudgetAlertsToKeyRows,
   moveMetadataTagsToTagsField,
 } from "./KeyEditViewControls";
 import {
@@ -49,6 +49,7 @@ import {
   clearMcpGrants,
   writeMcpToolPermissions,
 } from "./keyEditFormValues";
+import { BudgetAlertEmailsEditor } from "../key_team_helpers/BudgetAlertEmailsEditor";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import {
@@ -90,6 +91,7 @@ interface KeyEditViewProps {
   userID: string | null;
   userRole: string | null;
   premiumUser?: boolean;
+  editingMemberKeyAsTeamAdmin?: boolean;
 }
 
 const sessionKey = (keyData: KeyResponse) => keyData.token || keyData.token_id;
@@ -105,6 +107,7 @@ function KeyEditSession({
   userID,
   userRole,
   premiumUser = false,
+  editingMemberKeyAsTeamAdmin = false,
 }: KeyEditViewProps) {
   const { t } = useTranslation();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
@@ -147,8 +150,6 @@ function KeyEditSession({
   const keyTypeFieldId = React.useId();
   const endUserBudgetFieldId = React.useId();
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
-  const { data: uiSettingsData } = useUISettings();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
   const canChangeOrganization = userRole === "Admin" && !hasProject;
   const detachProject = hasProject && form.watch("project_id") === null;
@@ -321,9 +322,9 @@ function KeyEditSession({
       await onSubmit(
         withNormalizedEstimates({
           ...values,
-          ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
+          ...(detachProject && canDetachProject ? { project_id: null } : {}),
         }),
-        [...Object.keys(dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
+        [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
     } finally {
       setIsKeySaving(false);
@@ -373,16 +374,17 @@ function KeyEditSession({
     );
   };
 
+  const submitForm = (event: React.FormEvent<HTMLFormElement>) => {
+    moveMetadataTagsToTagsField(form, t);
+    if (!editingMemberKeyAsTeamAdmin) moveMetadataBudgetAlertsToKeyRows(form, t);
+    return form.handleSubmit((values) => handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })))(
+      event,
+    );
+  };
+
   return (
     <TooltipProvider>
-      <form
-        onSubmit={(event) => {
-          moveMetadataTagsToTagsField(form, t);
-          return form.handleSubmit((values) =>
-            handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
-          )(event);
-        }}
-      >
+      <form onSubmit={submitForm}>
         <FieldGroup>
           <FormField control={form.control} name="key_alias" label={t("keyDetail.keyEditView.fields.keyAlias")}>
             {(field) => <Input {...field} value={(field.value as string | undefined) ?? ""} />}
@@ -466,6 +468,23 @@ function KeyEditSession({
             label={t("keyDetail.keyEditView.fields.softBudget")}
             placeholder={t("keyDetail.keyEditView.fields.softBudgetPlaceholder")}
           />
+
+          {!editingMemberKeyAsTeamAdmin && (
+            <BudgetAlertEmailsEditor
+              control={form.control}
+              name="max_budget_alert_emails"
+              label={labelWithHint(
+                t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholds"),
+                t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholdsHint"),
+              )}
+              text={{
+                thresholdPlaceholder: t("keyDetail.maxBudgetAlertEmails.thresholdPlaceholder"),
+                recipientsPlaceholder: t("keyDetail.maxBudgetAlertEmails.recipientsPlaceholder"),
+                removeThreshold: t("keyDetail.maxBudgetAlertEmails.removeThreshold"),
+                addThreshold: t("keyDetail.maxBudgetAlertEmails.addThreshold"),
+              }}
+            />
+          )}
 
           <FormField
             control={form.control}
@@ -859,7 +878,7 @@ function KeyEditSession({
             )}
           </FormField>
 
-          {enableProjectsUI && hasProject && (
+          {hasProject && (
             <KeyProjectField
               projectId={keyData.project_id}
               canDetach={canDetachProject}
@@ -896,7 +915,7 @@ function KeyEditSession({
             )}
           </FormField>
 
-          <KeyMetadataField form={form} />
+          <KeyMetadataField form={form} budgetAlertRowsShown={!editingMemberKeyAsTeamAdmin} />
 
           <div className="mb-4">
             <FormField control={form.control} name="duration">

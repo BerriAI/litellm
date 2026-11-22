@@ -24,6 +24,7 @@ from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLMKeyType,
@@ -104,11 +105,13 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "allow_client_pricing_override",
         "allow_litellm_changed_by_header",
         "soft_budget_alerting_emails",
+        "max_budget_alert_emails",
         "team_member_max_budget_alert_emails",
         "phoenix_project_name_override",
         "phoenix_project_name",
         "opik",
-        "team_model_limit_max_borrow_multiple",
+        "model_limit_max_borrow_multiple",
+        REQUIRED_CUSTOMER_HEADERS_SETTING,
     )
 )
 _NOT_COLUMNS: Final[frozenset[str]] = frozenset({"team_id", "metadata"})
@@ -358,6 +361,11 @@ def _column_changed(
     existing_row: LiteLLM_TeamTable,
     member_defaults: Mapping[str, object],
 ) -> bool:
+    if field == "budget_limits":
+        sent: Final = _budget_windows(submitted.get(field))
+        stored: Final = _budget_windows(existing.get(field))
+        if sent is not None and stored is not None:
+            return sent != stored
     if field == "model_aliases":
         return _as_object(submitted.get(field)) != _stored_model_aliases(existing_row)
     if field in member_defaults:

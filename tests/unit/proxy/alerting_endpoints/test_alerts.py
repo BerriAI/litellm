@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
+from litellm.models.performance_alert import DEFAULT_THRESHOLDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.alerting_endpoints.alerts import router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -55,6 +56,7 @@ def app(table: MagicMock, history_query: AsyncMock) -> FastAPI:
     app.include_router(router)
     prisma: Final = MagicMock()
     prisma.writer_db.litellm_alert = table
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.writer_db.tx.return_value.__aenter__.return_value.query_raw = history_query
     app.dependency_overrides[get_database] = lambda: Database(prisma, native_database())
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -72,7 +74,9 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 @pytest.mark.parametrize(
     "role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 )
-@pytest.mark.parametrize("method,path", (("GET", "/alerts"), ("GET", "/alerts/5"), ("PATCH", "/alerts/5")))
+@pytest.mark.parametrize(
+    "method,path", (("GET", "/alerts"), ("GET", "/alerts/5"), ("PATCH", "/alerts/5"), ("PATCH", "/alerts"))
+)
 def test_permissions_precede_database_access(
     app: FastAPI, table: MagicMock, role: LitellmUserRoles, method: str, path: str
 ) -> None:
@@ -123,8 +127,39 @@ def test_monitoring_only_accepts_a_boolean_opt_out(
     history_query.assert_not_awaited()
 
 
+@pytest.mark.parametrize("enabled", (False, True))
+def test_deprecation_preference_updates_without_changing_performance(app: FastAPI, enabled: bool) -> None:
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=MagicMock(param_value=enabled))
+    prisma.writer_db.litellm_config.upsert = AsyncMock()
+    transaction: Final = prisma.writer_db.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(side_effect=((), ({"enabled": False, "alerts_used": 3},)))
+    transaction.execute_raw = AsyncMock()
+    app.dependency_overrides[get_alert_monitoring_repository] = lambda: PerformanceAlertRepository(prisma)
+    with TestClient(app) as client:
+        response: Final = client.patch("/alerts/monitoring", json={"model_deprecations_enabled": enabled})
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "enabled": False,
+        "model_deprecations_enabled": enabled,
+        "alerts_used": 3,
+        "alert_limit": 5,
+        "disabled_by_config": False,
+        "thresholds": DEFAULT_THRESHOLDS.model_dump(),
+    }
+    prisma.writer_db.litellm_config.upsert.assert_awaited_once_with(
+        where={"param_name": "model_deprecation_alerts_enabled"},
+        data={
+            "create": {"param_name": "model_deprecation_alerts_enabled", "param_value": str(enabled).lower()},
+            "update": {"param_value": str(enabled).lower()},
+        },
+    )
+    transaction.execute_raw.assert_not_awaited()
+
+
 def test_config_opt_out_cannot_be_enabled_from_the_api(app: FastAPI) -> None:
     prisma: Final = MagicMock()
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
     transaction: Final = prisma.writer_db.tx.return_value.__aenter__.return_value
     transaction.query_raw = AsyncMock(return_value=[{"enabled": True, "alerts_used": 0}])
     transaction.execute_raw = AsyncMock()
@@ -134,9 +169,46 @@ def test_config_opt_out_cannot_be_enabled_from_the_api(app: FastAPI) -> None:
     with TestClient(app) as client:
         status: Final = client.get("/alerts/monitoring")
         response: Final = client.patch("/alerts/monitoring", json={"enabled": True})
-    assert status.json() == {"enabled": False, "alerts_used": 0, "alert_limit": 5, "disabled_by_config": True}
+    assert status.json() == {
+        "enabled": False,
+        "alerts_used": 0,
+        "alert_limit": 5,
+        "disabled_by_config": True,
+        "model_deprecations_enabled": True,
+        "thresholds": DEFAULT_THRESHOLDS.model_dump(),
+    }
     assert response.status_code == 409, response.text
     transaction.execute_raw.assert_not_awaited()
+
+
+@pytest.mark.parametrize("enterprise", (False, True))
+@pytest.mark.parametrize("role", (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+def test_only_enterprise_admins_can_save_thresholds(app: FastAPI, enterprise: bool, role: LitellmUserRoles) -> None:
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.writer_db.litellm_config.upsert = AsyncMock()
+    transaction: Final = prisma.writer_db.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"enabled": True, "alerts_used": 0}])
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role)
+    app.dependency_overrides[get_alert_monitoring_repository] = lambda: PerformanceAlertRepository(
+        prisma, enterprise=enterprise
+    )
+    with TestClient(app) as client:
+        response: Final = client.patch(
+            "/alerts/monitoring", json={"thresholds": {"spend": {"multiplier": 2, "minimum_increase": 20}}}
+        )
+    if enterprise and role == LitellmUserRoles.PROXY_ADMIN:
+        assert response.status_code == 200, response.text
+        prisma.writer_db.litellm_config.upsert.assert_awaited_once()
+    else:
+        assert response.status_code == 403, response.text
+        prisma.writer_db.litellm_config.upsert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("body", ({"status": "open"}, {"status": "resolved", "type": "unknown"}, {}))
+def test_bulk_update_rejects_reopening_or_unknown_filters(client: TestClient, body: object) -> None:
+    response: Final = client.patch("/alerts", json=body)
+    assert response.status_code == 422, response.text
 
 
 @pytest.mark.parametrize("alert_id", ("0", "-1", "01", "1.0", "oops", "9223372036854775808", "1" * 20))

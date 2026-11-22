@@ -5,6 +5,7 @@ import importlib
 import inspect
 import json
 import os
+import queue
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import ModuleType
 from typing import Final, Literal, Protocol
@@ -13,7 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncOpenAI, AzureOpenAI, Omit, OpenAI, omit
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import Response as SDKResponse
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -926,7 +927,7 @@ _QUERY_SECRET: Final = "query-secret"
     ("status_code", "mapped_error", "body"),
     (
         (400, litellm.BadRequestError, _REFUSAL_BODY),
-        (403, litellm.APIError, _REFUSAL_BODY),
+        (403, litellm.PermissionDeniedError, _REFUSAL_BODY),
         (408, litellm.Timeout, _REFUSAL_BODY),
         (408, litellm.Timeout, _GATEWAY_TIMEOUT_BODY),
         (409, litellm.APIError, _REFUSAL_BODY),
@@ -2663,6 +2664,132 @@ async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_head
     assert sent.headers["authorization"] == "Bearer sk-test"
 
 
+_HEADER_WIRE_BASE: Final = "https://openai-compatible.example/v1"
+_EMBEDDING_RESPONSE_JSON: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.5]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
+_CHAT_STREAM_CHUNK: Final = {
+    **_CHAT_RESPONSE_JSON,
+    "object": "chat.completion.chunk",
+    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+}
+_CHAT_STREAM_BODY: Final = f"data: {json.dumps(_CHAT_STREAM_CHUNK)}\n\ndata: [DONE]\n\n".encode()
+_HeaderCall = Literal[
+    "completion",
+    "completion_stream",
+    "acompletion",
+    "acompletion_stream",
+    "embedding",
+    "aembedding",
+    "embedding_float",
+    "aembedding_float",
+]
+_HEADER_CALLS_BYPASSING_SDK_TRANSFORM: Final[tuple[_HeaderCall, ...]] = (
+    "completion",
+    "completion_stream",
+    "acompletion",
+    "acompletion_stream",
+    "embedding",
+    "aembedding",
+)
+_ALL_HEADER_CALLS: Final[tuple[_HeaderCall, ...]] = (
+    *_HEADER_CALLS_BYPASSING_SDK_TRANSFORM,
+    "embedding_float",
+    "aembedding_float",
+)
+
+
+def _recording_transport(sent: queue.SimpleQueue[httpx.Request]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        if request.url.path.endswith("/embeddings"):
+            return httpx.Response(200, json=_EMBEDDING_RESPONSE_JSON)
+        if json.loads(request.content).get("stream"):
+            return httpx.Response(200, content=_CHAT_STREAM_BODY, headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=_CHAT_RESPONSE_JSON)
+
+    return httpx.MockTransport(respond)
+
+
+async def _call_with_extra_headers(
+    call: _HeaderCall, extra_headers: Mapping[str, object], transport: httpx.MockTransport
+) -> None:
+    chat: Final = {"model": "openai/gpt-5.4", "messages": _MESSAGES, "num_retries": 0, "extra_headers": extra_headers}
+    embed: Final = {
+        "model": "openai/text-embedding-3-small",
+        "input": ["hi"],
+        "num_retries": 0,
+        "extra_headers": extra_headers,
+    }
+    with OpenAI(
+        api_key="sk-test", base_url=_HEADER_WIRE_BASE, max_retries=0, http_client=httpx.Client(transport=transport)
+    ) as sync_client:
+        async with AsyncOpenAI(
+            api_key="sk-test",
+            base_url=_HEADER_WIRE_BASE,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=transport),
+        ) as async_client:
+            match call:
+                case "completion":
+                    litellm.completion(client=sync_client, **chat)
+                case "completion_stream":
+                    list(litellm.completion(client=sync_client, stream=True, **chat))
+                case "acompletion":
+                    await litellm.acompletion(client=async_client, **chat)
+                case "acompletion_stream":
+                    async for _ in await litellm.acompletion(client=async_client, stream=True, **chat):
+                        pass
+                case "embedding":
+                    litellm.embedding(client=sync_client, **embed)
+                case "aembedding":
+                    await litellm.aembedding(client=async_client, **embed)
+                case "embedding_float":
+                    litellm.embedding(client=sync_client, encoding_format="float", **embed)
+                case "aembedding_float":
+                    await litellm.aembedding(client=async_client, encoding_format="float", **embed)
+
+
+@pytest.mark.parametrize("call", _ALL_HEADER_CALLS)
+@pytest.mark.parametrize(
+    ("authorization", "expected_authorization"),
+    ((omit, None), (Omit(), None), ("Bearer caller", "Bearer caller"), (None, "Bearer sk-test")),
+    ids=("omit", "fresh-omit-instance", "string-override", "default"),
+)
+async def test_extra_headers_control_the_sdk_authorization_header_on_the_wire(
+    call: _HeaderCall,
+    authorization: str | Omit | None,
+    expected_authorization: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
+    sent: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+    auth_header: Final = {} if authorization is None else {"Authorization": authorization}
+
+    await _call_with_extra_headers(call, {**auth_header, "x-caller": "unit"}, _recording_transport(sent))
+
+    request: Final = sent.get_nowait()
+    assert sent.empty()
+    assert request.headers.get("authorization") == expected_authorization
+    assert request.headers["x-caller"] == "unit"
+
+
+@pytest.mark.parametrize("call", _HEADER_CALLS_BYPASSING_SDK_TRANSFORM)
+async def test_extra_headers_with_a_non_string_value_fail_before_any_request(
+    call: _HeaderCall, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
+    sent: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    with pytest.raises(litellm.InternalServerError):
+        await _call_with_extra_headers(call, {"x-caller": 1}, _recording_transport(sent))
+
+    assert sent.empty()
+
+
 def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
     return [
         {"role": "system", "content": "You are terse."},
@@ -2698,6 +2825,83 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
+
+
+class _ChatCompletionOnlyAgenticLoop(CustomLogger):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return isinstance(response, ModelResponse) and response.choices[0].finish_reason == "tool_calls", {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> ModelResponse:
+        return ModelResponse(
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "order shipped"}}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_runs_a_callback_that_only_implements_the_chat_completion_agentic_loop(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_ChatCompletionOnlyAgenticLoop()])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://openai-compatible.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-lookup",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_lookup",
+                                    "type": "function",
+                                    "function": {"name": "lookup_order", "arguments": '{"order_id": "42"}'},
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Where is order 42?"}],
+        tools=[{"type": "function", "function": {"name": "lookup_order", "parameters": {"type": "object"}}}],
+        api_key="sk-test",
+        api_base="https://openai-compatible.example/v1",
+    )
+
+    assert response.choices[0].message.content == "order shipped"
 
 
 @pytest.mark.asyncio
@@ -2738,3 +2942,119 @@ async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_c
         )
 
         assert [(batch.id, batch.status) for batch in (await page).data] == [("batch_5f8dac", "pending")]
+
+
+_STREAM_CHUNK_BASE: Final = {
+    "id": "chatcmpl-decode",
+    "object": "chat.completion.chunk",
+    "created": 1700000000,
+    "model": "gpt-5.5",
+}
+_STREAM_CHUNK_PAYLOADS: Final = (
+    {
+        **_STREAM_CHUNK_BASE,
+        "system_fingerprint": "fp_1",
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "logprobs": None, "finish_reason": None}
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}},
+                        {"index": 1, "type": None, "function": {"arguments": None}},
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 2,
+            "total_tokens": 11,
+            "prompt_tokens_details": {"cached_tokens": 3},
+            "cost": 0.5,
+        },
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "a"},
+                "logprobs": {"content": [{"token": "a", "logprob": 0, "bytes": [97], "top_logprobs": []}]},
+                "finish_reason": "stop",
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "provider": "upstream",
+        "citations": ["https://e.example"],
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "", "reasoning_content": "think", "provider_specific_fields": {"k": 1}},
+                "finish_reason": None,
+                "stop_reason": 128009,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "created": "1700000000",
+        "choices": [{"index": 0, "delta": {"content": "numeric string"}, "finish_reason": None}],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "object": "chat.completion",
+        "choices": [{"index": 0, "delta": {"content": "loose"}, "finish_reason": "eos"}],
+    },
+    {**_STREAM_CHUNK_BASE, "created": 1700000000.5, "choices": [{"index": "0", "delta": None}]},
+)
+
+
+def _model_state(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return (
+            type(value),
+            {key: _model_state(item) for key, item in value.__dict__.items()},
+            {key: _model_state(item) for key, item in (value.__pydantic_extra__ or {}).items()},
+            frozenset(value.model_fields_set & type(value).model_fields.keys()),
+        )
+    if isinstance(value, list):
+        return [_model_state(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _model_state(item) for key, item in value.items()}
+    return (type(value), value)
+
+
+@pytest.mark.asyncio
+async def test_streamed_chat_chunks_decode_exactly_like_the_sdk_for_strict_and_loose_payloads():
+    from openai._models import construct_type
+    from openai.types.chat import ChatCompletionChunk
+
+    body: Final = b"".join(f"data: {json.dumps(p)}\n\n".encode() for p in _STREAM_CHUNK_PAYLOADS) + b"data: [DONE]\n\n"
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        _, stream = await OpenAIChatCompletion().make_openai_chat_completion_request(
+            openai_aclient=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "q"}], "stream": True},
+            timeout=10,
+            logging_obj=MagicMock(),
+        )
+        decoded: Final = [chunk async for chunk in stream]
+
+    assert [_model_state(chunk) for chunk in decoded] == [
+        _model_state(construct_type(type_=ChatCompletionChunk, value=payload)) for payload in _STREAM_CHUNK_PAYLOADS
+    ]

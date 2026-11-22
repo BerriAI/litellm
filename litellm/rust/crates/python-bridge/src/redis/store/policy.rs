@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_redis_store::TierPolicy;
+use litellm_redis_store::RouterTiers;
 use pyo3::prelude::*;
 
 use crate::{
@@ -16,30 +16,16 @@ const MEMORY_TTL: FieldSpec<Option<Duration>> =
     FieldSpec::new("default_in_memory_ttl", optional_seconds);
 
 /// The tier values this Python process runs with, from its environment and `litellm` globals.
-#[derive(Debug)]
-pub(crate) struct RouterTierPolicies {
-    pub(crate) cooldowns: TierPolicy,
-    pub(crate) usage: TierPolicy,
-}
-
-pub(crate) fn router_tier_policies(py: Python<'_>) -> PyResult<RouterTierPolicies> {
+pub(crate) fn router_tier_policies(py: Python<'_>) -> PyResult<RouterTiers> {
     Ok(project(&PythonSettings::RouterTiers.read(py)?)?)
 }
 
-fn project(snapshot: &Snapshot<'_>) -> Result<RouterTierPolicies, ProjectionError> {
-    let tracked_reads = snapshot.read(&TRACKED_READS)?;
-    let default_in_memory_ttl = snapshot.read(&MEMORY_TTL)?;
-    Ok(RouterTierPolicies {
-        cooldowns: TierPolicy {
-            refresh_after: snapshot.read(&COOLDOWN_REFRESH)?,
-            tracked_reads,
-            default_in_memory_ttl,
-        },
-        usage: TierPolicy {
-            refresh_after: snapshot.read(&USAGE_REFRESH)?,
-            tracked_reads,
-            default_in_memory_ttl,
-        },
+fn project(snapshot: &Snapshot<'_>) -> Result<RouterTiers, ProjectionError> {
+    Ok(RouterTiers {
+        cooldown_refresh: snapshot.read(&COOLDOWN_REFRESH)?,
+        usage_refresh: snapshot.read(&USAGE_REFRESH)?,
+        tracked_reads: snapshot.read(&TRACKED_READS)?,
+        default_in_memory_ttl: snapshot.read(&MEMORY_TTL)?,
     })
 }
 
@@ -71,11 +57,12 @@ mod tests {
     use std::time::Duration;
 
     use pyo3::{prelude::*, types::PyDict};
+    use rstest::rstest;
 
     use super::project;
     use crate::python_settings::PythonSettings;
 
-    fn projected(py: Python<'_>, fields: &str) -> Result<super::RouterTierPolicies, String> {
+    fn projected(py: Python<'_>, fields: &str) -> Result<litellm_redis_store::RouterTiers, String> {
         let locals = PyDict::new(py);
         let source = std::ffi::CString::new(format!(
             "import types\nsettings = types.SimpleNamespace({fields})"
@@ -87,7 +74,7 @@ mod tests {
         project(&snapshot).map_err(|error| PyErr::from(error).to_string())
     }
 
-    #[test]
+    #[rstest]
     fn the_host_values_are_each_familys_refresh_and_tracked_reads() {
         Python::initialize();
         Python::attach(|py| {
@@ -97,18 +84,19 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                policies.cooldowns.refresh_after,
-                Duration::from_millis(2500)
+                policies,
+                litellm_redis_store::RouterTiers {
+                    cooldown_refresh: Duration::from_millis(2500),
+                    usage_refresh: Duration::from_secs(30),
+                    tracked_reads: 42,
+                    default_in_memory_ttl: None,
+                }
             );
-            assert_eq!(policies.usage.refresh_after, Duration::from_secs(30));
-            assert_eq!(policies.cooldowns.tracked_reads, 42);
-            assert_eq!(policies.usage.tracked_reads, 42);
-            assert_eq!(policies.cooldowns.default_in_memory_ttl, None);
         });
     }
 
-    #[test]
-    fn a_set_default_in_memory_ttl_reaches_both_familys_backfill() {
+    #[rstest]
+    fn a_set_default_in_memory_ttl_reaches_every_familys_backfill() {
         Python::initialize();
         Python::attach(|py| {
             let policies = projected(
@@ -117,17 +105,21 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                policies.cooldowns.default_in_memory_ttl,
-                Some(Duration::from_millis(7500))
-            );
-            assert_eq!(
-                policies.usage.default_in_memory_ttl,
-                Some(Duration::from_millis(7500))
+                (
+                    policies.cooldowns().default_in_memory_ttl,
+                    policies.usage().default_in_memory_ttl,
+                    policies.default_in_memory_ttl,
+                ),
+                (
+                    Some(Duration::from_millis(7500)),
+                    Some(Duration::from_millis(7500)),
+                    Some(Duration::from_millis(7500)),
+                )
             );
         });
     }
 
-    #[test]
+    #[rstest]
     fn a_value_python_would_not_run_with_is_a_configuration_error() {
         Python::initialize();
         Python::attach(|py| {

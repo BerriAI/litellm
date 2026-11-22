@@ -9,6 +9,11 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
+from redis.asyncio.client import Pipeline
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisClusterException, ResponseError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -77,6 +82,90 @@ async def test_async_delete_cache_applies_namespace(namespace, monkeypatch, redi
 
     expected_key = "litellm:3997c4abcdef" if namespace else "3997c4abcdef"
     mock_redis_instance.delete.assert_awaited_once_with(expected_key)
+
+
+@pytest.mark.parametrize("decode_responses", [False, True])
+@pytest.mark.asyncio
+async def test_async_getrange_reads_a_prefix_of_what_was_set_under_the_namespace(
+    decode_responses, monkeypatch, redis_no_ping
+):
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="litellm")
+    client: Final = FakeRedis(server=FakeServer(), decode_responses=decode_responses)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache("polling:1", {"status": "cancelled"}, ttl=60)
+
+        assert await redis_cache.async_getrange("polling:1", 0, 11) == '{"status": "'
+        assert await redis_cache.async_getrange("polling:never-set", 0, 11) == ""
+    await client.aclose()
+
+
+class _FakeRedisBefore62(FakeRedis):
+    async def set(self, name: str, value: str | bytes, *args: object, get: bool = False, **kwargs: object) -> object:
+        if get:
+            raise ResponseError("syntax error")
+        return await super().set(name, value, *args, **kwargs)
+
+
+class _FakeRedisBefore62LosingTheLinkAfterEachWrite(_FakeRedisBefore62):
+    async def expire(self, name: str, time: int | timedelta, *args: object, **kwargs: object) -> bool:
+        raise RedisConnectionError("connection lost")
+
+
+class _FakeRedisBefore62RefusingTransactionsLikeACluster(_FakeRedisBefore62):
+    def pipeline(self, transaction: bool = True, shard_hint: str | None = None) -> Pipeline:
+        if transaction:
+            raise RedisClusterException("transaction is deprecated in cluster mode")
+        return super().pipeline(transaction=False, shard_hint=shard_hint)
+
+
+@pytest.mark.parametrize(
+    "redis_type",
+    [
+        FakeRedis,
+        _FakeRedisBefore62,
+        _FakeRedisBefore62LosingTheLinkAfterEachWrite,
+        _FakeRedisBefore62RefusingTransactionsLikeACluster,
+    ],
+)
+@pytest.mark.parametrize("decode_responses", [False, True])
+@pytest.mark.asyncio
+async def test_async_set_existing_returning_previous_replaces_only_a_key_that_exists(
+    redis_type: type[FakeRedis], decode_responses: bool, monkeypatch: pytest.MonkeyPatch, redis_no_ping: None
+) -> None:
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="litellm")
+    client: Final = redis_type(server=FakeServer(), decode_responses=decode_responses)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache("polling:1", "first", ttl=600)
+
+        assert await redis_cache.async_set_existing_returning_previous("polling:1", "second", 30) == '"first"'
+        assert await redis_cache.async_set_existing_returning_previous("polling:never-set", "second", 30) is None
+        assert await redis_cache.async_getrange("polling:1", 0, -1) == "second"
+
+    assert 0 < await client.ttl("litellm:polling:1") <= 30
+    assert await client.exists("litellm:polling:never-set") == 0
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_getrange_that_cuts_a_multibyte_character_does_not_raise(monkeypatch, redis_no_ping):
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache()
+    client: Final = FakeRedis(server=FakeServer())
+    await client.set("polling:1", "é".encode())
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        assert await redis_cache.async_getrange("polling:1", 0, 0) == "�"
+    await client.aclose()
 
 
 @pytest.mark.parametrize("namespace", [None, "litellm"])
@@ -1595,7 +1684,7 @@ async def test_async_rpush_and_trim_runs_push_and_trim_in_one_transaction(monkey
 def test_call_stack_info_skips_generic_cache_facade_frames():
     """A read through ``DualCache.async_get_cache`` -> ``RedisCache.async_get_cache`` used to
     report ``async_get_cache <- async_get_cache``; the chain names the code that wanted the
-    read, skipping the facade verbs and the batch retry wrappers in between."""
+    read, skipping the facade verbs and the circuit-breaker guard in between."""
     from litellm.caching.redis_cache import _get_call_stack_info
 
     def probe():  # the RedisCache method that sets call_type
@@ -1604,11 +1693,11 @@ def test_call_stack_info_skips_generic_cache_facade_frames():
     def async_get_cache():  # a facade's generic verb
         return probe()
 
-    def run_alone():  # the batch retry wrapper
+    def _run_under_circuit_breaker():  # the breaker guard
         return async_get_cache()
 
     def _retrieve_from_cache():
-        return run_alone()
+        return _run_under_circuit_breaker()
 
     def _async_get_cache():
         return _retrieve_from_cache()
@@ -1630,31 +1719,7 @@ def test_call_stack_info_stops_at_the_event_loop():
     assert asyncio.run(_lookup()) == "_lookup"
 
 
-def test_call_stack_info_reports_the_threaded_caller_when_only_wrappers_are_found():
-    """A batch op retried on the flush runs in a task of its own, so above its wrappers there
-    is only the event loop; the chain is the one its declaring code threaded through
-    ``service_caller``, never the wrapper names (``run_alone <- _settle_alone`` says nothing)."""
-    from litellm._internal_context import service_caller
-    from litellm.caching.redis_cache import _get_call_stack_info
-
-    def probe():
-        return _get_call_stack_info()
-
-    def run_alone():
-        return probe()
-
-    async def _settle_alone():
-        return run_alone()
-
-    async def flush():
-        with service_caller("prefetch_auth_objects <- user_api_key_auth"):
-            task = asyncio.create_task(_settle_alone())
-        return await task
-
-    assert asyncio.run(flush()) == "prefetch_auth_objects <- user_api_key_auth"
-
-
-def test_call_stack_info_is_unknown_when_only_wrappers_are_found_and_nothing_was_threaded():
+def test_call_stack_info_is_unknown_when_only_wrappers_are_found():
     import threading
 
     from litellm.caching.redis_cache import _get_call_stack_info
@@ -1662,14 +1727,14 @@ def test_call_stack_info_is_unknown_when_only_wrappers_are_found_and_nothing_was
     def probe():
         return _get_call_stack_info()
 
-    def run_alone():
+    def wrapper():
         return probe()
 
-    def _settle_alone():
-        return run_alone()
+    def _run_under_circuit_breaker():
+        return wrapper()
 
     seen: list[str] = []
-    worker = threading.Thread(target=lambda: seen.append(_settle_alone()))
+    worker = threading.Thread(target=lambda: seen.append(_run_under_circuit_breaker()))
     worker.start()
     worker.join()
     assert seen == ["unknown"]

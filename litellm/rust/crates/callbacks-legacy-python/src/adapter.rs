@@ -17,11 +17,15 @@ use pyo3::{
     types::{PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger, SentRequest,
+    DeploymentHooks, LegacyCallbacks, LoggedCallParam, PublicCall, PythonLogger, SentRequest,
     deferred::{PendingLogging, PendingSuccess},
-    finalize, is_internal_call,
+    finalize, is_internal_call, messages_input,
     python::{Logging, Streaming},
     setup,
 };
@@ -34,6 +38,7 @@ struct PassThroughStream {
 
 /// What the Messages stream iterator keeps for its end-of-stream billing.
 struct DeliveredStream {
+    head: Py<PyAny>,
     chunks: Py<PyList>,
     first_chunk: Option<Py<PyAny>>,
 }
@@ -61,6 +66,14 @@ pub struct LegacyLogging {
     /// When the provider request went out, until its window is recorded (Messages only).
     api_started: Option<f64>,
     host_answered: bool,
+    /// Whether the call's stream starts only on its first read, as Python's Messages iterator
+    /// does.
+    stream_starts_on_first_read: bool,
+    /// Set once the route sends through the host's own client, whose timed `post` already
+    /// reports the exchange.
+    host_client: Arc<AtomicBool>,
+    /// The params the route's provider logs from the caller's own kwargs.
+    logged_call_params: Vec<LoggedCallParam>,
 }
 
 fn retry_reason(reason: &RetryReason) -> Value {
@@ -102,7 +115,26 @@ impl LegacyLogging {
             cache_key: None,
             api_started: None,
             host_answered: false,
+            stream_starts_on_first_read: false,
+            host_client: Arc::default(),
+            logged_call_params: Vec::new(),
         }
+    }
+
+    /// Shares the flag the route host sets when the call sends through its own client.
+    #[must_use]
+    pub fn with_host_client(self, host_client: Arc<AtomicBool>) -> Self {
+        Self {
+            host_client,
+            ..self
+        }
+    }
+
+    /// Logs `param` in the Messages `litellm_params` for calls to its provider.
+    #[must_use]
+    pub fn with_logged_call_param(mut self, param: LoggedCallParam) -> Self {
+        self.logged_call_params.push(param);
+        self
     }
 
     /// The kwargs `Logging.update_from_kwargs` sees. Python's Messages handler takes `metadata` as
@@ -129,24 +161,54 @@ impl LegacyLogging {
     }
 
     /// Python's Messages handler hands the logger its request params, validated `metadata`
-    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag.
+    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag and the
+    /// [`LoggedCallParam`]s the route's provider adds.
     fn logged_request_params(
         &self,
+        py: Python<'_>,
         context: &RequestContext,
-    ) -> Option<serde_json::Map<String, Value>> {
+    ) -> PyResult<Option<serde_json::Map<String, Value>>> {
         if self.operation != LoggingOperation::Messages {
-            return None;
+            return Ok(None);
         }
-        let mut params = context
-            .optional_params
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let mut params = serde_json::Map::new();
+        for param in &self.logged_call_params {
+            if context.custom_llm_provider != param.provider {
+                continue;
+            }
+            if let Some(value) = self.first_text(py, param.read_from)? {
+                params.insert(param.logged_as.to_owned(), Value::String(value));
+            }
+        }
+        params.extend(
+            context
+                .optional_params
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
         params.insert(
             "aanthropic_messages".to_owned(),
             Value::Bool(self.asynchronous),
         );
-        Some(params)
+        Ok(Some(params))
+    }
+
+    /// The first of the call's `names` that holds non-empty text.
+    fn first_text(&self, py: Python<'_>, names: &[&str]) -> PyResult<Option<String>> {
+        for name in names {
+            let Some(value) = self.call.lookup(py, name)? else {
+                continue;
+            };
+            let Ok(text) = value.cast::<PyString>() else {
+                continue;
+            };
+            let text = text.to_str()?;
+            if !text.is_empty() {
+                return Ok(Some(text.to_owned()));
+            }
+        }
+        Ok(None)
     }
 
     // Compared as Python compares them, so a caller's `0` is kept over a typed float's `0.0`.
@@ -216,12 +278,18 @@ impl LegacyLogging {
         &self,
         py: Python<'py>,
         body: &Bound<'py, PyDict>,
+        sent: &Value,
+        as_called: &serde_json::Map<String, Value>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let description = match self.operation {
             LoggingOperation::Completion => "Chat completions",
             LoggingOperation::Responses => "Responses",
             LoggingOperation::Messages => {
-                return Logging::MessagesInput.call(py, (body, self.call.kwargs().bind(py)));
+                let order: Vec<String> = Logging::MessagesInputOrder
+                    .call(py, (body, self.call.kwargs().bind(py)))?
+                    .extract()?;
+                let content = messages_input::serialized(&order, sent, as_called)?;
+                return messages_input::logged(py, &content);
             }
             LoggingOperation::Ocr => "OCR document processing",
         };
@@ -410,6 +478,11 @@ impl LegacyLogging {
         stream: &DeliveredStream,
         teardown: bool,
     ) -> PyResult<()> {
+        // Python's Messages stream iterator starts on the first read, so a stream the caller
+        // closed or dropped unread bills nothing.
+        if self.stream_starts_on_first_read && stream.first_chunk.is_none() {
+            return Ok(());
+        }
         let logger = self.logger()?;
         let billing = self.stream_billing().ok_or(HostError::MissingState)?;
         let billed = Streaming::Success.call(
@@ -441,7 +514,7 @@ impl LegacyLogging {
     /// A failure after the stream reached the caller bills the delivered chunks as
     /// partial usage. The sync path has no loop to schedule that on, so it falls back to
     /// the plain failure handler.
-    fn stream_failure(&mut self, py: Python<'_>) -> PyResult<HookStep<Self, ()>> {
+    fn stream_failure(&mut self, py: Python<'_>, detached: bool) -> PyResult<HookStep<Self, ()>> {
         let (Some(logger), Some(error), Some(stream), Some(billing)) = (
             &self.logger,
             &self.error,
@@ -464,6 +537,8 @@ impl LegacyLogging {
                 ),
                 &stream.chunks,
                 error,
+                &stream.head,
+                detached,
             ),
         );
         match scheduled {
@@ -589,7 +664,7 @@ impl LegacyLogging {
             &self.logging_kwargs(py, false)?,
             &wire,
             context,
-            self.logged_request_params(context).as_ref(),
+            self.logged_request_params(py, context)?.as_ref(),
         )?;
         let lossless = self.operation == LoggingOperation::Messages;
         let body = if lossless {
@@ -598,8 +673,12 @@ impl LegacyLogging {
             to_py(py, &wire.body)?.into_bound(py)
         }
         .cast_into::<PyDict>()?;
+        let mut as_called = serde_json::Map::new();
         for (name, sent) in wire.body.as_object().into_iter().flatten() {
             if let Some(value) = self.caller_value(py, name, sent)? {
+                if lossless && messages_input::is_caller_scalar(&value) {
+                    as_called.insert(name.clone(), json_from_py(&value)?);
+                }
                 body.set_item(name, value)?;
             }
         }
@@ -620,7 +699,7 @@ impl LegacyLogging {
             url: wire.url.clone(),
             context: context.clone(),
         });
-        let input = self.logged_input(py, &body)?;
+        let input = self.logged_input(py, &body, &wire.body, &as_called)?;
         self.logger()?.pre_call(
             py,
             &input,
@@ -631,6 +710,7 @@ impl LegacyLogging {
         )?;
         if self.operation == LoggingOperation::Messages
             && self.asynchronous
+            && !self.host_client.load(Ordering::Acquire)
             && self.times_provider_exchange(py)?
         {
             self.api_started = Some(epoch_seconds());
@@ -683,6 +763,7 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         use litellm_host::interceptors::{Cost, ResultSource};
 
+        self.stream_starts_on_first_read = self.operation == LoggingOperation::Messages;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
@@ -752,10 +833,16 @@ impl LegacyLogging {
                 let sent = self.request.as_ref().map(|request| SentRequest {
                     url: &request.url,
                     headers: &request.headers,
-                    body: &request.body,
+                    body: &head.sent_body,
                 });
-                self.logger()?
-                    .record_response(py, head.status, &head.headers, &raw.body, sent)?;
+                self.logger()?.record_response(
+                    py,
+                    head.status,
+                    &head.headers,
+                    &raw.body,
+                    head.streamed,
+                    sent,
+                )?;
             }
             return Ok(HookStep::Ready(()));
         }
@@ -838,7 +925,7 @@ impl LegacyLogging {
             self.close_api_window(py, timing.end_time)?;
         }
         if self.stream.is_some() {
-            return self.stream_failure(py);
+            return self.stream_failure(py, origin == FailureOrigin::DetachedStream);
         }
         if origin == FailureOrigin::Call && self.logger.is_some() && self.runs_deployment_hooks() {
             let error = self.error.as_ref().ok_or(HostError::MissingState)?;
@@ -886,6 +973,7 @@ impl LegacyLogging {
             ),
         )?;
         self.stream = Some(DeliveredStream {
+            head: head.clone_ref(py),
             chunks: PyList::empty(py).unbind(),
             first_chunk: None,
         });
@@ -941,6 +1029,7 @@ impl PythonOwned for LegacyLogging {
         visit.call(&self.response)?;
         visit.call(&self.error)?;
         if let Some(stream) = &self.stream {
+            visit.call(&stream.head)?;
             visit.call(&stream.chunks)?;
             visit.call(&stream.first_chunk)?;
         }
@@ -1700,6 +1789,47 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
         }
     }
 
+    const LOGGED_LOCATION: crate::LoggedCallParam = crate::LoggedCallParam {
+        provider: "regional",
+        read_from: &["location", "location_alias"],
+        logged_as: "location",
+    };
+
+    #[rstest]
+    #[case::first_name(c"kwargs = {'location': 'eu', 'location_alias': 'us'}", "regional", json!({}), Some("eu"))]
+    #[case::empty_falls_through(c"kwargs = {'location': '', 'location_alias': 'us'}", "regional", json!({}), Some("us"))]
+    #[case::text_only(c"kwargs = {'location': 7, 'location_alias': 'us'}", "regional", json!({}), Some("us"))]
+    #[case::from_the_bound_request(c"bound = {'location': 'eu'}", "regional", json!({}), Some("eu"))]
+    #[case::route_params_win(c"kwargs = {'location': 'eu'}", "regional", json!({"location": "routed"}), Some("routed"))]
+    #[case::other_provider(c"kwargs = {'location': 'eu'}", "elsewhere", json!({}), None)]
+    fn messages_log_a_provider_s_call_param(
+        #[case] source: &CStr,
+        #[case] provider: &str,
+        #[case] optional_params: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = pyo3::types::PyDict::new(py);
+            py.run(source, Some(&locals), Some(&locals)).unwrap();
+            let logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                ..legacy_call(py, &locals, false)
+            }
+            .with_logged_call_param(LOGGED_LOCATION);
+            let context = RequestContext {
+                custom_llm_provider: provider.into(),
+                optional_params,
+                ..route_context()
+            };
+            let params = logging
+                .logged_request_params(py, &context)
+                .unwrap()
+                .unwrap();
+            assert_eq!(params.get("location").and_then(Value::as_str), expected);
+        });
+    }
+
     fn route_wire() -> WireRequest {
         WireRequest {
             url: "https://provider.invalid/ocr".into(),
@@ -1734,7 +1864,7 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
     #[case::responses(crate::LoggingOperation::Responses, "Responses")]
     #[case::messages(
         crate::LoggingOperation::Messages,
-        r#"[{'role': 'user', 'content': '{"pages": [1]}'}]"#
+        r#"[{'role': 'user', 'content': '{"pages":[1]}'}]"#
     )]
     #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
@@ -1778,6 +1908,48 @@ prepared = {'pages': replacement}
 assert logger.pre['complete_input_dict']['pages'] is replacement
 assert str(logger.pre_input) == description
 assert original == [0]
+",
+            );
+        });
+    }
+
+    #[rstest]
+    fn the_messages_input_is_the_body_before_pre_call_edits_with_the_callers_scalars() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+kwargs['temperature'] = 1
+def on_pre_call(additional_args):
+    additional_args['complete_input_dict']['system'] = 'edited'
+",
+            );
+            let mut logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let wire = WireRequest {
+                body: json!({"model": "m", "system": "caf\u{e9} \u{1f600}", "temperature": 1.0}),
+                ..route_wire()
+            };
+
+            let (_, step) = send_and_receive(py, &mut logging, wire, &route_context());
+
+            let HookStep::Ready(sent) = step else {
+                panic!("pre_call answers at once");
+            };
+            assert_eq!(sent.body["system"], "edited");
+            run(
+                py,
+                &locals,
+                c"
+assert logger.pre_input == [
+    {'role': 'user', 'content': '{\"model\":\"m\",\"system\":\"caf\u{e9} \u{1f600}\",\"temperature\":1}'}
+], logger.pre_input
 ",
             );
         });
@@ -2569,10 +2741,16 @@ assert chunks[1] is last
     }
 
     #[rstest]
-    #[case::cancelled_mid_stream(None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
-    #[case::after_success(Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
-    #[case::after_failure(Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
+    #[case::cancelled_mid_stream(true, true, None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::dropped_unread(true, false, None, &["stamp_stream_head", "stream_opened", "restore"])]
+    #[case::closed_unread(true, false, Some(true), &["stamp_stream_head", "stream_opened", "restore"])]
+    #[case::dropped_unread_billed_where_the_stream_starts_on_open(false, false, None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::closed_unread_billed_where_the_stream_starts_on_open(false, false, Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_success(true, true, Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_failure(true, true, Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
     fn closing_an_unfinished_stream_bills_its_delivered_chunks_once(
+        #[case] starts_on_first_read: bool,
+        #[case] read: bool,
         #[case] ended: Option<bool>,
         #[case] expected: &[&str],
     ) {
@@ -2584,14 +2762,17 @@ assert chunks[1] is last
             );
             let mut logging = LegacyLogging {
                 operation: crate::LoggingOperation::Messages,
+                stream_starts_on_first_read: starts_on_first_read,
                 ..logged(py, &locals, true)
             };
             logging
                 .on_stream_open(py, &local(&locals, "head").unbind())
                 .unwrap();
-            logging
-                .on_stream_chunk(py, &local(&locals, "first").unbind())
-                .unwrap();
+            if read {
+                logging
+                    .on_stream_chunk(py, &local(&locals, "first").unbind())
+                    .unwrap();
+            }
             match ended {
                 Some(true) => drop(succeed(py, &locals, &mut logging)),
                 Some(false) => drop(fail(py, &locals, &mut logging)),
