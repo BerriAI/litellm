@@ -25,11 +25,9 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
-# OpenAI has a 64-character limit for function/tool names
-# Anthropic does not have this limit, so we need to truncate long names
 OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
 TOOL_NAME_HASH_LENGTH: Final = 8
-TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
+TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1
 
 
 BRIDGED_TOOL_NAMES_KWARG: Final = "litellm_bridged_tool_names"
@@ -200,7 +198,6 @@ def truncate_tool_name(name: str) -> str:
     if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
         return name
 
-    # Create deterministic hash from full name to avoid collisions
     name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
     return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
 

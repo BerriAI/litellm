@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_BYTES, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
@@ -3701,6 +3701,271 @@ def test_vertex_keeps_a_union_root_tool_on_parameters_when_the_call_can_be_force
 
 
 @pytest.mark.parametrize(
+    ("model", "kind_schema", "expected_kind"),
+    [
+        ("gemini-2.5-flash", {"const": "card"}, {"type": "string", "enum": ["card"]}),
+        ("gemini-2.5-flash", {"const": "ledger-7", "type": "string"}, {"type": "string", "enum": ["ledger-7"]}),
+        ("gemini-2.5-flash", {"const": "card", "enum": ["card", "bank"]}, {"type": "string", "enum": ["card"]}),
+        ("gemini-4-argon", {"const": 7}, {"type": "integer", "enum": ["7"]}),
+        ("gemini-2.5-flash", {"const": 7}, {"type": "integer"}),
+        ("gemini-2.5-flash", {"const": 1.5}, {"type": "number"}),
+        ("gemini-2.5-flash", {"const": True}, {"type": "boolean"}),
+        ("gemini-2.5-flash", {"type": ["string", "null"], "const": "card"}, {"type": "string", "enum": ["card"]}),
+        ("gemini-4-argon", {"type": "integer", "const": 7.0}, {"type": "integer", "enum": ["7"]}),
+    ],
+    ids=[
+        "const-only-string",
+        "typed-string",
+        "const-beside-enum",
+        "integer-with-integer-enums",
+        "integer-without-integer-enums",
+        "number",
+        "boolean",
+        "nullable-type-list",
+        "whole-float-under-integer",
+    ],
+)
+def test_vertex_sends_a_tool_parameter_const_as_its_type_and_the_one_enum_value_gemini_enforces(
+    model: str, kind_schema: dict[str, object], expected_kind: dict[str, object]
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "pay", "parameters": {"type": "object", "properties": {"kind": kind_schema}}},
+                }
+            ]
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["kind"] == expected_kind
+
+
+_CARD_PAYMENT: Final = {
+    "type": "object",
+    "properties": {"kind": {"const": "card"}, "number": {"type": "string"}},
+    "required": ["kind", "number"],
+}
+_BANK_PAYMENT: Final = {
+    "type": "object",
+    "properties": {"kind": {"const": "bank"}, "iban": {"type": "string"}},
+    "required": ["kind", "iban"],
+}
+_PINNED_PAYMENTS: Final = {
+    "anyOf": [
+        {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["card"]}, "number": {"type": "string"}},
+            "required": ["kind", "number"],
+        },
+        {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["bank"]}, "iban": {"type": "string"}},
+            "required": ["kind", "iban"],
+        },
+    ]
+}
+
+
+@pytest.mark.parametrize(
+    ("parameters", "tool_choice", "expected_declaration"),
+    [
+        (
+            {"anyOf": [_CARD_PAYMENT, _BANK_PAYMENT]},
+            "auto",
+            {"name": "pay", "parametersJsonSchema": _PINNED_PAYMENTS},
+        ),
+        (
+            {"anyOf": [_CARD_PAYMENT, _BANK_PAYMENT]},
+            {"type": "function", "function": {"name": "pay"}},
+            {"name": "pay", "parameters": _PINNED_PAYMENTS},
+        ),
+        (
+            {"$ref": "#/$defs/Card", "$defs": {"Card": _CARD_PAYMENT}},
+            "auto",
+            {"name": "pay", "parameters": _PINNED_PAYMENTS["anyOf"][0]},
+        ),
+    ],
+    ids=["union-root-auto", "union-root-forced", "root-ref-to-object"],
+)
+def test_vertex_pins_tool_consts_on_whichever_schema_field_the_tool_goes_on(
+    parameters: dict[str, object], tool_choice: str | dict[str, object], expected_declaration: dict[str, object]
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tool_choice": tool_choice,
+            "tools": [{"type": "function", "function": {"name": "pay", "parameters": deepcopy(parameters)}}],
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"] == [expected_declaration]
+
+
+def test_vertex_response_json_schema_pins_a_const_inside_the_defs_it_keeps() -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "payment",
+            "schema": {
+                "type": "object",
+                "properties": {"payment": {"$ref": "#/$defs/Card"}},
+                "required": ["payment"],
+                "$defs": {"Card": {"type": "object", "properties": {"kind": {"const": "card", "type": "string"}}}},
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="gemini-4-argon",
+        drop_params=False,
+    )
+
+    assert request_params["response_json_schema"] == {
+        "type": "object",
+        "properties": {"payment": {"$ref": "#/$defs/Card"}},
+        "required": ["payment"],
+        "$defs": {"Card": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["card"]}}}},
+    }
+
+
+_TEN_CHARACTER_CONSTS_IN_BUDGET: Final = GEMINI_MAX_ENUM_BYTES // 10
+
+
+def _ten_character_const_properties(numbers: range) -> dict[str, object]:
+    return {f"tag{n}": {"type": "string", "const": f"tag-{n:06d}"} for n in numbers}
+
+
+def _tool(name: str, properties: dict[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": properties}}}
+
+
+_SentDeclarations = list[dict[str, list[dict[str, dict[str, dict[str, object]]]]]]
+
+
+def _tools_through_chat(tools: list[dict[str, object]]) -> _SentDeclarations:
+    return VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="gemini-4-argon", drop_params=False
+    )["tools"]
+
+
+def _tools_through_map_function(tools: list[dict[str, object]]) -> _SentDeclarations:
+    return cast(_SentDeclarations, VertexGeminiConfig().map_function(value=tools, optional_params={}))
+
+
+@pytest.mark.parametrize("map_tools", [_tools_through_chat, _tools_through_map_function], ids=["chat", "map-function"])
+@pytest.mark.parametrize(
+    ("const_count", "pinned"),
+    [(_TEN_CHARACTER_CONSTS_IN_BUDGET, True), (_TEN_CHARACTER_CONSTS_IN_BUDGET + 1, False)],
+    ids=["at-budget", "over-budget"],
+)
+def test_gemini_tools_send_consts_unpinned_once_the_request_enums_pass_the_enum_budget(
+    map_tools: Callable[[list[dict[str, object]]], _SentDeclarations], const_count: int, pinned: bool
+) -> None:
+    half: Final = const_count // 2
+    tools: Final = [
+        _tool("first", _ten_character_const_properties(range(half))),
+        _tool("second", _ten_character_const_properties(range(half, const_count))),
+    ]
+
+    declarations: Final = map_tools(tools)[0]["function_declarations"]
+
+    sent_properties: Final = dict(
+        chain.from_iterable(declaration["parameters"]["properties"].items() for declaration in declarations)
+    )
+    assert sent_properties == {
+        f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} if pinned else {"type": "string"}
+        for n in range(const_count)
+    }
+
+
+@pytest.mark.parametrize(
+    ("const_count", "pinned"),
+    [(_TEN_CHARACTER_CONSTS_IN_BUDGET, True), (_TEN_CHARACTER_CONSTS_IN_BUDGET + 1, False)],
+    ids=["at-budget", "over-budget"],
+)
+def test_gemini_response_json_schema_keeps_consts_as_sent_once_its_enums_pass_the_enum_budget(
+    const_count: int, pinned: bool
+) -> None:
+    schema: Final = {"type": "object", "properties": _ten_character_const_properties(range(const_count))}
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "tags", "schema": schema}}
+        },
+        optional_params={},
+        model="gemini-4-argon",
+        drop_params=False,
+    )
+
+    assert request_params["response_json_schema"]["properties"] == (
+        {f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} for n in range(const_count)}
+        if pinned
+        else schema["properties"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("const_count", "pinned"),
+    [(_TEN_CHARACTER_CONSTS_IN_BUDGET, True), (_TEN_CHARACTER_CONSTS_IN_BUDGET + 1, False)],
+    ids=["at-budget", "over-budget"],
+)
+def test_gemini_sends_consts_unpinned_once_tools_and_response_format_pass_the_enum_budget_together(
+    const_count: int, pinned: bool
+) -> None:
+    half: Final = const_count // 2
+    response_properties: Final = _ten_character_const_properties(range(half, const_count))
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [_tool("record", _ten_character_const_properties(range(half)))],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "tags", "schema": {"type": "object", "properties": response_properties}},
+            },
+        },
+        optional_params={},
+        model="gemini-4-argon",
+        drop_params=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"] == {
+        f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} if pinned else {"type": "string"} for n in range(half)
+    }
+    assert request_params["response_json_schema"]["properties"] == (
+        {f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} for n in range(half, const_count)}
+        if pinned
+        else response_properties
+    )
+
+
+def test_gemini_tools_keep_integer_enums_that_fit_when_const_pins_pass_the_enum_budget() -> None:
+    tool: Final = _tool(
+        "set_priority",
+        {
+            **_ten_character_const_properties(range(_TEN_CHARACTER_CONSTS_IN_BUDGET)),
+            "level": {"type": "integer", "enum": [1, 2, 5]},
+        },
+    )
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [tool]}, optional_params={}, model="gemini-3.8-flash", drop_params=False
+    )
+
+    sent_properties: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+    assert sent_properties["level"] == {"type": "integer", "enum": ["1", "2", "5"]}
+    assert sent_properties["tag0"] == {"type": "string"}
+
+
+@pytest.mark.parametrize(
     ("model", "expected_level"),
     [
         ("gemini-3.8-flash", {"type": "integer", "enum": ["1", "2", "5"]}),
@@ -3789,7 +4054,7 @@ def test_gemini_mapping_drops_integer_enums_when_the_caller_disallows_them() -> 
     assert request_params["response_schema"]["properties"]["level"] == {"type": "integer"}
 
 
-_TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+_TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_BYTES // 10
 
 
 def _ten_digit_integer_enum_tool(name: str, value_count: int) -> dict[str, object]:
@@ -3843,7 +4108,7 @@ def test_gemini_tool_mapping_drops_every_integer_enum_when_the_request_exceeds_t
 
 
 def test_gemini_tool_mapping_counts_string_enums_toward_the_enum_budget() -> None:
-    names: Final = [f"name{n:06d}" for n in range(GEMINI_MAX_ENUM_CHARACTERS // 10)]
+    names: Final = [f"name{n:06d}" for n in range(GEMINI_MAX_ENUM_BYTES // 10)]
     tool: Final = {
         "type": "function",
         "function": {
@@ -13453,3 +13718,18 @@ async def test_gemini_malformed_finish_with_no_output_bills_the_tokens_on_the_fa
     assert capture.failures[0]["completion_tokens"] == 381
     assert capture.failures[0]["prompt_tokens"] == 9098
     assert cast(float, capture.failures[0]["response_cost"]) > 0
+
+
+@pytest.mark.parametrize(
+    ("const", "pinned"),
+    [("a" * GEMINI_MAX_ENUM_BYTES, True), ("账" * (GEMINI_MAX_ENUM_BYTES // 3 + 1), False)],
+    ids=["ascii-at-budget", "multibyte-over-budget"],
+)
+def test_gemini_tools_measure_the_enum_budget_in_utf8_bytes(const: str, pinned: bool) -> None:
+    declarations: Final = _tools_through_chat([_tool("record", {"source": {"type": "string", "const": const}})])[0][
+        "function_declarations"
+    ]
+
+    assert declarations[0]["parameters"]["properties"]["source"] == (
+        {"type": "string", "enum": [const]} if pinned else {"type": "string"}
+    )
