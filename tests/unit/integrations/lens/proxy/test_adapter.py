@@ -165,7 +165,12 @@ async def test_forwarding_replaces_caller_headers_and_preserves_wire_response(
         return httpx.Response(
             409,
             content=b'{"detail":"contract mismatch"}',
-            headers={"content-type": "application/json", "retry-after": "2", "set-cookie": "unsafe"},
+            headers={
+                "content-type": "application/json",
+                "retry-after": "2",
+                "set-cookie": "unsafe",
+                "cache-control": "public, max-age=600",
+            },
         )
 
     request: Final = Request(
@@ -192,6 +197,7 @@ async def test_forwarding_replaces_caller_headers_and_preserves_wire_response(
     assert response.body == b'{"detail":"contract mismatch"}'
     assert response.headers["retry-after"] == "2"
     assert "set-cookie" not in response.headers
+    assert response.headers["cache-control"] == "private, no-store"
 
 
 @pytest.mark.asyncio

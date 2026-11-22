@@ -41,6 +41,7 @@ router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 
 _REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempotency-key"})
 _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
+_PRIVATE: Final = MappingProxyType({"cache-control": "private, no-store"})
 _UI_MOUNT_HEADER: Final = "x-lens-ui-mount"
 _UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options"})
 _UI_SAME_ORIGIN_FRAME: Final = MappingProxyType(
@@ -236,7 +237,10 @@ async def forward(
             return BufferedResponse(
                 body,
                 status_code=response.status_code,
-                headers={name: value for name, value in response.headers.items() if name in _RESPONSE_HEADERS},
+                headers={
+                    **{name: value for name, value in response.headers.items() if name in _RESPONSE_HEADERS},
+                    **_PRIVATE,
+                },
                 reservation=reservation,
             )
     except (httpx.HTTPError, RuntimeError) as error:
