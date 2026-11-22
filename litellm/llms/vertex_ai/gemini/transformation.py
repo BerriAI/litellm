@@ -763,12 +763,9 @@ class _TargetModel:
     custom_llm_provider: str | None
 
 
-def _malformed_assistant_history(message: str, target: _TargetModel) -> BadRequestError:
-    return BadRequestError(
-        message=f"Invalid assistant message: {message}",
-        model=target.model,
-        llm_provider=target.custom_llm_provider or "vertex_ai",
-    )
+@dataclass(frozen=True, slots=True)
+class _MalformedHistory:
+    message: str
 
 
 def _generates_images(target: _TargetModel) -> bool:
@@ -781,42 +778,38 @@ def _generates_images(target: _TargetModel) -> bool:
 
 
 def _message_thought_signatures(
-    assistant_msg: ChatCompletionAssistantMessage, target: _TargetModel, *, drop_params: bool
-) -> tuple[str, ...]:
+    assistant_msg: ChatCompletionAssistantMessage, *, drop_params: bool
+) -> tuple[str, ...] | _MalformedHistory:
     fields: Final = as_str_mapping(assistant_msg.get("provider_specific_fields"))
     entries: Final = (as_object_list(fields.get("thought_signatures")) if fields is not None else None) or ()
     signatures: Final = tuple(entry for entry in entries if isinstance(entry, str))
     if len(signatures) < len(entries) and not drop_params:
-        raise _malformed_assistant_history(
-            "provider_specific_fields.thought_signatures entries must be strings", target
-        )
+        return _MalformedHistory("provider_specific_fields.thought_signatures entries must be strings")
     return signatures
 
 
 def _own_image_thought_signature(
-    image_item: Mapping[str, object], target: _TargetModel, *, drop_params: bool
-) -> str | None:
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> str | None | _MalformedHistory:
     fields: Final = as_str_mapping(image_item.get("provider_specific_fields"))
     signature: Final = fields.get("thought_signature") if fields is not None else None
     if signature is not None and not isinstance(signature, str) and not drop_params:
-        raise _malformed_assistant_history(
-            "images[].provider_specific_fields.thought_signature must be a string", target
-        )
+        return _MalformedHistory("images[].provider_specific_fields.thought_signature must be a string")
     return signature if isinstance(signature, str) and signature else None
 
 
 def _assistant_image_source(
-    image_item: Mapping[str, object], target: _TargetModel, *, drop_params: bool
-) -> GeminiMediaSource | None:
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> GeminiMediaSource | None | _MalformedHistory:
     raw_image_url: Final = image_item.get("image_url")
     image_url: Final = {"url": raw_image_url} if isinstance(raw_image_url, str) else as_str_mapping(raw_image_url)
     if raw_image_url is not None and image_url is None and not drop_params:
-        raise _malformed_assistant_history("images[].image_url must be an object or a string", target)
+        return _MalformedHistory("images[].image_url must be an object or a string")
     url: Final = image_url.get("url") if image_url is not None else None
     if image_url is None or not url or (drop_params and not isinstance(url, str)):
         return None
     if not isinstance(url, str):
-        raise _malformed_assistant_history("images[].image_url.url must be a string", target)
+        return _MalformedHistory("images[].image_url.url must be a string")
     format_hint: Final = image_url.get("format") or image_url.get("mime_type") or image_url.get("content_type")
     detail: Final = image_url.get("detail")
     return GeminiMediaSource(
@@ -831,18 +824,30 @@ def _right_aligned(signatures: Sequence[str], count: int) -> tuple[str | None, .
     return (None,) * (count - claimed) + tuple(signatures[len(signatures) - claimed :])
 
 
+def _sourced_assistant_image(
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> tuple[GeminiMediaSource, str | None] | None | _MalformedHistory:
+    source: Final = _assistant_image_source(image_item, drop_params=drop_params)
+    if source is None or isinstance(source, _MalformedHistory):
+        return source
+    signature: Final = _own_image_thought_signature(image_item, drop_params=drop_params)
+    if isinstance(signature, _MalformedHistory):
+        return signature
+    return (source, signature)
+
+
 def _sourced_assistant_images(
-    images: object, target: _TargetModel, *, drop_params: bool
-) -> tuple[tuple[GeminiMediaSource, str | None], ...]:
+    images: object, *, drop_params: bool
+) -> tuple[tuple[GeminiMediaSource, str | None], ...] | _MalformedHistory:
     entries: Final = as_object_list(images) or ()
     items: Final = tuple(item for item in map(as_str_mapping, entries) if item is not None)
     if len(items) < len(entries) and not drop_params:
-        raise _malformed_assistant_history("images entries must be objects", target)
-    return tuple(
-        (source, _own_image_thought_signature(item, target, drop_params=drop_params))
-        for item in items
-        if (source := _assistant_image_source(item, target, drop_params=drop_params)) is not None
-    )
+        return _MalformedHistory("images entries must be objects")
+    sourced: Final = tuple(_sourced_assistant_image(item, drop_params=drop_params) for item in items)
+    failure: Final = next((result for result in sourced if isinstance(result, _MalformedHistory)), None)
+    if failure is not None:
+        return failure
+    return tuple(result for result in sourced if isinstance(result, tuple))
 
 
 def _has_text(content: object) -> bool:
@@ -890,10 +895,14 @@ def _signed_text_and_image_parts(
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     *,
     drop_params: bool,
-) -> tuple[PartType, ...]:
+) -> tuple[PartType, ...] | _MalformedHistory:
     tool_call_signatures: Final = _collect_tool_call_thought_signatures(assistant_msg)
-    message_signatures: Final = _message_thought_signatures(assistant_msg, target, drop_params=drop_params)
-    sourced_images: Final = _sourced_assistant_images(assistant_msg.get("images"), target, drop_params=drop_params)
+    message_signatures: Final = _message_thought_signatures(assistant_msg, drop_params=drop_params)
+    if isinstance(message_signatures, _MalformedHistory):
+        return message_signatures
+    sourced_images: Final = _sourced_assistant_images(assistant_msg.get("images"), drop_params=drop_params)
+    if isinstance(sourced_images, _MalformedHistory):
+        return sourced_images
     signing_images: Final = sourced_images if sourced_images and _generates_images(target) else ()
     content: Final = assistant_msg.get("content")
     text_signature: Final = (
@@ -922,6 +931,26 @@ def _signed_text_and_image_parts(
         PartType(text=content) if text_signature is None else PartType(text=content, thoughtSignature=text_signature)
     )
     return (text_part, *image_parts)
+
+
+def _assistant_text_and_image_parts(
+    assistant_msg: ChatCompletionAssistantMessage,
+    target: _TargetModel,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+) -> tuple[PartType, ...]:
+    parts: Final = _signed_text_and_image_parts(
+        assistant_msg, target, vertex_project, vertex_credentials, drop_params=drop_params
+    )
+    if isinstance(parts, _MalformedHistory):
+        raise BadRequestError(
+            message=f"Invalid assistant message: {parts.message}",
+            model=target.model,
+            llm_provider=target.custom_llm_provider or "vertex_ai",
+        )
+    return parts
 
 
 def _gemini_history_media_part(
@@ -1115,7 +1144,7 @@ def gemini_convert_messages_with_history(
                     assistant_content.extend(_parts)
 
                 assistant_content.extend(
-                    _signed_text_and_image_parts(
+                    _assistant_text_and_image_parts(
                         assistant_msg,
                         _TargetModel(model=model, custom_llm_provider=custom_llm_provider),
                         vertex_project,
