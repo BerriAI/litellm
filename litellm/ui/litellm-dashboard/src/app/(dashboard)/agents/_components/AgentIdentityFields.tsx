@@ -2,12 +2,18 @@ import React, { useEffect, useState } from "react";
 import { useWatch } from "react-hook-form";
 import type { ParseKeys } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
+import { productNames } from "@/i18n/untranslated/productNames";
 import i18n from "@/i18n/i18n";
 import { apiClient } from "@/components/networking";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AgentFormField, type AgentFormValues } from "./AgentFormKit";
-import { entraTenantFromIssuer, IDENTITY_UUID_PATTERN } from "./agent_identity";
+import {
+  entraTenantFromIssuer,
+  IDENTITY_UUID_PATTERN,
+  isBoundIdentityProvider,
+  OKTA_ISSUER_PATTERN,
+} from "./agent_identity";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const PROVIDER_OPTIONS: { value: string; labelKey: ParseKeys }[] = [
@@ -24,32 +30,34 @@ const EXECUTION_OPTIONS: { value: string; labelKey: ParseKeys }[] = [
   { value: "disabled", labelKey: "agents.identityFields.execution.disabled" },
 ];
 
+type IssuerList = { issuers?: string[]; error?: string };
+
 export const AgentIdentityFields = ({ accessToken }: { accessToken: string | null }) => {
   const { t } = useTranslation();
   const provider = useWatch<AgentFormValues>({ name: "identity_provider" });
   const mode = useWatch<AgentFormValues>({ name: "execution_mode" });
   const showScopes = mode !== "autonomous" && mode !== undefined;
-  const [tenants, setTenants] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [byProvider, setByProvider] = useState<Partial<Record<string, IssuerList>>>({});
+  const current = typeof provider === "string" ? byProvider[provider] : undefined;
+  const issuers = current?.issuers ?? [];
+  const error = current?.error ?? null;
+  const tenants = issuers.flatMap((issuer) => {
+    const tenant = entraTenantFromIssuer(issuer);
+    return tenant ? [tenant] : [];
+  });
 
   useEffect(() => {
-    if (!accessToken || provider !== "microsoft_entra") return;
+    if (!accessToken || typeof provider !== "string" || !isBoundIdentityProvider(provider)) return;
     let active = true;
+    const path = provider === "okta" ? "/v1/agents/identity/providers/okta" : "/v1/agents/identity/providers";
     apiClient
-      .get<string[]>("/v1/agents/identity/providers", { accessToken })
+      .get<string[]>(path, { accessToken })
       .then((issuers) => {
-        if (active) {
-          setError(null);
-          setTenants(
-            issuers.flatMap((issuer) => {
-              const tenant = entraTenantFromIssuer(issuer);
-              return tenant ? [tenant] : [];
-            }),
-          );
-        }
+        if (active) setByProvider((all) => ({ ...all, [provider]: { issuers } }));
       })
       .catch(() => {
-        if (active) setError(i18n.t("agents.identityFields.errors.providersLoadFailed"));
+        const failure = i18n.t("agents.identityFields.errors.providersLoadFailed");
+        if (active) setByProvider((all) => ({ ...all, [provider]: { ...all[provider], error: failure } }));
       });
     return () => {
       active = false;
@@ -69,7 +77,10 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
         <AgentFormField name="identity_provider" label={t("agents.identityFields.provider")} defaultValue="none">
           {({ value, onChange, id }) => (
             <Select
-              items={PROVIDER_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+              items={[
+                ...PROVIDER_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) })),
+                { value: "okta", label: productNames.okta },
+              ]}
               value={typeof value === "string" ? value : "none"}
               onValueChange={onChange}
             >
@@ -82,6 +93,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                     {t(option.labelKey)}
                   </SelectItem>
                 ))}
+                <SelectItem value="okta">{productNames.okta}</SelectItem>
               </SelectContent>
             </Select>
           )}
@@ -213,6 +225,13 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
             <p className="text-sm text-muted-foreground">{t("agents.identityFields.verificationNote")}</p>
           </>
         )}
+        {provider === "okta" && (
+          <OktaIdentityFields
+            issuers={issuers.filter((issuer) => OKTA_ISSUER_PATTERN.test(issuer))}
+            loaded={current?.issuers !== undefined}
+            error={error}
+          />
+        )}
       </section>
     </>
   );
@@ -267,5 +286,77 @@ const ExecutionField = () => {
         </Select>
       )}
     </AgentFormField>
+  );
+};
+
+const OktaIdentityFields = ({
+  issuers,
+  loaded,
+  error,
+}: {
+  issuers: string[];
+  loaded: boolean;
+  error: string | null;
+}) => {
+  const { t } = useTranslation();
+  const noneAvailable = !error && loaded && issuers.length === 0;
+  return (
+    <>
+      <AgentFormField
+        name="identity_okta_issuer"
+        label={t("agents.identityFields.okta.issuer.label")}
+        rules={{ required: t("agents.identityFields.okta.issuer.required") }}
+        description={t("agents.identityFields.okta.issuer.description")}
+      >
+        {({ value, onChange, id }) => (
+          <Select value={typeof value === "string" ? value : ""} onValueChange={onChange}>
+            <SelectTrigger id={id}>
+              <SelectValue placeholder={t("agents.identityFields.okta.issuer.placeholder")} />
+            </SelectTrigger>
+            <SelectContent>
+              {issuers.map((issuer) => (
+                <SelectItem key={issuer} value={issuer}>
+                  {issuer}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </AgentFormField>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      {noneAvailable && (
+        <p className="text-sm text-muted-foreground">{t("agents.identityFields.okta.issuer.noneAvailable")}</p>
+      )}
+      <AgentFormField
+        name="identity_okta_client_id"
+        label={t("agents.identityFields.okta.clientId.label")}
+        rules={{
+          required: t("agents.identityFields.okta.clientId.required"),
+          validate: (value) =>
+            (typeof value === "string" && value.trim() !== "") || t("agents.identityFields.okta.clientId.required"),
+        }}
+        description={t("agents.identityFields.okta.clientId.description")}
+      >
+        {({ value, onChange, ref, ...control }) => (
+          <Input {...control} ref={ref} value={typeof value === "string" ? value : ""} onChange={onChange} />
+        )}
+      </AgentFormField>
+      <AgentFormField
+        name="identity_okta_required_scopes"
+        label={t("agents.identityFields.okta.requiredScopes.label")}
+        description={t("agents.identityFields.okta.requiredScopes.description")}
+      >
+        {({ value, onChange, ref, ...control }) => (
+          <Input {...control} ref={ref} value={typeof value === "string" ? value : ""} onChange={onChange} />
+        )}
+      </AgentFormField>
+      <ExecutionModeField />
+      <ExecutionField />
+      <p className="text-sm text-muted-foreground">{t("agents.identityFields.okta.verificationNote")}</p>
+    </>
   );
 };

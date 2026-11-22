@@ -1,4 +1,5 @@
 export const productNames = {
+  okta: "Okta",
   liteLLM: "LiteLLM",
   liteLLMWithLogo: "🚅 LiteLLM",
   liteLLMProxy: "LiteLLM Proxy",
