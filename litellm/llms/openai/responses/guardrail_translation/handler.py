@@ -105,6 +105,7 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ChatCompletionAssistantToolCall,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
     ContentPartAddedEvent,
     ContentPartDoneEvent,
@@ -126,7 +127,7 @@ from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputText,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import ChatCompletionDeltaToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -1918,7 +1919,18 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             finished_web_tool_call: Final = _claude_web_tool_call(finished_item, 0)
             tool_calls: Final = [
-                *cast(list[ChatCompletionToolCallChunk], model_response_stream.choices[0].delta.tool_calls or []),
+                *(
+                    ChatCompletionToolCallChunk(
+                        id=tool_call.id,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=tool_call.function.name, arguments=tool_call.function.arguments
+                        ),
+                        index=tool_call.index,
+                    )
+                    for tool_call in model_response_stream.choices[0].delta.tool_calls or ()
+                    if isinstance(tool_call, ChatCompletionDeltaToolCall)
+                ),
                 *(() if finished_web_tool_call is None else (finished_web_tool_call,)),
             ]
             if tool_calls or finished_summary is not None:
