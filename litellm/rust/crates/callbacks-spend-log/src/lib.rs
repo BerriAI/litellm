@@ -35,6 +35,7 @@ mod py;
 mod redaction;
 mod request;
 mod row;
+mod signed_state;
 mod stamps;
 #[cfg(test)]
 mod test_support;

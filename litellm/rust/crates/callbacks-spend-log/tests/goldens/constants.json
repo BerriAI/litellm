@@ -187,6 +187,28 @@
   "mcp_tool_result",
   "tool_result"
  ],
+ "THOUGHT_SIGNATURE_KEYS": [
+  "response_thought_signature",
+  "thought_signature",
+  "thought_signatures"
+ ],
+ "SIGNED_TOOL_CALL_ID_KEYS": [
+  "call_id",
+  "id"
+ ],
+ "THOUGHT_SIGNATURE_SEPARATOR": [
+  "__thought__"
+ ],
+ "SIGNED_FIELDS_BY_BLOCK_TYPE.thinking": [
+  "signature",
+  "thinking"
+ ],
+ "SIGNED_FIELDS_BY_BLOCK_TYPE.redacted_thinking": [
+  "data"
+ ],
+ "SIGNED_FIELDS_BY_BLOCK_TYPE.reasoning": [
+  "encrypted_content"
+ ],
  "PROMPT_CARRYING_GUARDRAIL_FIELDS": [
   "classification",
   "guardrail_request",

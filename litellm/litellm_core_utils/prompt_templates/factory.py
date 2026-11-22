@@ -1280,15 +1280,15 @@ def encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: str
 _encode_tool_call_id_with_signature = encode_tool_call_id_with_signature
 
 
-def _tool_call_id_prefix(tool_call_id: object) -> str | None:
+def tool_call_id_prefix(tool_call_id: object) -> str | None:
     return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if isinstance(tool_call_id, str) else None
 
 
 def _called_tool_name(tool_call_id: str, tool_calls: Sequence[Mapping[str, object]]) -> str | None:
     exact_matches: Final = tuple(call for call in tool_calls if call.get("id") == tool_call_id)
-    prefix: Final = _tool_call_id_prefix(tool_call_id)
+    prefix: Final = tool_call_id_prefix(tool_call_id)
     prefix_matches: Final = tuple(
-        call for call in tool_calls if prefix and _tool_call_id_prefix(call.get("id")) == prefix
+        call for call in tool_calls if prefix and tool_call_id_prefix(call.get("id")) == prefix
     )
     matches: Final = exact_matches or (prefix_matches if len(prefix_matches) == 1 else ())
     function: Final = matches[0].get("function") if matches else None

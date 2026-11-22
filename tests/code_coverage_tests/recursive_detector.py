@@ -9,6 +9,7 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 
 IGNORE_FUNCTIONS = [
     "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
+    "without_altered_provider_state",  # DEFAULT_MAX_RECURSE_DEPTH bound, walks one stored JSON document.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_ids_to_walk",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
     "_level_holds_large_str",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.

@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import functools
 import json
 import threading
 from collections.abc import Callable, Mapping
@@ -36,6 +37,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -1766,6 +1768,209 @@ def test_responses_shaped_spend_row_keeps_a_compaction_output_item_summary_bound
         _assert_bounded_like_a_db_string(stored_summary, summary)
         return
     assert stored_summary == summary
+
+
+def _signature_past_the_db_cap(name: str) -> str:
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    return f"{name}-" + "Eq0BCkYICxgCKkB" * (MAX_STRING_LENGTH_PROMPT_IN_DB // 10) + f"-{name}=="
+
+
+def _text_past_the_db_cap() -> str:
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    return "The total is 954. " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 12)
+
+
+def _claude_thinking_blocks() -> list[dict[str, str]]:
+    return [
+        {"type": "thinking", "thinking": _text_past_the_db_cap(), "signature": _signature_past_the_db_cap("claude")},
+        {"type": "redacted_thinking", "data": _signature_past_the_db_cap("redacted")},
+    ]
+
+
+def _claude_thinking_row() -> dict[str, object]:
+    message: Final = {
+        "role": "assistant",
+        "content": _text_past_the_db_cap(),
+        "reasoning_content": _text_past_the_db_cap(),
+        "thinking_blocks": _claude_thinking_blocks(),
+        "provider_specific_fields": {"thinking_blocks": _claude_thinking_blocks()},
+    }
+    return {"choices": [{"message": message}]}
+
+
+def _gemini_thought_row() -> dict[str, object]:
+    signature: Final = _signature_past_the_db_cap("gemini-call")
+    tool_call: Final = {
+        "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{signature}",
+        "type": "function",
+        "function": {"name": "count_divisor_triples", "arguments": "{}"},
+        "provider_specific_fields": {"thought_signature": signature},
+    }
+    unsigned_call: Final = {
+        "id": f"call_2_{'0' * len(signature)}",
+        "type": "function",
+        "function": {"name": "count_divisor_triples", "arguments": "{}"},
+    }
+    message: Final = {
+        "role": "assistant",
+        "content": _text_past_the_db_cap(),
+        "tool_calls": [tool_call, unsigned_call],
+        "thinking_blocks": [{"type": "thinking", "thinking": _text_past_the_db_cap()}],
+        "provider_specific_fields": {
+            "thought_signatures": [_signature_past_the_db_cap("gemini-text")],
+            "server_side_tool_invocations": [
+                {
+                    "tool_type": "GOOGLE_SEARCH_WEB",
+                    "id": "search_1",
+                    "thought_signature": _signature_past_the_db_cap("gemini-search"),
+                    "response": {"results": _text_past_the_db_cap()},
+                    "response_thought_signature": _signature_past_the_db_cap("gemini-result"),
+                }
+            ],
+        },
+    }
+    return {"choices": [{"message": message}]}
+
+
+_GEMINI_SEARCH_PATH: Final = (
+    "choices",
+    0,
+    "message",
+    "provider_specific_fields",
+    "server_side_tool_invocations",
+    0,
+)
+
+
+def _responses_reasoning_row() -> dict[str, object]:
+    thinking: Final = {"type": "thinking", "thinking": "Count", "signature": _signature_past_the_db_cap("claude")}
+    reasoning: Final = {"type": "reasoning", "id": "rs_1", "encrypted_content": json.dumps([thinking])}
+    message: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": _text_past_the_db_cap()}],
+    }
+    signed_call_id: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_signature_past_the_db_cap('gemini-call')}"
+    call: Final = {
+        "type": "function_call",
+        "id": signed_call_id,
+        "call_id": signed_call_id,
+        "name": "count_divisor_triples",
+        "arguments": json.dumps({"note": _text_past_the_db_cap()}),
+    }
+    return {"object": "response", "output": [reasoning, message, call]}
+
+
+def _at(row: object, path: tuple[str | int, ...]) -> object:
+    return functools.reduce(
+        lambda node, step: node[step],  # pyright: ignore[reportIndexIssue, reportUnknownLambdaType]  # known JSON
+        path,
+        row,
+    )
+
+
+@pytest.mark.parametrize(
+    "response, signed_paths, cut_paths",
+    [
+        pytest.param(
+            _claude_thinking_row(),
+            (
+                ("choices", 0, "message", "thinking_blocks"),
+                ("choices", 0, "message", "provider_specific_fields", "thinking_blocks"),
+            ),
+            (("choices", 0, "message", "content"), ("choices", 0, "message", "reasoning_content")),
+            id="claude-thinking-and-redacted-thinking",
+        ),
+        pytest.param(
+            _gemini_thought_row(),
+            (
+                ("choices", 0, "message", "tool_calls", 0, "id"),
+                ("choices", 0, "message", "tool_calls", 0, "provider_specific_fields"),
+                ("choices", 0, "message", "provider_specific_fields", "thought_signatures"),
+                (*_GEMINI_SEARCH_PATH, "thought_signature"),
+                (*_GEMINI_SEARCH_PATH, "response_thought_signature"),
+            ),
+            (
+                ("choices", 0, "message", "content"),
+                ("choices", 0, "message", "tool_calls", 1, "id"),
+                ("choices", 0, "message", "thinking_blocks", 0, "thinking"),
+                (*_GEMINI_SEARCH_PATH, "response", "results"),
+            ),
+            id="gemini-thought-signatures",
+        ),
+        pytest.param(
+            _responses_reasoning_row(),
+            (("output", 0, "encrypted_content"), ("output", 2, "id"), ("output", 2, "call_id")),
+            (("output", 1, "content", 0, "text"), ("output", 2, "arguments")),
+            id="responses-reasoning-item-and-signed-call",
+        ),
+    ],
+)
+def test_spend_row_keeps_provider_signed_reasoning_whole_for_previous_response_id_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    response: dict[str, object],
+    signed_paths: tuple[tuple[str | int, ...], ...],
+    cut_paths: tuple[tuple[str | int, ...], ...],
+):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+
+    stored: Final = json.loads(
+        _get_response_for_spend_logs_payload(cast(StandardLoggingPayload, {"response": response}))
+    )
+
+    assert [_at(stored, path) for path in signed_paths] == [_at(response, path) for path in signed_paths]
+    assert all(LITELLM_TRUNCATED_PAYLOAD_FIELD in str(_at(stored, path)) for path in cut_paths)
+
+
+def test_spend_row_masks_tokens_inside_the_signed_reasoning_it_keeps_whole(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": True}
+    )
+    secret: Final = "ghp_" + "A" * 36
+    thinking: Final = f"{_text_past_the_db_cap()} {secret} {_text_past_the_db_cap()}"
+    block: Final = {"type": "thinking", "thinking": thinking, "signature": _signature_past_the_db_cap("claude")}
+    message: Final = {
+        "thinking_blocks": [block],
+        "provider_specific_fields": {"thought_signatures": [f"whole {secret}"]},
+    }
+
+    stored: Final = json.loads(
+        _get_response_for_spend_logs_payload(
+            cast(StandardLoggingPayload, {"response": {"choices": [{"message": message}]}})
+        )
+    )["choices"][0]["message"]
+
+    assert stored == {
+        "thinking_blocks": [{**block, "thinking": thinking.replace(secret, REDACTED_BY_LITELM_STRING)}],
+        "provider_specific_fields": {"thought_signatures": [f"whole {REDACTED_BY_LITELM_STRING}"]},
+    }
+
+
+def test_stored_request_still_bounds_signed_reasoning_a_client_sends_back(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    request_body: Final = {
+        "input": [
+            {"type": "reasoning", "id": "rs_1", "encrypted_content": _signature_past_the_db_cap("reasoning")},
+            {
+                "type": "function_call_output",
+                "call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_signature_past_the_db_cap('call')}",
+            },
+        ]
+    }
+
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={}, litellm_params={"proxy_server_request": {"body": request_body}}
+        )
+    )
+
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["input"][0]["encrypted_content"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["input"][1]["call_id"]
+    assert stored["input"][1]["call_id"].split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] == "call_1"
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")

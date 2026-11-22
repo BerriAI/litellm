@@ -13,6 +13,7 @@ use crate::consts::{
 };
 use crate::input::RowInput;
 use crate::py::{Dict, as_str, char_len, entries, get_or_none, has, lookup, slice, text, truthy};
+use crate::signed_state::SignedParent;
 use crate::text::{masked_ip_text, redact_prompt_leaks_in_error_string};
 
 pub(crate) const REDACTED: &str = "REDACTED_BY_LITELM";
@@ -59,7 +60,7 @@ impl SpendLogRowBuilder {
         )
     }
 
-    /// `_bounded_compaction_summary(parent, key, value, keep_compaction_blocks)`.
+    /// `_bounded_compaction_summary(parent, key, value, keep_replayed_provider_state)`.
     fn bounded_compaction_summary(
         &self,
         parent: &[(Value, Value)],
@@ -79,16 +80,17 @@ impl SpendLogRowBuilder {
     }
 
     /// `_sanitize_request_body_for_spend_logs_payload(body, mask_credentials=...,
-    /// keep_compaction_blocks=...)`: drops `secret_fields`, masks credential-named string values
+    /// keep_replayed_provider_state=...)`: drops `secret_fields`, masks credential-named string values
     /// outside tool payloads, redacts tokens and truncates every string.
     pub(crate) fn sanitize_body(
         &self,
         body: &[(Value, Value)],
         mask_credentials: bool,
-        keep_compaction_blocks: bool,
+        keep_replayed_provider_state: bool,
     ) -> Value {
-        let compaction = keep_compaction_blocks && is_compaction_item(body);
+        let compaction = keep_replayed_provider_state && is_compaction_item(body);
         let content = ContentParent::of(body);
+        let signed = SignedParent::of(body);
         let mut result = Vec::with_capacity(body.len());
         for (key, value) in body {
             if matches!(key, Value::Str(name) if name == "secret_fields") {
@@ -98,6 +100,8 @@ impl SpendLogRowBuilder {
             let stored =
                 if mask_credentials && matches!(value, Value::Str(_)) && is_sensitive_key(name) {
                     text(REDACTED)
+                } else if keep_replayed_provider_state && signed.signs(name, value) {
+                    self.stored_whole(value, mask_credentials)
                 } else if let Some(bounded) = compaction
                     .then(|| self.bounded_compaction_summary(body, name, value))
                     .flatten()
@@ -107,7 +111,7 @@ impl SpendLogRowBuilder {
                     self.sanitize_value(
                         value,
                         mask_credentials && !content.holds(name),
-                        keep_compaction_blocks,
+                        keep_replayed_provider_state,
                     )
                 };
             result.push((key.clone(), stored));
@@ -115,21 +119,40 @@ impl SpendLogRowBuilder {
         Value::Dict(result)
     }
 
+    /// A provider-signed value: its tokens redacted, its strings never truncated.
+    fn stored_whole(&self, value: &Value, mask_credentials: bool) -> Value {
+        match value {
+            Value::Str(content) => Value::Str(self.without_tokens(content)),
+            Value::List(items) => Value::List(
+                items
+                    .iter()
+                    .map(|item| match item {
+                        Value::Str(content) => Value::Str(self.without_tokens(content)),
+                        other => self.sanitize_value(other, mask_credentials, true),
+                    })
+                    .collect(),
+            ),
+            other => self.sanitize_value(other, mask_credentials, true),
+        }
+    }
+
     fn sanitize_value(
         &self,
         value: &Value,
         mask_credentials: bool,
-        keep_compaction_blocks: bool,
+        keep_replayed_provider_state: bool,
     ) -> Value {
         match value {
             Value::Dict(items) => match items.as_slice() {
                 [(Value::Str(key), object)] if key == PYTHON_OBJECT_KEY => object.clone(),
-                _ => self.sanitize_body(items, mask_credentials, keep_compaction_blocks),
+                _ => self.sanitize_body(items, mask_credentials, keep_replayed_provider_state),
             },
             Value::List(items) => Value::List(
                 items
                     .iter()
-                    .map(|item| self.sanitize_value(item, mask_credentials, keep_compaction_blocks))
+                    .map(|item| {
+                        self.sanitize_value(item, mask_credentials, keep_replayed_provider_state)
+                    })
                     .collect(),
             ),
             Value::Str(content) => Value::Str(self.truncated_for_db(&self.without_tokens(content))),
@@ -457,7 +480,7 @@ mod tests {
                 &builder.sanitize_body(
                     body,
                     flag(&record, "mask_credentials", true),
-                    flag(&record, "keep_compaction_blocks", false),
+                    flag(&record, "keep_replayed_provider_state", false),
                 ),
                 field(&record, "output"),
                 "{}",

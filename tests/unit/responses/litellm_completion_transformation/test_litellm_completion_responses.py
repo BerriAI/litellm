@@ -24,6 +24,7 @@ from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
@@ -1832,6 +1833,53 @@ class TestFunctionCallTransformation:
         function = tool_call.get("function", {})
         assert function.get("name") == "search_web"
         assert function.get("arguments") == '{"query": "attribute objects"}'
+
+    def test_ensure_tool_results_answer_the_signed_call_a_cut_result_id_names(self):
+        signed_call_id: Final = f"call_weather{THOUGHT_SIGNATURE_SEPARATOR}{'S' * 3000}"
+        cut_result_id: Final = f"{signed_call_id[:1000]}...cut...{signed_call_id[-1000:]}"
+        weather_call: Final = {
+            "id": signed_call_id,
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        }
+
+        fixed_messages: Final = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+            messages=[
+                {"role": "user", "content": "What is the weather?"},
+                {"role": "assistant", "content": None, "tool_calls": [weather_call]},
+                {"role": "tool", "content": "sunny", "tool_call_id": cut_result_id},
+            ],
+            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+        )
+
+        assert [call.get("id") for call in fixed_messages[1].get("tool_calls", [])] == [signed_call_id]
+        assert fixed_messages[2].get("tool_call_id") == signed_call_id
+
+    @pytest.mark.parametrize(
+        "call_ids",
+        [
+            (f"call_1{THOUGHT_SIGNATURE_SEPARATOR}AAA", f"call_1{THOUGHT_SIGNATURE_SEPARATOR}BBB"),
+            (f"call_1{THOUGHT_SIGNATURE_SEPARATOR}AAA", "call_1"),
+        ],
+    )
+    def test_ensure_tool_results_keep_the_call_their_id_names_exactly(self, call_ids: tuple[str, str]):
+        fixed_messages: Final = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+            messages=[
+                {"role": "user", "content": "What is the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                        for call_id in call_ids
+                    ],
+                },
+                *({"role": "tool", "content": "sunny", "tool_call_id": call_id} for call_id in call_ids),
+            ],
+            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+        )
+
+        assert [message.get("tool_call_id") for message in fixed_messages[2:]] == list(call_ids)
 
 
 class TestToolChoiceTransformation:

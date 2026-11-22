@@ -36,6 +36,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     instruction_items,
     response_holds_compaction_block,
 )
+from litellm.responses.litellm_completion_transformation.provider_signed_state import without_altered_provider_state
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ALL_RESPONSES_API_TOOL_PARAMS,
@@ -116,6 +117,16 @@ def _is_a_response_read(spend_log: Mapping[str, object]) -> bool:
 
 def _stored_response(spend_log: Mapping[str, object]) -> object:
     return spend_log.get("response")
+
+
+def _replayable(stored: object, spend_log: Mapping[str, object]) -> object:
+    replayable: Final = without_altered_provider_state(stored)
+    if replayable != stored:
+        verbose_proxy_logger.warning(
+            "previous_response_id replay leaves out reasoning the stored turn %s holds cut or redacted",
+            spend_log.get("request_id"),
+        )
+    return replayable
 
 
 def _stored_model_map_key(metadata: object) -> str | None:
@@ -647,8 +658,9 @@ class ResponsesSessionHandler:
         ############################################################
         if proxy_server_request_dict:
             stored_request_input: Final = proxy_server_request_dict.get("input")
-            _response_input_param: Final = (
-                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input
+            _response_input_param: Final = _replayable(
+                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input,
+                spend_log,
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -659,7 +671,7 @@ class ResponsesSessionHandler:
                 )
 
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
-            _stored_response(spend_log),
+            _replayable(_stored_response(spend_log), spend_log),
             tool_names,
             _declared_tool_names(spend_log, proxy_server_request_dict),
             item_cache_control,

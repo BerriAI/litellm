@@ -678,7 +678,7 @@ def _get_response_for_spend_logs_payload(
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
-            {"response": response_obj}, keep_compaction_blocks=True
+            {"response": response_obj}, keep_replayed_provider_state=True
         )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
