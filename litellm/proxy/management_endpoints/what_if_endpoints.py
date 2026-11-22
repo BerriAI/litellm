@@ -6,7 +6,8 @@ import json
 import re
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from itertools import chain, groupby, pairwise
+from functools import reduce
+from itertools import accumulate, chain, groupby, pairwise, takewhile
 from typing import Annotated, Final, Literal
 
 import httpx
@@ -688,6 +689,8 @@ async def xray_limits(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)
     )
 
 
+MAX_TRACE_MESSAGES: Final = 500
+MAX_TRACE_TOTAL_MESSAGES: Final = 100_000
 PR_URL: Final = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 
 
@@ -753,8 +756,9 @@ def _messages(row: Mapping[str, object]) -> Sequence[object]:
     return _as_list(_as_dict(row.get("proxy_server_request")).get("messages"))
 
 
-def _digest(key: object, messages: Sequence[object]) -> str:
-    return hashlib.sha256(f"{key}:{json.dumps(messages, sort_keys=True, default=str)}".encode()).hexdigest()
+def _prefix_digests(key: object, messages: Sequence[object]) -> tuple[bytes, ...]:
+    hashed: Final = (hashlib.sha256(json.dumps(m, sort_keys=True, default=str).encode()).digest() for m in messages)
+    return tuple(accumulate(hashed, lambda seen, m: hashlib.sha256(seen + m).digest(), initial=str(key).encode()))[1:]
 
 
 def _text(content: object) -> str:
@@ -763,7 +767,7 @@ def _text(content: object) -> str:
 
 def _step(row: Mapping[str, object]) -> GhostStep:
     messages: Final = _messages(row)
-    last: Final = _as_dict(messages[-1]) if messages else {}
+    last: Final = _as_dict(messages[-1] if messages else None)
     return GhostStep(
         request_id=str(row.get("request_id")),
         start_time=str(row.get("startTime")),
@@ -795,44 +799,24 @@ def _run(rows: Sequence[Mapping[str, object]]) -> GhostRun:
     )
 
 
-async def _ghost_trace(hours: int) -> GhostTrace:
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+def _stitch(logged: Sequence[Mapping[str, object]]) -> GhostTrace:
+    sized: Final = tuple(row for row in logged if 0 < len(_messages(row)) <= MAX_TRACE_MESSAGES)
+    totals: Final = accumulate(len(_messages(row)) for row in sized)
     rows: Final = tuple(
-        row
-        for row in await query_raw_within_statement_timeout(
-            prisma_client,
-            'SELECT request_id, "startTime", "endTime", session_id, api_key, model, spend, total_tokens, metadata, '
-            'proxy_server_request, response FROM "LiteLLM_SpendLogs" WHERE "startTime" >= $1::timestamptz '
-            'ORDER BY "startTime" LIMIT 3000',
-            datetime.now(timezone.utc) - timedelta(hours=hours),
-        )
-        if _messages(row)
+        row for row, _ in takewhile(lambda pair: pair[1] <= MAX_TRACE_TOTAL_MESSAGES, zip(sized, totals, strict=False))
     )
-    order: Final = {str(row["request_id"]): index for index, row in enumerate(rows)}
-    by_digest: Final = {_digest(row.get("api_key"), _messages(row)): row for row in reversed(rows)}
+    prefixes: Final = tuple(_prefix_digests(row.get("api_key"), _messages(row)) for row in rows)
+    first_with: Final = {digests[-1]: index for index, digests in reversed(tuple(enumerate(prefixes)))}
 
-    def parent(row: Mapping[str, object]) -> Mapping[str, object] | None:
-        messages: Final = _messages(row)
-        candidates: Final = (
-            by_digest.get(_digest(row.get("api_key"), messages[:size])) for size in range(len(messages) - 1, 0, -1)
-        )
-        return next(
-            (
-                found
-                for found in candidates
-                if found is not None and order[str(found["request_id"])] < order[str(row["request_id"])]
-            ),
-            None,
-        )
+    def parent(index: int) -> int | None:
+        found: Final = (first_with.get(digest, index) for digest in reversed(prefixes[index][:-1]))
+        return next((earlier for earlier in found if earlier < index), None)
 
-    def root(row: Mapping[str, object]) -> str:
-        above: Final = parent(row)
-        return str(row["request_id"]) if above is None else root(above)
+    def with_root(roots: tuple[int, ...], index: int) -> tuple[int, ...]:
+        above: Final = parent(index)
+        return (*roots, index if above is None else roots[above])
 
-    roots: Final = tuple(root(row) for row in rows)
+    roots: Final = reduce(with_root, range(len(rows)), ())
     runs: Final = tuple(
         _run(tuple(row for row, owner in zip(rows, roots, strict=True) if owner == run_root))
         for run_root in dict.fromkeys(roots)
@@ -842,6 +826,23 @@ async def _ghost_trace(hours: int) -> GhostTrace:
         loose_requests=len(rows),
         client_session_ids=sum(1 for count in counts if count > 1),
         runs=tuple(sorted((run for run in runs if len(run.steps) > 1), key=lambda run: -run.spend)),
+    )
+
+
+async def _ghost_trace(hours: int) -> GhostTrace:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    return await asyncio.to_thread(
+        _stitch,
+        await query_raw_within_statement_timeout(
+            prisma_client,
+            'SELECT request_id, "startTime", "endTime", session_id, api_key, model, spend, total_tokens, metadata, '
+            'proxy_server_request, response FROM "LiteLLM_SpendLogs" WHERE "startTime" >= $1::timestamptz '
+            'ORDER BY "startTime" LIMIT 3000',
+            datetime.now(timezone.utc) - timedelta(hours=hours),
+        ),
     )
 
 
