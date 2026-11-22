@@ -148,7 +148,7 @@ def gateway(database: str, connection: dict[str, str], directory: Path) -> Gener
         "general_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n"
     )
     with (directory / "gateway.log").open("w") as log:
-        process: Final = subprocess.Popen(
+        process: Final = subprocess.Popen(  # test-quality-ok: the gateway under test is this checkout
             (
                 sys.executable,
                 "litellm/proxy/proxy_cli.py",

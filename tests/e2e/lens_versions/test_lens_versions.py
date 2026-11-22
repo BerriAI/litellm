@@ -135,6 +135,7 @@ class TestGatewayAcrossLensVersions:
             )
         )
         until("the trace to be readable in Lens", lambda: marker in either.stored_trace(trace_id).body, 90)
+        assert marker in either.stored_trace(trace_id).body
 
     @meta(Subject(domain=Domain.OBSERVABILITY))
     def test_newest_lens_serves_its_ui_and_pages_through_the_gateway(self, newest: Stack) -> None:
