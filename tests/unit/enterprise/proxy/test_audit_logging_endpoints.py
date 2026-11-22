@@ -193,7 +193,7 @@ class _StoredAuditRow(BaseModel):
     updated_values: object = None
 
 
-OLD_TEAM_STATE: Final = {"team_id": "team-1", "max_budget": 5.0, "metadata": {"api_key": "sk-1234567890abcdef"}}
+OLD_TEAM_STATE: Final = {"team_id": "team-1", "max_budget": 5.0, "metadata": {"api_key": "sk-abcdef1234567890"}}
 
 
 @pytest.mark.parametrize("field", ["before_value", "updated_values"])
@@ -210,7 +210,7 @@ def test_a_row_stored_as_json_text_is_listed_as_an_object_with_keys_masked(
     assert response.status_code == 200, response.text
     listed: Final = response.json()["audit_logs"][0][field]
     assert {name: listed[name] for name in ("team_id", "max_budget")} == {"team_id": "team-1", "max_budget": 5.0}
-    assert "sk-1234567890abcdef" not in response.text
+    assert "sk-abcdef1234567890" not in response.text
 
 
 def test_a_row_stored_as_json_text_is_fetched_by_id_as_an_object(mock_prisma_client: MagicMock) -> None:
@@ -222,4 +222,4 @@ def test_a_row_stored_as_json_text_is_fetched_by_id_as_an_object(mock_prisma_cli
 
     assert response.status_code == 200, response.text
     assert response.json()["before_value"]["team_id"] == "team-1"
-    assert "sk-1234567890abcdef" not in response.text
+    assert "sk-abcdef1234567890" not in response.text

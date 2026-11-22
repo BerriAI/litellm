@@ -2,6 +2,7 @@
  "SpendLogsMetadata": [
   "user_api_key_customer_org_id",
   "user_api_key_app_id",
+  "user_api_key_app_group_id",
   "user_api_key_app_alias",
   "user_api_key_customer_org_alias",
   "user_api_key_customer_team_id",
@@ -68,6 +69,7 @@
  ],
  "_CustomerIdentityMetadata": [
   "user_api_key_app_id",
+  "user_api_key_app_group_id",
   "user_api_key_app_alias",
   "user_api_key_customer_org_id",
   "user_api_key_customer_org_alias",
@@ -127,6 +129,7 @@
   "upstream_provider",
   "used_client_oauth_token",
   "user_api_key_app_alias",
+  "user_api_key_app_group_id",
   "user_api_key_app_id",
   "user_api_key_customer_member_alias",
   "user_api_key_customer_member_id",
@@ -242,6 +245,7 @@
  "accounting._ACCOUNTING_FIELDS": [
   "agent_id",
   "api_key",
+  "app_group_id",
   "app_id",
   "call_type",
   "completion_tokens",

@@ -16,6 +16,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.duration_parser import get_budget_window_end
 from litellm.proxy.db.budget_window_spend_writer import CommittedWindowSpend
+from litellm.proxy.management_helpers.app_groups import AppGroupStore
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_identity
 from litellm.proxy.management_helpers.customer_hierarchy import (
     PrismaRecord,
@@ -94,7 +95,13 @@ _LEVELS: Final = (
 )
 _CHARGES: Final = TypeAdapter(Mapping[str, float])
 _TABLE: Final = TypeAdapter(InstanceOf[_CustomerBudgetTable])
-_APP_SCOPES: Final[tuple[AppBudgetScope, ...]] = ("app", "app_customer_org", "app_customer_member")
+_APP_SCOPES: Final[tuple[AppBudgetScope, ...]] = (
+    "app",
+    "app_customer_org",
+    "app_customer_member",
+    "app_group",
+    "app_group_customer_org",
+)
 
 
 def _events(level: _Level, entity_id: str, row: _CustomerRow, now: datetime) -> tuple[CustomerBudgetEvent, ...]:
@@ -161,6 +168,8 @@ async def _app_entity(
             return await store.find_organization(app, customer_id)
         case "app_customer_member":
             return await store.get_member(app.app_id, customer_id, known_to_app_only=True)
+        case "app_group" | "app_group_customer_org":
+            return None
 
 
 def _app_usages(
@@ -200,22 +209,59 @@ def _app_usages(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _AppBudgetEntity:
+    budget: Budget | None
+    spend: float
+    app_id: str | None = None
+    app_alias: str | None = None
+    app_group_id: str | None = None
+    app_group_name: str | None = None
+    customer_org_id: str | None = None
+    customer_member_id: str | None = None
+
+
+async def _budget_entity(scope: AppBudgetScope, entity_id: str, store: AppStore) -> _AppBudgetEntity | None:
+    parent_id, customer_id = (entity_id, "") if scope in ("app", "app_group") else app_scope_identity(entity_id)
+    if scope in ("app_group", "app_group_customer_org"):
+        groups: Final = AppGroupStore(store)
+        group: Final = await groups.get(parent_id)
+        if isinstance(group, AppFailure):
+            return None
+        organization: Final = await groups.organization(parent_id, customer_id) if customer_id else None
+        return _AppBudgetEntity(
+            budget=organization.budget if organization is not None else group.budget,
+            spend=organization.spend if organization is not None else group.spend,
+            app_group_id=group.app_group_id,
+            app_group_name=group.name,
+            customer_org_id=customer_id or None,
+        )
+    app: Final = await store.get(parent_id)
+    if isinstance(app, AppFailure):
+        return None
+    entity: Final = await _app_entity(store, app, scope, customer_id)
+    if entity is None or isinstance(entity, AppFailure):
+        return None
+    return _AppBudgetEntity(
+        budget=entity.budget if isinstance(entity, App) else entity.effective_budget,
+        spend=entity.spend,
+        app_id=app.app_id,
+        app_alias=app.alias,
+        customer_org_id=entity.customer_org_id if isinstance(entity, AppOrganization) else None,
+        customer_member_id=entity.customer_member_id if isinstance(entity, AppMember) else None,
+    )
+
+
 async def _app_events(
     scope: AppBudgetScope,
     entity_id: str,
     store: AppStore,
     windows: Sequence[CommittedWindowSpend] | None,
 ) -> tuple[CustomerBudgetEvent, ...]:
-    app_id, customer_id = (entity_id, "") if scope == "app" else app_scope_identity(entity_id)
-    app: Final = await store.get(app_id)
-    if isinstance(app, AppFailure):
+    entity: Final = await _budget_entity(scope, entity_id, store)
+    if entity is None or entity.budget is None:
         return ()
-    entity: Final = await _app_entity(store, app, scope, customer_id)
-    if entity is None or isinstance(entity, AppFailure):
-        return ()
-    budget: Final = entity.budget if isinstance(entity, App) else entity.effective_budget
-    if budget is None:
-        return ()
+    budget: Final = entity.budget
     usages: Final = _app_usages(budget, entity.spend, store, windows)
 
     def event(kind: CustomerBudgetEventType, usage: CustomerBudgetUsage, threshold: float) -> CustomerBudgetEvent:
@@ -223,10 +269,12 @@ async def _app_events(
             event=kind,
             scope=scope,
             entity_id=entity_id,
-            app_id=app.app_id,
-            app_alias=app.alias,
-            customer_org_id=entity.customer_org_id if isinstance(entity, AppOrganization) else None,
-            customer_member_id=entity.customer_member_id if isinstance(entity, AppMember) else None,
+            app_id=entity.app_id,
+            app_alias=entity.app_alias,
+            app_group_id=entity.app_group_id,
+            app_group_name=entity.app_group_name,
+            customer_org_id=entity.customer_org_id,
+            customer_member_id=entity.customer_member_id,
             spend=usage.spend or 0.0,
             budget=threshold,
             budget_duration=usage.budget_duration,
