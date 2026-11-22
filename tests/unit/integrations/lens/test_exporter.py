@@ -15,7 +15,6 @@ from prometheus_client import CollectorRegistry, Counter
 from pydantic import TypeAdapter
 
 from litellm.integrations.lens import exporter as exporter_module
-from litellm.integrations.lens.ledger import LedgerHandoff
 from litellm.integrations.lens.exporter import (
     MAX_BUFFER_EVENTS,
     MAX_EVENT_BYTES,
@@ -24,7 +23,7 @@ from litellm.integrations.lens.exporter import (
     encode_record,
     lens_export_counters,
 )
-
+from litellm.integrations.lens.ledger import LedgerHandoff
 
 _HASH_TEST: Final = hashlib.sha256(b"key-test").hexdigest()
 _HASH_A: Final = hashlib.sha256(b"key-a").hexdigest()
