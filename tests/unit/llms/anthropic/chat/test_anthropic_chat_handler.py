@@ -1486,8 +1486,9 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
         "data: [1]\n\n",
         "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
         'event: ping\ndata: {"type": "ping", "n": ' + "9" * 5000 + "}\n\n",
+        "data: " + "9" * 5000 + "\n\n",
     ],
-    ids=["number", "null", "array", "deep-object", "huge-number-in-object"],
+    ids=["number", "null", "array", "deep-object", "huge-number-in-object", "huge-number"],
 )
 @pytest.mark.parametrize("split_block_start", [False, True], ids=["whole-frames", "after-a-split-frame"])
 async def test_anthropic_chat_stream_skips_a_data_line_it_cannot_read_as_an_object(
