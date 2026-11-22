@@ -172,14 +172,8 @@ class _ToolCallChunk(TypedDict):
     choices: ReadOnly[Sequence[_ToolCallChoice]]
 
 
-_PROVIDERS_STREAMING_CLAUDE_AS_ANTHROPIC_EVENTS: Final = frozenset(
-    {"vertex_ai", "vertex_ai_beta", "azure_ai", "bedrock", "bedrock_mantle", "snowflake"}
-)
-
-
 class _UsageBearingChunk(TypedDict, total=False):
     usage: Usage | None
-    model: ReadOnly[str]
     _hidden_params: Mapping[str, str]
     choices: ReadOnly[Sequence[StreamingChoices | Mapping[str, object]]]
 
@@ -1070,15 +1064,15 @@ class ChunkProcessor:
         ``calculate_usage()``'s ``token_counter(...)`` fallback estimate from
         the actually-received text and reasoning instead. Gated on streams
         parsed from Anthropic's message_start SSE shape (``anthropic``, or a
-        Claude model on a provider that relays Anthropic's events) so the
-        heuristic does not silently affect other providers that legitimately
-        report usage from a single event.
+        chunk Anthropic's parser marked as its message_start on any provider
+        that reuses it) so the heuristic does not silently affect other
+        providers that legitimately report usage from a single event.
         """
         saw_non_cursor_completion: Final = completion_usage_updates >= 2 or ChunkProcessor._saw_finish_reason(chunks)
         if saw_non_cursor_completion:
             return completion_tokens
 
-        if chunks and ChunkProcessor._streamed_anthropic_message_start(chunks[0]):
+        if any(ChunkProcessor._streamed_anthropic_message_start(chunk) for chunk in chunks):
             return None
         return completion_tokens
 
@@ -1087,14 +1081,9 @@ class ChunkProcessor:
         hidden_params: Final = object_mapping(
             chunk.get("_hidden_params") if isinstance(chunk, dict) else getattr(chunk, "_hidden_params", None)
         )
-        provider: Final = hidden_params.get("custom_llm_provider") if hidden_params is not None else None
-        if provider == "anthropic":
-            return True
-        model: Final[object] = chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
-        return (
-            provider in _PROVIDERS_STREAMING_CLAUDE_AS_ANTHROPIC_EVENTS
-            and isinstance(model, str)
-            and "claude" in model.lower()
+        return hidden_params is not None and (
+            hidden_params.get("custom_llm_provider") == "anthropic"
+            or hidden_params.get("anthropic_message_start") is True
         )
 
     def calculate_usage(
