@@ -187,3 +187,29 @@ def test_zai_drops_a_reasoning_effort_the_model_cannot_take_only_under_drop_para
     )
 
     assert json.loads(respx_mock.calls[0].request.content).get("reasoning_effort") == sent
+
+
+@pytest.mark.parametrize(
+    ("model", "requested", "sent"),
+    [
+        ("glm-5.3", {"effort": "medium", "summary": "detailed"}, "high"),
+        ("glm-5.2", {"effort": "medium", "summary": "auto"}, "medium"),
+        ("glm-5.3", {"summary": "detailed"}, None),
+    ],
+)
+def test_zai_sends_only_the_level_of_a_reasoning_effort_with_a_summary(
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    requested: Mapping[str, str],
+    sent: str | None,
+) -> None:
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(model=f"zai/{model}", messages=[{"role": "user", "content": "Hello"}], reasoning_effort=requested)
+
+    assert json.loads(respx_mock.calls[0].request.content).get("reasoning_effort") == sent

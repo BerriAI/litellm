@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from typing import Final
 
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+
 import litellm
 from litellm.router_utils.reasoning_effort_capability import (
     declared_reasoning_efforts_for_model,
@@ -14,11 +16,22 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
 
 
+def _is_json_object(
+    value: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: request params are JSON
+    return isinstance(value, Mapping)
+
+
+def _requested_level(requested: object) -> object:
+    return requested.get("effort") if _is_json_object(requested) else requested
+
+
 def _accepted_effort(model: str, requested: object, drop_params: bool) -> object:
+    level: Final = _requested_level(requested)
     declared: Final = declared_reasoning_efforts_for_model(model, "zai")
-    if not isinstance(requested, str) or declared is None:
-        return requested
-    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    if not isinstance(level, str) or declared is None:
+        return level
+    accepted: Final = nearest_declared_reasoning_effort(level, declared)
     return None if drop_params and accepted not in declared else accepted
 
 
