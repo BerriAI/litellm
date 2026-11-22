@@ -7855,3 +7855,21 @@ def test_bounded_call_id_fields_never_reuses_a_short_id_held_by_another_item_typ
 
     assert sent_ids[2] == held_id, sent_ids
     assert sent_ids[0] == sent_ids[1] != held_id, sent_ids
+
+
+def test_bounded_call_id_fields_never_gives_a_later_long_id_a_replacement_already_claimed() -> None:
+    import hashlib
+
+    long_id: Final = "call_" + "a" * 80
+    claims_first: Final = "1:" + long_id
+    short_id: Final = hashlib.sha256(long_id.encode()).hexdigest()
+    pairs: Final = tuple(_function_pair(call_id) for call_id in (long_id, claims_first, short_id))
+    in_order: Final = list(itertools.chain.from_iterable(pairs))
+
+    sent_ids: Final = _sent_call_ids({"input": in_order})
+    sent_reversed_ids: Final = _sent_call_ids({"input": in_order[::-1]})
+
+    assert sent_ids[0::2] == sent_ids[1::2], "each output keeps the id of its own call"
+    assert sent_ids[4] == short_id, sent_ids
+    assert len(set(sent_ids[0::2])) == 3, sent_ids
+    assert sent_reversed_ids == sent_ids[::-1], "the assignment must not depend on item order"
