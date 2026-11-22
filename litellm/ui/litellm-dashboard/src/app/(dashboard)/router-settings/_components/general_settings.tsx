@@ -1,3 +1,5 @@
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -9,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
-import { Trash2 } from "lucide-react";
+import { Route, Trash2 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/table_cells";
 
 import RouterSettings from "@/components/router_settings";
@@ -316,28 +318,35 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
   }
 
   return (
-    <div className="w-full">
-      <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
-        <TabsList variant="line" className="mx-8 mt-4">
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Route />
+          {t("shell.nav.items.routerSettings")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.routerSettings")}</PageHeaderDescription>
+      </PageHeader>
+      <Tabs defaultValue="loadbalancing" className="w-full gap-6">
+        <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
           <TabsTrigger value="loadbalancing">{t("routerSettings.generalSettings.tabs.loadbalancing")}</TabsTrigger>
           <TabsTrigger value="routing-groups">{t("routerSettings.generalSettings.tabs.routingGroups")}</TabsTrigger>
           <TabsTrigger value="fallbacks">{t("routerSettings.generalSettings.tabs.fallbacks")}</TabsTrigger>
           <TabsTrigger value="prompt-caching">{t("routerSettings.generalSettings.tabs.promptCaching")}</TabsTrigger>
           <TabsTrigger value="general">{t("routerSettings.generalSettings.tabs.general")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
+        <TabsContent value="loadbalancing" keepMounted>
           <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="routing-groups" className="px-8 py-6" keepMounted>
+        <TabsContent value="routing-groups" keepMounted>
           <RoutingGroups />
         </TabsContent>
-        <TabsContent value="fallbacks" className="px-8 py-6" keepMounted>
+        <TabsContent value="fallbacks" keepMounted>
           <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="prompt-caching" className="px-8 py-6" keepMounted>
+        <TabsContent value="prompt-caching" keepMounted>
           <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
         </TabsContent>
-        <TabsContent value="general" className="px-8 py-6" keepMounted>
+        <TabsContent value="general" keepMounted>
           <Card>
             <CardContent>
               <Table>
@@ -406,7 +415,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
           </Card>
         </TabsContent>
       </Tabs>
-    </div>
+    </PageContent>
   );
 };
 

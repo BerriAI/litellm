@@ -1488,25 +1488,21 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
         receive.assert_awaited_once()
 
 
+@pytest.mark.parametrize("path", ["/v1/traces", "/v1/logs"])
 @pytest.mark.asyncio
-async def test_auth_and_retired_trace_handler_never_consume_upload_body() -> None:
+async def test_auth_never_consumes_an_otlp_upload_body(path: str) -> None:
     from litellm.constants import OTLP_MAX_BODY_BYTES
-    from litellm.integrations.lens.proxy import tracing_endpoints
     from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
 
     chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
     receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2)
     request: Final = Request(
-        {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
+        {"type": "http", "method": "POST", "path": path, "headers": [(b"content-type", b"application/json")]},
         receive,
     )
     parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
     assert parsed == {}
     assert parse_error is None
-    receive.assert_not_awaited()
-
-    response: Final = await tracing_endpoints.ingest_otlp_traces(request)
-    assert response.status_code == 410
     receive.assert_not_awaited()
 
 
