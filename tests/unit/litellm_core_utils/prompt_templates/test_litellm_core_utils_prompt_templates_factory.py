@@ -1838,7 +1838,7 @@ def _find_clip_result(video_url: Mapping[str, object]) -> Mapping[str, object]:
 
 
 _TOOL_OUTPUT_ONLY: Final = {"function_response": {"name": "find_clip", "response": {"ok": True}}}
-_CLIP_WITH_METADATA: Final = {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "video_metadata": {"fps": 2}}
+_CLIP_SETTINGS: Final = ({"video_metadata": {"fps": 2}}, {"detail": "high"})
 
 
 def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
@@ -1883,14 +1883,26 @@ def test_drop_params_drops_a_tool_result_video_without_a_url() -> None:
     assert delivered == _TOOL_OUTPUT_ONLY
 
 
-def test_gemini_tool_result_video_metadata_is_a_bad_request_instead_of_a_silent_drop() -> None:
-    with pytest.raises(litellm.BadRequestError, match="cannot carry video_metadata"):
-        convert_to_gemini_tool_call_result(_find_clip_result(_CLIP_WITH_METADATA), _FIND_CLIP_CALL)
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_settings_are_a_bad_request_instead_of_a_silent_drop(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="cannot carry detail or video_metadata") as excinfo:
+        convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+            _FIND_CLIP_CALL,
+            model="gemini-3.8-flash",
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (custom_llm_provider, "gemini-3.8-flash")
 
 
-def test_drop_params_sends_a_tool_result_video_without_its_metadata() -> None:
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+def test_drop_params_sends_a_tool_result_video_without_its_settings(settings: Mapping[str, object]) -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
-        _find_clip_result(_CLIP_WITH_METADATA), _FIND_CLIP_CALL, drop_params=True
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}), _FIND_CLIP_CALL, drop_params=True
     )
 
     assert delivered == [
@@ -1902,6 +1914,32 @@ def test_drop_params_sends_a_tool_result_video_without_its_metadata() -> None:
             }
         }
     ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_html(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    page_url: Final = f"https://videos.example/watch/{uuid.uuid4()}"
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": page_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": page_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
 
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():

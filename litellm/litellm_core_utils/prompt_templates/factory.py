@@ -1500,7 +1500,26 @@ def _contains_part_reference(payload: JsonValue) -> bool:
     return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
-def _gemini_tool_result_video_blob(content: object, *, drop_params: bool) -> BlobType | None:
+def keeps_gemini_video(
+    mime_type: str | None, *, model: str | None, custom_llm_provider: str, drop_params: bool
+) -> bool:
+    if not mime_type or mime_type.startswith("video/"):
+        return True
+    if drop_params:
+        return False
+    raise BadRequestError(
+        message=(
+            f"Invalid message content: video_url must link a video file or a YouTube video, but it holds {mime_type}. "
+            "Link the video itself or set drop_params=True."
+        ),
+        model=model or "",
+        llm_provider=custom_llm_provider,
+    )
+
+
+def _gemini_tool_result_video_blob(
+    content: object, *, drop_params: bool, model: str | None, custom_llm_provider: str
+) -> BlobType | None:
     from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
 
     fields: Final = as_str_mapping(content)
@@ -1514,25 +1533,32 @@ def _gemini_tool_result_video_blob(content: object, *, drop_params: bool) -> Blo
             return None
         raise BadRequestError(
             message="Invalid message content: element type is 'video_url' but it has no 'url'",
-            model="",
-            llm_provider="gemini",
+            model=model or "",
+            llm_provider=custom_llm_provider,
         )
-    if video_fields.get("video_metadata") and not drop_params:
+    if (video_fields.get("detail") or video_fields.get("video_metadata")) and not drop_params:
         raise BadRequestError(
-            message="Gemini tool results cannot carry video_metadata. Remove it or set drop_params=True.",
-            model="",
-            llm_provider="gemini",
+            message=(
+                "A video inside a Gemini tool result cannot carry detail or video_metadata on this version. "
+                "Move the video to a user message, remove them, or set drop_params=True."
+            ),
+            model=model or "",
+            llm_provider=custom_llm_provider,
         )
     if gemini_fetches_url_itself(url):
         raise BadRequestError(
             message="Gemini tool results require inline media data. Use a data URL for this video.",
-            model="",
-            llm_provider="gemini",
+            model=model or "",
+            llm_provider=custom_llm_provider,
         )
     try:
         video: Final = convert_to_anthropic_image_obj(url, format=None)
     except litellm.ImageFetchError as exc:
         verbose_logger.warning("Failed to process video in tool response: %s", exc)
+        return None
+    if not keeps_gemini_video(
+        video["media_type"], model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    ):
         return None
     return BlobType(data=video["data"], mime_type=video["media_type"])
 
@@ -1543,6 +1569,8 @@ def convert_to_gemini_tool_call_result(
     forward_function_call_id: bool = False,
     *,
     drop_params: bool = False,
+    model: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> VertexPartType | list[VertexPartType]:
     """
     OpenAI message with a tool result looks like:
@@ -1650,7 +1678,14 @@ def convert_to_gemini_tool_call_result(
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
-                elif (video_blob := _gemini_tool_result_video_blob(content, drop_params=drop_params)) is not None:
+                elif (
+                    video_blob := _gemini_tool_result_video_blob(
+                        content,
+                        drop_params=drop_params,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider or "gemini",
+                    )
+                ) is not None:
                     inline_data_list.append(video_blob)
     name: str | None = message.get("name", "")
 

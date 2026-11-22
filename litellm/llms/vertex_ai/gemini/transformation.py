@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
     get_thought_signature_from_tool,
+    keeps_gemini_video,
     response_schema_prompt,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
@@ -612,6 +613,7 @@ def _process_gemini_video_url(
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     *,
     drop_params: bool,
+    custom_llm_provider: str,
 ) -> PartType | None:
     video_fields: Final = as_str_mapping(video_url) or {}
     url: Final = video_url if isinstance(video_url, str) else _str_field(video_fields, "url")
@@ -620,10 +622,10 @@ def _process_gemini_video_url(
     if not url:
         raise litellm.BadRequestError(
             message="Invalid message content: element type is 'video_url' but it has no 'url'",
-            model=model,
-            llm_provider="vertex_ai",
+            model=model or "",
+            llm_provider=custom_llm_provider,
         )
-    return _process_gemini_media(
+    part: Final = _process_gemini_media(
         image_url=url,
         format=_str_field(video_fields, "format", "mime_type", "content_type"),
         media_resolution_enum=_convert_detail_to_media_resolution_enum(_str_field(video_fields, "detail")),
@@ -632,6 +634,14 @@ def _process_gemini_video_url(
         vertex_project=vertex_project,
         vertex_credentials=vertex_credentials,
     )
+    media: Final = part.get("inline_data") or part.get("file_data")
+    holds_video: Final = keeps_gemini_video(
+        media.get("mime_type") if media is not None else None,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        drop_params=drop_params,
+    )
+    return part if holds_video else None
 
 
 def _assistant_video_url_part(element: object, video_url_part: Callable[[object], PartType | None]) -> PartType | None:
@@ -783,6 +793,7 @@ def gemini_convert_messages_with_history(
         vertex_project=vertex_project,
         vertex_credentials=vertex_credentials,
         drop_params=drop_params,
+        custom_llm_provider=custom_llm_provider or "vertex_ai",
     )
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -1099,6 +1110,8 @@ def gemini_convert_messages_with_history(
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
                     drop_params=drop_params,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1224,6 +1237,8 @@ def transform_request_body(
         supports_system_message=supports_system_message,
         messages=messages,
         drop_params=drops_unsupported_params(request_params.get("drop_params")),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
@@ -1492,7 +1507,11 @@ def _has_video_url_part(message: object) -> bool:
 
 
 def transform_system_message(
-    supports_system_message: bool, messages: list[AllMessageValues], drop_params: bool = False
+    supports_system_message: bool,
+    messages: list[AllMessageValues],
+    drop_params: bool = False,
+    model: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
     Extracts the system message from the openai message list.
@@ -1519,8 +1538,8 @@ def transform_system_message(
                                 "Gemini system instructions take text only. "
                                 "Move the video to a user message or set drop_params=True."
                             ),
-                            model="",
-                            llm_provider="gemini",
+                            model=model or "",
+                            llm_provider=custom_llm_provider or "gemini",
                         )
                     system_text = ""
                     for content in message["content"]:
