@@ -946,6 +946,7 @@ class GuardrailEventHooks(str, Enum):
     pre_mcp_call = "pre_mcp_call"
     during_mcp_call = "during_mcp_call"
     post_mcp_call = "post_mcp_call"
+    mcp_event = "mcp_event"
     realtime_input_transcription = "realtime_input_transcription"
 
 
