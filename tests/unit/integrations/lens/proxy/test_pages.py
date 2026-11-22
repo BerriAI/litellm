@@ -312,4 +312,4 @@ def test_lens_admin_pages_stop_at_the_gateway_for_everyone_but_admins(path: str,
     ],
 )
 def test_admins_reach_lens_admin_pages_and_everyone_reaches_the_rest(path: str, role: LitellmUserRoles) -> None:
-    allow_page(path, UserAPIKeyAuth(user_id="alice", user_role=role))
+    assert allow_page(path, UserAPIKeyAuth(user_id="alice", user_role=role)) is None
