@@ -120,8 +120,7 @@ from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     chat_template_tool_section,
 )
 from litellm.litellm_core_utils.routing_common_utils import (
-    get_request_team_id,
-    is_proxy_admin_request,
+    deployments_the_caller_may_use,
     resolve_model_group_alias,
 )
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
@@ -1122,7 +1121,7 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.router_api import ChangeSet, RoutingContext, deployment_id, deployment_usable_by_team, router_init_args
+from litellm.router_api import ChangeSet, RoutingContext, deployment_id, router_init_args
 from litellm.router_strategy.tag_based_routing import (
     get_deployments_for_tag,
     get_tag_metadata_variable_name_from_kwargs,
@@ -16368,12 +16367,7 @@ async def _routed_count_deployment(
 async def _first_caller_allowed_deployment(
     served: str, select_request: Mapping[str, object], routable: tuple[Mapping[str, object], ...]
 ) -> Mapping[str, object] | None:
-    team_id: Final = get_request_team_id(select_request)
-    team_usable: Final = (
-        routable
-        if is_proxy_admin_request(select_request)
-        else tuple(d for d in routable if deployment_usable_by_team(d, team_id))
-    )
+    team_usable: Final = deployments_the_caller_may_use(routable, select_request)
     if llm_router is None or not team_usable:
         return next(iter(team_usable), None)
     try:
