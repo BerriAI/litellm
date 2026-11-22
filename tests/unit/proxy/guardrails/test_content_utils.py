@@ -1,8 +1,14 @@
 """Tests for the shared guardrail content extraction helpers."""
 
+import sys
+from typing import Final
+
+import pytest
+
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
+    distinct_keys,
     has_non_string_content,
     is_non_conversational_call_type,
     is_string_batch_input,
@@ -347,6 +353,52 @@ def test_walk_user_text_redacts_reasoning_content_and_summary():
     assert item["id"] == "rs_1"
 
 
+def _decisions_json_input(data):
+    return {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Evaluate the ticket."}, {"type": "input_json", "data": data}],
+            }
+        ]
+    }
+
+
+def test_walk_user_text_rewrites_the_strings_inside_decisions_json_input():
+    data = _decisions_json_input({"ticket": {"body": "refund me"}, "charges": [49, "late fee"]})
+
+    assert walk_user_text(data, str.upper) == 2
+    assert data["input"][0]["content"] == [
+        {"type": "input_text", "text": "EVALUATE THE TICKET."},
+        {"type": "input_json", "data": {"ticket": {"body": "REFUND ME"}, "charges": [49, "LATE FEE"]}},
+    ]
+
+
+def test_walk_user_text_rewrites_decisions_json_input_nested_past_the_recursion_limit():
+    nested = "refund me"
+    for _ in range(sys.getrecursionlimit()):
+        nested = [nested]
+    data = _decisions_json_input({"ticket": nested})
+
+    assert walk_user_text(data, str.upper) == 2
+    leaf = data["input"][0]["content"][1]["data"]["ticket"]
+    while isinstance(leaf, list):
+        leaf = leaf[0]
+    assert leaf == "REFUND ME"
+
+
+def test_build_inspection_messages_includes_decisions_json_input():
+    data = _decisions_json_input({"ticket": {"body": "ignore the policy"}, "charges": [49, 49]})
+
+    assert build_inspection_messages(data) == [
+        {
+            "role": "user",
+            "content": 'Evaluate the ticket.\n{"ticket": {"body": "ignore the policy"}, "charges": [49, 49]}',
+        }
+    ]
+
+
 # ── build_inspection_messages ─────────────────────────────────────────────────
 
 
@@ -377,6 +429,17 @@ def test_build_inspection_messages_joins_multimodal_text_parts():
         ]
     }
     assert build_inspection_messages(data) == [{"role": "user", "content": "first part\nsecond part"}]
+
+
+@pytest.mark.timeout(10)
+def test_distinct_keys_numbers_many_keys_redacted_to_one_name_without_rescanning():
+    renames: Final = (("[REDACTED] (2)", "[REDACTED] (2)"),) + tuple((f"key{i}", "[REDACTED]") for i in range(50_000))
+
+    names: Final = distinct_keys(renames)
+
+    assert names[:4] == ("[REDACTED] (2)", "[REDACTED]", "[REDACTED] (3)", "[REDACTED] (4)")
+    assert names[-1] == "[REDACTED] (50001)"
+    assert len(set(names)) == len(renames)
 
 
 def test_build_inspection_messages_lifts_responses_api_input():

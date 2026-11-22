@@ -63,7 +63,7 @@ _SINGLE_OPTION: Final = UnsupportedDecisionsRequest(
 )
 
 
-def _ir_input(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
+def openai_input_to_ir(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
     if isinstance(decision_input, str):
         return DecisionsIRState(state=decision_input)
     return DecisionsIRMessages(messages=tuple(decision_input))
@@ -98,7 +98,7 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
 
 def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
-        input=_ir_input(request.input),
+        input=openai_input_to_ir(request.input),
         audio=request.audio,
         videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
@@ -335,6 +335,7 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
     supports_safety_identifier = True
     supports_images = True
+    supports_json_input = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"
