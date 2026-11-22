@@ -82,6 +82,7 @@ from litellm.proxy.common_request_processing import (
     include_guardrail_response_requested,
     is_azure_model_router_request,
     open_sse_before_first_byte,
+    pick_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
     sse_error_payload,
@@ -16528,3 +16529,21 @@ def test_get_custom_headers_leave_a_plain_request_without_a_fallback_reason() ->
 
     assert headers["x-litellm-attempted-fallbacks"] == "0"
     assert "x-litellm-fallback-reason" not in headers
+
+
+class TestPickLitellmCallId:
+    def test_valid_body_id_is_kept(self):
+        assert pick_litellm_call_id({"litellm_call_id": "body-id"}, "fallback") == "body-id"
+
+    def test_oversized_body_id_falls_back_to_resolved(self):
+        oversized = "x" * (MAX_LITELLM_CALL_ID_LENGTH + 1)
+        assert pick_litellm_call_id({"litellm_call_id": oversized}, "fallback") == "fallback"
+
+    def test_non_string_body_id_falls_back_to_resolved(self):
+        assert pick_litellm_call_id({"litellm_call_id": 123}, "fallback") == "fallback"
+        assert pick_litellm_call_id({"litellm_call_id": ""}, "fallback") == "fallback"
+        assert pick_litellm_call_id({}, "fallback") == "fallback"
+
+    def test_boundary_length_body_id_is_kept(self):
+        exact = "x" * MAX_LITELLM_CALL_ID_LENGTH
+        assert pick_litellm_call_id({"litellm_call_id": exact}, "fallback") == exact

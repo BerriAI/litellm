@@ -816,6 +816,9 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.gateway_request_endpoints import (
     router as gateway_request_router,
 )
+from litellm.proxy.management_endpoints.in_flight_endpoints import (
+    router as in_flight_router,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
@@ -23143,6 +23146,7 @@ app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
 app.include_router(request_error_router)
+app.include_router(in_flight_router)
 app.include_router(telemetry_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
