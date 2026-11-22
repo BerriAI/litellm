@@ -209,7 +209,7 @@ mod tests {
         let over = "界".repeat(MAX_FIELD_BYTES / 3 + 1);
         let rows = reported(
             &[charge(&over, json!({"request_id": "request-over"}))],
-            &[over.clone()],
+            std::slice::from_ref(&over),
         );
         assert_eq!(rows[0]["unreportable"], json!(true));
         assert_eq!(
