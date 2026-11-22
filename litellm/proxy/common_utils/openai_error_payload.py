@@ -98,9 +98,17 @@ def relayed_provider_specific_fields(
         **_error_body_provider_specific_fields(exc),
         **(_ERROR_BODY.validate_python(carried) if isinstance(carried, dict) else {}),
     }
-    if not relayed:
+    return redacted_provider_specific_fields(relayed) if relayed else None
+
+
+def redacted_provider_specific_fields(
+    carried: object,
+) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
+    if not isinstance(carried, dict):
         return None
-    redacted: Final = _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(relayed))
+    redacted: Final = _ERROR_BODY.validate_python(
+        redact_internal_details_from_client_fields(_ERROR_BODY.validate_python(carried))
+    )
     return redacted if _is_json_compliant(redacted) else None
 
 

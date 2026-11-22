@@ -321,7 +321,7 @@ def _litellm_proxy_response(
 def _decoded_openai_error(text: str) -> Mapping[str, object] | None:
     try:
         decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(text)))
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if decoded is None or decoded.get("type") == "error":
         return None

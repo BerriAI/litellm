@@ -272,6 +272,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message=error_message["message"],
                     status_code=error_message["code"],
                     headers=error_message["metadata"].get("headers", {}),
+                    body=error_chunk if isinstance(error_chunk, dict) else None,
                 )
 
             new_choices: Final = []

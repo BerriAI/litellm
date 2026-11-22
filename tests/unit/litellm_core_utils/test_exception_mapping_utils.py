@@ -2937,3 +2937,18 @@ def test_flat_responses_failure_logs_its_status_and_relays_the_provider_code() -
 
     assert _logged_error_code(caught.value) == "400"
     assert relayed_provider_specific_fields(caught.value) == {"code": "provider_code"}
+
+
+def test_a_deeply_nested_provider_error_keeps_its_status() -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    depth: Final = 200_000
+    nested: Final = '{"error":' * depth + "1" + "}" * depth
+
+    with pytest.raises(litellm.BadRequestError):
+        exception_type(
+            model="qwen",
+            original_exception=BaseLLMException(status_code=400, message=nested),
+            custom_llm_provider="hosted_vllm",
+        )

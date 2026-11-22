@@ -112,7 +112,7 @@ class OpenAIError(BaseLLMException):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: dict | httpx.Headers | None = None,
-        body: Mapping[str, object] | None = None,
+        body: object = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -131,7 +131,7 @@ class OpenAIError(BaseLLMException):
             headers=self.headers,
             request=self.request,
             response=self.response,
-            body=None if body is None else dict(body),
+            body=None if (body_object := as_str_mapping(body)) is None else dict(body_object),
         )
 
 

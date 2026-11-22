@@ -3019,6 +3019,23 @@ class TestCommonRequestProcessingHelpers:
         plain: Final = proxy_exception_from_route_error(ValueError("boom"))
         assert (plain.code, plain.type, plain.message) == ("500", "internal_server_error", "boom")
 
+    async def test_proxy_exception_from_route_error_redacts_carried_provider_fields(self) -> None:
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_route_error,
+        )
+
+        failure: Final = litellm.NotFoundError(message="no such assistant", model="gpt-5.4-mini", llm_provider="openai")
+        failure.provider_specific_fields = {
+            "request_id": "req_123",
+            "debug": {"token_value": "opaque-upstream-credential"},
+        }
+
+        shaped: Final = proxy_exception_from_route_error(failure)
+
+        assert shaped.provider_specific_fields is not None
+        assert shaped.provider_specific_fields["request_id"] == "req_123"
+        assert "opaque-upstream-credential" not in json.dumps(shaped.provider_specific_fields)
+
     async def test_proxy_exception_from_route_error_redacts_internal_details(self) -> None:
         from litellm.proxy.common_request_processing import (
             proxy_exception_from_route_error,
