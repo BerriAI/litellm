@@ -13,6 +13,7 @@ from typing import Final
 import httpx
 import pytest
 
+import litellm
 from litellm.exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
@@ -418,3 +419,21 @@ class TestBedrockErrorHeaders:
                     headers = get_response_headers(dict(_response_headers))
 
         assert headers.get("llm_provider-x-amzn-requestid") == "req-proxy-500"
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    (RateLimitError, ServiceUnavailableError, litellm.BadGatewayError, litellm.InternalServerError),
+)
+def test_error_built_from_an_unread_streaming_response_keeps_its_headers(error_class: type[Exception]) -> None:
+    unread: Final = httpx.Response(
+        500,
+        headers={"x-request-id": "req-unread"},
+        stream=httpx.ByteStream(b'{"error":"never read"}'),
+    )
+
+    error: Final = error_class(message="upstream failed", llm_provider="openai", model="gpt-5.6", response=unread)
+
+    error_response: Final = getattr(error, "response")
+    assert error_response.text == ""
+    assert dict(error_response.headers) == {"x-request-id": "req-unread"}

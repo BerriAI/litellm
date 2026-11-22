@@ -39,6 +39,7 @@ from typing import Final
 import httpx
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -47,6 +48,7 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.secret_managers.main import get_secret_str
 
 # AgentCore web-search rejects queries longer than 200 characters
@@ -146,7 +148,9 @@ def _iter_sse_events(text: str) -> Iterator[Mapping[str, object]]:
     progress notifications before the JSON-RPC response.
     """
     for chunk in _SSE_EVENT_SEPARATOR.split(text):
-        payload = "\n".join(line[len("data:") :].lstrip() for line in chunk.splitlines() if line.startswith("data:"))
+        payload = "\n".join(
+            line[len("data:") :].lstrip() for line in split_sse_lines(chunk) if line.startswith("data:")
+        )
         if not payload:
             continue
         try:
@@ -405,14 +409,14 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
         return SearchResponse(results=results, object="search")
 
-    def _tool_error_message(self, response_json: Mapping[str, object]) -> str:
+    def _tool_error_message(self, response_json: Mapping[str, object] | SupportsGet) -> str:
         texts: Final = tuple(
             text for block in self._text_blocks(response_json) if isinstance(text := block.get("text"), str)
         )
         return " ".join(texts) if texts else json.dumps(response_json.get("result"))[:500]
 
     @staticmethod
-    def _text_blocks(response_json: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    def _text_blocks(response_json: Mapping[str, object] | SupportsGet) -> tuple[Mapping[str, object], ...]:
         result: Final = response_json.get("result")
         content: Final = result.get("content") if isinstance(result, dict) else None
         if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
@@ -420,7 +424,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         return tuple(block for block in content if isinstance(block, dict) and block.get("type") == "text")
 
     @staticmethod
-    def _parse_mcp_body(raw_response: httpx.Response) -> Mapping[str, object]:
+    def _parse_mcp_body(raw_response: httpx.Response) -> Mapping[str, object] | SupportsGet:
         """
         Parse a JSON or SSE-framed (Streamable HTTP transport) MCP response.
 
@@ -430,7 +434,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         """
         text: Final = raw_response.text
         if not text.lstrip().startswith(_SSE_LINE_PREFIXES):
-            return raw_response.json()
+            return require_get(_JSON_VALUE.validate_python(raw_response.json()))
 
         events: Final = tuple(_iter_sse_events(text))
         response_event: Final = next(

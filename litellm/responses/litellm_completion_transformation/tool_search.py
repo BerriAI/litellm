@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -18,25 +19,33 @@ if TYPE_CHECKING:
 __all__ = [
     "ANTHROPIC_TOOL_SEARCH_TOOL_NAME",
     "ANTHROPIC_TOOL_SEARCH_TOOL_TYPE",
+    "CLIENT_TOOL_SEARCH_FUNCTION_NAME",
     "CompletionRoute",
     "ToolSearchCallStatus",
+    "ToolSearchExecution",
+    "ToolSearchRouting",
     "answers_tool_search",
     "anthropic_tool_search_chat_tool",
     "build_tool_search_call",
     "chat_config_builds_anthropic_request",
     "chat_messages_without_tool_search_calls",
     "chat_route_rejects_unanswered_tool_calls",
+    "has_client_tool_search",
     "has_server_tool_search",
     "holds_tool_search_use",
     "input_without_unanswered_anthropic_tool_search_calls",
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
+    "is_client_tool_search_tool",
     "is_openai_tool_search_tool",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
     "provider_chat_config",
+    "request_runs_tool_search",
+    "route_runs_tool_search",
     "runs_tool_search_on_the_server",
     "tool_search_call_ids",
+    "tool_search_routing",
     "tools_with_anthropic_tool_search_mapped",
     "tools_without_anthropic_tool_search",
     "unanswered_tool_search_call_ids",
@@ -46,7 +55,9 @@ __all__ = [
 
 ANTHROPIC_TOOL_SEARCH_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
 ANTHROPIC_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_regex"
+CLIENT_TOOL_SEARCH_FUNCTION_NAME: Final = "tool_search"
 ToolSearchCallStatus: TypeAlias = Literal["in_progress", "completed", "incomplete"]
+ToolSearchExecution: TypeAlias = Literal["server", "client"]
 
 _ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MESSAGE_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -77,6 +88,35 @@ def runs_tool_search_on_the_server(tool: object) -> bool:
 
 def has_server_tool_search(tools: Sequence[object] | None) -> bool:
     return any(is_server_tool_search_tool(tool) for tool in tools or ())
+
+
+def is_client_tool_search_tool(tool: object) -> bool:
+    try:
+        parsed: Final = _ToolSearchFields.model_validate(tool)
+    except ValidationError:
+        return False
+    return parsed.type == "tool_search" and parsed.execution == "client"
+
+
+def has_client_tool_search(tools: Sequence[object] | None) -> bool:
+    return any(is_client_tool_search_tool(tool) for tool in tools or ())
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSearchRouting:
+    server: bool
+    client: bool
+
+    def execution_of(self, tool_id: str, tool_name: str) -> ToolSearchExecution | None:
+        if self.server and is_anthropic_tool_search_use(tool_id, tool_name):
+            return "server"
+        if self.client and tool_name == CLIENT_TOOL_SEARCH_FUNCTION_NAME:
+            return "client"
+        return None
+
+
+def tool_search_routing(tools: Sequence[object] | None) -> ToolSearchRouting:
+    return ToolSearchRouting(server=has_server_tool_search(tools), client=has_client_tool_search(tools))
 
 
 def anthropic_tool_search_chat_tool() -> AnthropicToolSearchToolRegex:
@@ -177,6 +217,20 @@ def provider_chat_config(model: str, custom_llm_provider: str | None) -> "BaseCo
 
 def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:
     return chat_config_builds_anthropic_request(provider_chat_config(model, custom_llm_provider))
+
+
+def route_runs_tool_search(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.utils import supports_tool_search
+
+    return supports_tool_search(
+        model=model, custom_llm_provider=custom_llm_provider
+    ) and provider_builds_anthropic_request(model, custom_llm_provider)
+
+
+def request_runs_tool_search(tools: Sequence[object], model: str, custom_llm_provider: str | None) -> bool:
+    if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+        return provider_builds_anthropic_request(model, custom_llm_provider)
+    return has_server_tool_search(tools) and route_runs_tool_search(model, custom_llm_provider)
 
 
 def chat_config_builds_anthropic_request(chat_config: object) -> bool:
@@ -346,13 +400,18 @@ def _parsed_arguments(arguments_json: str) -> Mapping[str, object] | None:
         return None
 
 
-def build_tool_search_call(tool_id: str, arguments_json: str, status: ToolSearchCallStatus) -> OutputToolSearchCall:
+def build_tool_search_call(
+    tool_id: str,
+    arguments_json: str,
+    status: ToolSearchCallStatus,
+    execution: ToolSearchExecution = "server",
+) -> OutputToolSearchCall:
     arguments: Final = _parsed_arguments(arguments_json)
     return OutputToolSearchCall(
         id=openai_shaped_tool_call_item_id("tool_search_call", tool_id),
         call_id=tool_id,
         arguments={} if arguments is None else arguments,
-        execution="server",
+        execution=execution,
         status="incomplete" if arguments is None else status,
         type="tool_search_call",
     )

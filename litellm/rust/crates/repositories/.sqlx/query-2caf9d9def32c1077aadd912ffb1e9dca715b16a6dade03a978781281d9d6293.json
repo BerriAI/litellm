@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_AuditLog\" (\n    id,\n    updated_at,\n    changed_by,\n    changed_by_api_key,\n    action,\n    table_name,\n    object_id,\n    before_value,\n    updated_values\n)\nSELECT log.id,\n       COALESCE(log.updated_at, NOW() AT TIME ZONE 'UTC'),\n       COALESCE(log.changed_by, ''),\n       COALESCE(log.changed_by_api_key, ''),\n       log.action,\n       log.table_name,\n       log.object_id,\n       log.before_value,\n       log.updated_values\nFROM jsonb_to_recordset($1) AS log(\n    id text,\n    updated_at timestamp,\n    changed_by text,\n    changed_by_api_key text,\n    action text,\n    table_name text,\n    object_id text,\n    before_value jsonb,\n    updated_values jsonb\n)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2caf9d9def32c1077aadd912ffb1e9dca715b16a6dade03a978781281d9d6293"
+}

@@ -1,10 +1,12 @@
 import asyncio
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm import text_completion
+from litellm.llms.custom_llm import CustomLLM
 from litellm.types.utils import ModelResponse, TextCompletionResponse, Usage
 from litellm.utils import LiteLLMResponseObjectHandler
 
@@ -1298,3 +1300,30 @@ def mock_post(*args, **kwargs):
         "usage": {"prompt_tokens": 2, "total_tokens": 18, "completion_tokens": 16},
     }
     return mock_response
+
+
+def test_text_completion_reads_a_custom_provider_dict_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DictReplyLLM(CustomLLM):
+        def completion(self, *args: object, **kwargs: object) -> dict[str, object]:
+            return {
+                "id": "dict-reply",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "x",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi from a dict reply"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "dictreply", "custom_handler": DictReplyLLM()}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "dictreply"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "dictreply"])
+
+    response: Final = text_completion(model="dictreply/x", prompt="hi")
+
+    assert response.choices[0].text == "hi from a dict reply"
+    assert response.choices[0].finish_reason == "stop"

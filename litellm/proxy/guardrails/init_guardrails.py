@@ -4,6 +4,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.router_api import ChangeSet
 
 # v2 implementation
 from litellm.types.guardrails import Guardrail, GuardrailItem, GuardrailItemSpec
@@ -93,7 +94,7 @@ def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
 
         router_guardrail_list.append(router_guardrail)
 
-    llm_router.guardrail_list = router_guardrail_list
+    llm_router.apply(ChangeSet(assign={"guardrail_list": router_guardrail_list}))
     verbose_proxy_logger.debug("Populated router guardrail_list with %s guardrails", len(router_guardrail_list))
 
 
@@ -119,7 +120,7 @@ def initialize_guardrails(
                 litellm.guardrail_name_config_map[k] = guardrail_item
 
         # set appropriate callbacks if they are default on
-        default_on_callbacks: Final = set()
+        default_on_callbacks: Final = set[str]()
         callback_specific_params: Final = {}
         for guardrail in all_guardrails:
             verbose_proxy_logger.debug(guardrail.guardrail_name)

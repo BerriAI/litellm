@@ -26,7 +26,7 @@ def is_undiscoverable_deployment(deployment: Mapping[str, object]) -> bool:
 def is_undiscoverable_model_name(model_name: str, llm_router: Router | None, team_id: str | None) -> bool:
     if llm_router is None:
         return False
-    deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id)
+    deployments: Final = llm_router.registry().deployments(model_name, team_id=team_id)
     if not deployments:
         return False
     return all(is_undiscoverable_deployment(deployment) for deployment in deployments)
@@ -56,11 +56,10 @@ def _undiscoverable_served_names(
 
 
 def _undiscoverable_patterns(llm_router: Router, team_id: str | None) -> tuple[re.Pattern[str], ...]:
-    team_pattern_router: Final = llm_router.team_pattern_routers.get(team_id) if team_id is not None else None
+    registry: Final = llm_router.registry()
+    team_pattern_router: Final = registry.patterns(team=True).get(team_id) if team_id is not None else None
     pattern_routers: Final = (
-        (llm_router.pattern_router,)
-        if team_pattern_router is None
-        else (llm_router.pattern_router, team_pattern_router)
+        (registry.patterns(),) if team_pattern_router is None else (registry.patterns(), team_pattern_router)
     )
     return tuple(
         re.compile(regex)
@@ -94,12 +93,11 @@ def undiscoverable_model_names(
 ) -> frozenset[str]:
     if llm_router is None or user_api_key_has_admin_view(user_api_key_dict):
         return frozenset()
-    undiscoverable_rows: Final = tuple(
-        row for row in llm_router.get_model_list() or () if is_undiscoverable_deployment(row)
-    )
+    registry: Final = llm_router.registry()
+    undiscoverable_rows: Final = tuple(row for row in registry.deployments() or () if is_undiscoverable_deployment(row))
     if not undiscoverable_rows:
         return frozenset()
-    served_names: Final = _undiscoverable_served_names(undiscoverable_rows, llm_router.model_group_alias)
+    served_names: Final = _undiscoverable_served_names(undiscoverable_rows, registry.aliases())  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
     patterns: Final = _undiscoverable_patterns(llm_router, team_id)
     return frozenset(
         name
@@ -118,7 +116,7 @@ def undiscoverable_model_groups(
         return frozenset()
     return frozenset(
         row["model_name"]
-        for row in llm_router.get_model_list() or ()
+        for row in llm_router.registry().deployments() or ()
         if is_undiscoverable_deployment(row) and is_undiscoverable_model_name(row["model_name"], llm_router, team_id)
     )
 
