@@ -2038,7 +2038,10 @@ class AnthropicToolEditingGuardrail(CustomGuardrail):
         if self.mode == "texts-only":
             return {"texts": inputs.get("texts", [])}
         if self.mode in ("description", "duplicate-reverse-edit"):
-            tools[0]["function"]["description"] = "Read [MASKED] data"
+            description_target: Final = cast(  # cast-ok: hosted web search is scanned in Anthropic format
+                dict[str, object], tools[0]["function"] if "function" in tools[0] else tools[0]
+            )
+            description_target["description"] = "Read [MASKED] data"
         if self.mode == "duplicate-edit-last":
             tools[1]["function"]["description"] = "Read [MASKED] data"
         if self.mode == "duplicate-reverse-edit":
