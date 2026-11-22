@@ -68,6 +68,17 @@ def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedC
     logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
+def _cached_prefix_covers_whole_request(non_cached_messages: Sequence[AllMessageValues]) -> bool:
+    if non_cached_messages:
+        return False
+    verbose_logger.debug(
+        "Vertex AI context caching: the cached prefix covers the whole request, and an explicit cache "
+        "only serves that exact prefix, so implicit caching serves it without a storage fee. "
+        "Skipping context caching."
+    )
+    return True
+
+
 class ContextCachingEndpoints(VertexBase):
     """
     Covers context caching endpoints for Vertex AI + Google AI Studio
@@ -333,7 +344,7 @@ class ContextCachingEndpoints(VertexBase):
 
         cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
-        if len(cached_messages) == 0:
+        if len(cached_messages) == 0 or _cached_prefix_covers_whole_request(non_cached_messages):
             return messages, optional_params, None
 
         if not cached_messages_end_on_supported_turn(cached_messages):
@@ -494,7 +505,7 @@ class ContextCachingEndpoints(VertexBase):
 
         cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
-        if len(cached_messages) == 0:
+        if len(cached_messages) == 0 or _cached_prefix_covers_whole_request(non_cached_messages):
             return messages, optional_params, None
 
         if not cached_messages_end_on_supported_turn(cached_messages):

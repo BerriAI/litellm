@@ -2586,3 +2586,31 @@ async def test_a_strict_request_rejects_tool_call_arguments_even_when_a_lenient_
 
     with pytest.raises(litellm.BadRequestError, match="get_weather"):
         await complete({**request, "drop_params": False}, calls)
+
+
+def test_a_mark_on_the_latest_turn_sends_the_whole_conversation_uncached_in_order(
+    local_model_cost_map: None,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    litellm.completion(
+        model="gemini/gemini-flash-latest",
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What's the weather in Tokyo today?"},
+            {"role": "assistant", "content": "Sunny."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "And Nagoya tomorrow? " * 3000, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+        ],
+        api_key="test-key",
+        client=_recording_gemini_client(calls),
+    )
+
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert not any(call.url.path.endswith("/cachedContents") for call in calls)
+    assert "cachedContent" not in generated
+    assert generated["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert [content["role"] for content in generated["contents"]] == ["user", "model", "user"]
