@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._logging import verbose_logger
@@ -568,6 +569,16 @@ async def test_gemini_ai_studio_async_completion_sends_a_video_url_part_as_video
             {"file_data": {"mime_type": "video/mp4", "file_uri": "https://youtu.be/aqz-KE-bpKQ"}},
             id="youtube-link-with-port",
         ),
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "https://www.youtube.com/shorts/aqz-KE-bpKQ"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "https://www.youtube.com/shorts/aqz-KE-bpKQ"}},
+            id="youtube-short",
+        ),
+        pytest.param(
+            {"type": "video_url", "video_url": {"url": "https://www.youtube.com/embed/aqz-KE-bpKQ"}},
+            {"file_data": {"mime_type": "video/mp4", "file_uri": "https://www.youtube.com/embed/aqz-KE-bpKQ"}},
+            id="youtube-embed",
+        ),
     ],
 )
 def test_a_video_url_part_reaches_gemini_as_video(
@@ -664,6 +675,68 @@ def test_gemini_ai_studio_sync_completion_lets_gemini_fetch_youtube_links_itself
         {"file_data": {"mime_type": "video/mp4", "file_uri": watch_link}},
         {"file_data": {"mime_type": "video/mp4", "file_uri": short_link}},
     ]
+
+
+_WEB_PAGE_LINKS: Final = (
+    "https://www.youtube.com/live/aqz-KE-bpKQ",
+    "https://www.youtube.com/@Google",
+    "https://vimeo.com/76979871",
+)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("page_url", _WEB_PAGE_LINKS)
+def test_a_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_the_html(
+    monkeypatch: pytest.MonkeyPatch, page_url: str, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Describe the clip"}, {"type": "video_url", "video_url": page_url}],
+        }
+    ]
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            transformation.gemini_convert_messages_with_history(
+                messages, model="gemini-3.8-flash", custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = transformation.gemini_convert_messages_with_history(
+            messages,
+            model="gemini-3.8-flash",
+            custom_llm_provider=custom_llm_provider,
+            litellm_params={"drop_params": True},
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (custom_llm_provider, "gemini-3.8-flash")
+    assert dropped[0]["parts"] == [{"text": "Describe the clip"}]
+
+
+def test_a_linked_video_in_a_system_message_is_a_bad_request_naming_the_model_and_provider() -> None:
+    with pytest.raises(litellm.BadRequestError, match="system instructions take text only") as excinfo:
+        transformation.transform_request_body(
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Be brief"},
+                        {"type": "video_url", "video_url": {"url": "https://videos.example/clip.mp4"}},
+                    ],
+                },
+                {"role": "user", "content": "Describe the clip"},
+            ],
+            model="gemini-3.8-flash",
+            optional_params={},
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=None,
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == ("vertex_ai", "gemini-3.8-flash")
 
 
 def test_gemini_completion_rejects_a_video_url_part_without_a_url_instead_of_dropping_it() -> None:

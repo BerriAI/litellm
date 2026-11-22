@@ -1558,6 +1558,32 @@ def gemini_tool_media_needs_download(source: GeminiMediaSource) -> bool:
     )
 
 
+def checked_gemini_video_part(
+    content: Mapping[str, object],
+    part: VertexPartType,
+    *,
+    model: str | None,
+    custom_llm_provider: str,
+    drop_params: bool,
+) -> VertexPartType | None:
+    if content.get("type") != "video_url":
+        return part
+    media: Final = part.get("inline_data") or part.get("file_data")
+    mime_type: Final = media.get("mime_type") if media is not None else None
+    if not mime_type or mime_type.startswith("video/"):
+        return part
+    if drop_params:
+        return None
+    raise litellm.BadRequestError(
+        message=(
+            f"Invalid message content: video_url must link a video file or a YouTube video, but it holds {mime_type}. "
+            "Link the video itself or set drop_params=True."
+        ),
+        model=model or "",
+        llm_provider=custom_llm_provider,
+    )
+
+
 def _gemini_media_format(fields: Mapping[str, object]) -> str | None:
     hint: Final = fields.get("format") or fields.get("mime_type") or fields.get("content_type")
     return hint if isinstance(hint, str) else None
@@ -1663,42 +1689,53 @@ def _gemini_tool_media_part(
                 llm_provider=custom_llm_provider or "gemini",
             )
         return None
-    drops_video_metadata: Final = nested and content.get("type") == "video_url" and bool(source.video_metadata)
-    if drops_video_metadata and not drop_params:
+    vertex_nested: Final = nested and custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+    drops_video_settings: Final = (
+        vertex_nested and content.get("type") == "video_url" and bool(source.detail or source.video_metadata)
+    )
+    if drops_video_settings and not drop_params:
         raise litellm.BadRequestError(
-            message="Gemini tool results cannot carry video_metadata. Remove it or set drop_params=True.",
+            message=(
+                "Vertex ignores detail and video_metadata on a video inside a tool result. "
+                "Move the video to a user message, remove them, or set drop_params=True."
+            ),
             model=model or "",
-            llm_provider=custom_llm_provider or "gemini",
+            llm_provider=custom_llm_provider or "vertex_ai",
         )
-    inline_only: Final = nested and custom_llm_provider not in ("vertex_ai", "vertex_ai_beta")
+    inline_only: Final = nested and not vertex_nested
     if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
         raise litellm.BadRequestError(
             message="Gemini tool results require inline media data. Use a data URL or input_audio for this file reference.",
             model=model or "",
             llm_provider=custom_llm_provider or "gemini",
         )
+    kept_source: Final = replace(source, detail=None, video_metadata=None) if vertex_nested else source
     try:
-        if not inline_only:
-            encoded_source: Final = (
-                replace(
-                    source,
-                    url=convert_generic_image_chunk_to_openai_image_obj(
-                        convert_to_anthropic_image_obj(source.url, format=source.format)
-                    ),
-                )
-                if gemini_tool_media_needs_download(source)
-                else source
+        encoded_source: Final = (
+            replace(
+                kept_source,
+                url=convert_generic_image_chunk_to_openai_image_obj(
+                    convert_to_anthropic_image_obj(kept_source.url, format=kept_source.format)
+                ),
             )
-            part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
-            if nested and "file_data" in part and not part["file_data"].get("mime_type"):
-                raise litellm.BadRequestError(
-                    message="Vertex tool result file references require an explicit MIME type in format.",
-                    model=model or "",
-                    llm_provider=custom_llm_provider or "vertex_ai",
-                )
-            return part
-        inline: Final = convert_to_anthropic_image_obj(source.url, format=source.format)
-        return {"inline_data": {"data": inline["data"], "mime_type": inline["media_type"]}}
+            if gemini_tool_media_needs_download(kept_source)
+            or (inline_only and kept_source.url.startswith(("http://", "https://")))
+            else kept_source
+        )
+        part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
+        if nested and "file_data" in part and not part["file_data"].get("mime_type"):
+            raise litellm.BadRequestError(
+                message="Vertex tool result file references require an explicit MIME type in format.",
+                model=model or "",
+                llm_provider=custom_llm_provider or "vertex_ai",
+            )
+        return checked_gemini_video_part(
+            content,
+            part,
+            model=model,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            drop_params=drop_params,
+        )
     except litellm.ImageFetchError as exc:
         verbose_logger.warning("Failed to process media in tool response: %s", exc)
         return None
@@ -1707,6 +1744,31 @@ def _gemini_tool_media_part(
     except Exception as exc:
         verbose_logger.warning("Failed to process media in tool response: %s", exc)
         return None
+
+
+def _function_response_media(part: VertexPartType) -> FunctionResponsePartType | None:
+    if "inline_data" in part:
+        return FunctionResponsePartType(inline_data=part["inline_data"])
+    if "file_data" in part:
+        return FunctionResponsePartType(file_data=part["file_data"])
+    return None
+
+
+def _function_response_part(part: VertexPartType) -> FunctionResponsePartType | None:
+    media: Final = _function_response_media(part)
+    if media is None:
+        return None
+    resolution: Final = (
+        FunctionResponsePartType(media_resolution=part["media_resolution"])
+        if "media_resolution" in part
+        else FunctionResponsePartType()
+    )
+    clip: Final = (
+        FunctionResponsePartType(video_metadata=part["video_metadata"])
+        if "video_metadata" in part
+        else FunctionResponsePartType()
+    )
+    return media | resolution | clip
 
 
 def convert_to_gemini_tool_call_result(
@@ -1841,11 +1903,7 @@ def convert_to_gemini_tool_call_result(
         if not supports_multimodal_function_responses:
             return [_part, *media_parts]
         _function_response["parts"] = [
-            FunctionResponsePartType(inline_data=part["inline_data"])
-            if "inline_data" in part
-            else FunctionResponsePartType(file_data=part["file_data"])
-            for part in media_parts
-            if "inline_data" in part or "file_data" in part
+            response_part for response_part in map(_function_response_part, media_parts) if response_part is not None
         ]
         return [_part]
 

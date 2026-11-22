@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
+    checked_gemini_video_part,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
@@ -737,7 +738,9 @@ def _gemini_history_media_part(
     message_index: int | None = None,
     content_index: int | None = None,
     drop_params: bool = False,
+    custom_llm_provider: str | None = None,
 ) -> PartType | None:
+    provider: Final = custom_llm_provider or "vertex_ai"
     source: Final = gemini_media_source(content, prefer_file_id=message_index is not None)
     if source is None:
         if message_index is not None and content.get("type") == "image_url":
@@ -759,8 +762,8 @@ def _gemini_history_media_part(
         if content.get("type") == "video_url" and not drop_params:
             raise litellm.BadRequestError(
                 message="Invalid message content: element type is 'video_url' but it has no 'url'",
-                model=model,
-                llm_provider="vertex_ai",
+                model=model or "",
+                llm_provider=provider,
             )
         if message_index is not None and content.get("type") == "file":
             if content.get("file") is None:
@@ -772,7 +775,7 @@ def _gemini_history_media_part(
             raise Exception("Unknown file type. Please pass in a file_id or file_data")
         return None
     try:
-        return encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
+        part: Final = encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
     except litellm.BadRequestError:
         raise
     except Exception as exc:
@@ -788,6 +791,7 @@ def _gemini_history_media_part(
             model=model,
             llm_provider="vertex_ai",
         ) from exc
+    return checked_gemini_video_part(content, part, model=model, custom_llm_provider=provider, drop_params=drop_params)
 
 
 def gemini_convert_messages_with_history(
@@ -848,6 +852,7 @@ def gemini_convert_messages_with_history(
                                 message_index=msg_i,
                                 content_index=element_idx,
                                 drop_params=drop_params,
+                                custom_llm_provider=custom_llm_provider,
                             )
                         ) is not None:
                             _parts.append(media_part)
@@ -894,7 +899,12 @@ def gemini_convert_messages_with_history(
                                 _parts.append(_part)
                             elif (
                                 media_part := _gemini_history_media_part(
-                                    element, model, vertex_project, vertex_credentials, drop_params=drop_params
+                                    element,
+                                    model,
+                                    vertex_project,
+                                    vertex_credentials,
+                                    drop_params=drop_params,
+                                    custom_llm_provider=custom_llm_provider,
                                 )
                             ) is not None:
                                 _parts.append(media_part)
@@ -1190,6 +1200,8 @@ def transform_request_body(
         supports_system_message=supports_system_message,
         messages=messages,
         drop_params=drops_unsupported_params(request_params.get("drop_params")),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
@@ -1535,7 +1547,11 @@ def _has_video_url_part(message: object) -> bool:
 
 
 def transform_system_message(
-    supports_system_message: bool, messages: list[AllMessageValues], drop_params: bool = False
+    supports_system_message: bool,
+    messages: list[AllMessageValues],
+    drop_params: bool = False,
+    model: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
     Extracts the system message from the openai message list.
@@ -1562,8 +1578,8 @@ def transform_system_message(
                                 "Gemini system instructions take text only. "
                                 "Move the video to a user message or set drop_params=True."
                             ),
-                            model="",
-                            llm_provider="gemini",
+                            model=model or "",
+                            llm_provider=custom_llm_provider or "gemini",
                         )
                     system_text = ""
                     for content in message["content"]:

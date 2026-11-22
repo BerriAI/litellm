@@ -2785,27 +2785,53 @@ def test_gemini_tool_result_youtube_video_on_ai_studio_is_a_bad_request_instead_
         convert_to_gemini_tool_call_result(_YOUTUBE_TOOL_RESULT, None, custom_llm_provider="gemini")
 
 
-_CLIP_WITH_METADATA_RESULT: Final = {
+_CLIP_WITH_SETTINGS_RESULT: Final = {
     "role": "tool",
     "name": "find_clip",
     "content": [
         {"type": "text", "text": '{"ok":true}'},
         {
             "type": "video_url",
-            "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "video_metadata": {"fps": 2}},
+            "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "detail": "high", "video_metadata": {"fps": 2}},
         },
     ],
 }
 
 
-def test_gemini_tool_result_video_metadata_is_a_bad_request_instead_of_a_silent_drop() -> None:
-    with pytest.raises(litellm.BadRequestError, match="cannot carry video_metadata"):
-        convert_to_gemini_tool_call_result(_CLIP_WITH_METADATA_RESULT, None, custom_llm_provider="gemini")
-
-
-def test_drop_params_sends_a_tool_result_video_without_its_metadata() -> None:
+def test_gemini_tool_result_video_carries_its_detail_and_metadata_into_the_function_response() -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
-        _CLIP_WITH_METADATA_RESULT, None, custom_llm_provider="gemini", drop_params=True
+        _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="gemini", model="gemini-3.8-flash"
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [
+                    {
+                        "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                        "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+                        "video_metadata": {"fps": 2},
+                    }
+                ],
+            }
+        }
+    ]
+
+
+def test_vertex_tool_result_video_settings_are_a_bad_request_since_vertex_ignores_them() -> None:
+    with pytest.raises(litellm.BadRequestError, match="Vertex ignores detail and video_metadata") as excinfo:
+        convert_to_gemini_tool_call_result(
+            _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash"
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == ("vertex_ai", "gemini-3.8-flash")
+
+
+def test_drop_params_sends_a_vertex_tool_result_video_without_its_settings() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash", drop_params=True
     )
 
     assert delivered == [
@@ -2819,9 +2845,55 @@ def test_drop_params_sends_a_tool_result_video_without_its_metadata() -> None:
     ]
 
 
-def test_gemini_tool_result_video_keeps_its_metadata_beside_the_function_response() -> None:
+def test_gemini_tool_result_image_carries_its_detail_into_the_function_response() -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
-        _CLIP_WITH_METADATA_RESULT,
+        {
+            "role": "tool",
+            "name": "find_clip",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "low"}}],
+        },
+        None,
+        custom_llm_provider="gemini",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered[0]["function_response"]["parts"] == [
+        {
+            "inline_data": {"data": "iVBORw0KGgo=", "mime_type": "image/png"},
+            "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"},
+        }
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_html(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    page_url: Final = f"https://videos.example/watch/{uuid.uuid4()}"
+    page_result: Final = {
+        "role": "tool",
+        "name": "find_clip",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": {"url": page_url}}],
+    }
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            convert_to_gemini_tool_call_result(page_result, None, custom_llm_provider=custom_llm_provider)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            page_result, None, custom_llm_provider=custom_llm_provider, drop_params=True
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+def test_gemini_tool_result_video_keeps_its_settings_beside_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT,
         None,
         supports_multimodal_function_responses=False,
         custom_llm_provider="gemini",
@@ -2830,7 +2902,11 @@ def test_gemini_tool_result_video_keeps_its_metadata_beside_the_function_respons
 
     assert delivered == [
         {"function_response": {"name": "find_clip", "response": {"ok": True}}},
-        {"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}, "video_metadata": {"fps": 2}},
+        {
+            "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+            "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+            "video_metadata": {"fps": 2},
+        },
     ]
 
 
