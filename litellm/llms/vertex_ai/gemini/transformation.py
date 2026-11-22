@@ -67,8 +67,8 @@ from ..common_utils import (
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    with_enums_that_fit,
     with_forced_bare_root_unions_on_parameters,
-    with_integer_enums_that_fit,
 )
 from .long_decode import with_default_output_budget
 
@@ -1096,7 +1096,7 @@ def _tools_fit_for_caller_tool_config(tools: Tools, extra_body: object, model: s
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     json_tools: Final = cast(JsonValue, tools)  # cast-ok: LiteLLM built these tools as JSON request data
-    fitted: Final = with_integer_enums_that_fit(
+    fitted: Final = with_enums_that_fit(
         partial(with_forced_bare_root_unions_on_parameters, json_tools, tool_config),
         VertexGeminiConfig.is_gemini_3_or_newer(model),
     )

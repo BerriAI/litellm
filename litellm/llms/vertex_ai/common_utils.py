@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import accumulate, chain, repeat, starmap, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
@@ -778,13 +778,18 @@ def _enum_size(node: JsonValue) -> tuple[bool, int] | None:
             return None
 
 
-def _integer_enums_fit(schema: JsonValue) -> bool:
+def _enum_sizes(schema: JsonValue) -> tuple[tuple[bool, int], ...]:
     levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,)))
-    enum_sizes: Final = tuple(size for node in chain.from_iterable(levels) if (size := _enum_size(node)) is not None)
-    return (
-        not any(is_integer for is_integer, _ in enum_sizes)
-        or sum(characters for _, characters in enum_sizes) <= GEMINI_MAX_ENUM_CHARACTERS
-    )
+    return tuple(size for node in chain.from_iterable(levels) if (size := _enum_size(node)) is not None)
+
+
+def _enum_characters_fit(enum_sizes: Iterable[tuple[bool, int]]) -> bool:
+    return sum(characters for _, characters in enum_sizes) <= GEMINI_MAX_ENUM_CHARACTERS
+
+
+def _integer_enums_fit(schema: JsonValue) -> bool:
+    enum_sizes: Final = _enum_sizes(schema)
+    return not any(is_integer for is_integer, _ in enum_sizes) or _enum_characters_fit(enum_sizes)
 
 
 _GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")
@@ -804,6 +809,24 @@ def with_integer_enums_that_fit(
         "Gemini integer enums dropped: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS
     )
     return build(False)
+
+
+def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart]) -> _GeminiRequestPart:
+    pinned: Final = build(True)
+    if _enum_characters_fit(_enum_sizes(cast(JsonValue, pinned))):  # cast-ok: built tools and schemas are JSON
+        return pinned
+    verbose_logger.debug(
+        "Gemini consts sent unpinned: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS
+    )
+    return build(False)
+
+
+def with_enums_that_fit(
+    build: Callable[[bool, bool], _GeminiRequestPart], send_integer_enums: bool
+) -> _GeminiRequestPart:
+    return with_integer_enums_that_fit(
+        lambda integer_enums: with_pins_that_fit(partial(build, integer_enums)), send_integer_enums
+    )
 
 
 def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
@@ -871,11 +894,11 @@ _SINGLE_SCHEMA_KEYWORDS: Final = frozenset({"items", "additionalProperties", "no
 _LIST_SCHEMA_KEYWORDS: Final = frozenset({"items", "anyOf", "oneOf", "allOf", "prefixItems"})
 
 
-def _json_schema_type_of(value: JsonValue) -> Literal["boolean", "integer", "number", "string"] | None:
+def _pinnable_type_of(value: JsonValue) -> Literal["boolean", "integer", "number", "string"] | None:
     match value:
         case bool():
             return "boolean"
-        case int():
+        case int() if -_GEMINI_EXACT_INT_MAX <= value <= _GEMINI_EXACT_INT_MAX:
             return "integer"
         case float():
             return "number"
@@ -933,7 +956,7 @@ def _branch_holds(branch: JsonValue, const: JsonValue) -> bool:
     if not isinstance(branch, dict):
         return True
     declared_type: Final = branch.get("type")
-    json_type: Final = _json_schema_type_of(_const_as_declared(const, declared_type))
+    json_type: Final = _pinnable_type_of(_const_as_declared(const, declared_type))
     return json_type is not None and _declared_type_holds(declared_type, json_type)
 
 
@@ -942,7 +965,7 @@ def _union_keyword(schema: Mapping[str, JsonValue]) -> Literal["anyOf", "oneOf"]
 
 
 def _push_const_into_branches(schema: JsonValue) -> None:
-    if not isinstance(schema, dict) or _json_schema_type_of(schema.get("const")) is None:
+    if not isinstance(schema, dict) or _pinnable_type_of(schema.get("const")) is None:
         return
     keyword: Final = _union_keyword(schema)
     branches: Final = schema.get(keyword)
@@ -958,23 +981,27 @@ def _push_const_into_branches(schema: JsonValue) -> None:
     ]
 
 
-def _pin_scalar_consts(schema: JsonValue, depth: int = 0) -> None:
+def _pin_scalar_consts(schema: JsonValue, *, pins_empty_string: bool, depth: int = 0) -> None:
     if depth > DEFAULT_MAX_RECURSE_DEPTH or not isinstance(schema, dict):
         return
     _push_const_into_branches(schema)
     declared_type: Final = schema.get("type")
     const: Final = _const_as_declared(schema.get("const"), declared_type)
-    json_type: Final = None if const == "" or _is_union(schema) else _json_schema_type_of(const)
+    skipped: Final = _is_union(schema) or (const == "" and not pins_empty_string)
+    json_type: Final = None if skipped else _pinnable_type_of(const)
     if json_type is not None and _declared_type_holds(declared_type, json_type):
         del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
         schema["enum"] = [const]  # rebind-ok: the schema builders edit their own copy in place
         schema["type"] = declared_type if isinstance(declared_type, str) else json_type  # rebind-ok: same copy
     for subschema in chain.from_iterable(starmap(_subschemas, schema.items())):
-        _pin_scalar_consts(subschema, depth + 1)
+        _pin_scalar_consts(subschema, pins_empty_string=pins_empty_string, depth=depth + 1)
 
 
 def build_vertex_schema(
-    parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
+    parameters: dict,
+    add_property_ordering: bool = False,
+    send_integer_enums: bool = False,
+    pin_consts: bool = True,
 ) -> dict[str, object]:
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -986,6 +1013,7 @@ def build_vertex_schema(
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
         send_integer_enums: bool - whether to send integer enums with string values instead of removing them
+        pin_consts: bool - whether to send each scalar `const` as a one-value enum, since Gemini ignores `const`
     Returns:
         parameters: dict - the input parameters, modified in place
     """
@@ -998,7 +1026,11 @@ def build_vertex_schema(
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
-    _pin_scalar_consts(cast(JsonValue, parameters))  # cast-ok: tool and response schemas are JSON request data
+    if pin_consts:
+        _pin_scalar_consts(
+            cast(JsonValue, parameters),  # cast-ok: tool and response schemas are JSON request data
+            pins_empty_string=False,
+        )
 
     _convert_schema_types(parameters)
 
@@ -1107,12 +1139,21 @@ def _forces(function_calling_config: JsonValue, name: JsonValue) -> bool:
             return False
 
 
-def _vertex_parameters(json_schema: Mapping[str, JsonValue], send_integer_enums: bool) -> Mapping[str, JsonValue]:
+def _vertex_parameters(
+    json_schema: Mapping[str, JsonValue], send_integer_enums: bool, pin_consts: bool
+) -> Mapping[str, JsonValue]:
     stripped: Final = remove_strict_from_schema(remove_additional_properties(deepcopy(dict(json_schema))))
-    return _JSON_SCHEMA.validate_python(build_vertex_schema(stripped, send_integer_enums=send_integer_enums))
+    return _JSON_SCHEMA.validate_python(
+        build_vertex_schema(stripped, send_integer_enums=send_integer_enums, pin_consts=pin_consts)
+    )
 
 
-def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
+def _declaration_for(
+    declaration: JsonValue,
+    function_calling_config: JsonValue,
+    send_integer_enums: bool,
+    pin_consts: bool,
+) -> JsonValue:
     if not isinstance(declaration, dict):
         return declaration
     json_schema: Final = declaration.get("parametersJsonSchema")
@@ -1121,28 +1162,33 @@ def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue,
     if not _forces(function_calling_config, declaration.get("name")):
         return declaration
     kept: Final = {key: value for key, value in declaration.items() if key != "parametersJsonSchema"}
-    return {**kept, "parameters": dict(_vertex_parameters(json_schema, send_integer_enums))}
+    return {**kept, "parameters": dict(_vertex_parameters(json_schema, send_integer_enums, pin_consts))}
 
 
-def _tool_for(tool: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
+def _tool_for(
+    tool: JsonValue,
+    function_calling_config: JsonValue,
+    send_integer_enums: bool,
+    pin_consts: bool,
+) -> JsonValue:
     declarations: Final = tool.get("function_declarations") if isinstance(tool, dict) else None
     if not isinstance(tool, dict) or not isinstance(declarations, list):
         return tool
     return {
         **tool,
         "function_declarations": [
-            _declaration_for(item, function_calling_config, send_integer_enums) for item in declarations
+            _declaration_for(item, function_calling_config, send_integer_enums, pin_consts) for item in declarations
         ],
     }
 
 
 def with_forced_bare_root_unions_on_parameters(
-    tools: JsonValue, tool_config: JsonValue, send_integer_enums: bool
+    tools: JsonValue, tool_config: JsonValue, send_integer_enums: bool, pin_consts: bool
 ) -> JsonValue:
     match tool_config:
         case {"functionCallingConfig": function_calling_config} | {"function_calling_config": function_calling_config}:
             return (
-                [_tool_for(tool, function_calling_config, send_integer_enums) for tool in tools]
+                [_tool_for(tool, function_calling_config, send_integer_enums, pin_consts) for tool in tools]
                 if isinstance(tools, list)
                 else tools
             )
@@ -1150,18 +1196,21 @@ def with_forced_bare_root_unions_on_parameters(
             return tools
 
 
-def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
+def parameters_json_schema_for(
+    parameters: Mapping[str, object], pin_consts: bool = True
+) -> Mapping[str, JsonValue] | None:
     if "$ref" not in parameters and not _root_cannot_be_vertex_parameters(parameters):
         return None
     json_schema: Final = _JSON_SCHEMA.validate_python(to_jsonable_python(parameters))
     if not needs_parameters_json_schema(json_schema):
         return None
     pinned: Final = dict(json_schema)
-    _pin_scalar_consts(pinned)
+    if pin_consts:
+        _pin_scalar_consts(pinned, pins_empty_string=True)
     return pinned
 
 
-def build_json_schema(parameters: dict) -> dict:
+def build_json_schema(parameters: Mapping[str, object], pin_consts: bool = True) -> dict[str, object]:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
 
@@ -1172,7 +1221,7 @@ def build_json_schema(parameters: dict) -> dict:
     - Preserves $defs/$ref (Gemini 2.0+ supports JSON Schema references natively)
 
     Parameters:
-        parameters: dict - the JSON schema to process
+        parameters: Mapping - the JSON schema to process, left unchanged
 
     Returns:
         dict - the processed schema in standard JSON Schema format
@@ -1181,8 +1230,13 @@ def build_json_schema(parameters: dict) -> dict:
     # are only required for responseSchema (Gemini 1.5) and can break valid
     # JSON Schema by adding conflicting fields to $ref nodes.
     # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
-    _pin_scalar_consts(cast(JsonValue, parameters))  # cast-ok: response schemas are JSON request data
-    return parameters
+    schema: Final = deepcopy(dict(parameters))
+    if pin_consts:
+        _pin_scalar_consts(
+            cast(JsonValue, schema),  # cast-ok: response schemas are JSON request data
+            pins_empty_string=True,
+        )
+    return schema
 
 
 _build_json_schema = build_json_schema

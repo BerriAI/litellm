@@ -115,7 +115,8 @@ from ..common_utils import (
     has_bare_root_union,
     parameters_json_schema_for,
     supports_response_json_schema,
-    with_integer_enums_that_fit,
+    with_enums_that_fit,
+    with_pins_that_fit,
 )
 from ..context_caching.known_cached_contents import known_cached_contents
 from ..context_caching.rejected_cache_retry import (
@@ -599,19 +600,24 @@ def _caller_parameters(tool: object) -> Mapping[str, object] | None:
     return caller_tool.get("function", caller_tool).get("parameters")
 
 
-def _parameters_json_schema(tool: object, forced_function_names: frozenset[str]) -> Mapping[str, JsonValue] | None:
+def _parameters_json_schema(
+    tool: object, forced_function_names: frozenset[str], pin_consts: bool
+) -> Mapping[str, JsonValue] | None:
     parameters: Final = _caller_parameters(tool)
-    json_schema: Final = None if parameters is None else parameters_json_schema_for(parameters)
+    json_schema: Final = None if parameters is None else parameters_json_schema_for(parameters, pin_consts)
     if json_schema is None or declared_function_name(tool) not in forced_function_names:
         return json_schema
     return None if has_bare_root_union(json_schema) else json_schema
 
 
 def _parameters_json_schemas(
-    tools: object, allow_parameters_json_schema: bool, forced_function_names: frozenset[str]
+    tools: object,
+    allow_parameters_json_schema: bool,
+    forced_function_names: frozenset[str],
+    pin_consts: bool,
 ) -> tuple[Mapping[str, JsonValue] | None, ...]:
     return tuple(
-        _parameters_json_schema(tool, forced_function_names) if allow_parameters_json_schema else None
+        _parameters_json_schema(tool, forced_function_names, pin_consts) if allow_parameters_json_schema else None
         for tool in _CALLER_TOOLS.validate_python(tools)
     )
 
@@ -1300,6 +1306,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict],
         optional_params: dict,
         send_integer_enums: bool = False,
+        pin_consts: bool = True,
         allow_parameters_json_schema: bool = True,
         outside_declarations: JsonValue = None,
         tool_choice: object = None,
@@ -1311,6 +1318,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
             send_integer_enums: Whether to send integer enums with string values
+            pin_consts: Whether to send each scalar `const` as a one-value enum
             allow_parameters_json_schema: Whether a tool whose parameters root Vertex cannot take as `parameters`
                 goes as `parametersJsonSchema`
 
@@ -1336,6 +1344,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _with_namespace_members_inlined(schema_value, outside_declarations),
             allow_parameters_json_schema,
             _function_names_forced_by(tool_choice, [*_listed(schema_value), *_listed(outside_declarations)]),
+            pin_consts,
         )
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
@@ -1355,7 +1364,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
                     _openai_function_object["parameters"] = build_vertex_schema(
-                        _openai_function_object["parameters"], send_integer_enums=send_integer_enums
+                        _openai_function_object["parameters"],
+                        send_integer_enums=send_integer_enums,
+                        pin_consts=pin_consts,
                     )
 
                 openai_function_object = _openai_function_object
@@ -1506,20 +1517,39 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         send_integer_enums: bool = False,
         allow_parameters_json_schema: bool = True,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params, send_integer_enums, allow_parameters_json_schema)
+        return with_pins_that_fit(
+            partial(
+                self._map_function,
+                value,
+                optional_params,
+                send_integer_enums,
+                allow_parameters_json_schema=allow_parameters_json_schema,
+            )
+        )
 
-    def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
+    def _map_response_schema(
+        self,
+        value: dict,
+        send_integer_enums: bool = False,
+        pin_consts: bool = True,
+    ) -> Mapping[str, object]:
         old_schema = deepcopy(value)
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
                     item = build_vertex_schema(
-                        parameters=item, add_property_ordering=True, send_integer_enums=send_integer_enums
+                        parameters=item,
+                        add_property_ordering=True,
+                        send_integer_enums=send_integer_enums,
+                        pin_consts=pin_consts,
                     )
 
         elif isinstance(old_schema, dict):
             old_schema = build_vertex_schema(
-                parameters=old_schema, add_property_ordering=True, send_integer_enums=send_integer_enums
+                parameters=old_schema,
+                add_property_ordering=True,
+                send_integer_enums=send_integer_enums,
+                pin_consts=pin_consts,
             )
         return old_schema
 
@@ -1561,13 +1591,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - Standard JSON Schema format (lowercase types)
                 # - Supports additionalProperties
                 # - No propertyOrdering needed
-                optional_params["response_json_schema"] = build_json_schema(deepcopy(schema))
+                json_schema: Final[Mapping[str, object]] = schema
+                optional_params["response_json_schema"] = with_pins_that_fit(partial(build_json_schema, json_schema))
             else:
                 # Use responseSchema (default, backwards compatible)
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = with_integer_enums_that_fit(
+                optional_params["response_schema"] = with_enums_that_fit(
                     partial(self._map_response_schema, schema),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )
@@ -2033,7 +2064,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = with_integer_enums_that_fit(
+                mapped_tools = with_enums_that_fit(
                     partial(
                         self._map_function,
                         value,
