@@ -36,7 +36,10 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     instruction_items,
     response_holds_compaction_block,
 )
-from litellm.responses.litellm_completion_transformation.provider_signed_state import without_altered_provider_state
+from litellm.responses.litellm_completion_transformation.provider_signed_state import (
+    holds_altered_provider_state,
+    without_altered_provider_state,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ALL_RESPONSES_API_TOOL_PARAMS,
@@ -121,7 +124,7 @@ def _stored_response(spend_log: Mapping[str, object]) -> object:
 
 def _replayable(stored: object, spend_log: Mapping[str, object]) -> object:
     replayable: Final = without_altered_provider_state(stored)
-    if replayable != stored:
+    if replayable != stored and holds_altered_provider_state(stored):
         verbose_proxy_logger.warning(
             "previous_response_id replay leaves out reasoning the stored turn %s holds cut or redacted",
             spend_log.get("request_id"),

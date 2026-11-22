@@ -7,7 +7,10 @@ import pytest
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_request_body_for_spend_logs_payload
-from litellm.responses.litellm_completion_transformation.provider_signed_state import without_altered_provider_state
+from litellm.responses.litellm_completion_transformation.provider_signed_state import (
+    holds_altered_provider_state,
+    without_altered_provider_state,
+)
 
 _LONG: Final = "Eq0BCkYICxgCKkB" * 2000
 _WHOLE_THINKING: Final = {"type": "thinking", "thinking": "Count.", "signature": "Eq0BCkYI=="}
@@ -87,7 +90,7 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
         pytest.param({"thought_signatures": [_LONG], "thought_signature": _LONG}, id="whole-thought-signatures"),
         pytest.param({"content": _cut(_LONG), "reasoning_content": _cut(_LONG)}, id="cut-unsigned-text"),
         pytest.param([{"type": "thinking", "thinking": _cut(_LONG)}], id="cut-unsigned-thinking"),
-        pytest.param({"content": _cut(f"Ids hold {THOUGHT_SIGNATURE_SEPARATOR}. {_LONG}")}, id="cut-text-on-signed-ids"),
+        pytest.param({"content": _cut(f"Ids hold {THOUGHT_SIGNATURE_SEPARATOR}. {_LONG}")}, id="cut-text-naming-ids"),
         pytest.param({"type": "web_search_call", "encrypted_content": _cut(_LONG)}, id="cut-state-of-another-item"),
         pytest.param(
             {"id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG}", "type": "function"}, id="whole-signed-call-id"
@@ -101,19 +104,37 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
 )
 def test_whole_state_and_unsigned_text_replay_unchanged(stored: object):
     assert without_altered_provider_state(stored) == stored
+    assert not holds_altered_provider_state(stored)
 
 
-@pytest.mark.parametrize("key", ["id", "call_id", "tool_call_id", "tool_use_id"])
-def test_a_cut_signed_call_id_replays_as_the_unsigned_id_it_starts_with(key: str):
-    stored: Final = {key: _cut(f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG}"), "type": "function"}
+@pytest.mark.parametrize(
+    "item",
+    [
+        pytest.param({"id": "", "type": "function"}, id="chat-tool-call"),
+        pytest.param({"call_id": "", "type": "function_call"}, id="function-call"),
+        pytest.param({"call_id": "", "type": "function_call_output"}, id="function-call-output"),
+        pytest.param({"id": "", "type": "tool_use"}, id="tool-use"),
+        pytest.param({"tool_use_id": "", "type": "tool_result"}, id="tool-result"),
+        pytest.param({"tool_call_id": "", "role": "tool"}, id="chat-tool-output"),
+    ],
+)
+@pytest.mark.parametrize("call_id", ["call_1", ""], ids=["id-and-signature", "signature-only"])
+@pytest.mark.parametrize("signature", [_LONG, f"A{THOUGHT_SIGNATURE_SEPARATOR}{_LONG}"], ids=["plain", "nested"])
+def test_a_cut_signed_call_id_replays_as_the_unsigned_id_it_starts_with(
+    item: dict[str, str], call_id: str, signature: str
+):
+    cut_id: Final = _cut(f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}{signature}")
+    stored: Final = {key: value or cut_id for key, value in item.items()}
 
-    assert without_altered_provider_state([stored]) == [{key: "call_1", "type": "function"}]
+    assert without_altered_provider_state([stored]) == [{key: value or call_id for key, value in item.items()}]
 
 
-def test_state_nested_past_the_depth_bound_replays_instead_of_failing():
+@pytest.mark.parametrize("key", [0, "a"], ids=["lists", "objects"])
+def test_state_nested_past_the_depth_bound_replays_instead_of_failing(key: int | str):
     levels: Final = range(5000)
-    nested: Final = reduce(lambda inner, _: [inner], levels, "leaf")
+    nested: Final = reduce(lambda inner, _: [inner] if key == 0 else {key: inner}, levels, "leaf")
 
     replayed: Final = without_altered_provider_state(nested)
 
-    assert reduce(lambda outer, _: outer[0], levels, replayed) == "leaf"
+    assert reduce(lambda outer, _: outer[key], levels, replayed) == "leaf"
+    assert not holds_altered_provider_state(nested)
