@@ -78,7 +78,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     EMPTY_TEXT_PLACEHOLDER,
     continues_empty_user_turns,
     is_empty_user_message,
-    tool_call_id_prefix,
+    is_same_tool_call,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     is_anthropic_tool_search_use,
@@ -786,12 +786,7 @@ def _answered_tool_call_ids(messages: Sequence[object]) -> frozenset[str]:
 def _answered_call_id(tool_call_id: str, call_ids: Sequence[str]) -> str | None:
     if tool_call_id in call_ids:
         return tool_call_id
-    prefix: Final = tool_call_id_prefix(tool_call_id)
-    same_call: Final = frozenset(
-        call_id
-        for call_id in call_ids
-        if prefix and tool_call_id_prefix(call_id) == prefix and prefix in (call_id, tool_call_id)
-    )
+    same_call: Final = frozenset(call_id for call_id in call_ids if is_same_tool_call(call_id, tool_call_id))
     return next(iter(same_call)) if len(same_call) == 1 else None
 
 
@@ -2402,7 +2397,7 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def _reconstruct_tool_call_from_tools(tool_call_id: str, tools: Sequence[object]) -> dict[str, object] | None:
+    def _reconstruct_tool_call_from_tools(tool_call_id: str, tools: Sequence[object]) -> Mapping[str, object] | None:
         """Reconstruct a minimal tool_call definition from tools list."""
         for tool in tools:
             if isinstance(tool, dict):
@@ -2566,7 +2561,7 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionMessageToolCall
             | Message
         ] = list(copy.deepcopy(messages))
-        messages_to_remove: Final = []
+        messages_to_remove: Final[list[int]] = []
 
         # Count non-tool messages to avoid removing all messages
         # This prevents empty messages list when using previous_response_id without a database

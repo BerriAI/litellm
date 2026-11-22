@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from itertools import chain
 from types import SimpleNamespace
 from typing import Final
 
@@ -11,12 +12,16 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Message
 
 _USER: Final = {"role": "user", "content": "Weather in Paris, Rome and Oslo?"}
 _ANSWER: Final = {"role": "assistant", "content": "14 everywhere."}
+_DEVELOPER: Final = {"role": "developer", "content": "Answer in French."}
 _WHOLE: Final = f'{{"note": "{"Paris " * 500}"}}'
 _CUT: Final = truncated_for_db(_WHOLE, 2048)
 _OTHER_WHOLE: Final = f'{{"note": "{"Rome " * 600}"}}'
 _OTHER_CUT: Final = truncated_for_db(_OTHER_WHOLE, 2048)
 _EPHEMERAL: Final = {"type": "ephemeral"}
 _FIELDS: Final = {"provider_specific_fields": {"trace": "t1"}}
+_SIGNED: Final = f"c1{THOUGHT_SIGNATURE_SEPARATOR}EmwKAhgB"
+_OTHERWISE_SIGNED: Final = f"c1{THOUGHT_SIGNATURE_SEPARATOR}EmwK"
+_ONLY_SIGNED: Final = f"{THOUGHT_SIGNATURE_SEPARATOR}EmwK"
 
 
 def _call(call_id: str, arguments: str | None = "{}", name: str = "get_weather") -> dict[str, object]:
@@ -30,6 +35,11 @@ def _asks(*call_ids: str, arguments: str | None = "{}", name: str = "get_weather
 
 def _output(call_id: str) -> dict[str, object]:
     return {"role": "tool", "tool_call_id": call_id, "content": "14"}
+
+
+def _resent_one_by_one(*call_ids: str, arguments: str = "{}", name: str = "get_weather") -> list[dict[str, object]]:
+    resent: Final = ((_asks(call_id, arguments=arguments, name=name), _output(call_id)) for call_id in call_ids)
+    return list(chain.from_iterable(resent))
 
 
 def _stored(asked: dict[str, object]) -> Message:
@@ -62,7 +72,7 @@ def test_calls_a_turn_already_made_are_not_made_again_before_their_outputs(
         for index, call_id in enumerate(output_order)
     ]
     once: Final = [_output(call_id) for call_id in output_order]
-    repeated: Final = [message for pair in zip(repeats, once) for message in pair]
+    repeated: Final = chain.from_iterable(zip(repeats, once))
 
     assert _replayed([_USER, asked, *repeated, _ANSWER, _USER]) == [_USER, asked, *once, _ANSWER, _USER]
 
@@ -86,22 +96,31 @@ def test_a_repeat_whose_other_fields_are_empty_is_still_a_repeat(empty: dict[str
     assert _replayed([asked, repeat, _output("c1"), _output("c2")]) == [asked, _output("c1"), _output("c2")]
 
 
-def test_a_call_repeated_twice_before_its_output_is_made_once() -> None:
+@pytest.mark.parametrize("first_resent", [("c2",), ("c1", "c2")], ids=["alone", "together"])
+def test_a_call_repeated_twice_before_its_output_is_made_once(first_resent: tuple[str, ...]) -> None:
     asked: Final = _asks("c1", "c2")
 
-    replayed: Final = _replayed([asked, _asks("c1"), _asks("c1"), _output("c1"), _output("c2")])
+    replayed: Final = _replayed([asked, _asks(*first_resent), _output("c1"), _asks("c2"), _output("c2")])
 
     assert replayed == [asked, _output("c1"), _output("c2")]
 
 
-@pytest.mark.parametrize("signed", [0, 1], ids=["stored-id-lost-its-signature", "stored-id-kept-its-signature"])
-def test_a_call_whose_id_lost_its_signature_is_the_same_call(signed: int) -> None:
-    ids: Final = ("call_1", f"call_1{THOUGHT_SIGNATURE_SEPARATOR}EmwKAhgB==")
-    asked: Final = _asks(ids[signed], "call_2")
+@pytest.mark.parametrize(
+    ("stored_id", "resent_id"),
+    [
+        pytest.param("c1", _SIGNED, id="stored-id-lost-its-signature"),
+        pytest.param(_SIGNED, "c1", id="resent-id-lost-its-signature"),
+        pytest.param(_SIGNED, _SIGNED, id="both-ids-kept-it"),
+    ],
+)
+def test_a_call_whose_id_carries_its_signature_or_lost_it_is_the_same_call(stored_id: str, resent_id: str) -> None:
+    asked: Final = _asks("c2", stored_id, "c3", arguments=_CUT)
 
-    replayed: Final = _replayed([asked, _asks(ids[1 - signed]), _output(ids[1 - signed])])
+    turn, output = _replayed([asked, _asks(resent_id, arguments=_WHOLE), _output(resent_id)])
 
-    assert replayed == [asked, _output(ids[1 - signed])]
+    assert [call["id"] for call in turn["tool_calls"]] == ["c2", stored_id, "c3"]
+    assert _arguments(turn) == [_CUT, _WHOLE, _CUT]
+    assert output == _output(resent_id)
 
 
 @pytest.mark.parametrize("as_stored", _AS_STORED, ids=["message-dict", "stored-message"])
@@ -117,7 +136,7 @@ def test_a_repeated_call_gives_back_the_arguments_storage_cut(
 
     stored_turn: Final = turn(_CUT)
     outputs: Final = [_output(call_id) for call_id in call_ids]
-    one_by_one: Final = [m for i in call_ids for m in (_asks(i, arguments=_WHOLE), _output(i))]
+    one_by_one: Final = _resent_one_by_one(*call_ids, arguments=_WHOLE)
     together: Final = [_asks(*call_ids, arguments=_WHOLE), *outputs]
 
     assert _replayed([_USER, stored_turn, *one_by_one]) == [_USER, turn(_WHOLE), *outputs]
@@ -127,7 +146,7 @@ def test_a_repeated_call_gives_back_the_arguments_storage_cut(
 
 def test_a_call_resent_under_its_namespaced_name_gives_back_its_arguments_under_the_stored_name() -> None:
     stored: Final = _asks("c1", "c2", arguments=_CUT, name="search")
-    resent: Final = [m for i in ("c1", "c2") for m in (_asks(i, arguments=_WHOLE, name="crm__search"), _output(i))]
+    resent: Final = _resent_one_by_one("c1", "c2", arguments=_WHOLE, name="crm__search")
 
     turn, *outputs = _replayed([stored, *resent])
 
@@ -184,11 +203,54 @@ def test_the_stored_arguments_stay_unless_the_repeat_is_what_storage_cut(
 
 def test_the_stored_arguments_stay_when_asked_to_keep_them() -> None:
     asked: Final = _asks("c1", "c2", arguments=_CUT)
-    repeated: Final = [m for i in ("c1", "c2") for m in (_asks(i, arguments=_WHOLE), _output(i))]
+    repeated: Final = _resent_one_by_one("c1", "c2", arguments=_WHOLE)
 
     replayed: Final = without_repeated_tool_calls([asked, *repeated], keep_stored_arguments=lambda: True)
 
     assert list(replayed) == [asked, _output("c1"), _output("c2")]
+
+
+@pytest.mark.parametrize(
+    "stored_ids",
+    [(_SIGNED, _OTHERWISE_SIGNED), ("c1", _SIGNED), (_SIGNED, "c1")],
+    ids=["both-signed", "second-signed", "first-signed"],
+)
+def test_calls_that_are_one_id_once_their_signature_is_taken_off_stay_as_sent(stored_ids: tuple[str, str]) -> None:
+    asked: Final = _asks(*stored_ids, arguments=_CUT)
+    one_by_one: Final = _resent_one_by_one(*stored_ids, arguments=_WHOLE)
+    together: Final = [_asks(*stored_ids, arguments=_WHOLE), *(_output(i) for i in stored_ids)]
+
+    assert _replayed([asked, *one_by_one]) == [asked, *one_by_one]
+    assert _replayed([asked, *together]) == [asked, *together]
+
+
+def test_bare_repeats_after_a_resent_turn_that_says_more_are_left_out() -> None:
+    asked: Final = _asks("c1", "c2")
+    marked: Final = {**_asks("c1", "c2"), "cache_control": _EPHEMERAL}
+
+    assert _replayed([asked, marked, *_resent_one_by_one("c1", "c2")]) == [asked, marked, _output("c1"), _output("c2")]
+
+
+def test_a_call_is_looked_for_only_in_the_newest_turn() -> None:
+    marked: Final = {**_asks(_SIGNED), "cache_control": _EPHEMERAL}
+
+    assert _replayed([_asks("c1"), marked, _asks("c1"), _output("c1")]) == [_asks("c1"), marked, _output("c1")]
+
+
+def test_the_last_arguments_resent_for_a_call_are_the_ones_given_back() -> None:
+    asked: Final = _asks("c1", arguments=_CUT)
+    other: Final = _asks("c1", arguments='{"city": "Rome"}')
+
+    assert _replayed([asked, other, _asks("c1", arguments=_WHOLE), _output("c1")]) == [
+        _asks("c1", arguments=_WHOLE),
+        _output("c1"),
+    ]
+
+
+def test_a_call_made_next_to_one_id_made_twice_is_still_not_made_again() -> None:
+    asked: Final = _asks("c1", "c1", "c2")
+
+    assert _replayed([asked, _asks("c2"), _output("c2")]) == [asked, _output("c2")]
 
 
 def test_a_repeat_before_a_resent_call_that_says_more_is_still_one() -> None:
@@ -210,17 +272,56 @@ def test_a_repeat_before_a_resent_call_that_says_more_is_still_one() -> None:
             [_asks("c1", "c2"), _output(f"c1{THOUGHT_SIGNATURE_SEPARATOR}Em=="), _asks("c1"), _output("c2")],
             id="call-already-answered-by-its-signed-id",
         ),
+        pytest.param(
+            [_asks(_SIGNED, "c2"), _output(_OTHERWISE_SIGNED), _asks("c1"), _output("c1")],
+            id="call-already-answered-by-its-id-signed-otherwise",
+        ),
         pytest.param([_USER, _asks("c1"), _USER, _asks("c1"), _output("c1")], id="id-reused-after-a-user-turn"),
         pytest.param([_USER, _asks("c1"), _ANSWER, _asks("c1"), _output("c1")], id="id-reused-after-an-answer"),
+        pytest.param([_asks("c1", "c2"), _DEVELOPER, _asks("c1"), _output("c1")], id="id-reused-after-instructions"),
         pytest.param([_asks("c1", "c2"), _output("c1"), _stored(_asks("c2"))], id="id-reused-by-a-stored-turn"),
         pytest.param([_USER, _asks("c1"), _asks("c2"), _output("c1"), _output("c2")], id="call-made-nowhere-else"),
-        pytest.param([_asks("c1", "c2"), _asks("c1", "c3"), _output("c1")], id="a-new-call-among-the-repeated"),
+        pytest.param(
+            [_asks("c1", "c2"), _asks("c1", "c3"), _output("c1"), _output("c3"), _asks("c2"), _output("c2")],
+            id="a-new-call-among-the-repeated",
+        ),
+        pytest.param(
+            [_asks(_SIGNED, "c2"), _asks(_OTHERWISE_SIGNED, "c2"), _output(_OTHERWISE_SIGNED), _output("c2")],
+            id="an-id-otherwise-signed-among-the-repeated",
+        ),
+        pytest.param([_asks(_SIGNED), _asks(_OTHERWISE_SIGNED), _output(_OTHERWISE_SIGNED)], id="id-otherwise-signed"),
+        pytest.param(
+            [_asks(_SIGNED, _OTHERWISE_SIGNED), _asks("c1"), _output("c1")], id="id-of-two-calls-without-its-signature"
+        ),
+        pytest.param(
+            [_asks("c1", "c1", arguments=_CUT), _asks("c1", arguments=_WHOLE), _output("c1")], id="id-made-twice"
+        ),
+        pytest.param([_asks("c1", "c1", "c2"), _asks("c1"), _output("c1")], id="id-made-twice-next-to-another"),
+        pytest.param([_asks("c1"), _asks("c1", "c1"), _asks("c1"), _output("c1")], id="id-made-twice-by-a-later-turn"),
+        pytest.param([_asks("c1", "c1", "c1"), _asks("c1"), _output("c1")], id="id-made-three-times"),
+        pytest.param(
+            [_asks("c1", "c1", arguments=_CUT), _asks("c1", "c1", arguments=_WHOLE), _output("c1"), _output("c1")],
+            id="id-made-twice-resent-together",
+        ),
+        pytest.param([_asks("c1", "c2"), _asks("c1", "c1"), _output("c1")], id="one-call-resent-twice-at-once"),
+        pytest.param(
+            [_asks(_SIGNED, "c2"), _asks(_SIGNED, "c1"), _output(_SIGNED)], id="one-call-resent-at-once-under-two-ids"
+        ),
+        pytest.param([_asks("c1", "c2"), _asks("c12"), _output("c12")], id="id-that-starts-with-another"),
+        pytest.param([_asks("c12", "c2"), _asks("c1"), _output("c1")], id="id-that-starts-another"),
         pytest.param(
             [_asks("c1", "c2"), {**_asks("c1"), "cache_control": _EPHEMERAL}, _output("c1"), _asks("c2")],
             id="after-a-resent-call-that-says-more",
         ),
         pytest.param(
-            [_asks("c1", "c2"), {"role": "assistant", "tool_calls": [{**_call("c1"), **_FIELDS}, _call("c2")]}],
+            [
+                _asks("c1", "c2", "c3"),
+                {"role": "assistant", "tool_calls": [{**_call("c1"), **_FIELDS}, _call("c2")]},
+                _output("c1"),
+                _output("c2"),
+                _asks("c3"),
+                _output("c3"),
+            ],
             id="one-of-the-repeated-calls-saying-more",
         ),
         pytest.param([_asks("c1"), {**_asks("c1"), "content": "Checking."}, _output("c1")], id="text"),
@@ -239,9 +340,13 @@ def test_a_repeat_before_a_resent_call_that_says_more_is_still_one() -> None:
             id="function-saying-more",
         ),
         pytest.param([_asks(""), _asks(""), _output("")], id="empty-ids"),
+        pytest.param([_asks(_ONLY_SIGNED), _asks(_ONLY_SIGNED), _output(_ONLY_SIGNED)], id="ids-of-only-a-signature"),
         pytest.param([{"role": "assistant", "tool_calls": [{"type": "function", "function": {}}]}] * 2, id="no-ids"),
         pytest.param([_asks("c1"), {"role": "assistant", "tool_calls": [{"id": "c1"}]}], id="no-function"),
         pytest.param([_asks("c1"), {"role": "assistant", "tool_calls": ["c1"]}], id="no-call"),
+        pytest.param(
+            [_asks("c1"), {"role": "assistant", "tool_calls": [{**_call("c1"), "id": ["c1"]}]}], id="id-of-no-text"
+        ),
     ],
 )
 def test_every_other_message_stays(messages: list[dict[str, object]]) -> None:

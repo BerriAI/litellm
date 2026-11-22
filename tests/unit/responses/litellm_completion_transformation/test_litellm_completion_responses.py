@@ -1878,6 +1878,20 @@ class TestFunctionCallTransformation:
                 id="unsigned-result-of-a-repeated-call",
             ),
             pytest.param(
+                ["call_other", _SIGNED_ID, "call_last"],
+                ["call_paired"],
+                ["call_other", _SIGNED_ID, "call_last"],
+                [_SIGNED_ID],
+                id="unsigned-result-of-a-call-among-others",
+            ),
+            pytest.param(
+                ["call_paired", "call_paired", _SIGNED_ID],
+                ["call_paired"],
+                ["call_paired", "call_paired", _SIGNED_ID],
+                ["call_paired"],
+                id="result-of-an-id-made-twice",
+            ),
+            pytest.param(
                 [_SIGNED_ID, _OTHER_SIGNED_ID],
                 [_SIGNED_ID, _OTHER_SIGNED_ID],
                 [_SIGNED_ID, _OTHER_SIGNED_ID],
@@ -7344,11 +7358,12 @@ _ORDER_TOOLS: Final = [
     {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
     for name in ("cancel_order", "get_order", "get_invoice")
 ]
+_LONG_ARGUMENTS_AS_STORED: Final = truncated_for_db(_LONG_ARGUMENTS, 2048)
 _ORDER_CALLS: Final = (("toolu_1", "get_order"), ("toolu_2", "get_invoice"))
 
 
 def _order_call(call_id: str, name: str) -> dict[str, object]:
-    return {"type": "function_call", "call_id": call_id, "name": name, "arguments": "{}"}
+    return {"type": "function_call", "call_id": call_id, "name": name, "arguments": _LONG_ARGUMENTS}
 
 
 def _order_output(call_id: str) -> dict[str, object]:
@@ -7357,10 +7372,10 @@ def _order_output(call_id: str) -> dict[str, object]:
 
 async def _replayed_order_calls(
     input_items: Sequence[Mapping[str, object]], *, model: str, provider: str
-) -> tuple[list[tuple[str, str]], ...]:
+) -> tuple[list[tuple[str, str, str]], ...]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         stored: Final = [
-            {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+            {"id": call_id, "type": "function", "function": {"name": name, "arguments": _LONG_ARGUMENTS_AS_STORED}}
             for call_id, name in _ORDER_CALLS
         ]
         return ChatCompletionSession(
@@ -7383,7 +7398,7 @@ async def _replayed_order_calls(
         session_lookup=session_lookup,
     )
     return tuple(
-        [(call["id"], call["function"]["name"]) for call in message["tool_calls"]]
+        [(call["id"], call["function"]["name"], call["function"]["arguments"]) for call in message["tool_calls"]]
         for message in request["messages"]
         if message.get("tool_calls")
     )
@@ -7407,17 +7422,23 @@ async def test_calls_resent_after_the_assistants_words_stay_the_calls_the_client
         [said_before_the_first_call, *resent], model="house-model", provider="hosted_vllm"
     )
 
-    assert replayed == (list(_ORDER_CALLS), [_ORDER_CALLS[0]], [_ORDER_CALLS[1]])
+    stored_turn: Final = [(*call, _LONG_ARGUMENTS_AS_STORED) for call in _ORDER_CALLS]
+    assert replayed == (stored_turn, *([(*call, _LONG_ARGUMENTS)] for call in _ORDER_CALLS))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "provider"),
-    [("claude-sonnet-5-5", "anthropic"), ("gemini-3.8-flash", "gemini"), ("house-model", "hosted_vllm")],
+    ("model", "provider", "replayed_arguments"),
+    [
+        ("claude-sonnet-5-5", "anthropic", _LONG_ARGUMENTS_AS_STORED),
+        ("gemini-3.8-flash", "gemini", _LONG_ARGUMENTS),
+        ("house-model", "hosted_vllm", _LONG_ARGUMENTS),
+    ],
+    ids=["claude", "gemini", "house-model"],
 )
 @pytest.mark.parametrize("together", [True, False], ids=["together", "one-by-one"])
 async def test_calls_the_client_resends_with_their_outputs_are_made_once(
-    together: bool, model: str, provider: str
+    together: bool, model: str, provider: str, replayed_arguments: str
 ) -> None:
     calls: Final = [_order_call(*call) for call in _ORDER_CALLS]
     outputs: Final = [_order_output(call_id) for call_id, _ in _ORDER_CALLS]
@@ -7427,7 +7448,7 @@ async def test_calls_the_client_resends_with_their_outputs_are_made_once(
         [*calls, *outputs] if together else one_by_one, model=model, provider=provider
     )
 
-    assert replayed == (list(_ORDER_CALLS),)
+    assert replayed == ([(*call, replayed_arguments) for call in _ORDER_CALLS],)
 
 
 def test_cache_control_on_function_call_output():

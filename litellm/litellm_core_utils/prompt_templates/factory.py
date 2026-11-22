@@ -1284,6 +1284,13 @@ def tool_call_id_prefix(tool_call_id: object) -> str | None:
     return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if isinstance(tool_call_id, str) else None
 
 
+def is_same_tool_call(call_id: object, other_call_id: object) -> bool:
+    prefix: Final = tool_call_id_prefix(call_id)
+    if not prefix or prefix != tool_call_id_prefix(other_call_id):
+        return False
+    return call_id == other_call_id or prefix in (call_id, other_call_id)
+
+
 def _called_tool_name(tool_call_id: str, tool_calls: Sequence[Mapping[str, object]]) -> str | None:
     exact_matches: Final = tuple(call for call in tool_calls if call.get("id") == tool_call_id)
     prefix: Final = tool_call_id_prefix(tool_call_id)
