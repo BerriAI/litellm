@@ -45,8 +45,8 @@ class LensTraceStorage:
     def __init__(self, remote: RemoteTraceStore) -> None:
         self._remote: Final = remote
 
-    async def forward_spans(self, body: bytes, headers: Mapping[str, str]) -> tuple[int, bytes] | None:
-        return await self._remote.forward_spans(body, headers)
+    async def forward(self, path: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, bytes] | None:
+        return await self._remote.forward(path, body, headers)
 
     async def list_traces(
         self,
