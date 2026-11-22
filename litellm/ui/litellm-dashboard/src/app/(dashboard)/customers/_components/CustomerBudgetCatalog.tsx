@@ -18,6 +18,12 @@ export const budgetGroupCatalogs = [
     invalidate: ["apps", "app"],
   },
   {
+    scope: "app-group",
+    label: "customerPortal.budgetGroups.appGroupTab",
+    endpoint: "/management/v1/app_group_budget_groups",
+    invalidate: ["app-groups", "app-group-organizations"],
+  },
+  {
     scope: "organization",
     label: "customerPortal.budgetGroups.overallTab",
     endpoint: "/management/v1/customer_organization_budget_groups",
@@ -36,6 +42,8 @@ export const budgetGroupCatalogs = [
     invalidate: ["apps", "app", "app-organization", "app-member"],
   },
 ] as const;
+
+export type BudgetGroupCatalogScope = (typeof budgetGroupCatalogs)[number]["scope"];
 
 export default function CustomerBudgetCatalog({
   catalog,

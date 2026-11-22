@@ -167,6 +167,52 @@ afterEach(() => {
 const customerLinks = () => within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
 
 describe("customer organization overview", () => {
+  it("preserves monthly budget progress while showing all spend periods and rate limits in Max Budget", async () => {
+    const organization: CustomerOrganization = {
+      ...original[0],
+      budget: {
+        max_budget: 6000,
+        budget_duration: null,
+        budget_limits: [
+          { budget_duration: "1mo", max_budget: 100 },
+          { budget_duration: "12mo", max_budget: 1000 },
+        ],
+        tpm_limit: 10000,
+        rpm_limit: 20,
+      },
+      budget_usage: [
+        { source: "scalar", budget_duration: null, max_budget: 6000, spend: 200, reset_at: null },
+        { source: "window", budget_duration: "1mo", max_budget: 100, spend: 40, reset_at: null },
+        { source: "window", budget_duration: "12mo", max_budget: 1000, spend: 200, reset_at: null },
+      ],
+    };
+    const lifetimeOnly: CustomerOrganization = {
+      ...original[1],
+      budget: { max_budget: 50 },
+      budget_usage: [{ source: "scalar", budget_duration: null, max_budget: 50, spend: 10, reset_at: null }],
+    };
+    mockCustomerApi({ organizations: [organization, lifetimeOnly] });
+    renderWithProviders(<CustomersPage />);
+    const row = within(await screen.findByRole("row", { name: /Customer 00/ }));
+    const monthly = within(row.getByRole("cell", { name: /\$40.00 \/ \$100.00/ }));
+    expect(monthly.getByText("$40.00 / $100.00")).toBeInTheDocument();
+    expect(monthly.getByText("40% used")).toBeInTheDocument();
+    expect(monthly.getByText("$60.00 left")).toBeInTheDocument();
+    expect(monthly.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "40");
+    const limits = within(row.getByRole("cell", { name: /6,000.00 total/ }));
+    expect(limits.getByText("$6,000.00 total")).toBeInTheDocument();
+    expect(limits.getByText("No automatic reset")).toBeInTheDocument();
+    expect(limits.getByText("$100.00/mo")).toBeInTheDocument();
+    expect(limits.getByText("$1,000.00/yr")).toBeInTheDocument();
+    expect(limits.getByText("10,000 TPM")).toBeInTheDocument();
+    expect(limits.getByText("20 RPM")).toBeInTheDocument();
+    const uncappedMonth = within(screen.getByRole("row", { name: /Customer 01/ }));
+    expect(uncappedMonth.getByText("No monthly limit")).toBeInTheDocument();
+    expect(uncappedMonth.getByText("$50.00 total")).toBeInTheDocument();
+    expect(uncappedMonth.getByText("No automatic reset")).toBeInTheDocument();
+    expect(uncappedMonth.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
   it("edits an existing organization budget and refreshes its row without changing filters or pagination", async () => {
     const { updateOrganization } = mockCustomerApi();
     const user = userEvent.setup();
@@ -186,7 +232,7 @@ describe("customer organization overview", () => {
       "customer-00",
       expect.objectContaining({ budget: expect.objectContaining({ max_budget: 25, budget_duration: "1mo" }) }),
     );
-    expect(await within(row).findByText("$25.00", { exact: true })).toBeInTheDocument();
+    expect(await within(row).findByText("$25.00/mo", { exact: true })).toBeInTheDocument();
     expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
     expect(onUrlUpdate).not.toHaveBeenCalled();
   });

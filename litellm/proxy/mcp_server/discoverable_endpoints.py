@@ -30,6 +30,7 @@ from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get, unpackable_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -128,6 +129,7 @@ from litellm.proxy.mcp_server.proxy_api_credentials import (
     lookup_consent_teams,
     mint_proxy_credential,
 )
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
@@ -635,7 +637,7 @@ def _normalize_for_token_comparison(value: object) -> str:
 
 
 def _validate_token_response(
-    token_response: Mapping[str, object],
+    token_response: SupportsGet,
     validation_rules: Mapping[str, object],
     server_id: str,
 ) -> None:
@@ -918,13 +920,13 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
 
 
 def _register_relays_bridge_client(mcp_server: MCPServer) -> bool:
-    """``/register`` relays the caller's own registration only when the gateway cannot keep a shared
-    client: with ``PROXY_BASE_URL`` set it registers one client bound to its own ``/callback`` and
-    keeps it as the server's client, so an upstream that restricts redirect domains (Atlassian)
-    never sees a laptop loopback redirect. Without a database the shared client would live only in
-    this process, so a database-free gateway keeps relaying as well."""
+    """Creating a shared client changes callback routing and identity binding, so it requires opt-in.
+    Already configured or persisted clients retain their existing gateway-callback flow.
+    """
     return _dcr_bridge_relays_client_registration(mcp_server) and (
-        configured_proxy_base_url() is None or not _shared_client_store_available()
+        not get_secret_bool("LITELLM_MCP_DCR_GATEWAY_CLIENT", False)
+        or configured_proxy_base_url() is None
+        or not _shared_client_store_available()
     )
 
 
@@ -1520,7 +1522,7 @@ async def exchange_token_with_server(
     # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
     if resolved_server.token_validation and isinstance(resolved_server.token_validation, dict):
         _validate_token_response(
-            token_response=token_response,
+            token_response=require_get(_DECODED_JSON.validate_python(token_response)),
             validation_rules=resolved_server.token_validation,
             server_id=resolved_server.server_id,
         )
@@ -2335,7 +2337,7 @@ async def register_client_with_server(
         server_id=resolved_server.server_id,
     )
 
-    token_response: Final = response.json()
+    token_response: Final = _DECODED_JSON.validate_python(response.json())
     persistence_result: Final = (
         await _persist_dcr_client_registration(
             resolved_server, token_response, current_redirect_uri, replace_stale_client=replace_stale_client
@@ -2347,12 +2349,12 @@ async def register_client_with_server(
         return dummy_return
     if persistence_result == "failed":
         raise HTTPException(status_code=503, detail="OAuth client registration could not be saved; retry authorization")
-    shared_client_response: Final[Mapping[str, object]] = (
+    shared_client_response: Final[object] = (
         _without_upstream_client_management(_UPSTREAM_REGISTRATION.validate_python(token_response))
         if persistence_result == "persisted" and not replace_stale_client and isinstance(token_response, dict)
         else token_response
     )
-    bound_response: Final[Mapping[str, object]] = (
+    bound_response: Final[object] = (
         {
             **_UPSTREAM_REGISTRATION.validate_python(token_response),
             "dcr_issuer": resolved_server.issuer,
@@ -2362,8 +2364,8 @@ async def register_client_with_server(
         if persistence_result == "persisted" and replace_stale_client
         else shared_client_response
     )
-    client_response: Final[Mapping[str, object]] = (
-        {**bound_response, "redirect_uris": client_facing_redirect_uris}
+    client_response: Final[object] = (
+        {**unpackable_mapping(bound_response), "redirect_uris": client_facing_redirect_uris}
         if client_redirect_uris and not bridge_relay
         else bound_response
     )

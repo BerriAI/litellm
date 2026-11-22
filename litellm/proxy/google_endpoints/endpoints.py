@@ -27,6 +27,8 @@ from litellm.proxy.common_utils.token_count_log import answered_with_litellm_cal
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _google_repeated_field(value: JsonValue) -> JsonValue:
     match value:
@@ -162,7 +164,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
 
     validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
     contents: Final = [dict(content) for content in validated_data.contents]
-    messages: Final = (
+    messages: Final = _DECODED_JSON.validate_python(
         GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
     )
     system: Final = (
@@ -183,12 +185,14 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         }
         for declaration in declarations
     ]
-    return TokenCountRequest(
-        model=model_name,
-        contents=contents,
-        messages=messages,
-        system=system,
-        tools=tools or None,
+    return TokenCountRequest.model_validate(
+        {
+            "model": model_name,
+            "contents": contents,
+            "messages": messages,
+            "system": system,
+            "tools": tools or None,
+        }
     )
 
 

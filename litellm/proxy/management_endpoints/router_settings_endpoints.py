@@ -10,7 +10,7 @@ GET /router/fields - Get router settings field definitions without values (for U
 import inspect
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, get_args
+from typing import Final, Protocol, get_args
 
 from fastapi import APIRouter, Depends
 from pydantic import Field
@@ -63,6 +63,15 @@ def _router_setting_source(
     return "default" if current_value is not None else "unset"
 
 
+class _AnnotatedParameter(Protocol):
+    @property
+    def annotation(self) -> object: ...
+
+
+def _parameter_annotation(parameter: _AnnotatedParameter) -> object:
+    return parameter.annotation
+
+
 def _get_routing_strategies_from_router_class() -> list[str]:
     """
     Dynamically extract routing strategies from the Router class __init__ method.
@@ -72,7 +81,9 @@ def _get_routing_strategies_from_router_class() -> list[str]:
 
     # Get the routing_strategy parameter
     routing_strategy_param: Final = sig.parameters.get("routing_strategy")
-    routing_strategy_annotation: Final[object] = routing_strategy_param.annotation if routing_strategy_param else None
+    routing_strategy_annotation: Final[object] = (
+        _parameter_annotation(routing_strategy_param) if routing_strategy_param else None
+    )
 
     if routing_strategy_param and routing_strategy_annotation:
         # Extract Literal values using get_args

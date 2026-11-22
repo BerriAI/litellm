@@ -107,7 +107,6 @@ from litellm.types.utils import (
     GuardrailTracingDetail,
     Message,
     ModelResponse,
-    ModelResponseStream,
     StreamingChoices,
     TextChoices,
 )
@@ -232,6 +231,12 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
     """
     redacted: Final = redact_nested_match_and_regex_keys(assessments)
     return redacted if isinstance(redacted, list) else assessments
+
+
+def _redacted_payload(payload: object) -> object:
+    if isinstance(payload, (dict, list)):
+        return redact_nested_match_and_regex_keys(payload)
+    return payload
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
@@ -1428,13 +1433,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code == 200:
-            raw_json_response: Final = httpx_response.json()
+            _json_response: Final[BedrockGuardrailResponse] = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
                 "Bedrock AI response : %s",
-                redact_nested_match_and_regex_keys(raw_json_response),
+                _redacted_payload(_json_response),
             )
-            _json_response: Final[BedrockGuardrailResponse] = raw_json_response
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
                 self._log_apply_guardrail_attempt(
@@ -2175,42 +2179,38 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         label (category/type) and the numeric score are kept -- never offsets or
         matched text.
         """
-        results: Final[dict[str, Any]] = dict((response or {}).get("results") or {})
-        # (results key, score field, label field, threshold). PII uses
-        # confidenceScore/type; the other two use severityScore/category.
-        check_specs: Final = [
-            (
-                "contentFilter",
-                "severityScore",
-                "category",
-                self.content_filter_threshold,
-            ),
-            ("promptAttack", "severityScore", "category", self.prompt_attack_threshold),
-            (
-                "sensitiveInformation",
-                "confidenceScore",
-                "type",
-                self.pii_confidence_threshold,
-            ),
-        ]
+        results: Final = (response or {}).get("results") or {}
+        score_checks: Final = (
+            ("contentFilter", results.get("contentFilter"), self.content_filter_threshold),
+            ("promptAttack", results.get("promptAttack"), self.prompt_attack_threshold),
+        )
 
         configured_checks: Final = self.checks or {}
         violations: Final[list[BedrockChecksViolation]] = []
-        for check_key, score_field, label_field, threshold in check_specs:
+        for check_key, score_result, threshold in score_checks:
             if threshold is None or check_key not in configured_checks:
                 continue
-            check_result = results.get(check_key) or {}
-            if check_key == "sensitiveInformation" and check_result.get("truncated"):
-                violations.append({"check": check_key, "truncated": True})
-            for entry in check_result.get("results") or []:
-                score = entry.get(score_field)
+            for entry in (score_result or {}).get("results") or []:
+                score = entry.get("severityScore")
                 if isinstance(score, (int, float)) and float(score) >= threshold:
-                    violation: BedrockChecksViolation = (
+                    violations.append(
                         {"check": check_key, "category": entry.get("category"), "severityScore": float(score)}
-                        if score_field == "severityScore"
-                        else {"check": check_key, "type": entry.get("type"), "confidenceScore": float(score)}
                     )
-                    violations.append(violation)
+        pii_threshold: Final = self.pii_confidence_threshold
+        if pii_threshold is not None and "sensitiveInformation" in configured_checks:
+            pii_result: Final = results.get("sensitiveInformation") or {}
+            if pii_result.get("truncated"):
+                violations.append({"check": "sensitiveInformation", "truncated": True})
+            for pii_entry in pii_result.get("results") or []:
+                confidence = pii_entry.get("confidenceScore")
+                if isinstance(confidence, (int, float)) and float(confidence) >= pii_threshold:
+                    violations.append(
+                        {
+                            "check": "sensitiveInformation",
+                            "type": pii_entry.get("type"),
+                            "confidenceScore": float(confidence),
+                        }
+                    )
         return violations
 
     @staticmethod
@@ -3047,7 +3047,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[object],
         request_data: dict[str, object],
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks.
 

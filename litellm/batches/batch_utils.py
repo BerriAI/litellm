@@ -861,7 +861,7 @@ def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[st
 
 
 def _get_response_from_batch_job_output_file(
-    batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
+    batch_job_output_file: Mapping[str, object], custom_llm_provider: str = "openai"
 ) -> Mapping[str, object]:
     """
     Get the response from the batch job output file
@@ -871,7 +871,8 @@ def _get_response_from_batch_job_output_file(
             _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
         )
     if custom_llm_provider == "bedrock":
-        return batch_job_output_file.get("modelOutput", None) or {}
+        model_output: Final = batch_job_output_file.get("modelOutput", None) or dict[str, object]()
+        return model_output  # pyright: ignore[reportReturnType]  # main returns it unchecked, consumers fail as before
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
         Mapping[str, object], batch_job_output_file.get("response", None) or {}
     )

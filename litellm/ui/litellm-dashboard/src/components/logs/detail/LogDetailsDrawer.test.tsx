@@ -137,14 +137,14 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
 });
 
 describe("LogDetailsDrawer internal user email", () => {
-  const renderSingleLog = (user: string | undefined) => {
+  const renderSingleLog = (user: string | undefined, metadata?: LogEntry["metadata"]) => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(
       <QueryClientProvider client={queryClient}>
         <LogDetailsDrawer
           open
           onClose={() => {}}
-          logEntry={makeLog({ request_id: "single", user })}
+          logEntry={makeLog({ request_id: "single", user, metadata })}
           accessToken="token"
         />
       </QueryClientProvider>,
@@ -153,7 +153,7 @@ describe("LogDetailsDrawer internal user email", () => {
 
   it("looks up the log's internal user and hands the resolved email to the detail content", () => {
     mockUseUserLookup.mockReturnValue({ data: { user_id: "u-1", user_email: "alice@example.com" } });
-    renderSingleLog("u-1");
+    renderSingleLog("u-1", { user_api_key_user_email: "dev@example.com" });
 
     expect(mockUseUserLookup).toHaveBeenCalledWith("u-1");
     expect(screen.getByText("user-email:alice@example.com")).toBeInTheDocument();
@@ -164,6 +164,20 @@ describe("LogDetailsDrawer internal user email", () => {
     renderSingleLog(undefined);
 
     expect(mockUseUserLookup).toHaveBeenCalledWith(null);
+    expect(screen.getByText("user-email:none")).toBeInTheDocument();
+  });
+
+  it("shows the stored email when the user lookup returns nothing", () => {
+    mockUseUserLookup.mockReturnValue({ data: undefined });
+    renderSingleLog("acme-dev", { user_api_key_user_email: "dev@example.com" });
+
+    expect(screen.getByText("user-email:dev@example.com")).toBeInTheDocument();
+  });
+
+  it.each([undefined, "", 42, {}])("passes no email when stored email is unavailable or invalid (%j)", (email) => {
+    mockUseUserLookup.mockReturnValue({ data: undefined });
+    renderSingleLog("acme-dev", { user_api_key_user_email: email });
+
     expect(screen.getByText("user-email:none")).toBeInTheDocument();
   });
 });
