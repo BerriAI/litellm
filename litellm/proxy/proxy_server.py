@@ -119,7 +119,11 @@ from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
-from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.litellm_core_utils.routing_common_utils import (
+    get_request_team_id,
+    is_proxy_admin_request,
+    resolve_model_group_alias,
+)
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -16352,7 +16356,7 @@ async def _routed_count_deployment(
     if llm_router is None or not routable:
         return None
     try:
-        routed: Final = await llm_router.select(served, dict(select_request))
+        routed: Final = await llm_router.select(served, dict(select_request), override_pre_call_check=False)
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
@@ -16362,12 +16366,14 @@ async def _routed_count_deployment(
 
 
 async def _first_caller_allowed_deployment(
-    served: str,
-    select_request: Mapping[str, object],
-    routable: tuple[Mapping[str, object], ...],
-    team_id: str | None,
+    served: str, select_request: Mapping[str, object], routable: tuple[Mapping[str, object], ...]
 ) -> Mapping[str, object] | None:
-    team_usable: Final = tuple(d for d in routable if deployment_usable_by_team(d, team_id))
+    team_id: Final = get_request_team_id(select_request)
+    team_usable: Final = (
+        routable
+        if is_proxy_admin_request(select_request)
+        else tuple(d for d in routable if deployment_usable_by_team(d, team_id))
+    )
     if llm_router is None or not team_usable:
         return next(iter(team_usable), None)
     try:
@@ -16417,11 +16423,7 @@ async def route_count(
         deployment=deployment,
         miss=routed if isinstance(routed, Exception) else None,
         fallback=(
-            None
-            if deployment is not None
-            else await _first_caller_allowed_deployment(
-                served, select_request, routable, None if caller is None else caller.team_id
-            )
+            None if deployment is not None else await _first_caller_allowed_deployment(served, select_request, routable)
         ),
     )
 

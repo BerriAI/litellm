@@ -378,6 +378,37 @@ async def test_count_routes_with_the_callers_router_settings(
     assert response.model_used == expected_model_used
 
 
+
+def _rpm_capped_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "capped-model",
+                "litellm_params": {"model": "groq/capped-backend", "api_key": "sk-test", "rpm": 1},
+                "model_info": {"id": "capped-deployment"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["capped-model", "capped-deployment"], ids=("model-group", "deployment-id"))
+async def test_a_count_under_the_callers_usage_based_strategy_leaves_the_deployments_rpm_to_inference(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    router: Final = _rpm_capped_router()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    response: Final = await count_request_tokens(
+        request=TokenCountRequest(model=model, messages=[{"role": "user", "content": "hello"}]),
+        caller=UserAPIKeyAuth(router_settings={"routing_strategy": "usage-based-routing-v2"}),
+    )
+    picked: Final = await router.select(model, {"routing_strategy": "usage-based-routing-v2"})
+
+    assert response.model_used == "capped-backend"
+    assert picked["model_info"]["id"] == "capped-deployment"
+
+
 async def _count_on_utils_route(
     caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
 ) -> object:

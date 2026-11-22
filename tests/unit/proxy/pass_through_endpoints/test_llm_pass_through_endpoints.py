@@ -8702,6 +8702,32 @@ async def test_bedrock_native_count_tokens_counts_on_the_callers_own_deployment_
 
 
 @pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_counts_a_proxy_admins_call_on_a_cooling_down_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(
+                "model_name_team-a_1",
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+            ),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-admin-caller", user_role=LitellmUserRoles.PROXY_ADMIN),
+        cooled_down_ids=("team-a-deployment",),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tag", "expected_path"),
     (
