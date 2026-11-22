@@ -24,7 +24,6 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
-    TELEMETRY_CONTENT_KEYS,
     ApiKeyHelper,
     ClaudeSettingsError,
     KeepModel,
@@ -435,8 +434,6 @@ class TestMergeClaudeSettings:
             "OTEL_LOG_ASSISTANT_RESPONSES": "1",
             "OTEL_LOG_TOOL_DETAILS": "1",
             "OTEL_LOG_TOOL_CONTENT": "1",
-            "OTEL_LOG_RAW_API_BODIES": "1",
-            "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "1048576",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4000",
             "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer token-abc",
         }
@@ -468,37 +465,14 @@ class TestMergeClaudeSettings:
         assert not [key for key in merged["env"] if key.endswith(("_TRACES_HEADERS", "_LOGS_HEADERS", "_METRICS_HEADERS"))]
 
     def test_a_content_setting_the_user_turned_off_stays_off(self):
-        settings = {
-            "env": {
-                "OTEL_LOG_USER_PROMPTS": "0",
-                "OTEL_LOG_TOOL_CONTENT": "0",
-                "OTEL_LOG_RAW_API_BODIES": "0",
-                "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "2048",
-            }
-        }
+        settings = {"env": {"OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_TOOL_CONTENT": "0"}}
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", StaticToken("token-abc"))
-        assert {key: merged["env"][key] for key in TELEMETRY_CONTENT_KEYS} == {
+        assert {key: value for key, value in merged["env"].items() if key.startswith("OTEL_LOG_")} == {
             "OTEL_LOG_USER_PROMPTS": "0",
             "OTEL_LOG_ASSISTANT_RESPONSES": "1",
             "OTEL_LOG_TOOL_DETAILS": "1",
             "OTEL_LOG_TOOL_CONTENT": "0",
-            "OTEL_LOG_RAW_API_BODIES": "0",
-            "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "2048",
         }
-
-    @pytest.mark.parametrize(
-        ("existing", "raw_bodies"),
-        [
-            ({}, "1"),
-            ({"OTEL_LOG_USER_PROMPTS": "0"}, "0"),
-            ({"OTEL_LOG_TOOL_CONTENT": "false"}, "0"),
-            ({"OTEL_LOG_USER_PROMPTS": "1"}, "1"),
-            ({"OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_RAW_API_BODIES": "1"}, "1"),
-        ],
-    )
-    def test_raw_bodies_stay_off_when_the_user_turned_another_content_setting_off(self, existing, raw_bodies):
-        merged = merge_claude_settings({"env": existing}, "http://127.0.0.1:4000/", StaticToken("token-abc"))
-        assert merged["env"]["OTEL_LOG_RAW_API_BODIES"] == raw_bodies
 
     def test_a_static_token_replaces_an_earlier_logins_headers_helper(self):
         merged = merge_claude_settings(
@@ -683,8 +657,6 @@ UNDO_SCENARIOS = {
                 "env.OTEL_LOG_ASSISTANT_RESPONSES",
                 "env.OTEL_LOG_TOOL_DETAILS",
                 "env.OTEL_LOG_TOOL_CONTENT",
-                "env.OTEL_LOG_RAW_API_BODIES",
-                "env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH",
                 "env.OTEL_EXPORTER_OTLP_ENDPOINT",
                 "env.OTEL_EXPORTER_OTLP_HEADERS",
                 "statusLine",
