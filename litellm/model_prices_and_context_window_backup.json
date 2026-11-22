@@ -32257,7 +32257,6 @@
         "supports_vision": true
     },
     "gemini-embedding-001": {
-        "deprecation_date": "2028-05-20",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "successor_model": "gemini-embedding-2",
         "input_cost_per_token": 1.5e-07,
