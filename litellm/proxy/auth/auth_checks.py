@@ -379,6 +379,15 @@ def _metadata_is_mapping(metadata: object) -> bool:
     return isinstance(metadata, Mapping)
 
 
+class _MetadataScope(Protocol):
+    @property
+    def metadata(self) -> object: ...
+
+
+def _scope_metadata(scope: _MetadataScope | None) -> object:
+    return scope.metadata if scope is not None else None
+
+
 def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
     return tuple(chain.from_iterable(map(_scope_required_customer_headers, scopes)))
 
@@ -425,8 +434,8 @@ async def missing_required_customer_header(
         _required_customer_headers(
             (
                 getattr(proxy_server, "general_settings", None),
-                getattr(team, "metadata", None),
-                getattr(authenticated, "metadata", None),
+                _scope_metadata(team),
+                _scope_metadata(authenticated),
             )
         ),
     )
@@ -1567,8 +1576,8 @@ async def common_checks(
         _required_customer_headers(
             (
                 general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
-                getattr(team_object, "metadata", None),
-                getattr(valid_token, "metadata", None),
+                _scope_metadata(team_object),
+                _scope_metadata(valid_token),
             )
         )
         if _route_requires_customer_headers(route, request)
