@@ -8,6 +8,7 @@ import io
 
 import asyncio
 import logging
+from typing import Final
 
 import pytest
 from fastapi import Request
@@ -40,7 +41,7 @@ def test_routes_on_litellm_proxy():
 
     from litellm.proxy._lazy_features import LAZY_FEATURES, loaded_lazy_modules
 
-    already_loaded = loaded_lazy_modules(app)
+    already_loaded: Final = loaded_lazy_modules(app)
     for feat in LAZY_FEATURES:
         if feat.module_path in already_loaded:
             continue
