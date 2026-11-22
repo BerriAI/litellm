@@ -456,7 +456,7 @@ def _apply_client_disconnect_metadata(target_metadata: object) -> None:
 
 def _apply_client_disconnect_to_logged_metadata(params: dict[str, object]) -> None:
     if params.get("metadata") is None:
-        params["metadata"] = {}
+        params["metadata"] = {}  # rebind-ok: the spend logger reads the marker from this shared request dict
     metadata: Final = params["metadata"]
     if is_str_keyed_dict(metadata):
         _apply_client_disconnect_metadata(metadata)
@@ -577,7 +577,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
         return True
-    partial_responses_event: Final = partial_responses_incomplete_event_on_disconnect(response)
+    partial_responses_event: Final = await asyncio.to_thread(partial_responses_incomplete_event_on_disconnect, response)
     if partial_responses_event is not None:
         verbose_proxy_logger.debug(
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",

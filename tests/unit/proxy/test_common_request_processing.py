@@ -6,6 +6,7 @@ import datetime
 import gc
 import gzip
 import json
+import threading
 import time
 import traceback
 import weakref
@@ -12225,6 +12226,31 @@ class TestStreamingClientDisconnectBilling:
         assert getattr(usage, "cache_creation_input_tokens", None) == 3
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 7
+
+
+    @pytest.mark.asyncio
+    async def test_building_the_responses_disconnect_partial_leaves_the_event_loop_serving(self):
+        other_request_served: Final = threading.Event()
+
+        class _SlowPartialStream:
+            built_while_loop_served = False
+
+            def partial_response_on_disconnect(self) -> None:
+                self.built_while_loop_served = other_request_served.wait(timeout=2)
+
+        async def _serve_other_request() -> None:
+            other_request_served.set()
+
+        logging_obj: Final = MagicMock(spec=LiteLLMLoggingObj)
+        logging_obj.model_call_details = {}
+        stream: Final = _SlowPartialStream()
+        other_request: Final = asyncio.create_task(_serve_other_request())
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, stream)
+        await other_request
+
+        assert stream.built_while_loop_served is True
+        assert billed is False
 
 
 def _apply_stream_usage_tracking(
