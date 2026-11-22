@@ -734,6 +734,70 @@ class TestManagedWebSocketHandlerIntegration:
         assert [item.get("type") for item in second_turn_input] == expected_types
 
     @pytest.mark.asyncio
+    async def test_next_turn_keeps_a_search_the_provider_finished_before_an_incomplete_turn_ended(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        search: Final = (
+            {
+                "type": "tool_search_call",
+                "id": "tsc_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "arguments": {"pattern": "exec"},
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "tools": [],
+            },
+        )
+        cut_off_call: Final = {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "call_id": "call_cut",
+            "name": "exec",
+            "input": "printf 1",
+            "status": "incomplete",
+        }
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[
+                _provider_turn_answering((*search, cut_off_call), "response.incomplete"),
+                _provider_turn_answering(()),
+            ]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "never mind"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == [
+            "message",
+            "tool_search_call",
+            "tool_search_output",
+            "message",
+        ]
+
+    @pytest.mark.asyncio
     async def test_turn_after_an_approved_mcp_call_sends_the_call_that_used_the_approval(
         self,
         monkeypatch: pytest.MonkeyPatch,
