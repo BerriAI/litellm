@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 _PAID_SEARCH_TOOLS: Final = frozenset({"web_search", "web_search_image", "image_search"})
 _PAYLOAD_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TOOL_USAGE_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, int])
+_PARAM_NAMES_ADAPTER: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
 def web_search_requests_from_tool_usage(payload: object) -> int | None:
@@ -162,7 +163,10 @@ def create_config_class(provider: SimpleProviderConfig):
             that don't support function calling."""
             from litellm.utils import supports_function_calling, supports_reasoning
 
-            supported_params: Final = super().get_supported_openai_params(model=model)
+            inherited_params: Final = _PARAM_NAMES_ADAPTER.validate_python(
+                super().get_supported_openai_params(model=model)
+            )
+            supported_params: Final = [param for param in inherited_params if param not in provider.unsupported_params]
 
             _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 

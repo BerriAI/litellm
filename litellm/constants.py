@@ -1217,6 +1217,7 @@ openai_compatible_providers: Final[list[str]] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
+    "perplexity_orchestrator",
     "cortecs",
     "scx-ai",
     "prism",

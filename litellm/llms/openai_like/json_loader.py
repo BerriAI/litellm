@@ -25,6 +25,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
 _STR_ADAPTER: Final = TypeAdapter(str)
+_STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
@@ -48,6 +49,9 @@ class SimpleProviderConfig:
         self.constraints = data.get("constraints", {})
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
             data.get("special_handling", {})
+        )
+        self.unsupported_params: Final[frozenset[str]] = frozenset(
+            _STR_TUPLE_ADAPTER.validate_python(data["unsupported_params"]) if "unsupported_params" in data else ()
         )
         self.supported_endpoints: Sequence[str] = data.get("supported_endpoints", [])
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
