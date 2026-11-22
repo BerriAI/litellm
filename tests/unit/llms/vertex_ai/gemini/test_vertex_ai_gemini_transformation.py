@@ -3060,12 +3060,17 @@ def _part_label(part: PartType) -> str:
 
 
 def _model_turn_signatures(
-    assistant_message: Mapping[str, object], *, drop_params: bool = False
+    assistant_message: Mapping[str, object],
+    *,
+    drop_params: bool = False,
+    model: str = "gemini-3.1-flash-image",
+    custom_llm_provider: str | None = None,
 ) -> tuple[tuple[str, str | None], ...]:
     contents: Final = gemini_convert_messages_with_history(
         messages=[{"role": "user", "content": "Draw a cat"}, assistant_message],
-        model="gemini-3.1-flash-image",
+        model=model,
         litellm_params={"drop_params": True} if drop_params else None,
+        custom_llm_provider=custom_llm_provider,
     )
     return tuple((_part_label(part), part.get("thoughtSignature")) for part in contents[1]["parts"])
 
@@ -3273,9 +3278,13 @@ def test_assistant_image_item_without_url_takes_no_history_signature() -> None:
         ),
     ],
 )
-def test_malformed_assistant_image_history_answers_bad_request(assistant_message: Mapping[str, object]) -> None:
-    with pytest.raises(litellm.BadRequestError):
-        _model_turn_signatures(assistant_message)
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_malformed_assistant_image_history_answers_bad_request(
+    assistant_message: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _model_turn_signatures(assistant_message, custom_llm_provider=custom_llm_provider)
+    assert exc_info.value.llm_provider == custom_llm_provider
 
 
 @pytest.mark.parametrize(
@@ -3309,6 +3318,70 @@ def test_malformed_assistant_image_history_is_dropped_under_drop_params(
     assistant_message: Mapping[str, object], expected: tuple[tuple[str, str | None], ...]
 ) -> None:
     assert _model_turn_signatures(assistant_message, drop_params=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", None)),
+            id="own-image-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", "sig-cat"), ("Y2F0", None)),
+            id="history-saved-before-per-image-signatures",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        pytest.param("gemini-3.8-flash", "vertex_ai", id="vertex-text-model"),
+        pytest.param("gemini-3.8-flash", "gemini", id="ai-studio-text-model"),
+        pytest.param("4567890123456789012", "vertex_ai", id="unlisted-tuned-endpoint"),
+    ],
+)
+def test_assistant_image_signatures_are_only_sent_to_an_image_model(
+    assistant_message: Mapping[str, object],
+    expected: tuple[tuple[str, str | None], ...],
+    model: str,
+    custom_llm_provider: str,
+) -> None:
+    assert _model_turn_signatures(assistant_message, model=model, custom_llm_provider=custom_llm_provider) == expected
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {"role": "assistant", "content": "", "provider_specific_fields": {"thought_signatures": ["sig-text"]}},
+            id="empty-string",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "thinking",
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
+            },
+            id="empty-string-with-reasoning",
+        ),
+    ],
+)
+def test_empty_text_reply_without_images_keeps_its_thought_signature(assistant_message: Mapping[str, object]) -> None:
+    assert _model_turn_signatures(assistant_message, model="gemini-3.8-flash")[-1] == ("", "sig-text")
 
 
 def _get_time_call(tool_call_id: str | None, name: str = "get_time") -> Mapping[str, object]:

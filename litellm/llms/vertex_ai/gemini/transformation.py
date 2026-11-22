@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
@@ -744,18 +745,39 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
-def _malformed_assistant_history(message: str, model: str | None) -> BadRequestError:
-    return BadRequestError(message=f"Invalid assistant message: {message}", model=model, llm_provider="vertex_ai")
+@dataclass(frozen=True, slots=True)
+class _TargetModel:
+    model: str | None
+    custom_llm_provider: str | None
+
+
+def _malformed_assistant_history(message: str, target: _TargetModel) -> BadRequestError:
+    return BadRequestError(
+        message=f"Invalid assistant message: {message}",
+        model=target.model,
+        llm_provider=target.custom_llm_provider or "vertex_ai",
+    )
+
+
+def _generates_images(target: _TargetModel) -> bool:
+    if target.model is None:
+        return False
+    info: Final = litellm.utils.lookup_model_info_for_registration(target.model, target.custom_llm_provider)
+    if isinstance(info, litellm.utils.ModelInfoLookupMiss):
+        return False
+    return info.get("mode") == "image_generation" or "image" in (info.get("supported_output_modalities") or ())
 
 
 def _message_thought_signatures(
-    assistant_msg: ChatCompletionAssistantMessage, model: str | None, *, drop_params: bool
+    assistant_msg: ChatCompletionAssistantMessage, target: _TargetModel, *, drop_params: bool
 ) -> tuple[str, ...]:
     fields: Final = as_str_mapping(assistant_msg.get("provider_specific_fields"))
     entries: Final = (as_object_list(fields.get("thought_signatures")) if fields is not None else None) or ()
     signatures: Final = tuple(entry for entry in entries if isinstance(entry, str))
     if len(signatures) < len(entries) and not drop_params:
-        raise _malformed_assistant_history("provider_specific_fields.thought_signatures entries must be strings", model)
+        raise _malformed_assistant_history(
+            "provider_specific_fields.thought_signatures entries must be strings", target
+        )
     return signatures
 
 
@@ -766,14 +788,14 @@ def _own_image_thought_signature(image_item: Mapping[str, object]) -> str | None
 
 
 def _assistant_image_source(
-    image_item: Mapping[str, object], model: str | None, *, drop_params: bool
+    image_item: Mapping[str, object], target: _TargetModel, *, drop_params: bool
 ) -> GeminiMediaSource | None:
     image_url: Final = as_str_mapping(image_item.get("image_url"))
     url: Final = image_url.get("url") if image_url is not None else None
     if image_url is None or not url or (drop_params and not isinstance(url, str)):
         return None
     if not isinstance(url, str):
-        raise _malformed_assistant_history("images[].image_url.url must be a string", model)
+        raise _malformed_assistant_history("images[].image_url.url must be a string", target)
     format_hint: Final = image_url.get("format") or image_url.get("mime_type") or image_url.get("content_type")
     detail: Final = image_url.get("detail")
     return GeminiMediaSource(
@@ -789,13 +811,13 @@ def _right_aligned(signatures: Sequence[str], count: int) -> tuple[str | None, .
 
 
 def _sourced_assistant_images(
-    images: object, model: str | None, *, drop_params: bool
+    images: object, target: _TargetModel, *, drop_params: bool
 ) -> tuple[tuple[GeminiMediaSource, str | None], ...]:
     items: Final = tuple(filter(None, map(as_str_mapping, as_object_list(images) or ())))
     return tuple(
         (source, _own_image_thought_signature(item))
         for item in items
-        if (source := _assistant_image_source(item, model, drop_params=drop_params)) is not None
+        if (source := _assistant_image_source(item, target, drop_params=drop_params)) is not None
     )
 
 
@@ -839,30 +861,35 @@ def _assistant_image_part(
 
 def _signed_text_and_image_parts(
     assistant_msg: ChatCompletionAssistantMessage,
-    model: str | None,
+    target: _TargetModel,
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     *,
     drop_params: bool,
 ) -> tuple[PartType, ...]:
     tool_call_signatures: Final = _collect_tool_call_thought_signatures(assistant_msg)
-    message_signatures: Final = _message_thought_signatures(assistant_msg, model, drop_params=drop_params)
-    sourced_images: Final = _sourced_assistant_images(assistant_msg.get("images"), model, drop_params=drop_params)
+    message_signatures: Final = _message_thought_signatures(assistant_msg, target, drop_params=drop_params)
+    sourced_images: Final = _sourced_assistant_images(assistant_msg.get("images"), target, drop_params=drop_params)
+    signing_images: Final = sourced_images if sourced_images and _generates_images(target) else ()
     content: Final = assistant_msg.get("content")
     text_signature: Final = (
         _assistant_text_thought_signature(
             message_signatures,
-            frozenset(signature for _, signature in sourced_images if signature is not None),
+            frozenset(signature for _, signature in signing_images if signature is not None),
             tool_call_signatures,
         )
-        if _has_text(content)
+        if _has_text(content) or not signing_images
         else None
     )
-    signed_images: Final = _signed_assistant_images(
-        sourced_images, message_signatures, tool_call_signatures | frozenset(filter(None, (text_signature,)))
+    signed_images: Final = (
+        _signed_assistant_images(
+            signing_images, message_signatures, tool_call_signatures | frozenset(filter(None, (text_signature,)))
+        )
+        if signing_images
+        else tuple((source, None) for source, _ in sourced_images)
     )
     image_parts: Final = tuple(
-        _assistant_image_part(source, signature, model, vertex_project, vertex_credentials)
+        _assistant_image_part(source, signature, target.model, vertex_project, vertex_credentials)
         for source, signature in signed_images
     )
     if not isinstance(content, str):
@@ -1041,7 +1068,11 @@ def gemini_convert_messages_with_history(
 
                 assistant_content.extend(
                     _signed_text_and_image_parts(
-                        assistant_msg, model, vertex_project, vertex_credentials, drop_params=drop_params
+                        assistant_msg,
+                        _TargetModel(model=model, custom_llm_provider=custom_llm_provider),
+                        vertex_project,
+                        vertex_credentials,
+                        drop_params=drop_params,
                     )
                 )
 
