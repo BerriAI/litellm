@@ -929,14 +929,32 @@ def _const_as_declared(value: JsonValue, declared_type: JsonValue) -> JsonValue:
             return value
 
 
+def _branch_holds(branch: JsonValue, const: JsonValue) -> bool:
+    if not isinstance(branch, dict):
+        return True
+    declared_type: Final = branch.get("type")
+    json_type: Final = _json_schema_type_of(_const_as_declared(const, declared_type))
+    return json_type is not None and _declared_type_holds(declared_type, json_type)
+
+
+def _union_keyword(schema: Mapping[str, JsonValue]) -> Literal["anyOf", "oneOf"]:
+    return "anyOf" if "anyOf" in schema else "oneOf"
+
+
 def _push_const_into_branches(schema: JsonValue) -> None:
     if not isinstance(schema, dict) or _json_schema_type_of(schema.get("const")) is None:
         return
-    branches: Final = schema.get("anyOf", schema.get("oneOf"))
+    keyword: Final = _union_keyword(schema)
+    branches: Final = schema.get(keyword)
     if not isinstance(branches, list):
         return
-    const: Final = schema.pop("const")
-    for branch in branches:
+    const: Final = schema["const"]
+    holding: Final = tuple(branch for branch in branches if _branch_holds(branch, const))
+    if not holding:
+        return
+    del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
+    schema[keyword] = list(holding)  # rebind-ok: the schema builders edit their own copy in place
+    for branch in holding:
         if isinstance(branch, dict):
             branch.setdefault("const", const)
 
@@ -947,8 +965,8 @@ def _pin_scalar_consts(schema: JsonValue, depth: int = 0) -> None:
     _push_const_into_branches(schema)
     declared_type: Final = schema.get("type")
     const: Final = _const_as_declared(schema.get("const"), declared_type)
-    json_type: Final = _json_schema_type_of(const)
-    if json_type is not None and const != "" and _declared_type_holds(declared_type, json_type):
+    json_type: Final = None if const == "" or _is_union(schema) else _json_schema_type_of(const)
+    if json_type is not None and _declared_type_holds(declared_type, json_type):
         del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
         schema["enum"] = [const]  # rebind-ok: the schema builders edit their own copy in place
         schema["type"] = declared_type if isinstance(declared_type, str) else json_type  # rebind-ok: same copy
