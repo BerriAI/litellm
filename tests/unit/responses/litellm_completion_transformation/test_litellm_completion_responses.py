@@ -7262,6 +7262,49 @@ def test_callers_that_only_read_the_input_see_no_turn_for_a_user_item_without_co
     ]
 
 
+@pytest.mark.asyncio
+async def test_outputs_of_parallel_calls_follow_the_stored_turn_that_made_them_when_this_process_remembers_the_calls():
+    calls: Final = [
+        {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        for call_id in ("toolu_paris", "toolu_rome", "toolu_oslo")
+    ]
+    stored_turns: Final = [
+        {"role": "user", "content": "Weather in Paris, Rome and Oslo?"},
+        {"role": "assistant", "content": None, "tool_calls": calls},
+    ]
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(messages=stored_turns, litellm_session_id=None)
+
+    outputs: Final = cast(
+        ResponseInputParam,
+        [{"type": "function_call_output", "call_id": call["id"], "output": "14"} for call in calls],
+    )
+    config: Final = LiteLLMCompletionResponsesConfig
+    for call in calls:
+        TOOL_CALLS_CACHE.set_cache(key=call["id"], value=call)
+    try:
+        request: Final = await config.async_responses_api_session_handler(
+            previous_response_id="resp_parallel",
+            litellm_completion_request=config.transform_responses_api_request_to_chat_completion_request(
+                model="anthropic/claude-sonnet-5-5",
+                input=outputs,
+                responses_api_request={"previous_response_id": "resp_parallel"},
+                custom_llm_provider="anthropic",
+            ),
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    finally:
+        for call in calls:
+            TOOL_CALLS_CACHE.delete_cache(key=call["id"])
+
+    assert request["messages"][:2] == stored_turns
+    assert [(message["role"], message["tool_call_id"]) for message in request["messages"][2:]] == [
+        ("tool", call["id"]) for call in calls
+    ]
+
+
 def test_cache_control_on_function_call_output():
     """cache_control on a function_call_output should be passed through to tool message"""
     TOOL_CALLS_CACHE.set_cache(

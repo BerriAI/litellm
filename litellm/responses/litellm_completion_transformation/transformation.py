@@ -98,6 +98,7 @@ from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_suppo
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
 from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
+from litellm.responses.litellm_completion_transformation.repeated_tool_calls import without_repeated_tool_calls
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
     StoredTurns,
@@ -2550,7 +2551,7 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionResponseMessage
             | ChatCompletionMessageToolCall
             | Message
-        ] = list(copy.deepcopy(messages))
+        ] = list(copy.deepcopy(without_repeated_tool_calls(messages)))
         messages_to_remove: Final = []
 
         # Count non-tool messages to avoid removing all messages
