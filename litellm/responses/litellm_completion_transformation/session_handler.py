@@ -123,13 +123,12 @@ def _stored_response(spend_log: Mapping[str, object]) -> object:
 
 
 def _replayable(stored: object, spend_log: Mapping[str, object]) -> object:
-    replayable: Final = without_altered_provider_state(stored)
-    if replayable != stored and holds_altered_provider_state(stored):
+    if holds_altered_provider_state(stored):
         verbose_proxy_logger.warning(
             "previous_response_id replay leaves out reasoning the stored turn %s holds cut or redacted",
             spend_log.get("request_id"),
         )
-    return replayable
+    return without_altered_provider_state(stored)
 
 
 def _stored_model_map_key(metadata: object) -> str | None:

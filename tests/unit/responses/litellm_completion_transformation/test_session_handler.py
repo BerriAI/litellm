@@ -1420,7 +1420,7 @@ async def test_a_turn_stored_whole_replays_its_signed_thinking_block_silently(ca
 async def test_a_turn_whose_stored_input_only_cut_the_id_its_tool_output_answers_replays_silently(
     caplog: pytest.LogCaptureFixture,
 ):
-    signed_id: Final = f"call_1__thought__{_LONG_SIGNATURE}"
+    signed_id: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG_SIGNATURE}"
     stored: Final = _stored_cut({"input": [{"type": "function_call_output", "call_id": signed_id, "output": "14"}]})
     turn: Final = _answered_turn({"content": "954"}, turn_input=stored["input"])
 
@@ -1436,7 +1436,7 @@ async def test_a_turn_whose_stored_input_only_cut_the_id_its_tool_output_answers
 async def test_a_turn_whose_stored_tool_call_lost_its_signature_to_the_cut_says_so(
     place: str, caplog: pytest.LogCaptureFixture
 ):
-    signed_id: Final = f"call_1__thought__{_LONG_SIGNATURE}"
+    signed_id: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG_SIGNATURE}"
     function: Final = {"name": "get_weather", "arguments": "{}"}
     asked: Final = _stored_cut({"tool_calls": [{"id": signed_id, "type": "function", "function": function}]})
     resent: Final = _stored_cut({"input": [{"type": "function_call", "call_id": signed_id, **function}]})
