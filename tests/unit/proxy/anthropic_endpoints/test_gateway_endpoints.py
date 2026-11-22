@@ -147,7 +147,6 @@ def _real_auth_proxy_attrs() -> Mapping[str, object]:
             "llm_model_list": [],
             "user_custom_auth": None,
             "litellm_proxy_admin_name": "admin",
-            "jwt_handler": None,
             "open_telemetry_logger": None,
             "model_max_budget_limiter": MagicMock(),
         }

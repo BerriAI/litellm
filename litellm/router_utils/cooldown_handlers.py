@@ -333,13 +333,11 @@ def _is_cooldown_required(
 
 def _is_per_user_provider_request(request_kwargs: Mapping[str, object]) -> bool:
     from litellm.llms.github_copilot.per_user_auth import (
-        github_copilot_user_session_from,
         is_github_copilot_per_user_request,
     )
 
-    return (
-        is_github_copilot_per_user_request(request_kwargs)
-        or github_copilot_user_session_from(request_kwargs.get("litellm_params")) is not None
+    return is_github_copilot_per_user_request(request_kwargs) or is_github_copilot_per_user_request(
+        request_kwargs.get("litellm_params")
     )
 
 

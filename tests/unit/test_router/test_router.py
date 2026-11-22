@@ -34,7 +34,12 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisClusterCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
-from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    MidStreamFallbackError,
+    ModifyResponseException,
+    RequestOverDeploymentTpmError,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -106,6 +111,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 from tests.unit.conftest import redis_cache_double
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 import traceback
 import inspect
 from typing import List, Optional
@@ -387,11 +393,7 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [{"type": "reasoning", "id": encoded_id}],
@@ -4698,10 +4700,11 @@ async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches
         ],
         enable_pre_call_checks=True,
     )
-    batch: Final = ["word " * 2100] * 76
     batches: Final = tuple(
-        asyncio.create_task(router.aembedding(model="embed", input=batch))
-        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+        asyncio.create_task(
+            router.aembedding(model="embed", input=[f"{batch} {text} " + "word " * 2100 for text in range(76)])
+        )
+        for batch in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
     )
     await asyncio.wait_for(_until_every_count_slot_is_taken(), timeout=30)
     chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))
@@ -13291,11 +13294,13 @@ class TestMemberAutoRouterInference:
         )
         self.database = SimpleNamespace(
             db=SimpleNamespace(
-                litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
-                litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
                 litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
             )
         )
+        self.stores = install_rust_auth_stores(
+            monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"router-team": self.team}))
+        )
+        self.teams = self.stores.team
         monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 
@@ -13417,9 +13422,9 @@ class TestMemberAutoRouterInference:
         assert first.model == "permitted-model" and first.routing_decision is not None
         assert first.routing_decision["cause"] == "llm_classifier"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_teamtable.find_unique.await_count == 1
-        assert self.database.db.litellm_teammembership.find_unique.await_count == 1
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        assert len(self.teams.lookups) == 1
+        assert len(self.stores.team_membership.lookups) == 1
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={"members_with_roles": []}
         )
         await delete_cache_team_object(
@@ -13466,9 +13471,10 @@ class TestMemberAutoRouterInference:
                 )
             )
         )
-        self.database.db.litellm_teamtable.find_unique.return_value = (
-            None if state == "deleted" else self.team.model_copy(update={"blocked": state == "blocked"})
-        )
+        if state == "deleted":
+            del self.teams.rows["router-team"]
+        else:
+            self.teams.rows["router-team"] = self.team.model_copy(update={"blocked": state == "blocked"})
         if state == "unavailable":
             monkeypatch.setattr(proxy_server, "prisma_client", None)
         with pytest.raises(HTTPException) as error:
@@ -13498,9 +13504,9 @@ class TestMemberAutoRouterInference:
         from litellm.models.organization import LiteLLM_OrganizationTable
         from litellm.models.team_membership import LiteLLM_TeamMembership
         from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
-        from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+        from litellm.redis.stores.auth_cache import AuthObject
 
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if ceiling == "team" else self.team.models,
                 "organization_id": "router-org" if ceiling == "organization" else None,
@@ -13508,7 +13514,7 @@ class TestMemberAutoRouterInference:
         )
         if ceiling == "member":
             await self.cache.async_set_cache(
-                key=team_membership_reservation_cache_key(user_id="router-member", team_id="router-team"),
+                key=AuthObject.team_membership_reservation(user_id="router-member", team_id="router-team"),
                 value=LiteLLM_TeamMembership(
                     user_id="router-member",
                     team_id="router-team",
@@ -13518,7 +13524,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "organization":
             await self.cache.async_set_cache(
-                key="org_id:router-org",
+                key=AuthObject.org("router-org"),
                 value=LiteLLM_OrganizationTable(
                     organization_id="router-org",
                     budget_id="org-budget",
@@ -13530,7 +13536,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "project":
             await self.cache.async_set_cache(
-                key="project_id:router-project",
+                key=AuthObject.project("router-project"),
                 value=LiteLLM_ProjectTableCachedObj(
                     project_id="router-project",
                     team_id="router-team",
@@ -13553,16 +13559,19 @@ class TestMemberAutoRouterInference:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("group_owner", ("team", "key"))
-    async def test_access_group_grants_are_cached_and_revoked(self, group_owner: str) -> None:
-        from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    async def test_access_group_grants_are_cached_and_revoked(
+        self, group_owner: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
             access_group_id="router-group",
             access_group_name="Router targets",
             access_model_names=["permitted-model"],
         )
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        stores: Final = self.stores
+        stores.access_group.seed("router-group", group)
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if group_owner == "team" else self.team.models,
                 "access_group_ids": ["router-group"] if group_owner == "team" else [],
@@ -13579,14 +13588,12 @@ class TestMemberAutoRouterInference:
         router: Final = self._router()
         assert (await self._route(router, request)).model == "permitted-model"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(
-            update={"access_model_names": []}
-        )
+        assert len(stores.access_group.lookups) == 1
+        stores.access_group.seed("router-group", group.model_copy(update={"access_model_names": []}))
         await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
         with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, request)
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 2
+        assert len(stores.access_group.lookups) == 2
 
     @pytest.mark.asyncio
     async def test_sdk_router_does_not_import_proxy_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -14369,6 +14376,29 @@ class TestAutoRouterTraceProvenance:
         assert retry.attributes["error.type"] == "ValueError"
         assert retry.attributes["litellm.retry.count"] == 1
         assert "private-error-text" not in str(retry.attributes)
+
+    @pytest.mark.asyncio
+    async def test_retry_records_name_the_over_tpm_refusal_as_its_logs_do(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]"
+    ) -> None:
+        logger, exporter = _tracing
+        router: Final = Router(
+            model_list=[
+                self._marker("blue"),
+                {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+            ],
+        )
+        request: Final = {"metadata": {}}
+        refusal: Final = RequestOverDeploymentTpmError(message="over tpm", model="answer", llm_provider="openai")
+        with logger.tracer.start_as_current_span("request"):
+            await router.async_get_available_deployment(
+                model="traced-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}]
+            )
+            router.log_retry({**request, "model": "answer"}, refusal)
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        retry: Final = next(event for event in spans["request"].events if event.name == "litellm.routing.retry")
+        assert retry.attributes["error.type"] == refusal.logged_error_class
+        assert request["metadata"]["previous_models"][-1]["exception_type"] == refusal.logged_error_class
 
 
 @pytest.fixture()

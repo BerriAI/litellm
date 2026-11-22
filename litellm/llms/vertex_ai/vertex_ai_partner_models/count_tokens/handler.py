@@ -7,15 +7,22 @@ their respective publisher-specific count-tokens endpoints.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, filter_and_transform_beta_headers
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    drops_unsupported_params,
+    json_contains,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     OBJECT_LIST_ADAPTER,
+    AnthropicModelInfo,
     context_management_betas,
     count_tokens_feature_betas,
     is_claude_model_target,
@@ -23,6 +30,7 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 _COUNT_TOKENS_PUBLISHERS: Final = (
@@ -53,7 +61,19 @@ def count_tokens_request_body(
     }
 
 
+class _SplitsOnSeparator(Protocol):
+    def split(self, sep: str, /) -> object: ...
+
+
+def _model_without_version_suffix(model: object) -> object:
+    if not json_contains(model, "@"):
+        return model
+    return subscript(require_attributes(model, _SplitsOnSeparator, "split").split("@"), 0)
+
+
 def count_tokens_publisher(model: str) -> str | None:
+    if is_vertex_muse_model(model):
+        return None
     return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
 
 
@@ -64,7 +84,10 @@ def count_tokens_headers(access_token: str, request_data: Mapping[str, object]) 
             "vertex_ai", request_data, _REQUEST_MESSAGES.validate_python(request_data["messages"])
         ),
         *filter_and_transform_beta_headers(
-            list(context_management_betas(_CONTEXT_MANAGEMENT.validate_python(request_data.get("context_management")))),
+            [
+                *context_management_betas(_CONTEXT_MANAGEMENT.validate_python(request_data.get("context_management"))),
+                *AnthropicModelInfo().thinking_betas(request_data.get("thinking")),
+            ],
             "vertex_ai",
         ),
     )
@@ -135,9 +158,9 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
     async def handle_count_tokens_request(
         self,
         model: str,
-        request_data: dict[str, Any],
+        request_data: Mapping[str, object],
         litellm_params: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle token counting request for a Vertex AI partner model.
 
@@ -156,9 +179,14 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # count-tokens endpoint does not accept versioned model names.
         model = self._strip_version_suffix(model)
         if "model" in request_data:
+            requested_model: Final = request_data["model"]
             request_data = {
                 **request_data,
-                "model": self._strip_version_suffix(request_data["model"]),
+                "model": (
+                    self._strip_version_suffix(requested_model)
+                    if isinstance(requested_model, str)
+                    else _model_without_version_suffix(requested_model)
+                ),
             }
 
         # Validate request
