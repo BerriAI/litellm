@@ -369,6 +369,7 @@ _SWEPT_ROUTES: Final = (
     (LlmProviders.VERTEX_AI, "gemini-3.8-flash"),
     (LlmProviders.BEDROCK, "invoke/anthropic.claude-sonnet-5"),
     (LlmProviders.BEDROCK, "claude_platform/claude-sonnet-5"),
+    (LlmProviders.BEDROCK, "converse/anthropic.claude-sonnet-5"),
     (LlmProviders.AZURE_AI, "claude-sonnet-5"),
     (LlmProviders.DATABRICKS, "databricks-claude-sonnet-5"),
 )

@@ -312,7 +312,7 @@ async def test_a_server_known_to_be_unregistered_keeps_the_policy_400_when_anoth
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
         pytest.raises(HTTPException) as exc,
     ):
         await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)

@@ -701,7 +701,6 @@ _CAPTURED_CHAT_REPLY: Final = {
     "model": "captured",
     "choices": [{"index": 0, "message": {"role": "assistant", "content": "Sunny."}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11},
-    "service_tier": "on_demand",
 }
 
 
