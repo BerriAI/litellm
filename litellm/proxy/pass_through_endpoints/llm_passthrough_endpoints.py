@@ -17,7 +17,7 @@ import re
 import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
 from urllib.parse import quote, unquote
@@ -52,7 +52,13 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_get,
+)
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -354,8 +360,12 @@ def _string_keyed_mapping(value: object) -> Mapping[str, object] | None:
     return None
 
 
-async def _json_request_body(request: Request) -> Mapping[str, object]:
-    return await request.json()
+async def _json_request_value(request: Request) -> object:
+    return _DECODED_JSON.validate_python(await request.json())
+
+
+async def _json_request_body(request: Request) -> SupportsGet:
+    return require_get(await _json_request_value(request))
 
 
 _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -494,18 +504,33 @@ class _ProviderFileAccessGuard(Protocol):
 _METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
 
 
-def _gemini_passthrough_file_id(method: str, headers: Mapping[str, str], path: str) -> str | None:
+_MAX_PATH_DECODE_ROUNDS: Final = 8
+
+
+def _fully_decoded_path(path: str) -> str | None:
+    decoded: Final = reduce(lambda current, _: unquote(current), range(_MAX_PATH_DECODE_ROUNDS), path)
+    return decoded if unquote(decoded) == decoded else None
+
+
+def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
     methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
-    if methods.isdisjoint(("GET", "DELETE")):
-        return None
-    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(unquote(path))
+    return not methods.isdisjoint(("GET", "DELETE"))
+
+
+def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{decoded_path}".replace("\\", "/")))
     return single_file.group(1) if single_file is not None else None
 
 
 async def _enforce_gemini_passthrough_file_ownership(
     request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
-    file_id: Final = _gemini_passthrough_file_id(request.method, request.headers, path)
+    if not _is_gemini_get_or_delete(request.method, request.headers):
+        return
+    decoded_path: Final = _fully_decoded_path(path)
+    if decoded_path is None:
+        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+    file_id: Final = _gemini_passthrough_file_id(decoded_path)
     if file_id is None:
         return
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1984,7 +2009,7 @@ async def bedrock_proxy_route(
     agent_runtime_aws: Final = BedrockAgentRuntimeAWS()
     # Assuming the body contains JSON data, parse it
     try:
-        data: Final = await _json_request_body(request)
+        data: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await run_aws_signing(
@@ -2083,11 +2108,12 @@ async def comprehend_medical_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
@@ -2351,11 +2377,12 @@ async def transcribe_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Request body must be valid JSON: {e}")
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not an Amazon Transcribe request member")

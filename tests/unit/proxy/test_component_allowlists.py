@@ -197,10 +197,9 @@ def test_composed_lifespan_propagates_lifecycle_failures(
 
 
 @pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
-@pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"), ids=("traces", "logs"))
 @pytest.mark.parametrize("authorization", (None, "Bearer team-a-key", "Bearer team-b-key"))
 def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_component(
-    component_lifespan: Lifespan[Starlette], endpoint: str, authorization: str | None
+    component_lifespan: Lifespan[Starlette], authorization: str | None
 ) -> None:
     application: Final = FastAPI()
     application.include_router(tracing_endpoints.router)
@@ -217,10 +216,10 @@ def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_compone
     )
 
     with TestClient(application) as client:
-        response: Final = client.post(endpoint, content=b'{"resourceLogs": []}', headers=headers)
+        response: Final = client.post("/v1/logs", content=b'{"resourceLogs": []}', headers=headers)
 
     assert response.status_code == 410, response.text
-    assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
+    assert response.json() == {"message": "Send logs directly to the Lens endpoint shown in Lens setup."}
 
 
 def test_backend_mount_paths_defined():

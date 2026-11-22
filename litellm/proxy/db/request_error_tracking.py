@@ -256,7 +256,7 @@ class RequestErrorRedisBuffer:
 
     @with_service_target(_REQUEST_ERROR_QUEUE_TARGET)
     async def _pop_batch(self) -> tuple[str | bytes, ...]:
-        popped: Final[object] = await self._redis_cache.async_lpop(  # pyright: ignore[reportAny, reportUnknownMemberType]  # redis returns Any; span parameter is untyped
+        popped: Final[object] = await self._redis_cache.async_lpop(  # pyright: ignore[reportUnknownMemberType]  # span parameter is untyped
             key=REDIS_REQUEST_ERRORS_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT
         )
         if not popped:

@@ -191,7 +191,7 @@ export function useLogFilterLogic({
           used_client_oauth_token: getFilterValue(columnFilters, LOG_FILTER_IDS.CREDENTIAL),
           span_type: getFilterValue(columnFilters, LOG_FILTER_IDS.SPAN_TYPE),
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
-          model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
+          model_group: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
           error_code: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_CODE),
           error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
