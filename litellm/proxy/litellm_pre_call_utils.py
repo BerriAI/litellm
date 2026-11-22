@@ -4357,7 +4357,10 @@ def add_provider_specific_headers_to_request(
     }
     request_fields: Final = _REQUEST_FIELDS.validate_python(data)
     sends_anthropic_bearer_oauth: Final = any(
-        map(_carries_anthropic_bearer_oauth, (headers, request_fields.get("extra_headers")))
+        map(
+            _carries_anthropic_bearer_oauth,
+            (headers, request_fields.get("extra_headers"), request_fields.get("headers")),
+        )
     )
     caller_api_key: Final = request_fields.get("api_key")
     sends_anthropic_oauth: Final = sends_anthropic_bearer_oauth or (

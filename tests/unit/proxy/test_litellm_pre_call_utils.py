@@ -8164,6 +8164,12 @@ async def test_a_caller_credential_keeps_its_own_profile_id_where_the_provider_u
         (
             {"headers": {"authorization": "Bearer sk-ant-oat01-caller", USER_PROFILE_ID_HEADER: "uprof_client"}},
             "anthropic",
+            "uprof_client",
+        ),
+        ({"headers": {"Authorization": "Bearer sk-ant-oat01-caller"}}, "anthropic", None),
+        (
+            {"headers": {"authorization": "Bearer sk-ant-oat01-caller", USER_PROFILE_ID_HEADER: "uprof_client"}},
+            "azure_ai",
             "uprof_key",
         ),
         ({"extra_headers": {"x-trace": "t1", USER_PROFILE_ID_HEADER: "uprof_client"}}, "anthropic", "uprof_key"),
@@ -8176,6 +8182,8 @@ async def test_a_caller_credential_keeps_its_own_profile_id_where_the_provider_u
         "extra-headers-x-api-key-on-anthropic",
         "headers-x-api-key-on-azure-ai",
         "headers-oauth-on-anthropic",
+        "headers-oauth-without-a-profile-on-anthropic",
+        "headers-oauth-on-azure-ai",
         "extra-headers-without-a-credential",
     ],
 )
