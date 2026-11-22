@@ -257,6 +257,7 @@ class InteractionsChatStreamingIterator:
         self._text_length: int = 0
         self._grounding_steps: Final[list[JsonMapping]] = []  # mutable-ok: per-stream search and URL steps
         self._cited_spans: Final[list[JsonValue]] = []  # mutable-ok: per-stream citations in joined-answer bytes
+        self._whole_grounding_steps: Final[set[int]] = set()  # mutable-ok: step indexes already recorded whole
         self._last_text_start: int = 0
         self._text_starts: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> offset of its first text
         self._thought_slots: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> thought-slot state
@@ -406,6 +407,7 @@ class InteractionsChatStreamingIterator:
                 return (self._build_chunk(Delta(role="assistant", content=direct_text)),) if direct_text else ()
             case step_type if step_type in GROUNDING_STEP_TYPES and ("arguments" in raw_step or "result" in raw_step):
                 self._grounding_steps.append(raw_step)
+                self._whole_grounding_steps.add(step_index)
                 return ()
             case _:
                 return ()
@@ -479,6 +481,11 @@ class InteractionsChatStreamingIterator:
             return _MediaDelta(images=list(images))
         return _MediaDelta(audio=audio) if audio is not None else None
 
+    def _record_grounding_delta(self, step_index: int, raw_delta: JsonMapping) -> tuple[ModelResponseStream, ...]:
+        if step_index not in self._whole_grounding_steps:
+            self._grounding_steps.append(raw_delta)
+        return ()
+
     def _handle_step_delta(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
         step_index: Final = self._step_index_of(event)
         raw_delta: Final = event.get("delta")
@@ -486,8 +493,7 @@ class InteractionsChatStreamingIterator:
             return ()
 
         if raw_delta.get("type") in GROUNDING_STEP_TYPES:
-            self._grounding_steps.append(raw_delta)
-            return ()
+            return self._record_grounding_delta(step_index, raw_delta)
 
         match raw_delta.get("type"):
             case "text":

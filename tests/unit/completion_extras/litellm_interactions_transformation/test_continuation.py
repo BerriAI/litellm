@@ -744,10 +744,12 @@ _EXPECTED_URL_CONTEXT: Final = [
 def _grounded_sse(*, whole_steps_on_start: bool = False) -> httpx.Response:
     events: Final = (
         *(
-            {"event_type": "step.start", "index": position, "step": call}
-            if whole_steps_on_start
-            else {"event_type": "step.delta", "index": position, "delta": call}
+            event
             for position, call in enumerate(_GROUNDED_CALLS)
+            for event in (
+                *(({"event_type": "step.start", "index": position, "step": call},) if whole_steps_on_start else ()),
+                {"event_type": "step.delta", "index": position, "delta": call},
+            )
         ),
         {"event_type": "step.start", "index": 3, "step": {"type": "model_output"}},
         {"event_type": "step.delta", "index": 3, "delta": {"type": "text", "text": _GROUNDED_TEXT[:8]}},
