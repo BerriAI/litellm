@@ -142,6 +142,8 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_key_duration,
+    validate_key_duration_update,
     validate_semantic_cache_metadata,
 )
 from litellm.proxy.management_endpoints.key_budget_change import (
@@ -1623,6 +1625,7 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
+    validate_key_duration(data.duration)
     if prisma_client is not None:
         await validate_scalar_budget_attachment(prisma_client, data.budget_id)
     requested_metadata: Final = attribute_or_none(data, "metadata")
@@ -3638,6 +3641,7 @@ async def _process_single_key_update(
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
     validate_budget_duration(update_key_request.budget_duration)
+    validate_key_duration_update(update_key_request.duration)
 
     check_permissions_caller_permission(
         data=update_key_request,
@@ -4075,6 +4079,7 @@ async def _validate_update_key_data(
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
     validate_budget_duration(data.budget_duration)
+    validate_key_duration_update(data.duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
@@ -6641,6 +6646,7 @@ async def _execute_virtual_key_regeneration(
             )
 
     if data is not None:
+        validate_key_duration_update(data.duration)
         _existing_key_metadata: Final = getattr(key_in_db, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
             data=data,

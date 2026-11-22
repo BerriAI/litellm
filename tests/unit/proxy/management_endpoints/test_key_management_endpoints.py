@@ -3436,6 +3436,83 @@ async def test_generate_key_rejects_a_duration_that_never_advances(monkeypatch, 
     mock_generate.assert_not_awaited()
 
 
+_UNEXPIRABLE_KEY_DURATIONS: Final = ("banana", "1x", "3650000d", "99999999999d")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_duration", [*_UNEXPIRABLE_KEY_DURATIONS, "", "-1"])
+async def test_generate_key_rejects_a_duration_it_cannot_turn_into_an_expiry(
+    monkeypatch: pytest.MonkeyPatch, bad_duration: str
+) -> None:
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await generate_key_fn(
+            data=GenerateKeyRequest(duration=bad_duration),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="1234"),
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert f"Invalid duration '{bad_duration}'" in str(exc_info.value.message)
+    mock_prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_duration", _UNEXPIRABLE_KEY_DURATIONS)
+async def test_update_key_rejects_a_duration_it_cannot_turn_into_an_expiry(
+    monkeypatch: pytest.MonkeyPatch, bad_duration: str
+) -> None:
+    hashed_token: Final = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hashed_token, user_id="test-user")
+    )
+    mock_prisma_client.update_data = AsyncMock()
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=hashed_token, duration=bad_duration),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert f"Invalid duration '{bad_duration}'" in str(exc_info.value.message)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bulk_key_update_rejects_a_duration_it_cannot_turn_into_an_expiry() -> None:
+    prisma_client: Final = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update(
+            update_key_request=UpdateKeyRequest(key="sk-owned-key", duration="banana"),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"),
+            litellm_changed_by=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            llm_router=MagicMock(),
+            existing_key_row=LiteLLM_VerificationToken(token="hashed-key", user_id="admin-user"),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid duration 'banana'" in str(exc_info.value.detail)
+    prisma_client.update_data.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_update_key_by_alias_only(monkeypatch):
     """
@@ -13888,6 +13965,28 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
     assert "duration" in str(exc_info.value.detail)
     # Rejected regenerate must not reach the DB update.
     persist_deleted_verification_tokens.assert_not_awaited()
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_rejects_a_duration_it_cannot_turn_into_an_expiry() -> None:
+    mock_prisma_client: Final = _make_regenerate_mock_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(duration="banana"),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid duration 'banana'" in str(exc_info.value.detail)
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
 
 

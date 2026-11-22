@@ -194,6 +194,29 @@ async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(
     assert "employee-42" in exc.value.message
 
 
+@pytest.mark.asyncio
+async def test_new_user_rejects_a_key_duration_it_cannot_turn_into_an_expiry(mocker: MockerFixture) -> None:
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(return_value=LiteLLM_UserTable(user_id="duration-user")),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    with pytest.raises(ProxyException) as exc:
+        await new_user(
+            data=NewUserRequest(user_id="duration-user", duration="banana"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(exc.value.code) == "400"
+    assert "Invalid duration 'banana'" in exc.value.message
+    table.create.assert_not_awaited()
+
+
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.utils import PrismaClient
