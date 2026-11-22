@@ -97,6 +97,10 @@ _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
 _DECODED_JSON: Final = TypeAdapter(object)
 _REASONING_LEVELS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
 _PROVIDER_DEFAULT_EFFORT: Final = "default"
+_SENT_AS_IS: Final = frozenset(
+    ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key")
+)
+_SENT_AS_IS_WHEN_SUPPORTED: Final = frozenset(("presence_penalty", "frequency_penalty", "n"))
 _NON_LEVEL_EFFORT_REASON: Final = "the Mistral API takes it only as a level such as 'high'."
 _UNUSABLE_TOOL_CHOICE_REASON: Final = (
     "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required', "
@@ -259,6 +263,7 @@ class MistralConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         requested: Final = _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params)
+        supported_params: Final = frozenset(self.get_supported_openai_params(model))
         reasoning_level: Final = (
             _public_reasoning_level(self._reasoning_level_to_send(model, requested, drop_params))
             if "reasoning_effort" in requested
@@ -303,7 +308,7 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["reasoning_effort"] = _accepted_reasoning_effort(
                     model, thinking_effort, self.custom_llm_provider
                 )
-            if param in ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key"):
+            if param in _SENT_AS_IS or (param in _SENT_AS_IS_WHEN_SUPPORTED and param in supported_params):
                 optional_params[param] = value
         return optional_params
 

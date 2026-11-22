@@ -6,6 +6,8 @@ from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionTextObject
 
+_PARAMS_VERTEX_AI_ADDS: Final = ("presence_penalty", "frequency_penalty", "n")
+
 
 def _part_text(part: object) -> str | None:
     match part:
@@ -33,6 +35,9 @@ class VertexAIMistralConfig(MistralConfig):
     @property
     def custom_llm_provider(self) -> str:
         return "vertex_ai"
+
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: mirrors override contract
+        return [*super().get_supported_openai_params(model), *_PARAMS_VERTEX_AI_ADDS]
 
     @overload
     def _transform_messages(

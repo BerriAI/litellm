@@ -2143,3 +2143,13 @@ class TestMistralToolChoice:
         monkeypatch.setattr(litellm, "drop_params", True)
 
         assert "tool_choice" not in self._request_body({"type": "function", "function": {}})
+
+
+def test_mistral_api_chat_leaves_n_out_of_the_body() -> None:
+    import litellm
+
+    optional_params: Final = litellm.get_optional_params(
+        model="mistral-large-latest", custom_llm_provider="mistral", n=1
+    )
+
+    assert "n" not in optional_params
