@@ -14620,7 +14620,8 @@
         "overview": "Overview",
         "tools": "MCP Tools",
         "settings": "Settings",
-        "userCredentials": "User Credentials"
+        "userCredentials": "User Credentials",
+        "events": "Events"
       },
       "overview": {
         "transport": "Transport",
@@ -14653,6 +14654,16 @@
           "disabled": "Disabled",
           "enabledPkcePassthrough": "Enabled (PKCE Pass-Through)",
           "allToolsEnabled": "All tools enabled"
+        }
+      },
+      "events": {
+        "loading": "Loading event types...",
+        "loadError": "Could not load event types",
+        "empty": "The upstream server publishes no event types the gateway allows.",
+        "columns": {
+          "name": "Event type",
+          "description": "Description",
+          "delivery": "Delivery"
         }
       }
     },
