@@ -72,11 +72,17 @@ fn sorted_text_values_by_name<'a>(
     values_by_name
 }
 
-fn carries(values_by_name: &HashMap<String, Vec<&str>>, name: &str, prefix: &str) -> bool {
+fn carries(
+    values_by_name: &HashMap<String, Vec<&str>>,
+    name: &str,
+    prefix: &str,
+    caller_credentials: &[String],
+) -> bool {
     values_by_name.get(name).is_some_and(|values| {
-        values
-            .get(values.partition_point(|value| *value < prefix))
-            .is_some_and(|value| value.starts_with(prefix))
+        values[values.partition_point(|value| *value < prefix)..]
+            .iter()
+            .take_while(|value| value.starts_with(prefix))
+            .any(|value| !caller_credentials.iter().any(|caller| caller == value))
     })
 }
 
@@ -93,8 +99,10 @@ fn configures_a_listed_credential(
                     configured_values,
                     &credential.to_ascii_lowercase(),
                     &entry.configured_credential_prefix,
+                    &entry.caller_credentials,
                 )
             })
+            != entry.without_configured_credential
 }
 
 fn contributed_headers(
@@ -305,6 +313,44 @@ mod tests {
         assert_eq!(
             Value::Object(get_provider_specific_headers(
                 Some(&pinned),
+                "anthropic",
+                true,
+                configured.as_object().unwrap()
+            )),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::caller_token_survives_the_merge(json!({"authorization": "Bearer sk-ant-oat01-caller"}), false)]
+    #[case::configured_token_survives_the_merge(json!({"Authorization": "Bearer sk-ant-oat01-deployment"}), true)]
+    #[case::both_tokens_survive(
+        json!({"authorization": "Bearer sk-ant-oat01-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}),
+        true
+    )]
+    #[case::no_token(json!({}), false)]
+    fn an_entry_waits_on_whether_a_configured_token_that_is_not_the_callers_own_is_sent(
+        #[case] configured: Value,
+        #[case] configured_token_sent: bool,
+        #[values(false, true)] without_configured_credential: bool,
+    ) {
+        let entry: ProviderSpecificHeaders = serde_json::from_value(json!({
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+            "configured_credential_headers": ["authorization"],
+            "configured_credential_prefix": "Bearer sk-ant-oat",
+            "caller_credentials": ["Bearer sk-ant-oat01-caller"],
+            "without_configured_credential": without_configured_credential
+        }))
+        .unwrap();
+        let expected = if configured_token_sent != without_configured_credential {
+            json!({"anthropic-user-profile-id": "uprof_pinned"})
+        } else {
+            json!({})
+        };
+        assert_eq!(
+            Value::Object(get_provider_specific_headers(
+                Some(&entry),
                 "anthropic",
                 true,
                 configured.as_object().unwrap()

@@ -4197,12 +4197,13 @@ def _providers_on_caller_credentials(data: Mapping[str, object]) -> frozenset[st
     return _PROVIDERS_A_CALLER_API_KEY_AUTHENTICATES if _is_filled_string(data.get("api_key")) else frozenset()
 
 
-def _carries_anthropic_bearer_oauth(headers: object) -> bool:
-    return any(
-        name.lower() == "authorization"
+def _anthropic_bearer_oauth_credentials(headers: object) -> tuple[str, ...]:
+    return tuple(
+        value
+        for name, value in _request_fields(headers).items()
+        if name.lower() == "authorization"
         and isinstance(value, str)
         and value.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}")
-        for name, value in _request_fields(headers).items()
     )
 
 
@@ -4329,15 +4330,22 @@ def _pin_where_a_configured_credential_authenticates(
     )
 
 
-def _pin_where_a_configured_oauth_token_authenticates(
-    providers: frozenset[str], user_profile_id: str | None
+def _profile_by_which_oauth_token_is_sent(
+    providers: frozenset[str],
+    user_profile_id: str | None,
+    caller_credentials: tuple[str, ...],
+    sends_the_callers_token: bool,
+    yields_to_configured: bool = False,
 ) -> ProviderSpecificHeader:
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
         extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
         user_profile_id_models_only=True,
+        yields_to_configured=yields_to_configured,
         configured_credential_headers=("authorization",),
         configured_credential_prefix=f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}",
+        caller_credentials=caller_credentials,
+        without_configured_credential=sends_the_callers_token,
     )
 
 
@@ -4356,14 +4364,16 @@ def add_provider_specific_headers_to_request(
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
     request_fields: Final = _REQUEST_FIELDS.validate_python(data)
-    sends_anthropic_bearer_oauth: Final = any(
-        map(
-            _carries_anthropic_bearer_oauth,
-            (headers, request_fields.get("extra_headers"), request_fields.get("headers")),
+    caller_bearer_oauth_credentials: Final = tuple(
+        itertools.chain.from_iterable(
+            map(
+                _anthropic_bearer_oauth_credentials,
+                (headers, request_fields.get("extra_headers"), request_fields.get("headers")),
+            )
         )
     )
     caller_api_key: Final = request_fields.get("api_key")
-    sends_anthropic_oauth: Final = sends_anthropic_bearer_oauth or (
+    sends_anthropic_oauth: Final = bool(caller_bearer_oauth_credentials) or (
         isinstance(caller_api_key, str) and caller_api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
     )
     caller_oauth_providers: Final = ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_oauth else frozenset[str]()
@@ -4388,7 +4398,10 @@ def add_provider_specific_headers_to_request(
                 user_profile_id or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
                 yields_to_configured=user_profile_id is None,
             ),
-            _user_profile_id_header(caller_credential_providers, caller_profile),
+            _user_profile_id_header(caller_api_key_providers - caller_oauth_providers, caller_profile),
+            _profile_by_which_oauth_token_is_sent(
+                caller_oauth_providers, caller_profile, caller_bearer_oauth_credentials, sends_the_callers_token=True
+            ),
             *(
                 _pin_where_a_configured_credential_authenticates(
                     frozenset((provider,)) & (caller_api_key_providers - caller_oauth_providers),
@@ -4407,8 +4420,12 @@ def add_provider_specific_headers_to_request(
                 )
                 for provider, credential_headers in _CREDENTIAL_HEADERS_CHAT_SENDS_BESIDE_OR_OVER_A_CALLER_KEY.items()
             ),
-            _pin_where_a_configured_oauth_token_authenticates(
-                frozenset() if sends_anthropic_bearer_oauth else caller_oauth_providers, user_profile_id
+            _profile_by_which_oauth_token_is_sent(
+                caller_oauth_providers,
+                user_profile_id or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
+                caller_bearer_oauth_credentials,
+                sends_the_callers_token=False,
+                yields_to_configured=user_profile_id is None,
             ),
             ProviderSpecificHeader(
                 custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,

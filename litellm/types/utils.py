@@ -4597,6 +4597,8 @@ class ProviderSpecificHeader(TypedDict):
     native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
     configured_credential_headers: NotRequired[ReadOnly[tuple[str, ...]]]
     configured_credential_prefix: NotRequired[ReadOnly[str]]
+    caller_credentials: NotRequired[ReadOnly[tuple[str, ...]]]
+    without_configured_credential: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):
