@@ -8569,9 +8569,6 @@
         "usage": "Usage",
         "alerts": "Alerts",
         "costOptimization": "Cost Optimization",
-        "controlCanaries": "Control Canaries",
-        "cacheMiss": "Cache-Miss Explainer",
-        "planLab": "Plan Lab",
         "logs": "Logs",
         "lens": "Lens",
         "guardrailsMonitor": "Guardrails Monitor",
@@ -8594,7 +8591,10 @@
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry",
-        "customers": "$t(customerPortal.entities.organizations)"
+        "customers": "$t(customerPortal.entities.organizations)",
+        "controlCanaries": "Control Canaries",
+        "cacheMiss": "Cache-Miss Explainer",
+        "planLab": "Plan Lab"
       },
       "homeLink": "LiteLLM home"
     },
@@ -21555,6 +21555,19 @@
       "teams": "Customer teams",
       "member": "Customer member",
       "members": "Customer members"
+    }
+  },
+  "lensWorkspace": {
+    "opening": "Opening Lens…",
+    "frameTitle": "Lens",
+    "unsupported": {
+      "title": "Update Lens to use it here",
+      "body": "This page shows the Lens UI served by the Lens service this gateway is connected to. The connected Lens is an older version that cannot be shown inside the dashboard yet. Update Lens, or open it at its own address.",
+      "open": "Open Lens"
+    },
+    "unavailable": {
+      "title": "Lens is not reachable",
+      "body": "This page shows the Lens UI served by the Lens service this gateway is connected to. The gateway could not load it. Check that LITELLM_LENS_URL is set and that Lens is running."
     }
   },
   "whatIf": {

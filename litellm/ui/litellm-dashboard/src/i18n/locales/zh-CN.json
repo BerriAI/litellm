@@ -8500,9 +8500,6 @@
         "usage": "用量",
         "alerts": "告警",
         "costOptimization": "成本优化",
-        "controlCanaries": "Control Canaries",
-        "cacheMiss": "Cache-Miss Explainer",
-        "planLab": "Plan Lab",
         "logs": "日志",
         "lens": "Lens",
         "guardrailsMonitor": "护栏监控",
@@ -8525,7 +8522,10 @@
         "costTracking": "成本追踪",
         "uiTheme": "UI 主题",
         "telemetry": "遥测",
-        "customers": "$t(customerPortal.entities.organizations)"
+        "customers": "$t(customerPortal.entities.organizations)",
+        "controlCanaries": "Control Canaries",
+        "cacheMiss": "Cache-Miss Explainer",
+        "planLab": "Plan Lab"
       },
       "homeLink": "LiteLLM 首页"
     },
@@ -21437,6 +21437,19 @@
       "teams": "客户团队",
       "member": "客户成员",
       "members": "客户成员"
+    }
+  },
+  "lensWorkspace": {
+    "opening": "正在打开 Lens…",
+    "frameTitle": "Lens",
+    "unsupported": {
+      "title": "请升级 Lens 后在此使用",
+      "body": "此页面显示的是该网关所连接的 Lens 服务提供的 Lens 界面。当前连接的 Lens 版本较旧，尚不能在控制台内显示。请升级 Lens，或在 Lens 自己的地址打开它。",
+      "open": "打开 Lens"
+    },
+    "unavailable": {
+      "title": "无法连接 Lens",
+      "body": "此页面显示的是该网关所连接的 Lens 服务提供的 Lens 界面。网关无法加载它。请检查是否已设置 LITELLM_LENS_URL，以及 Lens 是否正在运行。"
     }
   },
   "whatIf": {

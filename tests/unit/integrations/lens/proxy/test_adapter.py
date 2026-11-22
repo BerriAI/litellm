@@ -11,19 +11,23 @@ from litellm.integrations.lens.proxy.adapter import (
     Connection,
     Identity,
     delegated_identity,
-    forward,
-    lens_request,
     login_redirect,
     login_user_name,
     password_change_redirect,
-    request_body,
     service_connection,
     service_status,
 )
+from litellm.integrations.lens.proxy.buffering import request_body
+from litellm.integrations.lens.proxy.pages import forward, lens_request
+from litellm.integrations.lens.proxy.buffering import BufferBudget
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
+
+
+async def _no_log_teams(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    return ()
 
 
 @pytest.fixture
@@ -161,7 +165,12 @@ async def test_forwarding_replaces_caller_headers_and_preserves_wire_response(
         return httpx.Response(
             409,
             content=b'{"detail":"contract mismatch"}',
-            headers={"content-type": "application/json", "retry-after": "2", "set-cookie": "unsafe"},
+            headers={
+                "content-type": "application/json",
+                "retry-after": "2",
+                "set-cookie": "unsafe",
+                "cache-control": "public, max-age=600",
+            },
         )
 
     request: Final = Request(
@@ -188,6 +197,7 @@ async def test_forwarding_replaces_caller_headers_and_preserves_wire_response(
     assert response.body == b'{"detail":"contract mismatch"}'
     assert response.headers["retry-after"] == "2"
     assert "set-cookie" not in response.headers
+    assert response.headers["cache-control"] == "private, no-store"
 
 
 @pytest.mark.asyncio
@@ -291,7 +301,7 @@ async def test_missing_connection_keeps_setup_readable_and_rejects_lens_requests
     assert status.url == "https://lens.example.test"
     request: Final = Request({"type": "http", "method": "GET", "headers": []})
     with pytest.raises(HTTPException) as routed:
-        await lens_request(request, identity, "datasets")
+        await lens_request(request, _no_log_teams, "datasets")
     assert routed.value.status_code == 503
     async with httpx.AsyncClient() as client:
         with pytest.raises(HTTPException) as forwarded:

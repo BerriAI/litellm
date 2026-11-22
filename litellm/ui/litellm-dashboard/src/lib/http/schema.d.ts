@@ -9609,8 +9609,42 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Service Connection */
-        get: operations["service_connection_lens_service_get"];
+        /** Lens Service */
+        get: operations["lens_service_lens_service_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui Entry */
+        get: operations["lens_ui_entry_lens_ui_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui */
+        get: operations["lens_ui_lens_ui__path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -70698,7 +70732,7 @@ export interface operations {
             };
         };
     };
-    service_connection_lens_service_get: {
+    lens_service_lens_service_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -70714,6 +70748,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceConnection"];
+                };
+            };
+        };
+    };
+    lens_ui_entry_lens_ui_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_ui_lens_ui__path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
