@@ -741,10 +741,12 @@ _EXPECTED_URL_CONTEXT: Final = [
 ]
 
 
-def _grounded_sse() -> httpx.Response:
+def _grounded_sse(*, whole_steps_on_start: bool = False) -> httpx.Response:
     events: Final = (
         *(
-            {"event_type": "step.delta", "index": position, "delta": call}
+            {"event_type": "step.start", "index": position, "step": call}
+            if whole_steps_on_start
+            else {"event_type": "step.delta", "index": position, "delta": call}
             for position, call in enumerate(_GROUNDED_CALLS)
         ),
         {"event_type": "step.start", "index": 3, "step": {"type": "model_output"}},
@@ -799,8 +801,11 @@ def test_unary_grounded_answer_carries_the_search_and_url_context_fields_generat
     assert (details.web_search_requests, details.google_maps_grounding_requests) == (2, 3)
 
 
-def test_streamed_grounded_answer_carries_the_search_and_url_context_fields_on_its_last_chunk() -> None:
-    _, responder = _scripted((_grounded_sse(),))
+@pytest.mark.parametrize("whole_steps_on_start", [False, True])
+def test_streamed_grounded_answer_carries_the_search_and_url_context_fields_on_its_last_chunk(
+    whole_steps_on_start: bool,
+) -> None:
+    _, responder = _scripted((_grounded_sse(whole_steps_on_start=whole_steps_on_start),))
     with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
         chunks: Final = list(
             litellm.completion(

@@ -102,7 +102,10 @@ def _grounding(steps: Sequence[JsonMapping]) -> Mapping[str, object]:
     queries: Final = _flat(_queries(step.get("arguments")) for step in _typed(steps, _SEARCH_CALL))
     found: Final = _flat(_dicts(step.get("result")) for step in _typed(steps, _SEARCH_RESULT))
     suggestions: Final = tuple(
-        suggestion for result in found if isinstance(suggestion := result.get("search_suggestions"), str) and suggestion
+        suggestion
+        for result in found
+        if isinstance(suggestion := result.get("search_suggestions") or result.get("rendered_content"), str)
+        and suggestion
     )
     return {
         **({"searchEntryPoint": {"renderedContent": suggestions[-1]}} if suggestions else {}),

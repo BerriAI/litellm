@@ -404,6 +404,9 @@ class InteractionsChatStreamingIterator:
                 direct_text: Final = str(raw_step.get("text") or "")
                 self._count_text(step_index, direct_text)
                 return (self._build_chunk(Delta(role="assistant", content=direct_text)),) if direct_text else ()
+            case step_type if step_type in GROUNDING_STEP_TYPES and ("arguments" in raw_step or "result" in raw_step):
+                self._grounding_steps.append(raw_step)
+                return ()
             case _:
                 return ()
 
