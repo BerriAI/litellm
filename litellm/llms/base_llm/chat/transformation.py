@@ -529,6 +529,9 @@ class BaseConfig(ABC):
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
         return False
 
+    def runs_hosted_mcp(self) -> bool:
+        return False
+
     def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
         return False
 

@@ -5177,8 +5177,8 @@ def test_batch_row_drops_a_hosted_mcp_tool_and_its_tool_choice_under_drop_params
 @pytest.mark.parametrize(
     ("row_drop_params", "deployment_drop_params", "advice", "misleading_advice"),
     [
-        (None, None, "`router_settings.default_litellm_params`", "this row sets"),
-        (False, True, "this row sets `drop_params: false`", "deployment when the upload names a model"),
+        (None, None, "when the upload names a model, in `router_settings.default_litellm_params`", "this row sets"),
+        (False, True, "this row sets `drop_params: false`", "when the upload names a model"),
     ],
     ids=["unset", "row_false_wins"],
 )
@@ -5209,41 +5209,77 @@ _RESPONSES_WEATHER_TOOL: Final = {
 }
 
 
-@pytest.mark.parametrize("server_label", ["deepwiki", "unsent"])
 @pytest.mark.parametrize("model", _BATCH_MODELS)
 @pytest.mark.parametrize(
     ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
 )
-@pytest.mark.parametrize(
-    "tools",
-    [(_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL), (_RESPONSES_WEATHER_TOOL,)],
-    ids=["with_mcp_tool", "without_mcp_tool"],
-)
 def test_batch_responses_row_drops_a_tool_choice_that_forces_the_dropped_hosted_mcp_server(
-    monkeypatch: pytest.MonkeyPatch,
-    model: str,
-    server_label: str,
-    row_drop_params: bool | None,
-    deployment_drop_params: bool | None,
-    tools: tuple[Mapping[str, object], ...],
+    monkeypatch: pytest.MonkeyPatch, model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     body: Final = {
         "model": model,
         "input": "hi",
         "max_output_tokens": 10,
-        "tools": list(tools),
-        "tool_choice": {"type": "mcp", "server_label": server_label},
+        "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL],
+        "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
         **({} if row_drop_params is None else {"drop_params": row_drop_params}),
     }
 
     model_input: Final = json.dumps(_uploaded_row(model, "/v1/responses", body, deployment_drop_params))
 
     assert "get_weather" in model_input
-    assert server_label not in model_input
+    assert "deepwiki" not in model_input
     assert "toolChoice" not in model_input
     assert "tool_choice" not in model_input
     assert "drop_params" not in model_input
+
+
+_CHAT_ROW: Final = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 10}
+_FORCE_DEEPWIKI: Final = {"type": "mcp", "server_label": "deepwiki"}
+_FORCE_DOCS: Final = {"type": "mcp", "server_label": "docs"}
+_RESPONSES_ROW: Final = {"input": "hi", "max_output_tokens": 10}
+_REAL_TIME_MCP_CHOICE_REFUSAL: Final = (
+    "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
+)
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("url", "body"),
+    [
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            id="chat-another-server",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            id="chat-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {**_RESPONSES_ROW, "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            id="responses-another-server",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {**_RESPONSES_ROW, "tools": [_RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            id="responses-no-mcp-tool",
+        ),
+    ],
+)
+def test_batch_row_is_refused_like_a_real_time_call_when_its_mcp_tool_choice_names_a_server_it_does_not_send(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(BedrockError) as exc_info:
+        _uploaded_row(model, url, {"model": model, **body}, True)
+
+    assert exc_info.value.status_code == 400
+    assert _REAL_TIME_MCP_CHOICE_REFUSAL in exc_info.value.message
 
 
 @pytest.mark.parametrize("model", _BATCH_MODELS)

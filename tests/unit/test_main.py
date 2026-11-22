@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import queue
 import threading
 import urllib.parse
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -868,11 +869,89 @@ def test_drop_params_drops_an_mcp_tool_choice_together_with_the_hosted_mcp_tool_
     ]
 
 
+_CAPTURED_CHAT_REPLY: Final = {
+    "id": "chatcmpl-mcp",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "captured",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "Sunny."}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11},
+}
+
+
+def _capturing_transport(requests: queue.SimpleQueue[httpx.Request]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json=_CAPTURED_CHAT_REPLY)
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.parametrize(
+    ("tools", "expected_tool_fields"),
+    [
+        pytest.param(
+            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+            {"tools": _TWO_TOOLS, "parallel_tool_calls": True},
+            id="function-tools-remain",
+        ),
+        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL], {}, id="no-tools-remain"),
+    ],
+)
+@pytest.mark.parametrize(
+    "model", ["groq/openai/gpt-oss-120b", "xai/grok-4.20-reasoning-gv2", "mistral/mistral-medium-3.5"]
+)
+def test_drop_params_sends_neither_a_forced_hosted_mcp_server_nor_its_choice_to_a_provider_that_cannot_run_it(
+    model: str, tools: list[dict[str, object]], expected_tool_fields: dict[str, object]
+):
+    requests: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=tools,
+        tool_choice=_FORCE_DEEPWIKI,
+        parallel_tool_calls=True,
+        drop_params=True,
+        api_key="fake_api_key",
+        client=HTTPHandler(client=httpx.Client(transport=_capturing_transport(requests))),
+    )
+
+    sent: Final = json.loads(requests.get_nowait().content)
+    assert {key: sent[key] for key in ("tools", "tool_choice", "parallel_tool_calls") if key in sent} == (
+        expected_tool_fields
+    )
+    assert response.choices[0].message.content == "Sunny."
+
+
+def test_drop_params_still_sends_a_forced_hosted_mcp_server_and_its_choice_to_openai():
+    requests: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    litellm.completion(
+        model="openai/gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        client=OpenAI(api_key="fake_api_key", http_client=httpx.Client(transport=_capturing_transport(requests))),
+    )
+
+    sent: Final = json.loads(requests.get_nowait().content)
+    assert sent["tool_choice"] == _FORCE_DEEPWIKI
+    assert sent["tools"] == [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS]
+
+
 @pytest.mark.parametrize(
     ("model", "tools", "drop_params"),
     [
         pytest.param("gemini/gemini-3.8-flash", [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], False, id="drop-params-off"),
         pytest.param("gemini/gemini-3.8-flash", _TWO_TOOLS, True, id="server-not-sent"),
+        pytest.param(
+            "groq/openai/gpt-oss-120b",
+            [{**_DEEPWIKI_HOSTED_MCP_TOOL, "server_label": "docs"}, *_TWO_TOOLS],
+            True,
+            id="another-server-sent",
+        ),
         pytest.param(
             "anthropic/claude-haiku-5-5", [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], True, id="provider-runs-the-server"
         ),

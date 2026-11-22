@@ -145,8 +145,8 @@ def raise_if_hosted_tool_choice_unsupported(
 ) -> None:
     """Anthropic drops a tool_choice dict it does not recognise and Bedrock sends a tool named "", so a forced hosted
     tool stops here with a 400 on providers that cannot run it. The one exception is an ``mcp`` choice naming a server
-    in ``mcp_servers_to_drop``, the hosted MCP tools drop_params drops on this call: the provider config drops the
-    choice together with that tool, and a provider that runs the server itself calls this again without them."""
+    in ``mcp_servers_to_drop``, the hosted MCP tools drop_params drops on this call, which the caller then drops
+    together with the choice."""
     hosted: Final = hosted_tool_choice_type(tool_choice)
     if (
         hosted is None

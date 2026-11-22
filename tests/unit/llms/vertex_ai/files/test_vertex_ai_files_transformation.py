@@ -2615,31 +2615,64 @@ def test_batch_responses_row_drops_a_hosted_mcp_tool_under_its_own_drop_params(
     assert "drop_params" not in json.dumps(row)
 
 
-def test_batch_responses_row_drops_an_mcp_tool_choice_under_its_deployments_drop_params(
-    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+_DEEPWIKI_SERVER: Final = {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}
+_RESPONSES_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "claude-sonnet-4-6"])
+@pytest.mark.parametrize(
+    ("url", "body"),
+    [
+        pytest.param(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+            id="chat-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+            id="responses-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_DEEPWIKI_SERVER, _RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "docs"},
+            },
+            id="responses-another-server",
+        ),
+    ],
+)
+def test_batch_row_is_refused_like_a_real_time_call_when_its_mcp_tool_choice_names_a_server_it_does_not_send(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object]
 ) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
     monkeypatch.setattr(litellm, "drop_params", False)
-    entry: Final = {
-        "custom_id": "r1",
-        "method": "POST",
-        "url": "/v1/responses",
-        "body": {
-            "model": "gemini-3.8-flash",
-            "input": "hi",
-            "max_output_tokens": 10,
-            "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
-            "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
-        },
-    }
+    entry: Final = {"custom_id": "r1", "method": "POST", "url": url, "body": {"model": model, **body}}
 
-    (row,) = _uploaded_rows(
-        config,
-        {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.8-flash", "drop_params": True},
-        [entry],
+    with pytest.raises(VertexAIError) as exc_info:
+        _uploaded_rows(
+            config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}", "drop_params": True}, [entry]
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
+        in exc_info.value.message
     )
-
-    assert "toolConfig" not in row["request"]
-    assert "get_weather" in json.dumps(row)
 
 
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])

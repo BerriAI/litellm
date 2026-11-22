@@ -245,21 +245,19 @@ def test_dropping_every_hosted_mcp_tool_clears_the_tool_selection_params() -> No
 _FORCED_DEEPWIKI: Final = {"type": "function", "function": {"name": "deepwiki"}}
 
 
-@pytest.mark.parametrize(
-    "tool_choice",
-    [
-        _FORCED_DEEPWIKI,
-        {"type": "mcp", "server_label": "deepwiki"},
-        {"type": "mcp", "server_label": "unsent"},
-        {"type": "mcp"},
-    ],
-    ids=["function_choice", "responses_mcp_choice", "mcp_choice_for_an_unsent_server", "unlabeled_mcp_choice"],
-)
-@pytest.mark.parametrize(
+_LEGACY_FUNCTION_CASES: Final = pytest.mark.parametrize(
     "functions",
     [None, [{"name": "get_weather", "parameters": {"type": "object"}}], ["deepwiki"]],
     ids=["tools_kept", "legacy_functions_kept", "malformed_legacy_function_kept"],
 )
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [_FORCED_DEEPWIKI, {"type": "mcp", "server_label": "deepwiki"}],
+    ids=["function_choice", "responses_mcp_choice"],
+)
+@_LEGACY_FUNCTION_CASES
 def test_dropping_a_hosted_mcp_tool_clears_a_tool_choice_that_forces_it(
     functions: object, tool_choice: Mapping[str, object]
 ) -> None:
@@ -278,6 +276,29 @@ def test_dropping_a_hosted_mcp_tool_clears_a_tool_choice_that_forces_it(
         "parallel_tool_calls": False,
         **legacy,
     }
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [{"type": "mcp", "server_label": "unsent"}, {"type": "mcp"}],
+    ids=["mcp_choice_for_an_unsent_server", "unlabeled_mcp_choice"],
+)
+@_LEGACY_FUNCTION_CASES
+def test_an_mcp_tool_choice_naming_no_dropped_server_is_refused_like_a_real_time_call(
+    functions: object, tool_choice: Mapping[str, object]
+) -> None:
+    sent_tools: Final = [_HOSTED_MCP_TOOL, _GOOD_TOOL] if functions is None else [_HOSTED_MCP_TOOL]
+    legacy: Final = {} if functions is None else {"functions": functions}
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp' forces an OpenAI hosted tool") as exc:
+        tool_params_without_hosted_mcp(
+            {"tools": sent_tools, "tool_choice": tool_choice, "parallel_tool_calls": False, **legacy},
+            model="deepseek-v4-flash",
+            route="deepseek",
+            drop_params=True,
+        )
+
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.parametrize(
