@@ -177,7 +177,7 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shutdown_error", [False, True])
-async def test_tracing_config_automatically_exports_spend_without_a_storage_dependency(
+async def test_tracing_config_sends_no_spend_record_without_a_confirmed_ledger_commit(
     shutdown_error: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import httpx
@@ -188,10 +188,10 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 
     monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-    received: Final = asyncio.Future[httpx.Request]()
+    received: Final = asyncio.Queue[httpx.Request]()
 
     def accept(request: httpx.Request) -> httpx.Response:
-        received.set_result(request)
+        received.put_nowait(request)
         return httpx.Response(204)
 
     def client(connection: LensConnection) -> httpx.AsyncClient:
@@ -209,11 +209,8 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
             if shutdown_error:
                 raise RuntimeError("shutdown failure")
 
-    request: Final = received.result()
-    rows: Final = json.loads(request.content)
-    assert request.url.path == "/internal/spend"
-    assert rows[0]["spend"] == 0.25
-    assert rows[0]["response_id"] == "response-1"
+    assert received.empty()
+    assert (logger.rows_written, logger.rows_dropped) == (0, 1)
     assert logger not in litellm._async_success_callback
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
 

@@ -1,12 +1,15 @@
 import asyncio
 import json
+import sys
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from functools import cache
 from io import BytesIO
+from math import isfinite
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -15,8 +18,9 @@ from typing_extensions import TypeIs
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
-from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
+from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload, SpendLogRecord
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lens.ledger import LedgerHandoff, Release, start_micros
 
 if TYPE_CHECKING:
     from prometheus_client import Counter as PrometheusCounter
@@ -25,6 +29,7 @@ MAX_EVENT_BYTES: Final = 1024 * 1024
 MAX_BUFFER_BYTES: Final = 32 * 1024 * 1024
 MAX_BUFFER_EVENTS: Final = 1000
 MAX_BATCH_BYTES: Final = 4 * 1024 * 1024
+MAX_PENDING_COMMITS: Final = 10_000
 SHUTDOWN_SECONDS: Final = 3.0
 _PAYLOAD: Final = TypeAdapter(SpendLogPayload)
 
@@ -94,15 +99,37 @@ def encode_record(value: Mapping[str, object]) -> bytes | ExportFailure:
         return ExportFailure.INVALID
 
 
-def _encoded(raw: object, kwargs: Mapping[str, object]) -> bytes | ExportFailure | None:
-    """The request record ready to send, why it cannot be sent, or None for a call that is not an LLM request."""
+def _cost_row(raw: object, kwargs: Mapping[str, object]) -> SpendLogRecord | ExportFailure | None:
+    """The request record to send, why it cannot be sent, or None for a call that is not an LLM request."""
     checked: Final = _check_size(raw, MAX_EVENT_BYTES)
     if isinstance(checked, ExportFailure):
         return checked
     payload: Final = _PAYLOAD.validate_python(raw)
     if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
         return None
-    return encode_record(spend_log_row_from_payload(payload, kwargs))
+    return spend_log_row_from_payload(payload, kwargs)
+
+
+def _retained_bytes(row: SpendLogRecord) -> int:
+    """Memory a held row keeps alive: the mapping, its keys and values, and each request tag, as stored."""
+    tags: Final = row["request_tags"]
+    return (
+        sys.getsizeof(row)
+        + sum(sys.getsizeof(key) + sys.getsizeof(value) for key, value in row.items())
+        + sum(sys.getsizeof(tag) for tag in tags)
+    )
+
+
+def _logged_start(kwargs: Mapping[str, object]) -> int | None:
+    """The start a successful request's spend log row records: the logging payload's ``startTime``."""
+    raw: Final = kwargs.get("standard_logging_object")
+    started: Final = raw.get("startTime") if _is_mapping(raw) else None
+    if isinstance(started, bool) or not isinstance(started, (int, float)) or not isfinite(started):
+        return None
+    try:
+        return start_micros(datetime.fromtimestamp(started, tz=timezone.utc))
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _without_content(raw: object) -> object:
@@ -149,11 +176,16 @@ class LensExporter(CustomLogger):
         client: httpx.AsyncClient,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         counters: ExportCounters | None = None,
+        ledger: LedgerHandoff | None = None,
+        ledger_key: Callable[[Mapping[str, object], object], str | None] | None = None,
     ) -> None:
         super().__init__()
         self.client: Final = client
         self.sleep: Final = sleep
         self.counters: Final = counters if counters is not None else lens_export_counters()
+        self.ledger: Final = ledger
+        self.ledger_key: Final = ledger_key
+        self.commits: Final[deque[Mapping[str, object]]] = deque()  # mutable-ok: bounded confirmed deliveries
         self.queue: Final[deque[bytes]] = deque()  # mutable-ok: bounded producer-consumer queue
         self.wake: Final = asyncio.Event()
         self.closed = False
@@ -194,14 +226,14 @@ class LensExporter(CustomLogger):
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self._log(kwargs)
+        self._log(kwargs, response_obj, _logged_start(kwargs))
 
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self._log(kwargs)
+        self._log(kwargs, response_obj, start_micros(start_time) if isinstance(start_time, datetime) else None)
 
-    def _log(self, kwargs: Mapping[str, object]) -> None:
+    def _log(self, kwargs: Mapping[str, object], response_obj: object, started: int | None) -> None:
         raw: Final = kwargs.get("standard_logging_object")
         if raw is None or self.closed:
             return
@@ -209,14 +241,25 @@ class LensExporter(CustomLogger):
             self._drop(1)
             return
         try:
-            record: Final = _encoded(_without_content(raw), kwargs)
-            if record is None:
+            row: Final = _cost_row(_without_content(raw), kwargs)
+            if row is None:
                 return
+            if isinstance(row, ExportFailure):
+                self._drop(1)
+                self._log_failure(row.value)
+                return
+            key: Final = self._ledger_request_id(kwargs, response_obj)
+            if key is None or self.ledger is None:
+                return
+            if started is None:
+                self._unconfirmed("no start time to match the request to its ledger commit")
+                return
+            record: Final = encode_record(row)
             if isinstance(record, ExportFailure):
                 self._drop(1)
                 self._log_failure(record.value)
                 return
-            self.enqueue(record)
+            self._release(self.ledger.hold(key, started, row, _retained_bytes(row)))
         except ValidationError as error:
             self._drop(1)
             fields: Final = tuple(
@@ -227,6 +270,59 @@ class LensExporter(CustomLogger):
         except (ValueError, TypeError, OverflowError, RecursionError) as error:
             self._drop(1)
             self._log_failure(type(error).__name__)
+
+    def _ledger_request_id(self, kwargs: Mapping[str, object], response_obj: object) -> str | None:
+        """The request id a ledger commit will confirm, or None after counting a record no commit confirms."""
+        if self.ledger is None or self.ledger_key is None:
+            self._unconfirmed("the spend logs ledger is not connected")
+            return None
+        try:
+            key: Final = self.ledger_key(kwargs, response_obj)
+        except Exception as error:  # noqa: BLE001  # an unknown ledger state never exports a record early
+            self._unconfirmed(f"ledger state unknown: {type(error).__name__}")
+            return None
+        if key is None:
+            self._unconfirmed("no ledger commit will confirm the request")
+        return key
+
+    def _unconfirmed(self, reason: str) -> None:
+        """Lens only receives requests a committed ledger delivery confirms; others are counted, never sent."""
+        self._drop(1)
+        self._log_failure(reason)
+
+    def ledger_committed(self, rows: Sequence[Mapping[str, object]]) -> None:
+        """Admits confirmed deliveries for the export task; the ledger writer that reports them never waits."""
+        if self.ledger is None or self.closed:
+            return
+        if len(self.commits) + len(rows) > MAX_PENDING_COMMITS:
+            self._drop(len(rows))
+            self._log_failure("too many confirmed deliveries awaiting export")
+            return
+        self.commits.extend(rows)
+        self.wake.set()
+
+    def _apply_commits(self) -> None:
+        if self.ledger is None or not self.commits:
+            return
+        rows: Final = tuple(self.commits)
+        self.commits.clear()
+        self._release(self.ledger.commit(rows))
+
+    def _release(self, release: Release) -> None:
+        for row in release.ready:
+            self._emit_finalized(row)
+        if release.dropped:
+            self._drop(release.dropped)
+            self._log_failure("records whose ledger commit was not confirmed in time")
+
+    def _emit_finalized(self, row: Mapping[str, object]) -> None:
+        """The one exit for a record whose committed accounting owner and cost are final."""
+        record: Final = encode_record(row)
+        if isinstance(record, ExportFailure):
+            self._drop(1)
+            self._log_failure(record.value)
+            return
+        self.enqueue(record)
 
     def _log_failure(self, reason: str) -> None:
         if reason != self.last_error:
@@ -269,7 +365,10 @@ class LensExporter(CustomLogger):
         return False
 
     async def _run(self) -> None:
-        while not self.closed or self.queue:
+        while not self.closed or self.queue or self.commits:
+            if self.commits:
+                self._apply_commits()
+                continue
             if not self.queue:
                 self.wake.clear()
                 await self.wake.wait()
@@ -291,6 +390,9 @@ class LensExporter(CustomLogger):
             self.buffered_bytes -= sum(len(record) for record in batch)
 
     async def aclose(self) -> None:
+        if self.ledger is not None and not self.closed:
+            self._apply_commits()
+            self._release(self.ledger.drain())
         self.closed = True
         self.wake.set()
         if self.task is not None:
