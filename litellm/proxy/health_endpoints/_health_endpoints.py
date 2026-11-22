@@ -90,6 +90,7 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     resolve_health_check_mode,
     run_with_timeout,
     update_litellm_params_for_health_check,
+    without_probe_identity,
 )
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
@@ -115,22 +116,19 @@ class _HealthBacklogResponse(TypedDict):
     rejected_requests: ReadOnly[int]
 
 
-def _reject_os_environ_references(params: dict) -> None:
+def _reject_os_environ_references(params: Mapping[str, object]) -> None:
     """
     Validate that the provided params do not contain any ``os.environ/``
     references. Values with that prefix are expected to come only from
     server-side configuration (already resolved before reaching here). If a
     request-supplied value still carries the prefix, raise ``HTTPException``.
     """
-    if not isinstance(params, dict):
-        return
-
     stack: Final[list[object]] = [params]
     seen: Final[set[int]] = {id(params)}
 
     while stack:
         src = stack.pop()
-        if isinstance(src, dict):
+        if isinstance(src, Mapping):
             values: Iterable[object] = src.values()
         elif isinstance(src, list):
             values = src
@@ -143,7 +141,7 @@ def _reject_os_environ_references(params: dict) -> None:
                     status_code=400,
                     detail={"error": "Environment variable references are not permitted in request parameters."},
                 )
-            if isinstance(value, (dict, list)) and id(value) not in seen:
+            if isinstance(value, (Mapping, list)) and id(value) not in seen:
                 seen.add(id(value))
                 stack.append(value)
 
@@ -2632,14 +2630,18 @@ async def test_model_connection(
             )
 
         # Get model name from litellm_params
-        request_litellm_params: Final = litellm_params or {}
+        raw_litellm_params: Final = _OBJECT_MAPPING.validate_python(litellm_params or {})
         # Reject request-supplied os.environ/ references. Config values are
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
-        _reject_os_environ_references(request_litellm_params)
+        _reject_os_environ_references(raw_litellm_params)
+        request_litellm_params: Final = {
+            key: value for key, value in raw_litellm_params.items() if key != "litellm_metadata"
+        }
         if model_info:
             _reject_os_environ_references(model_info)
-        model_name: Final = request_litellm_params.get("model")
+        requested_model: Final = request_litellm_params.get("model")
+        model_name: Final = requested_model if isinstance(requested_model, str) else None
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
@@ -2754,7 +2756,7 @@ async def test_model_connection(
             http_parsing_utils.safe_get_request_headers(request)
         )
         health_check_params: Final = {
-            **_OBJECT_MAPPING.validate_python(litellm_params),
+            **without_probe_identity(_OBJECT_MAPPING.validate_python(litellm_params)),
             **_admin_api_key_from_request(
                 _OBJECT_MAPPING.validate_python(request_litellm_params),
                 _OBJECT_MAPPING.validate_python(litellm_params),

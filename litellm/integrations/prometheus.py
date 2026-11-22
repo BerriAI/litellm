@@ -628,6 +628,11 @@ def _bounded_requested_model_label(requested_model: object, router_originated: b
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
 
 
+def _background_probe_deployment_id(payload: Mapping[str, object]) -> str | None:
+    probed: Final = payload.get("deployment_id")
+    return probed if isinstance(probed, str) and not payload.get("model_id") else None
+
+
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
 
@@ -3557,13 +3562,27 @@ class PrometheusLogger(CustomLogger):
                     api_base=api_base,
                     api_provider=llm_provider or "",
                 )
-            _deployment_label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
+            probed_deployment_id: Final = _background_probe_deployment_id(
+                _LOGGED_FIELDS.validate_python(standard_logging_payload)
+            )
+            deployment_values: Final = (
+                replace(
+                    enum_values,
+                    litellm_model_name=litellm_model_name,
+                    model_id=probed_deployment_id,
+                    api_base=api_base,
+                    api_provider=self._extract_deployment_api_provider(_LOGGED_FIELDS.validate_python(request_kwargs)),
+                )
+                if probed_deployment_id
+                else enum_values
+            )
+            _deployment_label_ctx: Final = PrometheusLabelFactoryContext(deployment_values)
             if exception is not None:
                 PrometheusLogger._inc_labeled_counter(
                     self,
                     self.litellm_deployment_failure_responses,
                     "litellm_deployment_failure_responses",
-                    enum_values,
+                    deployment_values,
                     label_context=_deployment_label_ctx,
                 )
 
@@ -3571,7 +3590,7 @@ class PrometheusLogger(CustomLogger):
                 self,
                 self.litellm_deployment_total_requests,
                 "litellm_deployment_total_requests",
-                enum_values,
+                deployment_values,
                 label_context=_deployment_label_ctx,
             )
 
@@ -3737,13 +3756,22 @@ class PrometheusLogger(CustomLogger):
             llm_provider: Final = _litellm_params.get("custom_llm_provider", None)
             _model_info: Final = _metadata.get("model_info") or {}
             model_id: Final = _model_info.get("id", None)
+            probed_deployment_id: Final = _background_probe_deployment_id(
+                _LOGGED_FIELDS.validate_python(standard_logging_payload)
+            )
+            deployment_values: Final = (
+                replace(enum_values, model_id=probed_deployment_id) if probed_deployment_id else enum_values
+            )
+            deployment_label_context: Final = (
+                PrometheusLabelFactoryContext(deployment_values) if probed_deployment_id else label_context
+            )
 
             if _model_info or _litellm_params:
                 self._set_deployment_tpm_rpm_limit_metrics(
                     model_info=_model_info,
                     litellm_params=_litellm_params,
                     litellm_model_name=litellm_model_name,
-                    model_id=model_id,
+                    model_id=probed_deployment_id or model_id,
                     api_base=api_base,
                     llm_provider=llm_provider,
                     model_group=enum_values.model_group,
@@ -3799,7 +3827,7 @@ class PrometheusLogger(CustomLogger):
             """
             self.set_deployment_healthy(
                 litellm_model_name=litellm_model_name or "",
-                model_id=model_id or "",
+                model_id=probed_deployment_id or model_id or "",
                 api_base=api_base or "",
                 api_provider=llm_provider or "",
             )
@@ -3808,15 +3836,15 @@ class PrometheusLogger(CustomLogger):
                 self,
                 self.litellm_deployment_success_responses,
                 "litellm_deployment_success_responses",
-                enum_values,
-                label_context=label_context,
+                deployment_values,
+                label_context=deployment_label_context,
             )
             PrometheusLogger._inc_labeled_counter(
                 self,
                 self.litellm_deployment_total_requests,
                 "litellm_deployment_total_requests",
-                enum_values,
-                label_context=label_context,
+                deployment_values,
+                label_context=deployment_label_context,
             )
 
             # Track deployment Latency
@@ -3841,8 +3869,8 @@ class PrometheusLogger(CustomLogger):
                     supported_enum_labels=self.get_labels_for_metric(
                         metric_name="litellm_deployment_latency_per_output_token"
                     ),
-                    enum_values=enum_values,
-                    label_context=label_context,
+                    enum_values=deployment_values,
+                    label_context=deployment_label_context,
                 )
                 self.litellm_deployment_latency_per_output_token.labels(**_labels).observe(latency_per_token)
 
