@@ -35,13 +35,14 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import effective_skip_tool_message_for_guardrail
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_tool_message_for_guardrail,
+    unappliable_request_rewrite,
+)
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
-
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -194,11 +195,6 @@ def _content_part_slots(content: object, include_tool_results: bool) -> tuple[_T
     )
 
 
-def _content_text_slots(content: object) -> tuple[_TextSlot, ...]:
-    parts: Final = _repeated_field(_field(content, "parts"))
-    return tuple(chain.from_iterable(_part_text_slots(parts, index) for index in range(len(parts))))
-
-
 def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
     system_instructions: Final = chain.from_iterable(
         _present_fields(container, _SYSTEM_INSTRUCTION_KEYS) for container in (data, data.get("config"))
@@ -217,10 +213,6 @@ def _candidate_contents(response: object) -> tuple[object, ...]:
     if not isinstance(candidates, (list, tuple)):
         return ()
     return tuple(_field(candidate, "content") for candidate in candidates)
-
-
-def _response_text_slots(response: object) -> tuple[_TextSlot, ...]:
-    return tuple(chain.from_iterable(_content_text_slots(content) for content in _candidate_contents(response)))
 
 
 def _response_part_slots(response: object) -> tuple[_TextSlot, ...]:
@@ -246,13 +238,7 @@ def _guardrail_inputs(texts: Sequence[str], model: object) -> GenericGuardrailAP
     return {**with_texts, "model": model} if isinstance(model, str) else with_texts
 
 
-def _unwritable_guardrail_change(rewrite: str) -> "HTTPException":
-    from fastapi import HTTPException
-
-    return HTTPException(status_code=400, detail={"error": f"Content blocked: the guardrail rewrote {rewrite}"})
-
-
-def _written_value(slot: _TextSlot, text: str) -> object:
+def _written_value(slot: _TextSlot, text: str, guardrail_name: str | None) -> object:
     if slot.json_value is None:
         return text
     try:
@@ -260,17 +246,21 @@ def _written_value(slot: _TextSlot, text: str) -> object:
             json.loads(_with_original_numbers(slot.json_value, text), strict=False)
         )
     except json.JSONDecodeError:
-        raise _unwritable_guardrail_change(f"a part's {slot.key} into text that is not valid JSON") from None
+        raise unappliable_request_rewrite(guardrail_name) from None
     if isinstance(slot.json_value, dict) and not isinstance(value, dict):
-        raise _unwritable_guardrail_change(f"a part's {slot.key} into a value that is not a JSON object")
+        raise unappliable_request_rewrite(guardrail_name)
     return value
 
 
-def _write_back_texts(text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None) -> None:
+def _write_back_texts(
+    text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None, guardrail_name: str | None
+) -> None:
     if not guardrailed_texts or len(guardrailed_texts) != len(text_slots):
         return
     writes: Final = tuple(
-        (slot, _written_value(slot, text)) for slot, text in zip(text_slots, guardrailed_texts) if text != slot.text
+        (slot, _written_value(slot, text, guardrail_name))
+        for slot, text in zip(text_slots, guardrailed_texts)
+        if text != slot.text
     )
     for slot, value in writes:
         _write_field(slot.container, slot.key, value)
@@ -293,7 +283,7 @@ def _sse_payload_texts(sse_text: str) -> tuple[str, ...]:
         if payload and payload != "[DONE]"
         for parsed in (_parse_json_dict_or_none(payload),)
         if parsed is not None
-        for text in _slot_texts(_response_text_slots(parsed))
+        for text in _slot_texts(_response_part_slots(parsed))
     )
 
 
@@ -310,7 +300,7 @@ def _accumulated_stream_text(responses_so_far: Sequence[object]) -> str:
         text
         for chunk in responses_so_far
         if _chunk_sse_text(chunk) is None
-        for text in _slot_texts(_response_text_slots(chunk))
+        for text in _slot_texts(_response_part_slots(chunk))
     )
     sse_text: Final = "".join(sse for chunk in responses_so_far for sse in (_chunk_sse_text(chunk),) if sse is not None)
     return "".join(object_texts) + "".join(_sse_payload_texts(sse_text))
@@ -398,7 +388,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
-        _write_back_texts(text_slots, guardrailed_inputs.get("texts"))
+        _write_back_texts(text_slots, guardrailed_inputs.get("texts"), guardrail_to_apply.guardrail_name)
         return data
 
     async def process_output_response(
@@ -425,7 +415,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
-        _write_back_texts(text_slots, guardrailed_inputs.get("texts"))
+        _write_back_texts(text_slots, guardrailed_inputs.get("texts"), guardrail_to_apply.guardrail_name)
         return response
 
     async def process_output_streaming_response(

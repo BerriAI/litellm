@@ -3,6 +3,7 @@ Tests for the Google GenAI generateContent guardrail translation handler.
 """
 
 import copy
+from collections.abc import Callable
 import functools
 import json
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.gemini.google_genai.guardrail_translation.handler import (
     GoogleGenAIGenerateContentHandler,
 )
@@ -342,13 +344,17 @@ async def test_a_tool_result_the_guardrail_leaves_alone_keeps_the_callers_object
 
 @pytest.mark.asyncio
 async def test_a_guardrail_that_breaks_a_tool_result_json_blocks_the_request_instead_of_sending_it() -> None:
-    with pytest.raises(HTTPException) as blocked:
+    request: Final = _function_response_with_rows(["plums"])
+    original: Final = copy.deepcopy(request)
+
+    with pytest.raises(UnappliableRequestRewrite) as rejected:
         await GoogleGenAIGenerateContentHandler().process_input_messages(
-            data=_function_response_with_rows(["plums"]),
+            data=request,
             guardrail_to_apply=_TruncatingGuardrail(),
         )
 
-    assert blocked.value.status_code == 400
+    assert rejected.value.guardrail_name == "truncator"
+    assert request["contents"] == original["contents"]
 
 
 @pytest.mark.asyncio
@@ -377,13 +383,17 @@ async def test_only_the_function_call_the_guardrail_changed_gets_new_args() -> N
 
 @pytest.mark.asyncio
 async def test_a_guardrail_turning_function_call_args_into_a_non_object_blocks_the_request() -> None:
-    with pytest.raises(HTTPException) as blocked:
+    request: Final = _lookup_calls({"args": {"q": "plums"}})
+    original: Final = copy.deepcopy(request)
+
+    with pytest.raises(UnappliableRequestRewrite) as rejected:
         await GoogleGenAIGenerateContentHandler().process_input_messages(
-            data=_lookup_calls({"args": {"q": "plums"}}),
+            data=request,
             guardrail_to_apply=_WholeTextMaskingGuardrail(),
         )
 
-    assert blocked.value.status_code == 400
+    assert rejected.value.guardrail_name == "whole-text-masker"
+    assert request["contents"] == original["contents"]
 
 
 @pytest.mark.asyncio
@@ -638,6 +648,29 @@ async def test_streaming_raw_sse_text_holding_unicode_line_separators_reaches_th
     )
 
     assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == [text]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "as_stream_item",
+    [lambda reply: reply, lambda reply: f"data: {json.dumps(reply)}\r\n\r\n"],
+    ids=["response_chunk", "raw_sse"],
+)
+async def test_a_blocked_word_in_a_function_call_the_model_streams_blocks_the_stream(
+    as_stream_item: Callable[[dict[str, object]], object],
+) -> None:
+    streamed: Final = [
+        as_stream_item(_model_reply({"text": "Looking it up."})),
+        as_stream_item(_model_reply({"functionCall": {"name": "lookup", "args": {"q": "zebrafruit"}}})),
+    ]
+
+    with pytest.raises(HTTPException) as blocked:
+        await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
+            responses_so_far=streamed,
+            guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.BLOCK),
+        )
+
+    assert blocked.value.status_code == 400
 
 
 @pytest.mark.asyncio
