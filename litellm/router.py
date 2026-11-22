@@ -3747,9 +3747,10 @@ class Router:
                     stream_logging,
                 )
 
-                if self._billing_source is source_iterator:
+                fallback_connected: Final = self._billing_source is not source_iterator
+                if not fallback_connected and self._primary_partial is None:
                     return partial_responses_incomplete_event_on_disconnect(source_iterator)
-                current: Final = priced_partial_on_disconnect(self._billing_source)
+                current: Final = priced_partial_on_disconnect(self._billing_source) if fallback_connected else None
                 primary: Final = self._primary_partial or priced_partial_on_disconnect(source_iterator)
                 if primary is None:
                     return None if current is None else current.event

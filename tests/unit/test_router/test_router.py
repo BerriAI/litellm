@@ -1,4 +1,5 @@
 import ast, asyncio, importlib, time
+import contextlib
 import copy
 import functools
 import gc
@@ -28199,6 +28200,9 @@ async def _streamed_after_a_cut(shared_logging: LiteLLMLogging, fallback: object
         shared_logging.model = "fallback-deployment"
         if isinstance(fallback, BaseException):
             raise fallback
+        if isinstance(fallback, asyncio.Event):
+            fallback.set()
+            return await asyncio.Event().wait()
         return fallback
 
     router.async_function_with_fallbacks_common_utils = fallback_attempt
@@ -28235,6 +28239,28 @@ async def test_a_client_cut_after_a_fallback_bills_the_first_deployment_at_its_o
     expected: Final = 25 * _PRICE_PER_INPUT_TOKEN["primary-deployment"] + (
         0.0 if fallback_input_tokens is None else fallback_input_tokens * _PRICE_PER_INPUT_TOKEN["fallback-deployment"]
     )
+    assert billed is not None
+    assert (get_hidden_params(billed.response) or {}).get("response_cost") == pytest.approx(expected)
+    assert shared_logging.cost_breakdown is not None
+    assert shared_logging.cost_breakdown.get("total_cost") == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_while_the_fallback_connects_bills_the_first_deployment_at_its_own_price():
+    shared_logging: Final = _shared_cut_logging()
+    fallback_connecting: Final = asyncio.Event()
+    wrapped: Final = await _streamed_after_a_cut(shared_logging, fallback_connecting)
+    relayed: Final = aiter(wrapped)
+    _ = await anext(relayed)
+    connecting: Final = asyncio.ensure_future(anext(relayed))
+    await fallback_connecting.wait()
+
+    billed: Final = wrapped.partial_response_on_disconnect()
+
+    connecting.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await connecting
+    expected: Final = 25 * _PRICE_PER_INPUT_TOKEN["primary-deployment"]
     assert billed is not None
     assert (get_hidden_params(billed.response) or {}).get("response_cost") == pytest.approx(expected)
     assert shared_logging.cost_breakdown is not None
