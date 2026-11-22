@@ -566,11 +566,12 @@ async def test_presidio_initialized_output_dispatch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("filter_scope", [None, "output"])
+@pytest.mark.parametrize("filter_scope", [None, "output", "both"])
 async def test_presidio_logging_only_masks_logged_output_without_changing_live_response(
-    filter_scope: Literal["output"] | None,
+    filter_scope: Literal["output", "both"] | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
     from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
     from litellm.types.utils import Choices, Message, ModelResponse
@@ -594,6 +595,18 @@ async def test_presidio_logging_only_masks_logged_output_without_changing_live_r
     )
 
     assert post_call_callbacks == ()
+
+    live_response: Final = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=original), index=0)]
+    )
+    for callback in post_call_callbacks:
+        request_data["guardrail_to_apply"] = callback
+        await callback.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response=live_response,
+        )
+    assert live_response.choices[0].message.content == original
 
     logged_response: Final = ModelResponse(
         choices=[Choices(message=Message(role="assistant", content=original), index=0)]
