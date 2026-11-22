@@ -20,9 +20,9 @@ from transport import HttpTransport
 
 REPOSITORY: Final = Path(__file__).resolve().parents[3]
 COMPOSE: Final = Path(__file__).with_name("compose.yaml")
-MASTER_KEY: Final = "sk-lens-versions-fixture"
+MASTER_KEY: Final = f"sk-{secrets.token_urlsafe(24)}"
 UI_USERNAME: Final = "admin"
-UI_PASSWORD: Final = "lens-versions-fixture"
+UI_PASSWORD: Final = secrets.token_urlsafe(24)
 MODEL: Final = "lens-versions-model"
 
 
@@ -101,17 +101,23 @@ def lens(image: str, directory: Path) -> Generator[tuple[HttpTransport, dict[str
             {**shared, "LITELLM_LENS_URL": f"http://127.0.0.1:{port}"},
         )
     finally:
-        logs: Final = subprocess.run(
-            ("docker", *compose, "logs", "lens"), capture_output=True, text=True, timeout=60, env={**os.environ, **env}
-        )
-        (directory / "lens.log").write_text(logs.stdout + logs.stderr)
-        subprocess.run(
-            ("docker", *compose, "down", "-v", "--remove-orphans"),
-            capture_output=True,
-            timeout=180,
-            env={**os.environ, **env},
-            check=True,
-        )
+        try:
+            logs: Final = subprocess.run(
+                ("docker", *compose, "logs", "lens"),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={**os.environ, **env},
+            )
+            (directory / "lens.log").write_text(logs.stdout + logs.stderr)
+        finally:
+            subprocess.run(
+                ("docker", *compose, "down", "-v", "--remove-orphans"),
+                capture_output=True,
+                timeout=180,
+                env={**os.environ, **env},
+                check=True,
+            )
 
 
 @step("Start a PostgreSQL container for the gateway")
@@ -154,6 +160,8 @@ def gateway(database: str, connection: dict[str, str], directory: Path) -> Gener
                 "litellm/proxy/proxy_cli.py",
                 "--config",
                 str(directory / "config.yaml"),
+                "--host",
+                "127.0.0.1",
                 "--port",
                 str(port),
                 "--use_v2_migration_resolver",
