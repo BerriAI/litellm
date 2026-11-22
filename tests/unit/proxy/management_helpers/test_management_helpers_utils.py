@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final, cast
@@ -308,6 +309,8 @@ async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_reque
 
     budget_update: Final = AsyncMock()
     db: Final = SimpleNamespace(
+        tx=lambda: nullcontext(db),
+        query_raw=AsyncMock(return_value=[]),
         litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
@@ -328,7 +331,7 @@ async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_reque
 
     assert budget_id == "budget-1"
     budget_update.assert_awaited_once_with(
-        where={"budget_id": "budget-1"},
+        where={"budget_id": "budget-1", "rollover_max_budget": None},
         data={"budget_id": "budget-1", "max_budget": 20.0, "updated_by": "admin"},
     )
 
@@ -358,6 +361,8 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
     tag: Final = TagUpdateRequest.model_validate(request_data)
     budget_update: Final = AsyncMock()
     db: Final = SimpleNamespace(
+        tx=lambda: nullcontext(db),
+        query_raw=AsyncMock(return_value=[]),
         litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
@@ -1075,6 +1080,9 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     db: Final = _FakeDb()
     prisma_client: Final = MagicMock()
     prisma_client.db = db
+    prisma_client.writer_db.tx.return_value.__aenter__.return_value = SimpleNamespace(
+        litellm_budgettable=db.litellm_budgettable, query_raw=AsyncMock(return_value=[])
+    )
     admin: Final = UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN)
     team_id: Final = "team-shared-default"
     default_budget: Final = await db.litellm_budgettable.create(data={"budget_id": "team-default", "max_budget": 100.0})

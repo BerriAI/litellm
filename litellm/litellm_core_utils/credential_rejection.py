@@ -8,7 +8,7 @@ from openai import APIError
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 _REQUEST_FAILURE_TYPES: Final = (APIError, httpx.HTTPError)
 
-_RejectionT: Final = TypeVar("_RejectionT", bound=BaseException)
+_RejectionT = TypeVar("_RejectionT", bound=BaseException)
 
 
 def _exception_chain(error: BaseException) -> Iterator[BaseException]:

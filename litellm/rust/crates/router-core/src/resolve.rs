@@ -37,6 +37,9 @@ pub struct Caller<'a> {
     /// `f"{provider}/{model}"`, the spelling `PatternMatchRouter.get_pattern` tries when no
     /// pattern matches the name itself.
     pub wildcard_request: Option<&'a str>,
+    /// The router's `enable_cross_model_group_collision_check`: a litellm model string whose
+    /// eligible deployments span several model groups is refused instead of balanced across them.
+    pub refuse_cross_group_litellm_model: bool,
 }
 
 /// `_core_should_include_deployment`: the team's own deployment under its public name, or a
@@ -51,6 +54,37 @@ fn included(deployment: &Deployment, model_name: &str, team_id: Option<&str>) ->
     }
     deployment.model_name == model_name
         && (team_id.is_none() || info.team_id.is_none() || info.team_id.as_deref() == team_id)
+}
+
+/// The model group a deployment serves: a team deployment's internal name is unique per
+/// deployment, so its team and public name stand for the group.
+fn logical_group(deployment: &Deployment) -> (Option<&str>, &str) {
+    let info = &deployment.model_info;
+    match info.team_public_model_name.as_deref() {
+        Some(public) => (info.team_id.as_deref(), public),
+        None => (None, deployment.model_name.as_str()),
+    }
+}
+
+fn refuse_cross_group(
+    model: &str,
+    deployments: Vec<Arc<Deployment>>,
+    caller: Caller<'_>,
+) -> Result<Vec<Arc<Deployment>>, Error> {
+    if !caller.refuse_cross_group_litellm_model {
+        return Ok(deployments);
+    }
+    let groups: BTreeSet<(Option<&str>, &str)> = deployments
+        .iter()
+        .filter(|d| d.usable_by_team(caller.team_id))
+        .map(|d| logical_group(d))
+        .collect();
+    if groups.len() > 1 {
+        return Err(Error::MultipleModelGroups {
+            model: model.to_owned(),
+        });
+    }
+    Ok(deployments)
 }
 
 /// `_core_get_all_deployments(model_name, team_id)`: the team's deployments under that public
@@ -145,7 +179,7 @@ fn model_access_groups(
 
 fn routing_group_rows(
     registry: &Registry,
-    group: &crate::registry::RoutingGroupSpec,
+    group: &litellm_router_types::RoutingGroupSpec,
     team_id: Option<&str>,
 ) -> Vec<Arc<Deployment>> {
     crate::routing_groups::members(group, |member| {
@@ -270,6 +304,7 @@ pub fn routable(
     registry: &Registry,
     dynamic: &crate::config::RouterDynamicConfig,
     request: &crate::host::RouterRequest,
+    refuse_cross_group_litellm_model: bool,
 ) -> Vec<Arc<Deployment>> {
     let caller = Caller {
         team_id: request.team_id.as_deref(),
@@ -278,6 +313,7 @@ pub fn routable(
         endpoint: request.endpoint.as_deref(),
         requested: &request.model,
         wildcard_request: request.wildcard_request.as_deref(),
+        refuse_cross_group_litellm_model,
     };
     match resolve_request(
         registry,
@@ -318,7 +354,7 @@ pub fn resolve_request(
             .filter(|d| d.params.model == name)
             .cloned()
             .collect();
-        let kept = reserved(name, matching, caller, now)?;
+        let kept = refuse_cross_group(name, reserved(name, matching, caller, now)?, caller)?;
         return resolved(ResolveKind::SpecificDeployment, name, kept);
     }
     if !registry.has_name(name)
@@ -427,7 +463,7 @@ pub fn resolve_request(
             .cloned()
             .collect();
         let found = !by_model.is_empty();
-        let deployments = narrow(model, by_model)?;
+        let deployments = refuse_cross_group(model, narrow(model, by_model)?, caller)?;
         if !deployments.is_empty() {
             return resolved(ResolveKind::Group, model, deployments);
         }
@@ -690,5 +726,167 @@ mod tests {
             refused,
             Err(Error::EndpointNotSupported { model, .. }) if model == "openai/a"
         ));
+    }
+
+    #[fixture]
+    fn colliding() -> Registry {
+        let specs: Vec<DeploymentSpec> = serde_json::from_value(json!([
+            {"model_name": "chain-a", "litellm_params": {"model": "openai/shared"}, "model_info": {"id": "a"}},
+            {"model_name": "chain-b", "litellm_params": {"model": "openai/shared"}, "model_info": {"id": "b"}},
+            {"model_name": "solo", "litellm_params": {"model": "openai/solo"}, "model_info": {"id": "s1"}},
+            {"model_name": "solo", "litellm_params": {"model": "openai/solo"}, "model_info": {"id": "s2"}},
+        ]))
+        .unwrap();
+        let aliases = BTreeMap::from([("alias-a".to_owned(), "chain-a".to_owned())]);
+        Registry::build(specs, aliases, Vec::new()).unwrap()
+    }
+
+    fn resolve_checked(
+        registry: &Registry,
+        name: &str,
+        specific_deployment: bool,
+        caller: Caller<'_>,
+    ) -> Result<Option<Resolution>, Error> {
+        resolve_request(
+            registry,
+            name,
+            specific_deployment,
+            caller,
+            None,
+            None,
+            Timestamp::now(),
+        )
+    }
+
+    fn checking<'a>() -> Caller<'a> {
+        Caller {
+            refuse_cross_group_litellm_model: true,
+            ..Caller::default()
+        }
+    }
+
+    fn refused_as_ambiguous(resolved: &Result<Option<Resolution>, Error>, model: &str) -> bool {
+        matches!(resolved, Err(Error::MultipleModelGroups { model: named }) if named == model)
+    }
+
+    #[rstest]
+    #[case::raw_fallback(false)]
+    #[case::specific_deployment(true)]
+    fn a_litellm_model_shared_across_groups_spans_them_by_default(
+        colliding: Registry,
+        #[case] specific_deployment: bool,
+    ) {
+        let resolved = resolve_checked(
+            &colliding,
+            "openai/shared",
+            specific_deployment,
+            Caller::default(),
+        );
+        assert_eq!(ids(resolved.unwrap()), ["a", "b"]);
+    }
+
+    #[rstest]
+    #[case::raw_fallback(false)]
+    #[case::specific_deployment(true)]
+    fn the_collision_check_refuses_a_litellm_model_shared_across_groups(
+        colliding: Registry,
+        #[case] specific_deployment: bool,
+    ) {
+        let resolved =
+            resolve_checked(&colliding, "openai/shared", specific_deployment, checking());
+        assert!(refused_as_ambiguous(&resolved, "openai/shared"));
+    }
+
+    #[rstest]
+    #[case::one_group_raw_fallback("openai/solo", false, &["s1", "s2"])]
+    #[case::one_group_specific_deployment("openai/solo", true, &["s1", "s2"])]
+    #[case::named_group("chain-a", false, &["a"])]
+    #[case::deployment_id("b", false, &["b"])]
+    #[case::alias("alias-a", false, &["a"])]
+    #[case::no_match("openai/none", false, &[])]
+    fn the_collision_check_keeps_unambiguous_requests(
+        colliding: Registry,
+        #[case] name: &str,
+        #[case] specific_deployment: bool,
+        #[case] expected: &[&str],
+    ) {
+        let resolved = resolve_checked(&colliding, name, specific_deployment, checking());
+        assert_eq!(ids(resolved.unwrap()), expected);
+    }
+
+    #[fixture]
+    fn team_collision() -> Registry {
+        registry(json!([
+            {"model_name": "chain-a", "litellm_params": {"model": "openai/shared"}, "model_info": {"id": "a"}},
+            {"model_name": "model_name_T2_1", "litellm_params": {"model": "openai/shared"}, "model_info": {
+                "id": "t2-1", "team_id": "T2", "team_public_model_name": "chain-b",
+            }},
+            {"model_name": "model_name_T2_2", "litellm_params": {"model": "openai/shared"}, "model_info": {
+                "id": "t2-2", "team_id": "T2", "team_public_model_name": "chain-b",
+            }},
+        ]))
+    }
+
+    #[rstest]
+    #[case::no_team(None, Some(&["a", "t2-1", "t2-2"][..]))]
+    #[case::a_team_that_owns_none_of_them(Some("T9"), Some(&["a", "t2-1", "t2-2"][..]))]
+    #[case::the_team_that_may_use_both_groups(Some("T2"), None)]
+    fn the_collision_check_counts_only_groups_the_callers_team_may_use(
+        team_collision: Registry,
+        #[case] team_id: Option<&str>,
+        #[case] expected: Option<&[&str]>,
+    ) {
+        let caller = Caller {
+            team_id,
+            ..checking()
+        };
+        let resolved = resolve_checked(&team_collision, "openai/shared", false, caller);
+        match expected {
+            Some(expected) => assert_eq!(ids(resolved.unwrap()), expected),
+            None => assert!(refused_as_ambiguous(&resolved, "openai/shared")),
+        }
+    }
+
+    #[rstest]
+    fn a_teams_internal_names_under_one_public_name_are_one_group() {
+        let registry = registry(json!([
+            {"model_name": "model_name_T2_1", "litellm_params": {"model": "openai/shared"}, "model_info": {
+                "id": "t2-1", "team_id": "T2", "team_public_model_name": "chain-b",
+            }},
+            {"model_name": "model_name_T2_2", "litellm_params": {"model": "openai/shared"}, "model_info": {
+                "id": "t2-2", "team_id": "T2", "team_public_model_name": "chain-b",
+            }},
+        ]));
+        let caller = Caller {
+            team_id: Some("T2"),
+            ..checking()
+        };
+        let resolved = resolve_checked(&registry, "openai/shared", true, caller);
+        assert_eq!(ids(resolved.unwrap()), ["t2-1", "t2-2"]);
+    }
+
+    #[rstest]
+    #[case::any_endpoint(None, None)]
+    #[case::an_endpoint_one_group_refuses(Some("/v1/chat/completions"), Some(&["a"][..]))]
+    fn the_collision_check_counts_only_groups_left_after_endpoint_filtering(
+        #[case] endpoint: Option<&str>,
+        #[case] expected: Option<&[&str]>,
+    ) {
+        let registry = registry(json!([
+            {"model_name": "chain-a", "litellm_params": {"model": "openai/shared"}, "model_info": {"id": "a"}},
+            {"model_name": "chain-b", "litellm_params": {"model": "openai/shared"}, "model_info": {
+                "id": "b", "enforce_supported_endpoints": true, "supported_endpoints": ["/v1/embeddings"],
+            }},
+        ]));
+        let caller = Caller {
+            endpoint,
+            requested: "openai/shared",
+            ..checking()
+        };
+        let resolved = resolve_checked(&registry, "openai/shared", false, caller);
+        match expected {
+            Some(expected) => assert_eq!(ids(resolved.unwrap()), expected),
+            None => assert!(refused_as_ambiguous(&resolved, "openai/shared")),
+        }
     }
 }

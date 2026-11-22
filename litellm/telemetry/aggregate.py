@@ -12,8 +12,8 @@ QUIET_RETRIES: Final = 3
 
 _LOGGER: Final = logging.getLogger(__name__)
 
-_Key: Final = TypeVar("_Key")
-_Row: Final = TypeVar("_Row")
+_Key = TypeVar("_Key")
+_Row = TypeVar("_Row")
 
 
 class AggregatingSink:

@@ -10,13 +10,13 @@ from typing_extensions import (
     TypedDict,
 )
 
-from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput, OpenAIChatCompletionTextObject
 from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
 # opt-in for combined embeddings — a provider-specific extension of the
 # OpenAI-faithful EmbeddingInput shape.
-GeminiEmbeddingElement = str | ChatCompletionFileObject
+GeminiEmbeddingElement = str | ChatCompletionFileObject | OpenAIChatCompletionTextObject
 GeminiEmbeddingInput = (
     EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
 )
@@ -49,15 +49,17 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
-class FunctionResponsePartType(TypedDict, total=False):
-    inline_data: BlobType
-    file_data: FileDataType
-
-
 class VideoMetadataType(TypedDict, total=False):
     fps: ReadOnly[float]
     startOffset: ReadOnly[str]
     endOffset: ReadOnly[str]
+
+
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
+    media_resolution: ReadOnly[Literal["low", "medium", "high"]]
+    video_metadata: ReadOnly[VideoMetadataType]
 
 
 class PartType(TypedDict, total=False):

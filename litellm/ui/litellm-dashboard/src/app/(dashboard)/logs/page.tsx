@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Activity } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import DeletedKeysPage from "@/components/DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "@/components/DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "@/components/logs/audit/AuditLogsPanel";
 import RequestLogsPanel from "@/components/logs/request/RequestLogsPanel";
-import { Page, PageTabs, PageTabsList, PageTabsTrigger, PageTabsContent } from "@/components/shared/Page";
+import { PageContent, PageTabs, PageTabsList, PageTabsTrigger, PageTabsContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
 type LogsTab = "request logs" | "audit logs" | "deleted keys" | "deleted teams";
@@ -37,17 +39,26 @@ export default function LogsPage() {
   }
 
   return (
-    <Page className="h-full">
-      <PageTabs value={activeTab} onValueChange={(value: LogsTab) => setActiveTab(value)}>
-        <PageTabsList>
-          <PageTabsTrigger value="request logs">{t("logs.page.tabs.requestLogs")}</PageTabsTrigger>
-          {canViewAuditLogs && <PageTabsTrigger value="audit logs">{t("logs.page.tabs.auditLogs")}</PageTabsTrigger>}
-          <PageTabsTrigger value="deleted keys">{t("logs.page.tabs.deletedKeys")}</PageTabsTrigger>
-          {canViewDeletedTeams && (
-            <PageTabsTrigger value="deleted teams">{t("logs.page.tabs.deletedTeams")}</PageTabsTrigger>
-          )}
-        </PageTabsList>
+    <PageTabs value={activeTab} onValueChange={(value: LogsTab) => setActiveTab(value)}>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Activity />
+          {t("shell.nav.items.logs")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("logs.page.description")}</PageHeaderDescription>
+        <PageHeaderControls>
+          <PageTabsList>
+            <PageTabsTrigger value="request logs">{t("logs.page.tabs.requestLogs")}</PageTabsTrigger>
+            {canViewAuditLogs && <PageTabsTrigger value="audit logs">{t("logs.page.tabs.auditLogs")}</PageTabsTrigger>}
+            <PageTabsTrigger value="deleted keys">{t("logs.page.tabs.deletedKeys")}</PageTabsTrigger>
+            {canViewDeletedTeams && (
+              <PageTabsTrigger value="deleted teams">{t("logs.page.tabs.deletedTeams")}</PageTabsTrigger>
+            )}
+          </PageTabsList>
+        </PageHeaderControls>
+      </PageHeader>
 
+      <PageContent>
         <PageTabsContent value="request logs" keepMounted>
           <RequestLogsPanel
             accessToken={accessToken}
@@ -77,7 +88,7 @@ export default function LogsPage() {
             <DeletedTeamsPage />
           </PageTabsContent>
         )}
-      </PageTabs>
-    </Page>
+      </PageContent>
+    </PageTabs>
   );
 }

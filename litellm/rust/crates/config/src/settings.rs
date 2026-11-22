@@ -1,4 +1,4 @@
-use litellm_python_compat::lenient::{IsTrue, StrBool, Truthy};
+use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -87,7 +87,7 @@ pub struct GeneralSettings {
     pub database_disable_prepared_statements: bool,
     pub max_parallel_requests: Option<u64>,
     pub global_max_parallel_requests: Option<u64>,
-    pub max_request_size_mb: Option<u64>,
+    pub max_request_size_mb: Option<f64>,
     pub max_response_size_mb: Option<u64>,
     pub proxy_config_reload_interval_seconds: u64,
     pub background_health_checks: Option<bool>,
@@ -122,6 +122,7 @@ pub struct GeneralSettings {
     pub allowed_routes: Option<Box<[String]>>,
     pub custom_auth: Option<String>,
     pub litellm_key_header_name: Option<String>,
+    pub required_customer_headers: Box<[String]>,
     pub litellm_jwtauth: Option<JwtAuthSettings>,
     pub role_permissions: Option<Box<[RolePermissions]>>,
     /// `bool(general_settings.get("enforce_rbac"))`
@@ -185,6 +186,7 @@ impl Default for GeneralSettings {
             allowed_routes: None,
             custom_auth: None,
             litellm_key_header_name: None,
+            required_customer_headers: Box::default(),
             litellm_jwtauth: None,
             role_permissions: None,
             enforce_rbac: false,
@@ -195,33 +197,8 @@ impl Default for GeneralSettings {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct RouterSettings {
-    pub routing_strategy: Option<String>,
-    pub routing_strategy_args: Option<Object>,
-    pub routing_groups: Option<Box<[Object]>>,
-    pub retry_policy: Option<Object>,
-    pub model_group_retry_policy: Option<Object>,
-    pub model_group_affinity_config: Option<Object>,
-    pub allowed_fails: Option<u64>,
-    pub cooldown_time: Option<f64>,
-    pub num_retries: Option<u64>,
-    pub timeout: Option<f64>,
-    pub max_retries: Option<u64>,
-    pub retry_after: Option<f64>,
-    pub fallbacks: Option<Box<[Object]>>,
-    pub context_window_fallbacks: Option<Box<[Object]>>,
-    pub model_group_alias: Option<Object>,
-    pub enable_tag_filtering: Option<bool>,
-    pub weights: Option<Object>,
-    pub tag_routing_prefix: Option<String>,
-    pub optional_pre_call_checks: Option<Box<[String]>>,
-    #[serde(flatten)]
-    pub additional_fields: AdditionalFields,
-}
-
 /// Callback entries can carry credentials inline, so only whether they are set is printed.
+#[serde_as]
 #[derive(Clone, Default, Deserialize, Redact)]
 #[serde(default)]
 pub struct LiteLlmSettings {
@@ -234,7 +211,25 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
-    pub drop_params: Option<Spelled<bool>>,
+    #[serde_as(as = "LaxBool")]
+    pub drop_params: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub modify_params: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub enable_anthropic_prompt_caching: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub reasoning_auto_summary: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub use_chat_completions_url_for_anthropic_messages: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub route_all_chat_openai_to_responses: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub gemini_live_defer_setup: Option<bool>,
+    pub anthropic_prompt_caching_ttl: Option<String>,
+    pub model_cost_map_url: Option<SecretValue>,
+    pub blog_posts_url: Option<SecretValue>,
+    pub anthropic_beta_headers_url: Option<SecretValue>,
+    pub autorouter_presets_url: Option<SecretValue>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
@@ -256,7 +251,9 @@ pub struct LiteLlmSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::GeneralSettings;
+    use rstest::rstest;
+
+    use super::{GeneralSettings, LiteLlmSettings};
     use crate::JwtAuthSettings;
 
     #[test]
@@ -271,9 +268,34 @@ mod tests {
         assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 
+    #[rstest]
+    #[case::a_word_for_on(serde_json::json!("on"), Some(true))]
+    #[case::a_word_that_is_no_flag(serde_json::json!("banana"), None)]
+    fn a_flag_key_written_as_text_is_read_by_the_one_flag_rule(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<bool>,
+    ) {
+        let settings: LiteLlmSettings =
+            serde_json::from_value(serde_json::json!({"modify_params": written})).unwrap();
+
+        assert_eq!(settings.modify_params, expected);
+    }
+
     #[test]
     fn unset_text_flags_are_false() {
         let general: GeneralSettings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!general.allow_requests_on_db_unavailable && !general.enforce_rbac);
+    }
+
+    #[rstest]
+    #[case::int(serde_json::json!(1), 1.0)]
+    #[case::fraction(serde_json::json!(0.5), 0.5)]
+    fn a_request_size_limit_is_an_int_or_a_float(
+        #[case] limit: serde_json::Value,
+        #[case] expected: f64,
+    ) {
+        let settings: GeneralSettings =
+            serde_json::from_value(serde_json::json!({"max_request_size_mb": limit})).unwrap();
+        assert_eq!(settings.max_request_size_mb, Some(expected));
     }
 }

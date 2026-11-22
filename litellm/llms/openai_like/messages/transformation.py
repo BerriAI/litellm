@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Final
 
 import litellm
@@ -47,7 +48,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -157,7 +158,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

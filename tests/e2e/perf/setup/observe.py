@@ -30,6 +30,7 @@ from setup.datastore import (
 )
 from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase, Ramp
+from setup.podcpu import CpuSeries
 from setup.ramp import StepReading, render_steps, sustained_rps
 from setup.series import Series
 from setup.telemetry import GatewayTelemetry
@@ -123,12 +124,11 @@ class Observation:
     redis_after: RedisCounters | None = None
     redis_commands: tuple[RedisCommand, ...] | None = None
     gateway_cpu_seconds: float | None = None
+    gateway_cpu_coverage: float | None = None
     telemetry_before: GatewayTelemetry | None = None
     telemetry_after: GatewayTelemetry | None = None
-    peak_connections: int | None = None
     ramp: Ramp | None = None
-    cpu_series: Series[float] | None = None
-    connection_series: Series[int] | None = None
+    cpu_series: Series[float] | CpuSeries | None = None
     telemetry_series: Series[GatewayTelemetry] | None = None
 
     @property
@@ -256,7 +256,7 @@ class Observation:
     def steps(self) -> tuple[StepReading, ...]:
         """One reading per step of a ramped run: the gateway's added latency over the step's requests, the rate
         at which requests completed inside the step's window, the step's unexpected statuses, and what the pod
-        was doing in that window (CPU per completed request, Redis latency, Postgres connections)."""
+        was doing in that window (CPU per completed request and Redis latency)."""
         ramp: Final = self.ramp
         if ramp is None or not self.records:
             return ()
@@ -286,23 +286,25 @@ class Observation:
 
     def _window_readings(self, start: float, seconds: float, completed: int) -> WindowReadings:
         end: Final = start + seconds
-        cpu: Final = None if self.cpu_series is None else sum(self.cpu_series.between(start, end))
-        conns: Final = None if self.connection_series is None else self.connection_series.between(start, end)
+        cpu_samples: Final = None if self.cpu_series is None else self.cpu_series.between(start, end)
+        cpu: Final = None if cpu_samples is None else sum(cpu_samples)
         before: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(start)
         after: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(end)
         return WindowReadings(
             cpu_seconds_per_request=None if cpu is None or completed == 0 else cpu / completed,
+            cpu_seconds_per_request_coverage=self.cpu_series.coverage_between(start, end)
+            if isinstance(self.cpu_series, CpuSeries)
+            else None,
             redis_latency_mean_seconds=None
             if before is None or after is None
             else after.minus(before).redis_latency.mean,
-            postgres_peak_connections=max(conns, default=None) if conns else None,
         )
 
 
 class WindowReadings(TypedDict):
     cpu_seconds_per_request: ReadOnly[float | None]
+    cpu_seconds_per_request_coverage: ReadOnly[float | None]
     redis_latency_mean_seconds: ReadOnly[float | None]
-    postgres_peak_connections: ReadOnly[int | None]
 
 
 def _by_step(ramp: Ramp, pairs: Iterable[tuple[WireRecord, float]]) -> Mapping[int, tuple[float, ...]]:
@@ -429,8 +431,7 @@ def breakdown(
     metric: Metric, percentile_rank: int | None, observation: Observation, exempt_tables: frozenset[str] = frozenset()
 ) -> tuple[Contributor, ...]:
     """The top contributors to one metric, so a spike on the chart names its statement, command, endpoint or
-    worker. Gauges with no slices (`cpu_seconds_per_request`, `prometheus_redis_latency_mean_seconds`,
-    `postgres_peak_connections`) have none."""
+    worker. Gauges with no slices (`cpu_seconds_per_request`, `prometheus_redis_latency_mean_seconds`) have none."""
     if metric in (
         "gateway_added_seconds",
         "client_total_seconds",
@@ -439,7 +440,7 @@ def breakdown(
         "litellm_response_seconds",
     ):
         return _latency_breakdown(metric, 50 if percentile_rank is None else percentile_rank, observation)
-    if metric.startswith("postgres_") and metric != "postgres_peak_connections":
+    if metric.startswith("postgres_"):
         return _statement_breakdown(metric, observation, exempt_tables)
     if metric in {"redis_calls_per_request", "redis_background_calls_per_request"}:
         return _redis_breakdown(metric, observation)
@@ -473,8 +474,6 @@ def observe(
     if metric == "postgres_slowest_statement_seconds":
         slowest: Final = slowest_statement(observation.statements)
         return None if slowest is None else slowest.mean_exec_seconds
-    if metric == "postgres_peak_connections":
-        return None if observation.peak_connections is None else float(observation.peak_connections)
     if metric == "postgres_calls_per_request":
         return observation.count_per_request(calls_in("awaited", observation.statements))
     if metric == "postgres_background_calls_per_request":
@@ -510,6 +509,7 @@ class Row:
     floor: float | None = None
     detail: str = ""
     breakdown: tuple[Contributor, ...] = ()
+    coverage: float | None = None
 
     @property
     def label(self) -> str:
@@ -541,6 +541,8 @@ class Row:
 
 REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("unexpected_status_count", None),
+    ("client_total_seconds", 50),
+    ("client_total_seconds", 95),
     ("gateway_added_seconds", 50),
     ("gateway_added_seconds", 99),
     ("litellm_overhead_seconds", 50),
@@ -550,7 +552,6 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("prometheus_redis_latency_mean_seconds", None),
     ("postgres_active_sessions", None),
     ("postgres_slowest_statement_seconds", None),
-    ("postgres_peak_connections", None),
     ("time_to_first_token_seconds", 50),
     ("time_to_first_token_seconds", 99),
     ("memory_growth_megabytes", None),
@@ -586,6 +587,7 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
                 floor=limit.min if limit else None,
                 detail=_detail(metric, observation, case.background_cap_exempt_tables),
                 breakdown=breakdown(metric, rank, observation, case.background_cap_exempt_tables),
+                coverage=observation.gateway_cpu_coverage if metric == "cpu_seconds_per_request" else None,
             )
         )
     exceeded: Final = [_breach(row) for row in rows if row.over or row.missing]
@@ -615,6 +617,7 @@ def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[s
 
 def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
     observed: Final = ((row.property_name, row.observed),) if row.observed is not None else ()
+    coverage: Final = ((f"{row.property_name}_coverage", row.coverage),) if row.coverage is not None else ()
     limit: Final = ((f"{row.property_name}_limit", row.limit),) if row.limit is not None else ()
     floor: Final = ((f"{row.property_name}_floor", row.floor),) if row.floor is not None else ()
     contributors: Final = (
@@ -622,7 +625,7 @@ def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
         if row.breakdown
         else ()
     )
-    return observed + limit + floor + contributors
+    return observed + coverage + limit + floor + contributors
 
 
 def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float | str], ...]:
@@ -656,7 +659,8 @@ def render(case: PerformanceTestCase, observation: Observation, rows: list[Row])
             if row.missing
             else ""
         )
-        lines.append(f"  {row.label:32} {observed:>12} {row.bound:>12}{flag}")
+        coverage = "" if row.coverage is None else f"  coverage {row.coverage:.4f}"
+        lines.append(f"  {row.label:32} {observed:>12} {row.bound:>12}{flag}{coverage}")
     lines.extend(render_steps(observation.steps()))
     lines.extend(_diagnostics(observation))
     lines.extend(_datastore_lines(observation))
