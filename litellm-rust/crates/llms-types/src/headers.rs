@@ -8,9 +8,15 @@ pub struct ProviderSpecificHeader {
     #[serde(default)]
     pub extra_headers: Map<String, Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub claude_models_only: bool,
+    pub user_profile_id_models_only: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub non_user_profile_id_models_only: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub yields_to_configured: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured_credential_headers: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub configured_credential_prefix: String,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]

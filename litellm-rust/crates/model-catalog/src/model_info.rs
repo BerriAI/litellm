@@ -479,6 +479,8 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_anthropic_thinking_payload: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_anthropic_user_profile_id: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_assistant_prefill: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_audio_input: Option<bool>,

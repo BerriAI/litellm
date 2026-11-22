@@ -776,7 +776,7 @@ def test_bedrock_runtime_requests_do_not_forward_user_profiles(
     monkeypatch: pytest.MonkeyPatch, route: str, bearer: bool, profile_source: str
 ) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    proxy_data: Final[dict] = {}  # mutable-ok: the forwarding helper writes into the request
+    proxy_data: Final[dict[str, object]] = {}  # mutable-ok: the forwarding helper writes into the request
     add_provider_specific_headers_to_request(
         data=proxy_data, headers={}, user_profile_id="uprof_bad" if profile_source == "pin" else None
     )

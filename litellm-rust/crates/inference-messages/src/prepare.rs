@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
@@ -89,7 +89,7 @@ fn prepare_provider_request(
     let scoped = get_provider_specific_headers(
         provider_specific_header.as_ref(),
         provider.as_str(),
-        &model,
+        shaping.capabilities.supports_anthropic_user_profile_id,
         &configured_headers,
     );
     let forwarded = string_headers(Some(replaced_by(configured_headers, scoped)))?;
@@ -166,25 +166,26 @@ fn without_additional_drop_params(
     })
 }
 
+const ANTHROPIC_USER_PROFILE_ID_HEADER: &str = "anthropic-user-profile-id";
+
+fn is_profile_id(name: &str) -> bool {
+    name.eq_ignore_ascii_case(ANTHROPIC_USER_PROFILE_ID_HEADER)
+}
+
 fn replaced_by(configured: Map<String, Value>, scoped: Map<String, Value>) -> Map<String, Value> {
-    let scoped_names: HashMap<String, String> = scoped
-        .keys()
-        .map(|name| (name.to_ascii_lowercase(), name.clone()))
-        .collect();
+    let scoped_profile_id = scoped.keys().any(|name| is_profile_id(name));
     configured
         .into_iter()
-        .filter(|(name, _)| {
-            scoped_names
-                .get(&name.to_ascii_lowercase())
-                .is_none_or(|scoped_name| scoped_name == name)
-        })
+        .filter(|(name, _)| !scoped_profile_id || !is_profile_id(name))
         .chain(scoped)
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::auth::resolve_auth;
+    use litellm_llms::base_llm::{
+        auth::resolve_auth, messages::context::MessagesModelCapabilities,
+    };
     use litellm_llms_types::headers::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
@@ -457,12 +458,12 @@ mod tests {
 
     #[rstest]
     #[case::pin_replaces_the_caller_header_in_another_case(
-        "claude-test",
+        false,
         json!({"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-user-profile-id": "uprof_pin"}}),
         &[("anthropic-user-profile-id", "uprof_pin")]
     )]
     #[case::yielding_header_keeps_the_configured_one(
-        "claude-test",
+        false,
         json!({
             "custom_llm_provider": "anthropic",
             "extra_headers": {"anthropic-user-profile-id": "uprof_client"},
@@ -470,24 +471,40 @@ mod tests {
         }),
         &[("Anthropic-User-Profile-Id", "uprof_caller")]
     )]
-    #[case::claude_only_header_skips_other_models(
-        "deepseek-chat",
+    #[case::profile_id_header_reaches_a_model_that_takes_it(
+        true,
         json!({
             "custom_llm_provider": "anthropic",
             "extra_headers": {"x-claude-only": "1"},
-            "claude_models_only": true
+            "user_profile_id_models_only": true
+        }),
+        &[("Anthropic-User-Profile-Id", "uprof_caller"), ("x-claude-only", "1")]
+    )]
+    #[case::profile_id_header_skips_a_model_without_support(
+        false,
+        json!({
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"x-claude-only": "1"},
+            "user_profile_id_models_only": true
         }),
         &[("Anthropic-User-Profile-Id", "uprof_caller")]
     )]
-    fn scoped_headers_apply_by_model_and_replace_any_casing(
+    fn scoped_headers_apply_by_model_support_and_replace_any_casing(
         shaping: MessagesShaping,
-        #[case] model: &str,
+        #[case] takes_user_profile_id: bool,
         #[case] configured: Value,
         #[case] expected: &[(&str, &str)],
     ) {
+        let shaping = MessagesShaping {
+            capabilities: MessagesModelCapabilities {
+                supports_anthropic_user_profile_id: takes_user_profile_id,
+                ..shaping.capabilities
+            },
+            ..shaping
+        };
         let prepared = prepare(MessagesCall {
             body: body(
-                json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+                json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
             ),
             api_key: Some("sk-test".into()),
             api_base: None,
@@ -512,6 +529,75 @@ mod tests {
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         assert_eq!(profile_headers, expected);
+    }
+
+    #[rstest]
+    #[case::caller_token_replaces_the_configured_one(
+        "authorization",
+        &[("authorization", "Bearer sk-ant-oat01-caller")]
+    )]
+    #[case::configured_token_in_another_case_survives_with_the_pin(
+        "Authorization",
+        &[
+            ("anthropic-user-profile-id", "uprof_pinned"),
+            ("authorization", "Bearer sk-ant-oat01-deployment"),
+        ]
+    )]
+    fn a_credential_gated_pin_reaches_the_wire_only_with_the_configured_credential(
+        shaping: MessagesShaping,
+        #[case] configured_name: &str,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let shaping = MessagesShaping {
+            capabilities: MessagesModelCapabilities {
+                supports_anthropic_user_profile_id: true,
+                ..shaping.capabilities
+            },
+            ..shaping
+        };
+        let prepared = prepare(MessagesCall {
+            body: body(
+                json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: None,
+            api_base: None,
+            custom_llm_provider: Some("anthropic".into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([(
+                configured_name.into(),
+                json!("Bearer sk-ant-oat01-deployment"),
+            )])),
+            provider_specific_header: Some(
+                serde_json::from_value(json!([
+                    {
+                        "custom_llm_provider": "anthropic",
+                        "extra_headers": {"authorization": "Bearer sk-ant-oat01-caller"}
+                    },
+                    {
+                        "custom_llm_provider": "anthropic",
+                        "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+                        "user_profile_id_models_only": true,
+                        "configured_credential_headers": ["authorization"],
+                        "configured_credential_prefix": "Bearer sk-ant-oat"
+                    }
+                ]))
+                .unwrap(),
+            ),
+            timeout: None,
+            shaping,
+        })
+        .unwrap();
+        let mut sent: Vec<(String, String)> = wire_headers(&prepared)
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization") || is_profile_id(name))
+            .map(|(name, value)| (name.to_ascii_lowercase(), value))
+            .collect();
+        sent.sort();
+        let expected: Vec<(String, String)> = expected
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(sent, expected);
     }
 
     #[rstest]

@@ -165,7 +165,7 @@ class TestProviderSpecificHeaderUtils:
 _PROFILE_ON_AZURE_AI: ProviderSpecificHeader = {
     "custom_llm_provider": "azure_ai",
     "extra_headers": {"anthropic-user-profile-id": "uprof_client"},
-    "claude_models_only": True,
+    "user_profile_id_models_only": True,
 }
 
 
@@ -173,13 +173,14 @@ _PROFILE_ON_AZURE_AI: ProviderSpecificHeader = {
     "model,expected",
     [
         ("claude-sonnet-5-5", {"anthropic-user-profile-id": "uprof_client"}),
-        ("Claude-Opus-5-5", {"anthropic-user-profile-id": "uprof_client"}),
+        ("claude-opus-5-5", {"anthropic-user-profile-id": "uprof_client"}),
         ("mistral-large-3", {}),
+        ("claude-unlisted-deployment", {}),
         (None, {}),
     ],
-    ids=["claude", "claude_mixed_case", "non_claude", "unknown_model"],
+    ids=["flagged_claude", "another_flagged_claude", "mapped_without_flag", "unmapped_claude_name", "unknown_model"],
 )
-def test_a_claude_only_entry_reaches_claude_models_alone(model: str | None, expected: dict[str, str]) -> None:
+def test_a_profile_id_entry_reaches_only_models_the_cost_map_flags(model: str | None, expected: dict[str, str]) -> None:
     assert (
         ProviderSpecificHeaderUtils.get_provider_specific_headers(_PROFILE_ON_AZURE_AI, "azure_ai", model=model)
         == expected
@@ -190,19 +191,47 @@ def test_a_claude_only_entry_reaches_claude_models_alone(model: str | None, expe
     "model,expected",
     [
         ("claude-sonnet-5-5", {}),
-        ("Claude-Opus-5-5", {}),
+        ("claude-opus-5-5", {}),
         ("mistral-large-3", {"authorization": "Bearer caller"}),
+        ("claude-unlisted-deployment", {"authorization": "Bearer caller"}),
         (None, {"authorization": "Bearer caller"}),
     ],
-    ids=["claude", "claude_mixed_case", "non_claude", "unknown_model"],
+    ids=["flagged_claude", "another_flagged_claude", "mapped_without_flag", "unmapped_claude_name", "unknown_model"],
 )
-def test_a_non_claude_entry_skips_claude_models(model: str | None, expected: dict[str, str]) -> None:
+def test_a_non_profile_id_entry_skips_models_the_cost_map_flags(model: str | None, expected: dict[str, str]) -> None:
     entry: Final[ProviderSpecificHeader] = {
         "custom_llm_provider": "azure_ai",
         "extra_headers": {"authorization": "Bearer caller"},
-        "non_claude_models_only": True,
+        "non_user_profile_id_models_only": True,
     }
     assert ProviderSpecificHeaderUtils.get_provider_specific_headers(entry, "azure_ai", model=model) == expected
+
+
+@pytest.mark.parametrize(
+    "base_model,expected",
+    [
+        ("azure_ai/claude-sonnet-5-5", {"anthropic-user-profile-id": "uprof_client"}),
+        (None, {"authorization": "Bearer caller"}),
+    ],
+    ids=["base_model_flagged", "no_base_model"],
+)
+def test_an_unlisted_deployment_takes_the_profile_id_when_its_base_model_is_flagged(
+    base_model: str | None, expected: dict[str, str]
+) -> None:
+    caller_credential: Final[ProviderSpecificHeader] = {
+        "custom_llm_provider": "azure_ai",
+        "extra_headers": {"authorization": "Bearer caller"},
+        "non_user_profile_id_models_only": True,
+    }
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            [_PROFILE_ON_AZURE_AI, caller_credential],
+            "azure_ai",
+            model="claude-unlisted-deployment",
+            base_model=base_model,
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(

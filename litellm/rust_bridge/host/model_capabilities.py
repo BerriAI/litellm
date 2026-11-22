@@ -11,7 +11,16 @@ def _resolved_provider(model: str, custom_llm_provider: str | None) -> tuple[str
     return resolved_model, provider
 
 
-def anthropic_model_capabilities(model: str, custom_llm_provider: str | None) -> dict[str, object]:
+def _supports_user_profile_id(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    _, provider = _resolved_provider(model, custom_llm_provider)
+    return AnthropicModelInfo._supports_model_capability(model, "supports_anthropic_user_profile_id", provider)  # pyright: ignore[reportPrivateUsage]  # same probe the Python transform runs
+
+
+def anthropic_model_capabilities(
+    model: str, custom_llm_provider: str | None, base_model: str | None = None
+) -> dict[str, object]:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -32,5 +41,7 @@ def anthropic_model_capabilities(model: str, custom_llm_provider: str | None) ->
         "supports_sampling_params": AnthropicModelInfo._supports_sampling_params(resolved_model),  # pyright: ignore[reportPrivateUsage]  # same gate the handler applies
         "supports_speed": AnthropicConfig._model_supports_speed_param(resolved_model, provider),  # pyright: ignore[reportPrivateUsage]  # same gate the handler applies
         "supports_mid_conversation_system": supports("supports_mid_conversation_system"),
+        "supports_anthropic_user_profile_id": supports("supports_anthropic_user_profile_id")
+        or (base_model is not None and _supports_user_profile_id(base_model, custom_llm_provider)),
         "effort_tiers": {level: tier(level) for level in ("minimal", "low", "medium", "high", "xhigh", "max")},
     }

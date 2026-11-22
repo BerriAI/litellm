@@ -41,6 +41,12 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
+fn non_empty_string(value: Option<Bound<'_, PyAny>>) -> Option<String> {
+    value
+        .and_then(|value| value.extract::<String>().ok())
+        .filter(|value| !value.is_empty())
+}
+
 /// Reads `litellm.<name>`, the module global a param spec names, the way
 /// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -188,10 +194,17 @@ impl MessagesPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<MessagesShaping> {
         let module = py.import(ROUTE_HOST_MODULE)?;
+        let argument = |name: &str| self.view.argument(py, arguments, name);
+        let deployment_base_model = match non_empty_string(
+            argument("model_info")?.and_then(|info| info.get_item("base_model").ok()),
+        ) {
+            Some(base_model) => Some(base_model),
+            None => non_empty_string(argument("base_model")?),
+        };
         let capabilities: MessagesModelCapabilities = from_py(
             &py.import("litellm.rust_bridge.host.model_capabilities")?
                 .getattr("anthropic_model_capabilities")?
-                .call1((model, custom_llm_provider))?,
+                .call1((model, custom_llm_provider, deployment_base_model.as_deref()))?,
         )?;
         let settings: MessagesSettings =
             from_py(&module.getattr("settings")?.call1((arguments,))?)?;

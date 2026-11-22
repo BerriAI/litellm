@@ -91,7 +91,10 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
 )
-from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    deployment_base_model,
+    takes_anthropic_user_profile_id,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -1327,7 +1330,6 @@ _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
-_LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 
 
 class _AiohttpConnectorKwargs(TypedDict, total=False):
@@ -14221,34 +14223,36 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 
 
+def _counts_with_user_profile_id(deployment_litellm_params: Mapping[str, object], base_model: str | None) -> bool:
+    model: Final = deployment_litellm_params.get("model")
+    provider: Final = deployment_litellm_params.get("custom_llm_provider")
+    return takes_anthropic_user_profile_id(
+        model if isinstance(model, str) else None, provider if isinstance(provider, str) else None, base_model
+    )
+
+
 def _count_user_profile_id(
     pinned_user_profile_id: str | None,
     client_user_profile_id: str | None,
     deployment_litellm_params: Mapping[str, object],
+    base_model: str | None,
 ) -> str | None:
-    if not names_a_claude_model(str(deployment_litellm_params.get("model") or "")):
-        return None
-    return (
+    user_profile_id: Final = (
         pinned_user_profile_id
         or anthropic_user_profile_id_in_headers(deployment_litellm_params)
         or client_user_profile_id
     )
+    if not user_profile_id or not _counts_with_user_profile_id(deployment_litellm_params, base_model):
+        return None
+    return user_profile_id
 
 
-def _with_user_profile_id(
-    counter: BaseTokenCounter | None,
-    pinned_user_profile_id: str | None,
-    client_user_profile_id: str | None,
-    deployment_litellm_params: Mapping[str, object],
-) -> BaseTokenCounter | None:
+def _with_user_profile_id(counter: BaseTokenCounter | None, user_profile_id: str | None) -> BaseTokenCounter | None:
     from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
     from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
     from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
-    user_profile_id: Final = _count_user_profile_id(
-        pinned_user_profile_id, client_user_profile_id, deployment_litellm_params
-    )
     match counter:
         case AnthropicTokenCounter() if user_profile_id:
             return AnthropicTokenCounter(user_profile_id=user_profile_id)
@@ -14869,18 +14873,26 @@ async def count_request_tokens(
         deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
+    counted_deployment: Final[_TokenCountDeployment] = {} if deployment is None else deployment_view
+    counted_litellm_params: Final = counted_deployment.get("litellm_params", {})
+    counted_user_profile_id: Final = (
+        None
+        if deployment is None
+        else await asyncify(_count_user_profile_id)(
+            pinned_user_profile_id,
+            client_user_profile_id,
+            counted_litellm_params,
+            deployment_base_model(counted_litellm_params, counted_deployment.get("model_info")),
+        )
+    )
+
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
     custom_llm_provider: str | None = None
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
-        provider_counter = _with_user_profile_id(
-            routed_counter,
-            pinned_user_profile_id,
-            client_user_profile_id,
-            _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})),
-        )
+        provider_counter = _with_user_profile_id(routed_counter, counted_user_profile_id)
         if _model is not None:
             model_to_use = _model
 
@@ -14920,14 +14932,7 @@ async def count_request_tokens(
             model_to_use=model_to_use,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
-            sends_user_profile_id=deployment is not None
-            and bool(
-                _count_user_profile_id(
-                    pinned_user_profile_id,
-                    client_user_profile_id,
-                    _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})),
-                )
-            ),
+            sends_user_profile_id=bool(counted_user_profile_id),
         )
     )
     if isinstance(ladder, TokenCountResponse):

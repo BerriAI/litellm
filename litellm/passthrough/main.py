@@ -17,6 +17,7 @@ from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFi
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_provider_specific_headers import deployment_base_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -540,10 +541,15 @@ def llm_passthrough_route(
         api_base=base_target_url,
     )
 
+    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
     headers = BasePassthroughUtils.forward_headers_from_request(
         request_headers=dict(
             with_pinned_pass_through_profile_id(
-                request_headers or {}, custom_llm_provider, model, anthropic_user_profile_id_pin
+                request_headers or {},
+                custom_llm_provider,
+                model,
+                deployment_base_model(request_kwargs, request_kwargs.get("model_info")),
+                anthropic_user_profile_id_pin,
             )
         ),
         headers=auth_headers,

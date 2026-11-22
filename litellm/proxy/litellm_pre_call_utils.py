@@ -4197,6 +4197,15 @@ def _providers_on_caller_credentials(data: Mapping[str, object]) -> frozenset[st
     return _PROVIDERS_A_CALLER_API_KEY_AUTHENTICATES if _is_filled_string(data.get("api_key")) else frozenset()
 
 
+def _carries_anthropic_bearer_oauth(headers: object) -> bool:
+    return any(
+        name.lower() == "authorization"
+        and isinstance(value, str)
+        and value.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}")
+        for name, value in _request_fields(headers).items()
+    )
+
+
 def anthropic_user_profile_id_in_headers(params: Mapping[str, object]) -> str | None:
     for field in ("extra_headers", "headers"):
         for name, value in reversed(tuple(_request_fields(params.get(field)).items())):
@@ -4232,7 +4241,7 @@ def _request_entries(value: object) -> tuple[object, ...]:
 
 class _CallerProviderSpecificHeader(TypedDict):
     custom_llm_provider: ReadOnly[str]
-    extra_headers: ReadOnly[dict[str, str]]
+    extra_headers: ReadOnly[Mapping[str, str]]
     native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
 
 
@@ -4266,7 +4275,7 @@ def _caller_entries_beside_a_pin(
         (
             ",".join(provider for provider in providers if provider in pinned_providers),
             credentials,
-            {"non_claude_models_only": True},
+            {"non_user_profile_id_models_only": True},
         ),
     )
     return tuple(
@@ -4284,7 +4293,7 @@ def _user_profile_id_header(
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
         extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
-        claude_models_only=True,
+        user_profile_id_models_only=True,
         yields_to_configured=yields_to_configured,
     )
 
@@ -4314,7 +4323,7 @@ def _pin_where_a_configured_credential_authenticates(
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
         extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
-        claude_models_only=True,
+        user_profile_id_models_only=True,
         native_anthropic_messages_only=native_anthropic_messages_only,
         configured_credential_headers=credential_headers,
     )
@@ -4326,7 +4335,7 @@ def _pin_where_a_configured_oauth_token_authenticates(
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
         extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
-        claude_models_only=True,
+        user_profile_id_models_only=True,
         configured_credential_headers=("authorization",),
         configured_credential_prefix=f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}",
     )
@@ -4346,10 +4355,10 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
-    sends_anthropic_bearer_oauth: Final = any(
-        value.startswith("Bearer ") for value in anthropic_oauth_credential_headers.values()
-    )
     request_fields: Final = _REQUEST_FIELDS.validate_python(data)
+    sends_anthropic_bearer_oauth: Final = any(
+        map(_carries_anthropic_bearer_oauth, (headers, request_fields.get("extra_headers")))
+    )
     caller_api_key: Final = request_fields.get("api_key")
     sends_anthropic_oauth: Final = sends_anthropic_bearer_oauth or (
         isinstance(caller_api_key, str) and caller_api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)

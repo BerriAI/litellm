@@ -9,7 +9,7 @@ from litellm.constants import PASS_THROUGH_HEADER_PREFIX
 from litellm.litellm_core_utils.aws_partition import contains_aws_arn
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
-    names_a_claude_model,
+    takes_anthropic_user_profile_id,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 
@@ -37,12 +37,16 @@ _PASS_THROUGH_PROFILE_HEADER: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USE
 
 
 def with_pinned_pass_through_profile_id(
-    request_headers: Mapping[str, str], custom_llm_provider: str, model: str, pinned_profile_id: str | None
+    request_headers: Mapping[str, str],
+    custom_llm_provider: str,
+    model: str,
+    base_model: str | None,
+    pinned_profile_id: str | None,
 ) -> Mapping[str, str]:
     if (
         pinned_profile_id is None
         or custom_llm_provider not in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
-        or not names_a_claude_model(model)
+        or not takes_anthropic_user_profile_id(model, custom_llm_provider, base_model)
     ):
         return request_headers
     return {

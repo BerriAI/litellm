@@ -62,7 +62,6 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
-    names_a_claude_model,
     override_headers,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
@@ -150,6 +149,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
+from litellm.utils import supports_anthropic_user_profile_id
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     is_tinyfish_agent_url,
@@ -1110,9 +1110,10 @@ _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
 
 
-def _with_pinned_profile_id_for_claude_or_where_sent(
+def _with_pinned_profile_id_where_taken_or_sent(
     pinned_profile_id: str | None,
     caller_credentials: Mapping[str, str],
+    custom_llm_provider: str | None,
     headers: Mapping[str, str],
     body: Mapping[str, object] | None,
     litellm_params: Mapping[str, object],
@@ -1122,8 +1123,8 @@ def _with_pinned_profile_id_for_claude_or_where_sent(
         caller_credentials.get(name.lower()) == value for name, value in headers.items()
     )
     model: Final = None if body is None else body.get("model")
-    names_claude: Final = isinstance(model, str) and names_a_claude_model(model)
-    if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or names_claude):
+    takes_profile_id: Final = isinstance(model, str) and supports_anthropic_user_profile_id(model, custom_llm_provider)
+    if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or takes_profile_id):
         return headers, body
     return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}), body
 
@@ -1140,7 +1141,7 @@ def _upstream_request_filter_or_pin(
 
     if upstream_request_filter is not None:
         return upstream_request_filter
-    claude_route: Final = configured_route or custom_llm_provider in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
+    profile_id_route: Final = configured_route or custom_llm_provider in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
     route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
     caller_credentials: Final[Mapping[str, str]] = (
         {}
@@ -1153,9 +1154,10 @@ def _upstream_request_filter_or_pin(
         }
     )
     return partial(
-        _with_pinned_profile_id_for_claude_or_where_sent,
-        pinned_anthropic_user_profile_id(user_api_key_dict) if claude_route else None,
+        _with_pinned_profile_id_where_taken_or_sent,
+        pinned_anthropic_user_profile_id(user_api_key_dict) if profile_id_route else None,
         caller_credentials,
+        custom_llm_provider,
     )
 
 
