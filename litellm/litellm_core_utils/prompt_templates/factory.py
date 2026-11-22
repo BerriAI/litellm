@@ -1554,6 +1554,15 @@ def _gemini_tool_result_video_blob(
     try:
         video: Final = convert_to_anthropic_image_obj(url, format=None)
     except litellm.ImageFetchError as exc:
+        if not drop_params:
+            raise BadRequestError(
+                message=(
+                    "Could not download the video in a tool result. "
+                    f"{exc.message.removeprefix('litellm.BadRequestError: ')} Fix the link or set drop_params=True."
+                ),
+                model=model or "",
+                llm_provider=custom_llm_provider,
+            ) from exc
         verbose_logger.warning("Failed to process video in tool response: %s", exc)
         return None
     if not keeps_gemini_video(

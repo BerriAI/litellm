@@ -1864,12 +1864,64 @@ def test_gemini_tool_result_youtube_video_is_a_bad_request_instead_of_a_page_dow
         )
 
 
-def test_gemini_tool_result_keeps_the_tool_output_when_its_video_cannot_be_fetched() -> None:
-    delivered: Final = convert_to_gemini_tool_call_result(
-        _find_clip_result({"url": "https://clips.invalid/missing.mp4"}), _FIND_CLIP_CALL
-    )
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str,
+) -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
 
-    assert delivered == _TOOL_OUTPUT_ONLY
+    with respx.mock as router:
+        router.get(video_url).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
+
+
+_MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+_HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+
+
+@pytest.mark.parametrize(
+    ("part_type", "suffix", "body", "mime_type"),
+    [
+        pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
+        pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
+    ],
+)
+def test_gemini_tool_result_media_served_as_octet_stream_keeps_its_real_type(
+    part_type: str, suffix: str, body: bytes, mime_type: str
+) -> None:
+    media_url: Final = f"https://8.8.8.8/{uuid.uuid4()}{suffix}"
+    message: Final = {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": part_type, part_type: {"url": media_url}}],
+    }
+
+    with respx.mock as router:
+        router.get(media_url).respond(200, content=body, headers={"content-type": "application/octet-stream"})
+        delivered: Final = convert_to_gemini_tool_call_result(message, _FIND_CLIP_CALL)
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": base64.b64encode(body).decode(), "mime_type": mime_type}}],
+            }
+        }
+    ]
 
 
 def test_gemini_tool_result_video_without_a_url_is_a_bad_request_instead_of_a_silent_drop() -> None:
