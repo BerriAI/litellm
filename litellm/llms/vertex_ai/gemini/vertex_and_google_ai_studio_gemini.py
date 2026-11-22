@@ -745,7 +745,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict, pin_consts: bool = True) -> list[Tools]:
+    def _map_function(
+        self,
+        value: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> list[Tools]:  # mutable-ok: mirrors override contract
+        return with_pins_that_fit(
+            partial(self._build_function_tools, value, optional_params),
+            has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
+        )
+
+    def _build_function_tools(self, value: list[dict], optional_params: dict, pin_consts: bool = True) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -933,10 +943,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return with_pins_that_fit(
-            partial(self._map_function, value, optional_params),
-            has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
-        )
+        return self._map_function(value, optional_params)
 
     def _map_response_schema(self, value: dict, pin_consts: bool = True) -> dict:
         old_schema = deepcopy(value)
@@ -1337,7 +1344,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self.apply_response_schema_transformation(response_format, response_params, model)
         tools: Final = [
             with_pins_that_fit(
-                partial(self._map_function, cast(list[dict], request_params[param]), {}),  # cast-ok: a tools list
+                partial(
+                    self._build_function_tools,
+                    cast(list[dict], request_params[param]),  # cast-ok: a tools list
+                    {},
+                ),
                 has_const(cast(JsonValue, request_params[param])),  # cast-ok: tools are JSON request data
             )
             for param in tool_params
@@ -1421,7 +1432,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = with_pins_that_fit(
-                    partial(self._map_function, value, optional_params),
+                    partial(self._build_function_tools, value, optional_params),
                     pins_fit and has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
