@@ -25,7 +25,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
+from litellm.litellm_core_utils.core_helpers import has_attributes, loads_json_object
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     SSE_FRAME_TERMINATORS,
     sse_frame_event,
@@ -53,7 +53,6 @@ AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES: Final = (
     b'"The agentic loop reached its limit before this turn finished. '
     b'Raise max_agentic_loops to allow more loops."}}\n\n'
 )
-_DECODED_JSON: Final = TypeAdapter(object)
 _AGENTIC_HOOK_RESULT: Final = TypeAdapter(object)
 _HOLD_START_EVENTS: Final = frozenset(("message_delta", "message_stop"))
 _CONTENT_BLOCK_EVENTS: Final = frozenset(("content_block_start", "content_block_delta", "content_block_stop"))
@@ -145,14 +144,12 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
             continue
         if not stripped.startswith("data:"):
             continue
-        data_str = stripped[len("data:") :].strip()
-        try:
-            data = _DECODED_JSON.validate_python(json.loads(data_str))
-        except (json.JSONDecodeError, ValueError):
-            continue
-        event_type = current_event_type or decoded_json_object(data).get("type", "")
+        named_event_type = current_event_type
         current_event_type = None
-        events.append((event_type, data))
+        data = loads_json_object(stripped[len("data:") :])
+        if data is None:
+            continue
+        events.append((named_event_type or data.get("type", ""), data))
     return events
 
 
