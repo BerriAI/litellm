@@ -778,9 +778,20 @@ def _enum_size(node: JsonValue) -> tuple[bool, int] | None:
             return None
 
 
+def _json_nodes(schema: JsonValue) -> Iterable[JsonValue]:
+    return chain.from_iterable(takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,))))
+
+
 def _enum_sizes(schema: JsonValue) -> tuple[tuple[bool, int], ...]:
-    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,)))
-    return tuple(size for node in chain.from_iterable(levels) if (size := _enum_size(node)) is not None)
+    return tuple(size for node in _json_nodes(schema) if (size := _enum_size(node)) is not None)
+
+
+def has_const(schema: JsonValue) -> bool:
+    return any(isinstance(node, dict) and "const" in node for node in _json_nodes(schema))
+
+
+def enums_fit(request_parts: JsonValue) -> bool:
+    return _enum_characters_fit(_enum_sizes(request_parts))
 
 
 def _enum_characters_fit(enum_sizes: Iterable[tuple[bool, int]]) -> bool:
@@ -811,9 +822,11 @@ def with_integer_enums_that_fit(
     return build(False)
 
 
-def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart]) -> _GeminiRequestPart:
+def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart], pin_consts: bool) -> _GeminiRequestPart:
+    if not pin_consts:
+        return build(False)
     pinned: Final = build(True)
-    if _enum_characters_fit(_enum_sizes(cast(JsonValue, pinned))):  # cast-ok: built tools and schemas are JSON
+    if enums_fit(cast(JsonValue, pinned)):  # cast-ok: built tools and schemas are JSON
         return pinned
     verbose_logger.debug(
         "Gemini consts sent unpinned: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS
@@ -822,10 +835,10 @@ def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart]) -> _GeminiRe
 
 
 def with_enums_that_fit(
-    build: Callable[[bool, bool], _GeminiRequestPart], send_integer_enums: bool
+    build: Callable[[bool, bool], _GeminiRequestPart], send_integer_enums: bool, pin_consts: bool
 ) -> _GeminiRequestPart:
     return with_integer_enums_that_fit(
-        lambda integer_enums: with_pins_that_fit(partial(build, integer_enums)), send_integer_enums
+        lambda integer_enums: with_pins_that_fit(partial(build, integer_enums), pin_consts), send_integer_enums
     )
 
 
@@ -1139,21 +1152,14 @@ def _forces(function_calling_config: JsonValue, name: JsonValue) -> bool:
             return False
 
 
-def _vertex_parameters(
-    json_schema: Mapping[str, JsonValue], send_integer_enums: bool, pin_consts: bool
-) -> Mapping[str, JsonValue]:
+def _vertex_parameters(json_schema: Mapping[str, JsonValue], send_integer_enums: bool) -> Mapping[str, JsonValue]:
     stripped: Final = remove_strict_from_schema(remove_additional_properties(deepcopy(dict(json_schema))))
     return _JSON_SCHEMA.validate_python(
-        build_vertex_schema(stripped, send_integer_enums=send_integer_enums, pin_consts=pin_consts)
+        build_vertex_schema(stripped, send_integer_enums=send_integer_enums, pin_consts=False)
     )
 
 
-def _declaration_for(
-    declaration: JsonValue,
-    function_calling_config: JsonValue,
-    send_integer_enums: bool,
-    pin_consts: bool,
-) -> JsonValue:
+def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
     if not isinstance(declaration, dict):
         return declaration
     json_schema: Final = declaration.get("parametersJsonSchema")
@@ -1162,33 +1168,28 @@ def _declaration_for(
     if not _forces(function_calling_config, declaration.get("name")):
         return declaration
     kept: Final = {key: value for key, value in declaration.items() if key != "parametersJsonSchema"}
-    return {**kept, "parameters": dict(_vertex_parameters(json_schema, send_integer_enums, pin_consts))}
+    return {**kept, "parameters": dict(_vertex_parameters(json_schema, send_integer_enums))}
 
 
-def _tool_for(
-    tool: JsonValue,
-    function_calling_config: JsonValue,
-    send_integer_enums: bool,
-    pin_consts: bool,
-) -> JsonValue:
+def _tool_for(tool: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
     declarations: Final = tool.get("function_declarations") if isinstance(tool, dict) else None
     if not isinstance(tool, dict) or not isinstance(declarations, list):
         return tool
     return {
         **tool,
         "function_declarations": [
-            _declaration_for(item, function_calling_config, send_integer_enums, pin_consts) for item in declarations
+            _declaration_for(item, function_calling_config, send_integer_enums) for item in declarations
         ],
     }
 
 
 def with_forced_bare_root_unions_on_parameters(
-    tools: JsonValue, tool_config: JsonValue, send_integer_enums: bool, pin_consts: bool
+    tools: JsonValue, tool_config: JsonValue, send_integer_enums: bool
 ) -> JsonValue:
     match tool_config:
         case {"functionCallingConfig": function_calling_config} | {"function_calling_config": function_calling_config}:
             return (
-                [_tool_for(tool, function_calling_config, send_integer_enums, pin_consts) for tool in tools]
+                [_tool_for(tool, function_calling_config, send_integer_enums) for tool in tools]
                 if isinstance(tools, list)
                 else tools
             )

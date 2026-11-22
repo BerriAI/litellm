@@ -3309,6 +3309,40 @@ def test_gemini_response_json_schema_keeps_consts_as_sent_once_its_enums_pass_th
     )
 
 
+@pytest.mark.parametrize(
+    ("const_count", "pinned"),
+    [(_TEN_CHARACTER_CONSTS_IN_BUDGET, True), (_TEN_CHARACTER_CONSTS_IN_BUDGET + 1, False)],
+    ids=["at-budget", "over-budget"],
+)
+def test_gemini_sends_consts_unpinned_once_tools_and_response_format_pass_the_enum_budget_together(
+    const_count: int, pinned: bool
+) -> None:
+    half: Final = const_count // 2
+    response_properties: Final = _ten_character_const_properties(range(half, const_count))
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [_tool("record", _ten_character_const_properties(range(half)))],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "tags", "schema": {"type": "object", "properties": response_properties}},
+            },
+        },
+        optional_params={},
+        model="gemini-4-argon",
+        drop_params=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"] == {
+        f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} if pinned else {"type": "string"} for n in range(half)
+    }
+    assert request_params["response_json_schema"]["properties"] == (
+        {f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} for n in range(half, const_count)}
+        if pinned
+        else response_properties
+    )
+
+
 def test_gemini_tools_keep_integer_enums_that_fit_when_const_pins_pass_the_enum_budget() -> None:
     tool: Final = _tool(
         "set_priority",
