@@ -121,22 +121,9 @@ def _otlp_error(content_type: str | None, status_code: int, message: str, retry:
     )
 
 
-@router.post("/v1/logs", include_in_schema=False)
-async def ingest_otlp_logs(request: Request) -> Response:
-    return _otlp_error(
-        request.headers.get("content-type"),
-        410,
-        "Send logs directly to the Lens endpoint shown in Lens setup.",
-    )
-
-
-@router.post("/v1/traces", include_in_schema=False)
-async def forward_otlp_traces(
-    request: Request,
-    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+async def _forward_to_lens(
+    path: Literal["/v1/traces", "/v1/logs"], request: Request, auth: UserAPIKeyAuth, tracing: TraceReceiver | None
 ) -> Response:
-    """An agent that traces itself sends its spans here with its gateway key; they go to Lens as sent, filed under that key's owner."""
     content_type: Final = request.headers.get("content-type")
     if tracing is None:
         return _otlp_error(content_type, 501, "Agent tracing is not enabled on this gateway.")
@@ -150,7 +137,8 @@ async def forward_otlp_traces(
     }
     reservation: Final = BodyReservation(FORWARD_BUFFER_BUDGET)
     try:
-        forwarded: Final = await tracing.storage.forward_spans(
+        forwarded: Final = await tracing.storage.forward(
+            path,
             await request_body(request, reservation=reservation),
             {name: value for name, value in owner.items() if value},
         )
@@ -164,6 +152,26 @@ async def forward_otlp_traces(
         status_code=status_code,
         media_type=(content_type or "application/x-protobuf").split(";", 1)[0],
     )
+
+
+@router.post("/v1/traces", include_in_schema=False)
+async def forward_otlp_traces(
+    request: Request,
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+) -> Response:
+    """An agent that traces itself sends its spans here with its gateway key; they go to Lens as sent, filed under that key's owner."""
+    return await _forward_to_lens("/v1/traces", request, auth, tracing)
+
+
+@router.post("/v1/logs", include_in_schema=False)
+async def forward_otlp_logs(
+    request: Request,
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+) -> Response:
+    """The agent's log events carry what its spans leave out, such as each reply; they go to Lens the same way."""
+    return await _forward_to_lens("/v1/logs", request, auth, tracing)
 
 
 class TraceReadFailure(LiteLLMBaseModel):

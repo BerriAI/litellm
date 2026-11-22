@@ -577,7 +577,8 @@ it("fetches the key by id when the URL has ?key= for a key not in the loaded pag
 it("shows a loading state while a deep-linked key is being fetched", () => {
   renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "other-key-hash" } });
 
-  expect(screen.getByText("Loading key...")).toBeInTheDocument();
+  expect(screen.getByTestId("key-detail-skeleton")).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByText("Back to Keys")).toBeInTheDocument();
   expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
 });
 
