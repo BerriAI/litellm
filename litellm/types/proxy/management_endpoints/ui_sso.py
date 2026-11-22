@@ -160,6 +160,14 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'",
     )
+    generic_user_id_attribute: str | None = Field(
+        default=None,
+        description="Userinfo claim used as the LiteLLM user ID, e.g. 'sub'. Defaults to 'preferred_username'",
+    )
+    generic_user_email_attribute: str | None = Field(
+        default=None,
+        description="Userinfo claim used as the user email. Defaults to 'email'",
+    )
 
     # SAML SSO
     saml_idp_metadata_url: str | None = Field(
