@@ -1555,3 +1555,54 @@ def test_vertex_ai_anthropic_default_max_tokens_reads_vertex_row(
     assert result["max_tokens"] == (
         DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if expected_max_tokens is None else expected_max_tokens
     )
+
+
+
+def test_vertex_ai_claude_haiku_5_5_native_structured_output():
+    """Verify that vertex_ai/claude-haiku-5-5 uses native structured outputs
+    (output_config.format) rather than falling back to synthetic tool calls (#53478)."""
+    config = VertexAIAnthropicConfig()
+    model = "claude-haiku-5-5"
+
+    assert config.uses_native_structured_output(model) is True
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "decisive": {"type": "boolean"},
+            "reason": {"type": "string"},
+        },
+        "required": ["decisive", "reason"],
+        "additionalProperties": False,
+    }
+
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": "medium",
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "verdict", "strict": True, "schema": schema},
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert "tools" not in params or params["tools"] is None
+    assert "output_format" in params
+    assert params["output_format"] == {"type": "json_schema", "schema": schema}
+
+    body = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Return a synthetic verdict."}],
+        optional_params=params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "tools" not in body or body["tools"] is None
+    assert body.get("output_config") == {
+        "effort": "medium",
+        "format": {"type": "json_schema", "schema": schema},
+    }
