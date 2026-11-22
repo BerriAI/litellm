@@ -135,6 +135,12 @@ def _convert_detail_to_media_resolution_enum(
     return None
 
 
+def changes_gemini_media_settings(detail: str | None, video_metadata: Mapping[str, object] | None) -> bool:
+    return _convert_detail_to_media_resolution_enum(detail) is not None or bool(
+        gemini_video_metadata_from_openai(video_metadata or {})
+    )
+
+
 def _get_highest_media_resolution(current: str | None, new_detail: str | None) -> str | None:
     """
     Compare two media resolution values and return the highest one.

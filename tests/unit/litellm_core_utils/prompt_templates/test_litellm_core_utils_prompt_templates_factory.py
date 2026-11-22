@@ -1865,6 +1865,19 @@ def test_gemini_tool_result_youtube_video_is_a_bad_request_instead_of_a_page_dow
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_drop_params_drops_a_youtube_video_from_a_tool_result(custom_llm_provider: str) -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}),
+            _FIND_CLIP_CALL,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
 def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
     custom_llm_provider: str,
 ) -> None:
@@ -1889,6 +1902,7 @@ def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless
 
 _MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
 _HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+_XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
 
 
 @pytest.mark.parametrize(
@@ -1896,6 +1910,7 @@ _HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
     [
         pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
         pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
         pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
     ],
 )
@@ -1949,6 +1964,32 @@ def test_gemini_tool_result_video_settings_are_a_bad_request_instead_of_a_silent
         )
 
     assert (excinfo.value.llm_provider, excinfo.value.model) == (custom_llm_provider, "gemini-3.8-flash")
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [pytest.param({"detail": "auto"}, id="detail-auto"), pytest.param({"video_metadata": {"label": "x"}}, id="no-op-metadata")],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_tool_result_video_settings_that_change_nothing_are_sent_without_error(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+        _FIND_CLIP_CALL,
+        model="gemini-3.8-flash",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
 
 
 @pytest.mark.parametrize("settings", _CLIP_SETTINGS)
@@ -2514,6 +2555,16 @@ def test_bedrock_image_processor_content_type_fallback_binary_detection():
 
     assert content_type == "image/jpeg"
     assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
+
+
+def test_bedrock_sends_an_mp4_link_served_as_octet_stream_as_a_video_block() -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+
+    with respx.mock as router:
+        router.get(video_url).respond(200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"})
+        block: Final = BedrockImageProcessor.process_image_sync(video_url)
+
+    assert block == {"video": {"source": {"bytes": base64.b64encode(_MP4_BYTES).decode()}, "format": "mp4"}}
 
 
 def test_bedrock_image_processor_content_type_fallback_application_octet_stream():

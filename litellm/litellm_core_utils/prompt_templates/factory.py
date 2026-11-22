@@ -1521,6 +1521,7 @@ def _gemini_tool_result_video_blob(
     content: object, *, drop_params: bool, model: str | None, custom_llm_provider: str
 ) -> BlobType | None:
     from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
+    from litellm.llms.vertex_ai.gemini.transformation import changes_gemini_media_settings
 
     fields: Final = as_str_mapping(content)
     if fields is None or fields.get("type") != "video_url":
@@ -1536,7 +1537,9 @@ def _gemini_tool_result_video_blob(
             model=model or "",
             llm_provider=custom_llm_provider,
         )
-    if (video_fields.get("detail") or video_fields.get("video_metadata")) and not drop_params:
+    detail: Final = video_fields.get("detail")
+    video_metadata: Final = as_str_mapping(video_fields.get("video_metadata"))
+    if changes_gemini_media_settings(detail if isinstance(detail, str) else None, video_metadata) and not drop_params:
         raise BadRequestError(
             message=(
                 "A video inside a Gemini tool result cannot carry detail or video_metadata on this version. "
@@ -1546,8 +1549,14 @@ def _gemini_tool_result_video_blob(
             llm_provider=custom_llm_provider,
         )
     if gemini_fetches_url_itself(url):
+        if drop_params:
+            verbose_logger.warning("Dropped a video link from a Gemini tool result, which takes inline data only")
+            return None
         raise BadRequestError(
-            message="Gemini tool results require inline media data. Use a data URL for this video.",
+            message=(
+                "Gemini tool results require inline media data. "
+                "Use a data URL, move the video to a user message, or set drop_params=True."
+            ),
             model=model or "",
             llm_provider=custom_llm_provider,
         )
