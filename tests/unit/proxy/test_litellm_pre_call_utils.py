@@ -12157,3 +12157,46 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("chain", "logged"), [(("wlp1agent", "0oa1service"), "wlp1agent,0oa1service"), ((), None)])
+async def test_a_delegated_agents_actor_chain_is_written_to_the_request_metadata_only_when_present(
+    monkeypatch: pytest.MonkeyPatch, chain: tuple[str, ...], logged: str | None
+) -> None:
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.types.proxy.agent_identity import ManagedAgentContext
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "client": ("127.0.0.1", 1234),
+            "server": ("localhost", 80),
+            "scheme": "http",
+        }
+    )
+    auth: Final = UserAPIKeyAuth(api_key="hashed-key", agent_id="invoice-bot", user_id="maria")
+    auth.managed_agent_context = ManagedAgentContext(
+        agent_id="invoice-bot", mode="delegated", user_id="maria", actor_chain=chain
+    )
+
+    updated_data: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "metadata": {"agent_actor_chain": "untrusted"}},
+        request=request,
+        user_api_key_dict=auth,
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+
+    metadata: Final = updated_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata.get("agent_actor_chain") == logged
+    assert ("agent_actor_chain" in metadata) is (logged is not None)

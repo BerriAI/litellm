@@ -229,6 +229,11 @@ def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
     return email if isinstance(email, str) and email.strip() else None
 
 
+def _stored_actor_chain(metadata: Mapping[object, object]) -> str | None:
+    chain: Final = metadata.get("agent_actor_chain")
+    return chain if isinstance(chain, str) else None
+
+
 _CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
@@ -348,8 +353,13 @@ def _get_spend_logs_metadata(  # pyright: ignore[reportUnusedFunction]  # shared
     customer_metadata: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(metadata)
     clean_metadata: Final = SpendLogsMetadata(
         **MappingProxyType(
-            {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
+            {
+                key: metadata.get(key)
+                for key in SpendLogsMetadata.__annotations__
+                if key not in _STAMPED_METADATA_KEYS and key != "agent_actor_chain"
+            }
         ),
+        agent_actor_chain=_stored_actor_chain(customer_metadata),
         **_stored_customer_identity(customer_metadata),
         **upstream_provider_metadata,
         **route_call_type_metadata,
