@@ -2674,6 +2674,9 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
         "/realtime/calls",
         "/v1/realtime/calls",
         "/openai/v1/realtime/calls",
+        "/live/sessions",
+        "/v1/live/sessions",
+        "/openai/v1/live/sessions",
     ],
 )
 def test_get_model_from_request_extracts_realtime_session_model(route):

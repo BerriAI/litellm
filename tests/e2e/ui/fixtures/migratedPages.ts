@@ -100,7 +100,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     segment: "admin-panel",
     linkName: "Admin Settings",
     group: "Settings",
-    content: { role: "heading", name: "Admin Access" },
+    content: { role: "heading", name: "Admin Settings" },
   },
   "logging-and-alerts": {
     segment: "logging-and-alerts",

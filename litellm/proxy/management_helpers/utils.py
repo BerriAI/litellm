@@ -399,6 +399,7 @@ async def handle_budget_for_entity(
 # default member-budget into an individual member-budget so that the new
 # row starts with the same limits as the default.
 _CLONABLE_BUDGET_FIELDS: Final[tuple[str, ...]] = (
+    "rollover_max_budget",
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
