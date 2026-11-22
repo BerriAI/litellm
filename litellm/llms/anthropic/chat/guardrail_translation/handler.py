@@ -25,17 +25,16 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
-    truncate_tool_name,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
-    keep_non_string_tool_result_texts,
-    keep_url_documents,
+    is_non_empty_text_block,
+    keep_original_fields,
     scannable_tool_result_request,
 )
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
@@ -1105,15 +1104,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                continue
-            text = block.get("text")
-            if not isinstance(text, str) or not text:
+        for item in cast(Sequence[object], content):  # cast-ok: untrusted client payload
+            if (block := as_str_mapping(item)) is None or not is_non_empty_text_block(block):
                 continue
             anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
                 "type": "text",
-                "text": text,
+                "text": block["text"],
             }
             cache_control = block.get("cache_control")
             if cache_control:
@@ -1278,9 +1274,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             original_tool_names,
         )
         original_messages: Final = data.get("messages")
-        data["messages"] = keep_url_documents(
-            keep_non_string_tool_result_texts(converted, original_messages), original_messages
-        )
+        data["messages"] = keep_original_fields(converted, original_messages)
 
     @staticmethod
     def _extract_midturn_system_text(
@@ -2172,6 +2166,18 @@ class AnthropicMessagesHandler(BaseTranslation):
         if released_key is None or not released_key.tool_calls_in_flight:
             return tuple(responses_so_far)
         return (*responses_so_far, _RELEASED_TOOL_USE_STOP)
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        return bool(self._streamed_tool_use_fingerprints((item,)))
+
+    def split_whole_stream_frames(self, carried: object | None, item: object) -> tuple[object | None, object | None]:
+        """Native ``/v1/messages`` relays raw transport reads, so an SSE event can arrive split across two."""
+        from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+
+        if not isinstance(item, bytes):
+            return item, carried
+        whole, rest = split_complete_sse_frames((carried if isinstance(carried, bytes) else b"") + item)
+        return whole or None, rest or None
 
     @classmethod
     def _streamed_tool_use_fingerprints(cls, responses_so_far: Sequence[object]) -> tuple[str, ...]:

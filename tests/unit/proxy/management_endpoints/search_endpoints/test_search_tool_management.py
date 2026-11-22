@@ -1129,7 +1129,8 @@ def _search_caller(
 @pytest.fixture
 def search_permission_cache(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str] | None], None]:
     from litellm.proxy._types import LiteLLM_UserTable
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     cache = UserApiKeyCache()
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
@@ -1137,10 +1138,11 @@ def search_permission_cache(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[s
 
     def grant_user(search_tools: list[str] | None) -> None:
         cache.set_cache(
-            key="internal_user", value=LiteLLM_UserTable(user_id="internal_user", object_permission_id="op-user")
+            key=AuthObject.user("internal_user"),
+            value=LiteLLM_UserTable(user_id="internal_user", object_permission_id="op-user"),
         )
         cache.set_cache(
-            key=object_permission_cache_key("op-user"),
+            key=AuthObject.object_permission("op-user"),
             value=LiteLLM_ObjectPermissionTable(object_permission_id="op-user", search_tools=search_tools),
         )
 

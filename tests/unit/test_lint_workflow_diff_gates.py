@@ -525,7 +525,7 @@ def _ui_api_types_relevant(tmp_path: Path, changed: str) -> bool:
     (
         "litellm/proxy/proxy_server.py",
         "litellm/types/router.py",
-        "litellm/tracing/generated/models.py",
+        "litellm/integrations/lens/generated/models.py",
         "litellm/router_strategy/complexity_router/config.py",
         "litellm/models/credentials.py",
         "litellm/enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",

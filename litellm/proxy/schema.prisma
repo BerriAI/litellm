@@ -12,6 +12,8 @@ generator client {
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
   apps LiteLLM_AppTable[] @relation("AppBudget")
+  app_groups LiteLLM_AppGroupTable[] @relation("AppGroupBudget")
+  app_group_org_budgets LiteLLM_AppGroupCustomerOrgTable[] @relation("AppGroupOrgBudget")
   app_default_tiers LiteLLM_AppTable[] @relation("AppDefaultTier")
   app_default_members LiteLLM_AppTable[] @relation("AppDefaultMember")
   app_org_tiers LiteLLM_AppCustomerOrgTable[] @relation("AppOrgTier")
@@ -59,8 +61,41 @@ model LiteLLM_BudgetTable {
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
 }
 
+model LiteLLM_AppGroupTable {
+  app_group_id String @id @default(uuid())
+  name String @unique
+  description String?
+  metadata Json?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppGroupBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  spend Float @default(0.0)
+  spend_reset_window String?
+  apps LiteLLM_AppTable[]
+  customer_organizations LiteLLM_AppGroupCustomerOrgTable[]
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+}
+
+model LiteLLM_AppGroupCustomerOrgTable {
+  app_group_id String
+  customer_org_id String
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppGroupOrgBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  spend Float @default(0.0)
+  spend_reset_window String?
+  app_group LiteLLM_AppGroupTable @relation(fields: [app_group_id], references: [app_group_id], onDelete: Cascade)
+  customer_org LiteLLM_CustomerOrganizationTable @relation(fields: [customer_org_id], references: [customer_org_id], onDelete: Cascade)
+  @@id([app_group_id, customer_org_id])
+  @@index([customer_org_id])
+}
+
 model LiteLLM_AppTable {
   app_id String @id @default(uuid())
+  app_group_id String?
+  app_group LiteLLM_AppGroupTable? @relation(fields: [app_group_id], references: [app_group_id], onDelete: Restrict)
+  @@index([app_group_id])
   resource_type String?
   resource_id String?
   alias String @unique
@@ -118,6 +153,7 @@ model LiteLLM_AppCustomerMemberTable {
 }
 
 model LiteLLM_CustomerOrganizationTable {
+  app_groups LiteLLM_AppGroupCustomerOrgTable[]
   apps LiteLLM_AppCustomerOrgTable[]
   spend Float @default(0.0)
   budget_template_ids String[] @default([])
@@ -1145,6 +1181,8 @@ model LiteLLM_DailyOrganizationSpend {
 
 // Track daily end user (customer) spend metrics per model and key
 model LiteLLM_DailyCustomerMemberSpend {
+  app_group_id String @default("")
+  @@index([app_group_id, customer_org_id, date])
   app_id String @default("")
   id                  String   @id
   date                String

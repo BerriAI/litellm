@@ -1,15 +1,17 @@
 import { useTranslation } from "react-i18next";
 import { Fragment, type ComponentProps, type ReactNode } from "react";
-import { CustomerBudgetLimitFields } from "./CustomerBudgetFields";
+import { CustomerBudgetFields } from "./CustomerBudgetFields";
+import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
+import type { BudgetFields } from "./customerBudgetForm";
 import { rateFields } from "./CustomerRateLimits";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { customerBudgetPeriod } from "./customerBudgetUsage";
+import { customerBudgetLimitLabel } from "./customerBudgetUsage";
 import type { Organization } from "./customerHierarchyForms";
 import type { CustomerOrganizationFields } from "./customerOrganizationForm";
 
 export type CustomerLimits = Pick<
   CustomerOrganizationFields,
-  "budgetMode" | "budgetId" | "budgetAmount" | "budgetDuration" | "tpm" | "rpm"
+  "budgetMode" | "budgetId" | "budgetAmount" | "budgetDuration" | "tpm" | "rpm" | "softBudget" | "allowedModels"
 >;
 
 const currencyOptions = { style: "currency", minimumFractionDigits: 0, maximumFractionDigits: 2 } as const;
@@ -32,6 +34,8 @@ export function CustomerBudgetSourceSelect({
   loading = false,
   inheritedOption,
   noTemplate = false,
+  custom = true,
+  unavailableSelection,
 }: {
   profiles: Organization["default_budgets"];
   value: string;
@@ -41,6 +45,8 @@ export function CustomerBudgetSourceSelect({
   loading?: boolean;
   inheritedOption?: { label: string; summary: string };
   noTemplate?: boolean;
+  custom?: boolean;
+  unavailableSelection?: { value: string; label: string; summary: string };
 }) {
   const { t } = useTranslation();
   const profileOptions = profiles.map((group) => {
@@ -52,12 +58,8 @@ export function CustomerBudgetSourceSelect({
     ];
     const spendSummary = spendLimits.map((limit) => {
       const amount = t("format.number", { val: limit.max_budget, ...currencyOptions });
-      const period = customerBudgetPeriod(limit.budget_duration ?? null);
-      if (period === "monthly") return t("customerPortal.createDialog.profileMonthlyBudget", { amount });
-      if (period === "yearly") return t("customerPortal.createDialog.profileYearlyBudget", { amount });
-      return limit.budget_duration
-        ? t("customerPortal.createDialog.profilePeriodBudget", { amount, duration: limit.budget_duration })
-        : amount;
+      const label = customerBudgetLimitLabel(amount, limit.budget_duration ?? null, t);
+      return limit.budget_duration ? label : `${label} · ${t("customerPortal.analytics.noAutomaticReset")}`;
     });
     const rateSummary = rateFields.map((field) =>
       group[`${field}_limit`] == null
@@ -73,6 +75,9 @@ export function CustomerBudgetSourceSelect({
       summary: [
         ...(spendSummary.length ? spendSummary : [t("customerPortal.rateLimits.noSpendLimit")]),
         ...rateSummary,
+        ...(group.allowed_models?.length
+          ? [`${t("customerPortal.hierarchy.allowedModels")}: ${group.allowed_models.join(", ")}`]
+          : []),
       ].join(" · "),
     };
   });
@@ -90,10 +95,11 @@ export function CustomerBudgetSourceSelect({
     ...(inheritedOption ? [{ ...inheritedOption, value: "inherit" }] : []),
     ...profileOptions,
     ...(noTemplate ? [noTemplateOption] : []),
-    customOption,
+    ...(custom ? [customOption] : []),
   ];
   const selection =
     options.find((option) => option.value === value) ??
+    (unavailableSelection?.value === value ? unavailableSelection : undefined) ??
     (value.startsWith("profile:")
       ? { label: t("customerPortal.hierarchy.unknownTemplate", { id: value.slice("profile:".length) }), summary: "" }
       : undefined);
@@ -105,6 +111,11 @@ export function CustomerBudgetSourceSelect({
         </SelectValue>
       </SelectTrigger>
       <SelectContent className="p-1">
+        {unavailableSelection?.value === value && (
+          <SelectItem value={unavailableSelection.value} disabled className="py-3">
+            <LimitOptionContent label={unavailableSelection.label} summary={unavailableSelection.summary} />
+          </SelectItem>
+        )}
         {loading && (
           <SelectItem value="loading" disabled>
             {t("customerPortal.common.loading")}
@@ -138,6 +149,7 @@ export function CustomerBudgetEditor({
   source,
   error,
   children,
+  budget,
   className = "space-y-4",
 }: {
   title?: string;
@@ -145,9 +157,14 @@ export function CustomerBudgetEditor({
   id: string;
   source?: ComponentProps<typeof CustomerBudgetSourceSelect>;
   error?: ReactNode;
-  children: ReactNode;
   className?: string;
-}) {
+} & (
+  | { children: ReactNode; budget?: never }
+  | {
+      budget: (Omit<ComponentProps<typeof CustomerBudgetCompactFields>, "id"> & { id?: string }) | null;
+      children?: never;
+    }
+)) {
   return (
     <section className={className} aria-labelledby={title ? `${id}-limits-heading` : undefined}>
       {title && (
@@ -160,7 +177,8 @@ export function CustomerBudgetEditor({
       )}
       {source && <CustomerBudgetSourceSelect {...source} />}
       {error}
-      {(!source || source.value === "custom") && children}
+      {(!source || source.value === "custom") &&
+        (budget ? <CustomerBudgetCompactFields id={id} {...budget} /> : children)}
     </section>
   );
 }
@@ -192,7 +210,7 @@ export default function CustomerLimitsFields({
     const profile = profiles?.find((group) => `profile:${group.budget_id}` === value);
     if (profile) onChange({ budgetMode: "profile", budgetId: profile.budget_id });
   };
-  const changeLimit = (key: "maxBudget" | "budgetDuration" | "tpm" | "rpm", value: string) =>
+  const changeLimit = <K extends keyof BudgetFields>(key: K, value: BudgetFields[K]) =>
     onChange({ [key === "maxBudget" ? "budgetAmount" : key]: value });
   return (
     <CustomerBudgetEditor
@@ -213,16 +231,17 @@ export default function CustomerLimitsFields({
             }
       }
     >
-      <CustomerBudgetLimitFields
+      <CustomerBudgetFields
         fields={{
           maxBudget: fields.budgetAmount,
           budgetDuration: fields.budgetDuration,
           tpm: fields.tpm,
           rpm: fields.rpm,
+          softBudget: fields.softBudget,
+          allowedModels: fields.allowedModels,
         }}
         disabled={disabled}
         idPrefix={idPrefix}
-        period="standard"
         onChange={changeLimit}
       />
     </CustomerBudgetEditor>

@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
@@ -18,8 +19,8 @@ from litellm import constants
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.csv_export import csv_cell
 from litellm.proxy.management_endpoints.daily_activity_routes import (
-    _csv_cell,
     get_daily_activity_llm_router,
     get_daily_activity_prisma_client,
     get_daily_activity_repository,
@@ -276,6 +277,7 @@ class _FakeRepository:
         self.user_page_call: tuple[DailyActivityScope, int, int] | None = None
         self.user_metadata = AsyncMock(side_effect=self._user_metadata)
         self.export_rows_error: Exception | None = None
+        self.export_rows_include_metadata: bool | None = None
 
     def _matching_rows(self, scope: DailyActivityScope) -> tuple[_Activity, ...]:
         return tuple(
@@ -385,7 +387,10 @@ class _FakeRepository:
             for key in api_keys
         }
 
-    async def export_rows(self, scope: DailyActivityScope, *, export_type: ExportType) -> AsyncIterator[ExportRow]:
+    async def export_rows(
+        self, scope: DailyActivityScope, *, export_type: ExportType, include_metadata: bool = False
+    ) -> AsyncIterator[ExportRow]:
+        self.export_rows_include_metadata = include_metadata
         if self.export_rows_error is not None:
             raise self.export_rows_error
         for row in self._matching_rows(scope):
@@ -407,6 +412,8 @@ class _FakeRepository:
                 failed_requests=row.failed_requests,
                 cache_read_input_tokens=row.cache_read_input_tokens,
                 cache_creation_input_tokens=row.cache_creation_input_tokens,
+                key_metadata={"cost_center": "=finance", "tier": 2} if include_metadata else {},
+                user_metadata={"department": "research"} if include_metadata else {},
             )
 
 
@@ -1175,7 +1182,9 @@ def _aggregated_entity_metadata(
     prefix: str, query_name: str, entity_id: str, prisma_client: object
 ) -> tuple[httpx.Response, tuple[Mapping[str, object], ...]]:
     with _daily_activity_test_client(_FakeRepository(_seeded_activity()), prisma_client) as client:
-        response: Final = client.get(f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id))
+        response: Final = client.get(
+            f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id)
+        )
     if response.status_code != 200:
         return response, ()
     entities: Final = chain.from_iterable(
@@ -1434,7 +1443,11 @@ def test_export_routes_stream_csv_and_preserve_row_counts(
     client, _ = daily_activity_client
     response: Final = client.get(
         f"{prefix}/daily/activity/export",
-        params={**_entity_params(query_name, entity_id), "export_type": ExportType.DAILY.value},
+        params={
+            **_entity_params(query_name, entity_id),
+            "export_type": ExportType.DAILY.value,
+            "include_metadata": "true",
+        },
     )
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
@@ -1444,6 +1457,9 @@ def test_export_routes_stream_csv_and_preserve_row_counts(
     assert len(records) == 7
     assert records[1][2] == "'=entity"
     assert records[1][4] == "'+key"
+    columns: Final = dict(zip(records[0], records[1], strict=True))
+    assert json.loads(columns["key_metadata"]) == {"cost_center": "=finance", "tier": 2}
+    assert json.loads(columns["user_metadata"]) == {"department": "research"}
 
 
 @pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
@@ -1456,7 +1472,7 @@ def test_export_routes_stream_json_arrays(
     client, _ = daily_activity_client
     response: Final = client.get(
         f"{prefix}/daily/activity/export",
-        params={**_entity_params(query_name, entity_id), "format": "json"},
+        params={**_entity_params(query_name, entity_id), "format": "json", "include_metadata": "true"},
     )
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("application/json")
@@ -1464,6 +1480,75 @@ def test_export_routes_stream_json_arrays(
     records: Final = response.json()
     assert isinstance(records, list) and len(records) == 6, response.text
     assert records[0]["entity_alias"] == "=entity"
+    assert records[0]["key_metadata"] == {"cost_center": "=finance", "tier": 2}
+    assert records[0]["user_metadata"] == {"department": "research"}
+
+
+_DEFAULT_EXPORT_COLUMNS: Final = (
+    "date",
+    "entity_id",
+    "entity_alias",
+    "api_key",
+    "key_alias",
+    "user_id",
+    "user_email",
+    "model",
+    "spend",
+    "flat_cost",
+    "prompt_tokens",
+    "completion_tokens",
+    "api_requests",
+    "successful_requests",
+    "failed_requests",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+@pytest.mark.parametrize(
+    ("role", "include_metadata", "expects_metadata"),
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "true", True),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, "true", True),
+        (LitellmUserRoles.INTERNAL_USER, "true", False),
+        (LitellmUserRoles.PROXY_ADMIN, "false", False),
+        (LitellmUserRoles.PROXY_ADMIN, None, False),
+    ],
+)
+def test_export_metadata_only_when_an_admin_view_caller_opts_in(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    role: LitellmUserRoles,
+    include_metadata: str | None,
+    expects_metadata: bool,
+) -> None:
+    client, repository = daily_activity_client
+    opt_in: Final = {} if include_metadata is None else {"include_metadata": include_metadata}
+    params: Final = {
+        **_entity_params("user_id", "user-a"),
+        "export_type": ExportType.DAILY_WITH_KEYS.value,
+        **opt_in,
+    }
+    headers: Final = {"x-user-role": role.value, "x-user-id": "user-a"}
+    json_response: Final = client.get(
+        "/user/daily/activity/export", params={**params, "format": "json"}, headers=headers
+    )
+    csv_response: Final = client.get("/user/daily/activity/export", params={**params, "format": "csv"}, headers=headers)
+    assert json_response.status_code == 200, json_response.text
+    assert csv_response.status_code == 200, csv_response.text
+    assert repository.export_rows_include_metadata is expects_metadata
+    expected_columns: Final = (
+        (*_DEFAULT_EXPORT_COLUMNS, "key_metadata", "user_metadata") if expects_metadata else _DEFAULT_EXPORT_COLUMNS
+    )
+    records: Final = json_response.json()
+    assert records, json_response.text
+    assert all(tuple(record) == expected_columns for record in records), json_response.text
+    csv_records: Final = tuple(csv.reader(io.StringIO(csv_response.text)))
+    assert len(csv_records) == len(records) + 1
+    assert tuple(csv_records[0]) == expected_columns
+    assert all(len(row) == len(expected_columns) for row in csv_records)
+    if expects_metadata:
+        assert all(record["key_metadata"] == {"cost_center": "=finance", "tier": 2} for record in records)
+        assert all(record["user_metadata"] == {"department": "research"} for record in records)
 
 
 def test_export_first_row_error_returns_json_error_before_streaming(
@@ -1490,7 +1575,7 @@ def test_csv_export_with_no_rows_contains_only_header(
         params={**_entity_params("team_ids", "team-a"), "api_key": "missing-key"},
     )
     assert response.status_code == 200, response.text
-    assert response.text == ",".join(field.name for field in fields(ExportRow)) + "\r\n"
+    assert response.text == ",".join(_DEFAULT_EXPORT_COLUMNS) + "\r\n"
 
 
 def test_json_export_with_no_rows_is_an_empty_array(
@@ -1688,7 +1773,7 @@ def test_exclusion_filters_apply_after_entity_scope(
 
 def test_csv_formula_escaping_covers_all_supported_leading_characters() -> None:
     dangerous_values: Final = ("=sum", "+sum", "-sum", "@sum", "\tsum", "\rsum")
-    assert tuple(_csv_cell(value) for value in dangerous_values) == tuple(f"'{value}" for value in dangerous_values)
+    assert tuple(csv_cell(value) for value in dangerous_values) == tuple(f"'{value}" for value in dangerous_values)
 
 
 def test_user_cache_leakage_route_returns_cache_keys_and_metadata(
