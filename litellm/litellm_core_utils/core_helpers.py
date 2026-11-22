@@ -357,14 +357,16 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
     and user_api_key values are in 'metadata'. The caller's spend_logs_metadata rides along for the same reason:
     a guardrail hook can plant `litellm_metadata` on a chat request after the proxy filled `metadata`, and the
-    spend row reads it from there.
+    spend row reads it from there. It goes only into the returned copy, since guardrail vendors receive the
+    planted dict.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
     for key, value in dict(metadata).items():
-        carry_when_missing = key == "spend_logs_metadata" and key not in litellm_metadata
-        if potential_spend_tracking_metadata_substring in key or carry_when_missing:
+        if potential_spend_tracking_metadata_substring in key:
             litellm_metadata[key] = value
-    return litellm_metadata
+    if "spend_logs_metadata" in litellm_metadata or "spend_logs_metadata" not in metadata:
+        return litellm_metadata
+    return {**litellm_metadata, "spend_logs_metadata": metadata["spend_logs_metadata"]}
 
 
 def get_metadata_variable_name_from_kwargs(

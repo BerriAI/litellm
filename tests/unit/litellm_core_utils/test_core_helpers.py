@@ -690,3 +690,16 @@ def test_a_planted_litellm_metadata_keeps_the_callers_spend_logs_metadata(
     }
 
     assert get_litellm_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == logged
+
+
+def test_carrying_spend_logs_metadata_leaves_the_planted_litellm_metadata_as_the_hook_set_it() -> None:
+    planted: Final = {"applied_guardrails": ["pre"]}
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {"spend_logs_metadata": {"team": "search"}},
+            "litellm_metadata": planted,
+        }
+    }
+
+    assert get_litellm_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == {"team": "search"}
+    assert planted == {"applied_guardrails": ["pre"]}
