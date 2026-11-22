@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_BYTES, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
@@ -3233,7 +3233,7 @@ def test_vertex_response_json_schema_pins_a_const_inside_the_defs_it_keeps() -> 
     }
 
 
-_TEN_CHARACTER_CONSTS_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+_TEN_CHARACTER_CONSTS_IN_BUDGET: Final = GEMINI_MAX_ENUM_BYTES // 10
 
 
 def _ten_character_const_properties(numbers: range) -> dict[str, object]:
@@ -3450,7 +3450,7 @@ def test_gemini_mapping_drops_integer_enums_when_the_caller_disallows_them() -> 
     assert request_params["response_schema"]["properties"]["level"] == {"type": "integer"}
 
 
-_TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+_TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_BYTES // 10
 
 
 def _ten_digit_integer_enum_tool(name: str, value_count: int) -> dict[str, object]:
@@ -3504,7 +3504,7 @@ def test_gemini_tool_mapping_drops_every_integer_enum_when_the_request_exceeds_t
 
 
 def test_gemini_tool_mapping_counts_string_enums_toward_the_enum_budget() -> None:
-    names: Final = [f"name{n:06d}" for n in range(GEMINI_MAX_ENUM_CHARACTERS // 10)]
+    names: Final = [f"name{n:06d}" for n in range(GEMINI_MAX_ENUM_BYTES // 10)]
     tool: Final = {
         "type": "function",
         "function": {
@@ -12655,3 +12655,18 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+@pytest.mark.parametrize(
+    ("const", "pinned"),
+    [("a" * GEMINI_MAX_ENUM_BYTES, True), ("账" * (GEMINI_MAX_ENUM_BYTES // 3 + 1), False)],
+    ids=["ascii-at-budget", "multibyte-over-budget"],
+)
+def test_gemini_tools_measure_the_enum_budget_in_utf8_bytes(const: str, pinned: bool) -> None:
+    declarations: Final = _tools_through_chat([_tool("record", {"source": {"type": "string", "const": const}})])[0][
+        "function_declarations"
+    ]
+
+    assert declarations[0]["parameters"]["properties"]["source"] == (
+        {"type": "string", "enum": [const]} if pinned else {"type": "string"}
+    )

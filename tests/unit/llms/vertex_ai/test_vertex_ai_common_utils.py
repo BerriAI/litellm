@@ -27,7 +27,9 @@ from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    enums_fit,
     get_vertex_url,
+    has_const,
     needs_parameters_json_schema,
     parameters_json_schema_for,
     pop_vertex_request_labels,
@@ -1725,6 +1727,17 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
             },
             {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"]}]}}},
         ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"const": "card"}, {"const": "bank"}], "const": "bank"}},
+            },
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["bank"]}]}}},
+        ),
+        (
+            {"type": "object", "properties": {"note": {"const": ""}}},
+            {"type": "object", "properties": {"note": {"type": "string"}}},
+        ),
     ],
     ids=[
         "items",
@@ -1735,6 +1748,8 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
         "empty-string",
         "const-beside-any-of",
         "const-beside-mixed-type-any-of",
+        "const-beside-branches-with-other-consts",
+        "typeless-empty-string",
     ],
 )
 def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
@@ -3193,3 +3208,17 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
+
+
+
+@pytest.mark.timeout(10)
+def test_const_and_enum_walks_end_on_a_schema_that_contains_itself() -> None:
+    node: Final[dict[str, JsonValue]] = {"type": "object"}
+    node["properties"] = {  # rebind-ok: a schema that contains itself needs a store after it exists
+        "left": node,
+        "right": node,
+        "kind": {"type": "string", "enum": ["x" * 2001]},
+    }
+
+    assert has_const(node) is False
+    assert enums_fit(node) is False
