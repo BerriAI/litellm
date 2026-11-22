@@ -3118,6 +3118,48 @@ async def test_apply_to_output_streaming_anthropic_sse_masks_a_number_in_a_tool_
     assert _tool_input_of(collected) == sent_input
 
 
+_ERROR_WITH_A_NUMERIC_PHONE: Final = (
+    b'event: error\ndata: {"type":"error","error":{"type":"api_error","details":{"phone":2125550147,"code":529,'
+    b'"retry":false,"others":[-2125550147,null]}}}\n\n'
+)
+_FRAMES_BEFORE_AN_ERROR: Final = {
+    "error-alone": (),
+    "error-after-text": (_message_start_sse(), *_text_block_sse(0, "Sure, one moment.")),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before", _FRAMES_BEFORE_AN_ERROR.values(), ids=_FRAMES_BEFORE_AN_ERROR.keys())
+async def test_apply_to_output_streaming_anthropic_sse_masks_a_number_in_an_upstream_error_as_a_string(
+    before: tuple[bytes, ...],
+):
+    async with _guardrail_over_regex_presidio(
+        PiiEntityType.PHONE_NUMBER, _PHONE_DIGITS_PATTERN, PiiAction.MASK
+    ) as guardrail:
+        collected: Final = [
+            chunk async for chunk in _post_call_stream(guardrail, (*before, _ERROR_WITH_A_NUMERIC_PHONE))
+        ]
+
+    joined: Final = b"".join(chunk for chunk in collected if isinstance(chunk, bytes))
+    assert joined.endswith(
+        b'event: error\ndata: {"type":"error","error":{"type":"api_error","details":{"phone":"<PHONE_NUMBER>","code":529,'
+        b'"retry":false,"others":["-<PHONE_NUMBER>",null]}}}\n\n'
+    )
+    assert b"2125550147" not in joined
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before", _FRAMES_BEFORE_AN_ERROR.values(), ids=_FRAMES_BEFORE_AN_ERROR.keys())
+async def test_apply_to_output_streaming_anthropic_sse_blocks_a_number_in_an_upstream_error(
+    before: tuple[bytes, ...],
+):
+    async with _guardrail_over_regex_presidio(
+        PiiEntityType.PHONE_NUMBER, _PHONE_DIGITS_PATTERN, PiiAction.BLOCK
+    ) as guardrail:
+        with pytest.raises(BlockedPiiEntityError):
+            await anext(_post_call_stream(guardrail, (*before, _ERROR_WITH_A_NUMERIC_PHONE)))
+
+
 async def _messages_tool_input(guardrail: OPTIONAL_PresidioPIIMasking, tool_input: dict[str, object]) -> object:
     response: Final = {
         "type": "message",

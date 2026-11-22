@@ -195,20 +195,24 @@ def _json_string_value(token: re.Match[str]) -> str:
     return _JSON_STRING_VALUE.validate_json(token.group())
 
 
-async def _masked_json_string(token: re.Match[str], mask: Callable[[str], Awaitable[str]]) -> str:
-    value: Final = _json_string_value(token)
+async def _masked_json_string_or_scalar(token: re.Match[str], mask: Callable[[str], Awaitable[str]]) -> str:
+    raw: Final = token.group()
+    value: Final = _json_string_value(token) if raw.startswith('"') else raw
     masked: Final = await mask(value)
-    return token.group() if masked == value else json.dumps(masked)
+    return raw if masked == value else json.dumps(masked)
 
 
 async def _masked_error_data(data: str, mask: Callable[[str], Awaitable[str]]) -> str:
-    """The data of an upstream ``error`` event, all its ``data:`` lines, with every JSON string in it masked in place."""
+    """The data of an upstream ``error`` event, all its ``data:`` lines, with each JSON string and scalar in it masked."""
     if not _is_json(data):
         return await mask(data)
-    masked_strings: Final = MappingProxyType(
-        {token.start(): await _masked_json_string(token, mask) for token in _JSON_STRING.finditer(data)}
+    masked_tokens: Final = MappingProxyType(
+        {
+            token.start(): await _masked_json_string_or_scalar(token, mask)
+            for token in _JSON_STRING_OR_SCALAR.finditer(data)
+        }
     )
-    return _JSON_STRING.sub(lambda token: masked_strings[token.start()], data)
+    return _JSON_STRING_OR_SCALAR.sub(lambda token: masked_tokens[token.start()], data)
 
 
 def _decoded_json_string(token: re.Match[str]) -> str:
