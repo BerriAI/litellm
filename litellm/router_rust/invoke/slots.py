@@ -74,6 +74,7 @@ def max_parallel_requests_limit(
                 model_group=str(deployment.get("model_name", "")),
             ),
             local_only=True,
+            ttl=float("inf"),
         )
     return cache.get_cache(key=key, local_only=True, parent_otel_span=span)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # see above
 

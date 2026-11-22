@@ -390,3 +390,28 @@ async def test_aspeech_cools_a_deployment_down_for_a_clip_that_stalled_after_the
     await (await _clip()).aclose()
 
     assert hosts == ["first.test", next_host]
+
+
+def test_slot_counter_survives_cache_ttl_expiry() -> None:
+    """The max_parallel_requests counter must not reset when its cache entry expires while
+    requests are in flight. Before the fix, the counter was stored with no explicit TTL, so
+    InMemoryCache applied its default (600 s). After expiry, a new counter with in_flight=0
+    was built, admitting a second full batch on top of the first."""
+    from litellm.caching.caching import DualCache, InMemoryCache
+    from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+
+    now: float = 1_000_000.0
+    mem: Final = InMemoryCache(default_ttl=10, clock=lambda: now)
+    cache: Final = DualCache(in_memory_cache=mem)
+
+    limit: Final = MaxParallelRequestsLimit(max_parallel_requests=3, model_id="dep-1", model_group="capped")
+    cache.set_cache(key="dep-1_max_parallel_requests_client", value=limit, local_only=True, ttl=float("inf"))
+
+    limit.acquire()
+    limit.acquire()
+
+    now += 20.0
+
+    retrieved: Final = cache.get_cache(key="dep-1_max_parallel_requests_client", local_only=True)
+    assert retrieved is limit, "cache entry expired and the counter was lost"
+    assert retrieved.in_flight == 2
