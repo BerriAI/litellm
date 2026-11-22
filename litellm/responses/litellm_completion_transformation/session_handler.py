@@ -16,10 +16,16 @@ from litellm.constants import (
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_attributes,
+)
 from litellm.litellm_core_utils.tool_fields import (
     SentToolNames,
     declared_function_names,
+    truncate_tool_name,
     with_renamed_tool_calls,
     with_tool_calls_named_as_declared,
 )
@@ -457,6 +463,23 @@ def _declared_tool_names(
     return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
 
 
+def _input_item_named_as_declared(item: object, declared_names: frozenset[str]) -> object:
+    fields: Final = as_str_mapping(item)
+    if fields is None or fields.get("type") != "function_call" or fields.get("namespace"):
+        return item
+    name: Final = fields.get("name")
+    if not isinstance(name, str) or name in declared_names or truncate_tool_name(name) not in declared_names:
+        return item
+    return {**fields, "name": truncate_tool_name(name)}
+
+
+def _input_named_as_declared(stored_input: object, declared_names: frozenset[str]) -> object:
+    items: Final = as_object_list(stored_input)
+    if not declared_names or items is None:
+        return stored_input
+    return [_input_item_named_as_declared(item, declared_names) for item in items]
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -641,14 +664,16 @@ class ResponsesSessionHandler:
         )
 
         response_input_param: str | ResponseInputParam | None = None
+        declared_tool_names: Final = _declared_tool_names(spend_log, proxy_server_request_dict)
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
             stored_request_input: Final = proxy_server_request_dict.get("input")
-            _response_input_param: Final = (
-                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input
+            _response_input_param: Final = _input_named_as_declared(
+                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input,
+                declared_tool_names,
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -661,7 +686,7 @@ class ResponsesSessionHandler:
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
             _stored_response(spend_log),
             tool_names,
-            _declared_tool_names(spend_log, proxy_server_request_dict),
+            declared_tool_names,
             item_cache_control,
             tool_call_provider_fields,
         )
