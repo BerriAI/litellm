@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     STORED_S3_BUCKET_PARAM,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
+    s3_media_uris,
     sanitize_cloud_object_component,
     should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
@@ -228,6 +229,13 @@ class _OpenAIBatchRecord(TypedDict, total=False):
     body: ReadOnly[_OpenAIBatchRecordBody]
 
 
+class _OpenAIBatchRecordFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class _BedrockBatchRecord(TypedDict):
     recordId: ReadOnly[str]
     modelInput: ReadOnly[Mapping[str, object]]
@@ -391,6 +399,14 @@ def _batch_line_error(line_number: int, problem: str) -> BedrockError:
     return _client_error(f"Batch input file line {line_number} {problem}")
 
 
+class _S3MediaInBatchRecord(ValueError):
+    def __init__(self, s3_uris: tuple[str, ...]) -> None:
+        super().__init__(
+            f"has s3:// media URLs ({', '.join(s3_uris)}). "
+            "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+        )
+
+
 _OPENAI_FORMAT_INVOKE_SERVICE_TIERS: Final = frozenset({"default", "flex", "priority"})
 
 
@@ -436,9 +452,9 @@ def _decode_batch_input(content: str | bytes) -> str:
         raise _batch_line_error(content.count(b"\n", 0, e.start) + 1, f"is not valid UTF-8: {e.reason}") from e
 
 
-def _load_batch_line(line_number: int, line: str) -> _OpenAIBatchRecord:
+def _load_batch_line(line_number: int, line: str) -> object:
     try:
-        return json.loads(line)
+        return _DECODED_JSON.validate_python(json.loads(line))
     except json.JSONDecodeError as e:
         raise _batch_line_error(line_number, f"is not valid JSON: {e.msg} at column {e.colno}") from e
     except (ValueError, RecursionError) as e:
@@ -450,10 +466,10 @@ def _json_object(value: object) -> Mapping[str, object] | None:
 
 
 def _batch_json_object(line_number: int, line: str) -> _OpenAIBatchRecord:
-    record: Final = _load_batch_line(line_number, line)
-    if _json_object(record) is None:
+    record: Final = _json_object(_load_batch_line(line_number, line))
+    if record is None:
         raise _batch_line_error(line_number, "is not a JSON object")
-    return record
+    return _OpenAIBatchRecord(**_OpenAIBatchRecordFields(**record))
 
 
 def _batch_body_problem(record: Mapping[str, object]) -> str | None:
@@ -1184,6 +1200,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
+            s3_uris: Final = s3_media_uris(openai_request_body)
+            if s3_uris:
+                raise _S3MediaInBatchRecord(s3_uris)
             _check_batch_record_service_tier(requested_service_tier, model, drop_unsupported_params)
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
@@ -1198,7 +1217,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 model=model,
                 messages=messages,
                 optional_params=mapped_params,
-                litellm_params={},
+                litellm_params={"drop_params": drop_unsupported_params},
                 headers={},
             )
 
@@ -1274,6 +1293,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             return self._transform_openai_batch_record(
                 idx, batch_input_line.record, target_model, model_info, drop_params
             )
+        except _S3MediaInBatchRecord as e:
+            raise _batch_line_error(batch_input_line.line_number, str(e)) from e
         except _BATCH_RECORD_CONVERSION_ERRORS as e:
             raise _batch_line_error(
                 batch_input_line.line_number, f"could not be converted to a Bedrock batch record: {e}"
@@ -1703,6 +1724,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             api_base=f"{url}?{urlencode(query, quote_via=quote, safe='')}",
             aws_region_name=target.aws_region_name,
             request_params=target.request_params,
+            litellm_params=litellm_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
         return url, query
@@ -1774,6 +1796,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             api_base=url,
             aws_region_name=target.aws_region_name,
             request_params=target.request_params,
+            litellm_params=litellm_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
         return url, {}
@@ -1809,6 +1832,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Mapping[str, str]:
         """
         SigV4-sign a bodiless S3 request (GetObject, DeleteObject, ListObjectsV2),
@@ -1822,7 +1846,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        credentials: Final = self.resolve_s3_credentials(request_params.model_dump(exclude_none=True), aws_region_name)
+        credentials: Final = self.resolve_s3_credentials(
+            {**(litellm_params or {}), **request_params.model_dump(exclude_none=True)}, aws_region_name
+        )
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped

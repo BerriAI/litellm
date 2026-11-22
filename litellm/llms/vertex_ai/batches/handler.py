@@ -1,5 +1,5 @@
 import json
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import urlparse
 
@@ -22,6 +22,11 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_REQUEST_LABELS_MAX,
+    resolve_vertex_request_labels,
+    vertex_request_label_fields,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import graft_default_vertex_path
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.llms.vertex_ai import (
@@ -83,6 +88,14 @@ def _vertex_batch_list_payload(response: _VertexBatchListJsonSource) -> dict[str
     return response.json()
 
 
+def _proxy_identity_labels(litellm_params: Mapping[str, object]) -> Mapping[str, str]:
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return {}
+    proxy_metadata: Final = {"litellm_metadata": litellm_params.get("litellm_metadata")}
+    return dict(resolve_vertex_request_labels(allowed_fields, None, proxy_metadata, VERTEX_REQUEST_LABELS_MAX))
+
+
 def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> MaskedHTTPStatusError:
     body: Final = mask_sensitive_info(error.response.text)
     return MaskedHTTPStatusError(
@@ -108,6 +121,7 @@ class VertexAIBatchPrediction(VertexLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         custom_endpoint: bool | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
         if custom_endpoint:
             raise VertexAIError(
@@ -136,6 +150,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 request=create_batch_data,
                 vertex_project=vertex_project or project_id,
                 vertex_location=vertex_location or "us-central1",
+                labels=_proxy_identity_labels(litellm_params or {}),
             )
         )
         vertex_batch_request: Final = self._resolve_fine_tuned_endpoint_model(

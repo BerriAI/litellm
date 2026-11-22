@@ -20,6 +20,7 @@ from litellm import verbose_logger
 from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
@@ -125,7 +126,13 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
-from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
+from litellm.types.decisions import (
+    DecisionsResponse,
+    DecisionsUsage,
+    OpenAIDecisionCacheWriteTokensDetails,
+    OpenAIDecisionResponse,
+    OpenAIDecisionUsage,
+)
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
@@ -141,6 +148,7 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
@@ -352,6 +360,18 @@ _TRANSCRIPTION_SECOND_RATE_KEYS: Final[tuple[_TranscriptionRateKey, ...]] = (
 )
 
 
+def _transcription_pricing_provider(model: str, custom_llm_provider: str | None) -> str | None:
+    if custom_llm_provider not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS:
+        return custom_llm_provider
+    provider_info: Final = _cost_map_model_info(model, custom_llm_provider)
+    if (
+        _declared_transcription_rate(provider_info, _TRANSCRIPTION_TOKEN_RATE_KEYS + _TRANSCRIPTION_SECOND_RATE_KEYS)
+        is not None
+    ):
+        return custom_llm_provider
+    return "openai"
+
+
 def _transcription_uses_token_pricing(
     model: str,
     custom_llm_provider: str | None,
@@ -401,6 +421,8 @@ class OCRPricing(TypedDict, total=False):
 
 
 _WALL_CLOCK_PRICED_MODES: Final = frozenset({"audio_transcription", "chat", "completion", "embedding", "responses"})
+_GROQ_WHISPER_TRANSCRIPTION_MODELS: Final = frozenset({"whisper-large-v3", "whisper-large-v3-turbo"})
+_GROQ_MINIMUM_TRANSCRIPTION_SECONDS: Final = 10.0
 
 
 def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
@@ -769,19 +791,29 @@ def cost_per_token(
             vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
-        if _transcription_uses_token_pricing(model_without_prefix, custom_llm_provider, usage_block):
+        transcription_provider: Final = _transcription_pricing_provider(model_without_prefix, custom_llm_provider)
+        if _transcription_uses_token_pricing(model_without_prefix, transcription_provider, usage_block):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=transcription_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
 
+        billed_duration: Final = (
+            max(audio_transcription_file_duration, _GROQ_MINIMUM_TRANSCRIPTION_SECONDS)
+            if (
+                custom_llm_provider == "groq"
+                and model_without_prefix in _GROQ_WHISPER_TRANSCRIPTION_MODELS
+                and audio_transcription_file_duration > 0
+            )
+            else audio_transcription_file_duration
+        )
         return openai_cost_per_second(
             model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            duration=audio_transcription_file_duration,
+            custom_llm_provider=transcription_provider,
+            duration=billed_duration,
         )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
@@ -792,6 +824,7 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
+            search_response=response if isinstance(response, SearchResponse) else None,
         )
     elif (
         per_second_cost := _per_second_pricing_cost(
@@ -948,6 +981,8 @@ _NON_TOKEN_RATE_FIELDS: Final = frozenset(
         "output_cost_per_second",
         "input_cost_per_query",
         "input_cost_per_text_message",
+        "input_cost_per_character",
+        "output_cost_per_character",
         "tiered_pricing",
     }
 )
@@ -1015,6 +1050,16 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     if own_model_info is None or not _declares_rates(own_model_info):
         return None
     return own_model_info["litellm_provider"]
+
+
+def _routed_model_pricing_provider(
+    request_model: str | None, served_model: str | None, custom_llm_provider: object
+) -> str | None:
+    if custom_llm_provider != "azure" or request_model is None or served_model is None:
+        return None
+    if not azure_ai_is_model_router_name(request_model) or _resolves_to_rates(served_model, "azure"):
+        return None
+    return "azure_ai" if _resolves_to_rates(served_model, "azure_ai") else None
 
 
 def _pricing_provider_for_cost_candidate(
@@ -1146,12 +1191,18 @@ def _served_or_priced_requested_model(
     if served in (requested, requested.partition("/")[2]):
         return served
     pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
-    profile_of_served: Final = _is_bedrock_cross_region_profile_of(requested_model, served_model, pricing_provider)
-    if profile_of_served and _resolves_to_rates(requested, pricing_provider):
+    requested_sets_the_price: Final = _is_bedrock_cross_region_profile_of(
+        requested_model, served_model, pricing_provider
+    ) or _is_fireworks_router(requested_model, pricing_provider)
+    if requested_sets_the_price and _resolves_to_rates(requested, pricing_provider):
         return requested
     if _resolves_to_rates(served, pricing_provider):
         return served
     return requested if _resolves_to_rates(requested, pricing_provider) else served
+
+
+def _is_fireworks_router(requested_model: str, custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider == "fireworks_ai" and "/routers/" in f"/{requested_model}"
 
 
 def _is_bedrock_cross_region_profile_of(profile: str, served_model: str, custom_llm_provider: str | None) -> bool:
@@ -1195,6 +1246,13 @@ def _model_contains_known_llm_provider(model: str) -> bool:
 
 class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+_NO_HIDDEN_VALUE: Final = object()
 
 
 def _get_response_model(completion_response: object) -> str | None:
@@ -1374,6 +1432,16 @@ def _usage_from_model(usage_model: BaseModel) -> Usage:
     return Usage(**_DumpedUsageFields(**_dumped_usage_fields(usage_model)))
 
 
+def _decisions_cache_write_lifetimes(
+    details: OpenAIDecisionCacheWriteTokensDetails | None,
+) -> CacheCreationTokenDetails | None:
+    if details is None:
+        return None
+    return CacheCreationTokenDetails(
+        ephemeral_30m_input_tokens=details.ttl_30m_tokens, ephemeral_12h_input_tokens=details.ttl_12h_tokens
+    )
+
+
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
     match usage:
         case DecisionsUsage():
@@ -1384,6 +1452,9 @@ def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage
             return PromptTokensDetailsWrapper(
                 cached_tokens=usage.input_tokens_details.cached_tokens,
                 cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+                cache_creation_token_details=_decisions_cache_write_lifetimes(
+                    usage.input_tokens_details.cache_write_tokens_details
+                ),
             )
         case _:
             assert_never(usage)
@@ -1929,6 +2000,11 @@ def completion_cost(
             if base_model is not None and custom_pricing is not True
             else None
         )
+        pricing_provider_override: Final = base_model_provider or (
+            _routed_model_pricing_provider(model, _get_response_model(completion_response), custom_llm_provider)
+            if base_model is None and custom_pricing is not True
+            else None
+        )
         invoked_model_id: Final = _invoked_model_id_for_cost(
             _LOGGED_LITELLM_PARAMS.validate_python(optional_params) if optional_params is not None else None,
             litellm_logging_obj,
@@ -1936,7 +2012,7 @@ def completion_cost(
         selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
-            custom_llm_provider=base_model_provider or custom_llm_provider,
+            custom_llm_provider=pricing_provider_override or custom_llm_provider,
             custom_pricing=custom_pricing,
             base_model=base_model,
             router_model_id=router_model_id,
@@ -1955,7 +2031,7 @@ def completion_cost(
         raw_candidates: Final = (
             (
                 selected_model,
-                base_model_provider if base_model_provider is not None else request_pricing_provider,
+                pricing_provider_override or request_pricing_provider,
             ),
             (_get_response_model(completion_response), request_pricing_provider),
             *(((model, request_pricing_provider),) if model is not None else ()),
@@ -2040,7 +2116,11 @@ def completion_cost(
                         custom_llm_provider = pricing_provider or hidden_params.get(
                             "custom_llm_provider", custom_llm_provider or None
                         )
-                        region_name = hidden_params.get("region_name", region_name)
+                        hidden_region_name = require_attributes(
+                            _ATTRIBUTE_VALUE.validate_python(hidden_params), _SupportsGetWithDefault, "get"
+                        ).get("region_name", _NO_HIDDEN_VALUE)
+                        if hidden_region_name is not _NO_HIDDEN_VALUE:
+                            region_name = hidden_region_name
 
                 else:
                     if model is None:
@@ -2188,6 +2268,9 @@ def completion_cost(
                             custom_llm_provider=custom_llm_provider,
                             number_of_queries=number_of_queries,
                             optional_params=optional_params,
+                            search_response=completion_response
+                            if isinstance(completion_response, SearchResponse)
+                            else None,
                         )
                     )
 

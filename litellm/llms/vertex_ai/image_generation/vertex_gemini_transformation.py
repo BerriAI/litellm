@@ -7,6 +7,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.images.fan_out import image_request_count
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -15,8 +16,9 @@ from litellm.llms.gemini.common_utils import (
     map_gemini_image_tools_params,
 )
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size, pop_vertex_request_labels
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -71,6 +73,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "web_search_options",
         ]
 
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        return image_request_count(optional_params.get("n"), model=model, llm_provider="vertex_ai")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -86,7 +91,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 if k in supported_params:
                     # Map OpenAI parameters to Gemini format
                     if k == "n":
-                        mapped_params["candidate_count"] = v
+                        mapped_params["n"] = v
                     elif k == "size":
                         continue
                     elif k in ("aspectRatio", "aspect_ratio"):
@@ -214,13 +219,15 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         prompt: str,
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         """
         Transform the image generation request to Gemini format
 
         Uses generateContent API with responseModalities: ["IMAGE"]
         """
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         # Prepare messages with the prompt
         contents: Final = [{"role": "user", "parts": [{"text": prompt}]}]
 
@@ -243,23 +250,23 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if image_config:
             generation_config["imageConfig"] = image_config
 
-        # Handle candidate_count (n parameter)
         if "candidate_count" in optional_params:
             generation_config["candidateCount"] = optional_params["candidate_count"]
-        elif "n" in optional_params:
-            generation_config["candidateCount"] = optional_params["n"]
 
         request_body: Final[dict[str, object]] = {
             "contents": contents,
             "generationConfig": generation_config,
         }
 
-        if tools := optional_params.get("tools"):
-            request_body["tools"] = tools
-        if tool_config := optional_params.get("toolConfig"):
-            request_body["toolConfig"] = tool_config
-
-        return request_body
+        params: Final = _JSON_OBJECT.validate_python(optional_params)
+        optional_fields: Final = {
+            "tools": params.get("tools"),
+            "toolConfig": params.get("toolConfig"),
+            "labels": pop_vertex_request_labels(optional_params, litellm_params)
+            if vertex_request_label_fields()
+            else None,
+        }
+        return {**request_body, **{key: value for key, value in optional_fields.items() if value}}
 
     def transform_image_generation_response(
         self,

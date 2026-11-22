@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -97,7 +97,7 @@ class BaseImageEditConfig(ABC):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -108,7 +108,7 @@ class BaseImageEditConfig(ABC):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
@@ -140,6 +140,14 @@ class BaseImageEditConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         pass
+
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        """
+        Number of identical upstream requests the handler sends and merges into one response.
+
+        Override for providers that return one image per call, so a caller's `n` still yields `n` images.
+        """
+        return 1
 
     def use_multipart_form_data(self) -> bool:
         """

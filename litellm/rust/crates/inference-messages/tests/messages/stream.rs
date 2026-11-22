@@ -225,6 +225,39 @@ async fn debug_trace_keeps_provider_input_and_every_stream_chunk(call: MessagesC
 }
 
 #[rstest]
+#[tokio::test]
+async fn debug_trace_hides_mcp_server_tokens_that_still_reach_the_provider(call: MessagesCall) {
+    let upstream = upstream([sse_response()]).await;
+    let servers = json!([{
+        "type": "url",
+        "url": "https://mcp.example.com/sse",
+        "name": "docs",
+        "authorization_token": "mcp-server-token"
+    }]);
+    let call = with_fields(call, json!({"mcp_servers": servers}));
+    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+    let (sender, receiver) = mpsc::channel();
+
+    Logger::new(TraceSink(sender))
+        .instrument(stream_through(&host))
+        .await
+        .unwrap();
+
+    let records: Vec<(String, Value)> = receiver.try_iter().collect();
+    let request = records
+        .iter()
+        .find(|(message, _)| message == "provider request")
+        .unwrap();
+    let logged: Value = serde_json::from_str(request.1["body"].as_str().unwrap()).unwrap();
+    assert_eq!(logged["mcp_servers"][0]["name"], "docs");
+    assert!(!format!("{records:?}").contains("mcp-server-token"));
+    let sent: Value = upstream.received_requests().await.unwrap()[0]
+        .body_json()
+        .unwrap();
+    assert_eq!(sent["mcp_servers"], servers);
+}
+
+#[rstest]
 #[case::at_open(1)]
 #[case::after_the_first_chunk(2)]
 #[tokio::test]

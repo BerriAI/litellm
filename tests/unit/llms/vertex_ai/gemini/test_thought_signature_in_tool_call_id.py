@@ -9,6 +9,7 @@ Note: Embedding signatures in tool call IDs is a beta feature that requires
 enable_preview_features=True to be enabled.
 """
 
+import base64
 import json
 import re
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
@@ -24,9 +25,10 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
-    encode_tool_call_id_with_signature,
-    get_thought_signature_from_tool,
     convert_to_gemini_tool_call_invoke,
+    encode_tool_call_id_with_signature,
+    get_dummy_thought_signature,
+    get_thought_signature_from_tool,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -259,7 +261,7 @@ def test_openai_client_e2e_flow(enable_preview_features):
 @pytest.mark.parametrize("enable_preview_features", [True, False])
 def test_parallel_tool_calls_with_signatures(enable_preview_features):
     """Test that parallel tool calls preserve signatures correctly"""
-    signature1 = "signature_for_first_call"
+    signature1 = "c2lnbmF0dXJlX2Zvcl9maXJzdF9jYWxs"
     # Only first call has signature (Gemini behavior for parallel calls)
 
     gemini_parts = [
@@ -297,6 +299,48 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
     sig2 = get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
+
+
+SIGNATURE_WITH_PLUS_SLASH_AND_PADDING: Final = base64.b64encode(b"\xfb\xef\xff thought signature\xfb\xff").decode()
+SIGNATURE_THAT_DECODES_WITHOUT_ITS_PLUS_SLASH_AND_PADDING: Final = base64.b64encode(
+    b"\xfb\xef\xff thought signatur\xff\xfe"
+).decode()
+
+
+def _replayed_signature(signature: str, model: str) -> str | None:
+    parts: Final = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": encode_tool_call_id_with_signature("call_1", signature),
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        },
+        model=model,
+    )
+    return parts[0].get("thoughtSignature")
+
+
+@pytest.mark.parametrize(
+    "mangled_signature",
+    [
+        re.sub(r"[+/=]", "", SIGNATURE_WITH_PLUS_SLASH_AND_PADDING),
+        re.sub(r"[+/=]", "_", SIGNATURE_THAT_DECODES_WITHOUT_ITS_PLUS_SLASH_AND_PADDING),
+    ],
+    ids=["stripped", "replaced"],
+)
+def test_client_mangled_signature_in_tool_call_id_is_not_replayed(mangled_signature: str):
+    assert _replayed_signature(mangled_signature, "gemini-3.8-flash") == get_dummy_thought_signature()
+    assert _replayed_signature(mangled_signature, "gemini-2.5-flash") is None
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-2.5-flash"])
+def test_intact_signature_in_tool_call_id_is_replayed_byte_for_byte(model: str):
+    assert _replayed_signature(SIGNATURE_WITH_PLUS_SLASH_AND_PADDING, model) == SIGNATURE_WITH_PLUS_SLASH_AND_PADDING
 
 
 GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
