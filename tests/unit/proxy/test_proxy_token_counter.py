@@ -45,6 +45,11 @@ from starlette.types import Message
 import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    install_model_cost_map,
+)
 from litellm.litellm_core_utils.tokenizer import HuggingFace
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -2993,14 +2998,107 @@ _FILL_FORM: Final = {
         "required": list(_FORM_FIELDS),
     },
 }
+_DEPLOYMENT_TOOLS: Final = (
+    {
+        "name": "configure_deployment",
+        "description": (
+            "Configure a model deployment with routing, limits, retries, fallbacks and observability settings for a "
+            "production gateway"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Deployment name"},
+                "provider": {
+                    "type": "string",
+                    "enum": ["openai", "azure", "anthropic", "bedrock", "vertex_ai", "xai"],
+                    "description": "Upstream provider",
+                },
+                "limits": {
+                    "type": "object",
+                    "description": "Rate limits",
+                    "properties": {
+                        "rpm": {"type": "integer", "description": "Requests per minute"},
+                        "tpm": {"type": "integer", "description": "Tokens per minute"},
+                        "max_parallel": {"type": "integer", "description": "Max parallel requests"},
+                    },
+                },
+                "retries": {
+                    "type": "object",
+                    "description": "Retry policy",
+                    "properties": {
+                        "count": {"type": "integer"},
+                        "backoff_seconds": {"type": "number"},
+                        "retry_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Error classes to retry",
+                        },
+                    },
+                },
+                "fallbacks": {
+                    "type": "array",
+                    "description": "Ordered fallback deployments",
+                    "items": {
+                        "type": "object",
+                        "properties": {"model": {"type": "string"}, "weight": {"type": "number"}},
+                    },
+                },
+                "observability": {
+                    "type": "object",
+                    "properties": {
+                        "log_requests": {"type": "boolean"},
+                        "callbacks": {"type": "array", "items": {"type": "string"}},
+                        "sample_rate": {"type": "number", "description": "Fraction of requests to trace"},
+                    },
+                },
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags"},
+            },
+            "required": ["name", "provider"],
+        },
+    },
+    {
+        "name": "search_docs",
+        "description": "Search the internal documentation",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "description": "Max results"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email to a recipient",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient address"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain text body"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+)
 _WEATHER_SYSTEM: Final = "You are a helpful assistant that answers weather questions briefly."
 _AZURE_GROK_4_1: Final = "azure_ai/grok-4-1-fast-reasoning"
 _FIREWORKS_DEEPSEEK_V4_1: Final = "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"
 _XAI_GROK_4_3: Final = "xai/grok-4.3"
+_AZURE_GROK_4_1_NON_REASONING: Final = "azure_ai/grok-4-1-fast-non-reasoning"
+_AZURE_GROK_4_3: Final = "azure_ai/grok-4.3"
+_VERTEX_GROK_4_3: Final = "vertex_ai/xai/grok-4.3"
+_MANTLE_GROK_4_3: Final = "bedrock_mantle/xai.grok-4.3"
+_PERPLEXITY_GROK_4_3: Final = "perplexity/xai/grok-4.3"
 _NATIVE_RESPONSES_BASE: Final = {
     _AZURE_GROK_4_1: "https://unused.services.ai.azure.com/models",
+    _AZURE_GROK_4_1_NON_REASONING: "https://unused.services.ai.azure.com/models",
     _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
     _XAI_GROK_4_3: "https://unused.invalid",
+    _PERPLEXITY_GROK_4_3: "https://unused.invalid",
+    _VERTEX_GROK_4_3: "https://unused.invalid",
 }
 
 
@@ -3018,10 +3116,23 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
     return tuple({**_GET_WEATHER, "name": f"get_weather_{index}"} for index in range(count))
 
 
+_MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
+
+
+@pytest.fixture
+def checked_in_cost_map() -> None:
+    assert isinstance(
+        install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes()), ModelCostMapReloaded
+    )
+
+
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
-# xAI grok-4.3 on 2026-10-29, and usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
-# 2026-10-30
+# xAI grok-4.3 on 2026-10-29, usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
+# 2026-10-30, and usage.input_tokens that POST /v1/messages billed through xAI grok-4.3-latest, Kyma grok-4.3, Azure AI
+# Foundry grok-4-1-fast-non-reasoning and grok-4.3, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3 on 2026-11-17,
+# except the request with no tools through Azure AI Foundry grok-4.3, billed on 2026-11-21
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3049,6 +3160,32 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
         ("deepseek/deepseek-v4-pro", None, (_GET_WEATHER,), 367),
         ("deepseek/deepseek-v4-pro", None, _THREE_TOOLS, 493),
         ("deepseek/deepseek-v4-pro", _WEATHER_SYSTEM, (_GET_WEATHER,), 378),
+        ("xai/grok-4.3-latest", None, (), 199),
+        ("xai/grok-4.3-latest", None, (_GET_WEATHER,), 283),
+        ("xai/grok-4.3-latest", None, _THREE_TOOLS, 402),
+        ("xai/grok-4.3-latest", None, (_FILL_FORM,), 530),
+        ("xai/grok-4.3-latest", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        ("kyma/grok-4.3", None, (), 199),
+        ("kyma/grok-4.3", None, (_GET_WEATHER,), 283),
+        ("kyma/grok-4.3", None, _THREE_TOOLS, 402),
+        ("kyma/grok-4.3", None, (_FILL_FORM,), 530),
+        ("kyma/grok-4.3", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 175),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_GET_WEATHER,), 369),
+        (_AZURE_GROK_4_1_NON_REASONING, None, _THREE_TOOLS, 457),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_FILL_FORM,), 562),
+        (_AZURE_GROK_4_1_NON_REASONING, _WEATHER_SYSTEM, (_GET_WEATHER,), 380),
+        (_AZURE_GROK_4_3, None, (), 11),
+        (_AZURE_GROK_4_3, None, (_GET_WEATHER,), 96),
+        (_AZURE_GROK_4_3, None, _THREE_TOOLS, 215),
+        (_AZURE_GROK_4_3, None, (_FILL_FORM,), 343),
+        (_AZURE_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 110),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
+        (_VERTEX_GROK_4_3, None, (_FILL_FORM,), 688),
+        (_VERTEX_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 455),
+        (_MANTLE_GROK_4_3, None, (), 37),
     ],
 )
 async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
@@ -3081,11 +3218,13 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 # usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
-# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29
+# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29, and
+# through Azure AI Foundry grok-4-1-fast-non-reasoning, Perplexity xai/grok-4.3 and Vertex AI xai/grok-4.3 on 2026-11-17
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3097,6 +3236,11 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
         (_AZURE_GROK_4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 170),
         (_FIREWORKS_DEEPSEEK_V4_1, None, (_GET_WEATHER,), 304),
         (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 181),
+        (_PERPLEXITY_GROK_4_3, None, (), 218),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
     ],
 )
 async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_shipped_framing(
@@ -3130,7 +3274,7 @@ async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_s
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 def _single_deployment_router(litellm_params: dict[str, object], model_info: dict[str, object]) -> Router:
@@ -3219,6 +3363,65 @@ async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_
     )
 
     assert billed_prompt_tokens <= counted <= billed_prompt_tokens * 1.02
+
+
+# usage.input_tokens that POST /v1/messages billed through Bedrock Mantle xai.grok-4.3, and POST /v1/responses through
+# Perplexity xai/grok-4.3 and Azure AI Foundry grok-4-1-fast-non-reasoning, on 2026-11-17 for the input "What is the
+# weather in Paris?" with these tools. Each host bills more hidden tokens per tool as the schema grows, so one flat
+# tool framing per host lands from 0 to 175 tokens over these bills on Mantle, 102 on Perplexity and 74 on Azure
+@pytest.mark.usefixtures("checked_in_cost_map")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "responses", "tools", "billed_prompt_tokens", "most_over"),
+    [
+        (_MANTLE_GROK_4_3, False, (_GET_WEATHER,), 114, 180),
+        (_MANTLE_GROK_4_3, False, _THREE_TOOLS, 256, 180),
+        (_MANTLE_GROK_4_3, False, (_FILL_FORM,), 424, 180),
+        (_MANTLE_GROK_4_3, False, _DEPLOYMENT_TOOLS, 789, 180),
+        (_PERPLEXITY_GROK_4_3, True, (_GET_WEATHER,), 308, 110),
+        (_PERPLEXITY_GROK_4_3, True, _THREE_TOOLS, 442, 110),
+        (_PERPLEXITY_GROK_4_3, True, (_FILL_FORM,), 555, 110),
+        (_PERPLEXITY_GROK_4_3, True, _DEPLOYMENT_TOOLS, 913, 110),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_GET_WEATHER,), 178, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _THREE_TOOLS, 276, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_FILL_FORM,), 371, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _DEPLOYMENT_TOOLS, 614, 80),
+    ],
+)
+async def test_a_host_whose_tool_prompt_grows_with_the_schema_counts_at_or_a_bounded_amount_over_the_bill(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    responses: bool,
+    tools: tuple[dict[str, object], ...],
+    billed_prompt_tokens: int,
+    most_over: int,
+):
+    router: Final = _single_deployment_router(
+        {"model": model, "api_base": _NATIVE_RESPONSES_BASE.get(model, "https://unused.invalid")}, {}
+    )
+    sent_tools: Final = tuple(_responses_function(tool) for tool in tools) if responses else tools
+
+    counted: Final = await _count_with_router(monkeypatch, router, sent_tools, responses)
+
+    assert (
+        billed_prompt_tokens <= counted <= billed_prompt_tokens + most_over
+    ), f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
+
+
+@pytest.mark.usefixtures("checked_in_cost_map")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS])
+async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...]
+):
+    govcloud: Final = _single_deployment_router(
+        {"model": "bedrock_mantle/us-gov-west-1/xai.grok-4.3", "api_base": "https://unused.invalid"}, {}
+    )
+    commercial: Final = _single_deployment_router({"model": _MANTLE_GROK_4_3, "api_base": "https://unused.invalid"}, {})
+
+    assert await _count_with_router(monkeypatch, govcloud, tools, False) == await _count_with_router(
+        monkeypatch, commercial, tools, False
+    )
 
 
 # POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
