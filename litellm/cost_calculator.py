@@ -926,13 +926,16 @@ def _bedrock_pricing_info(
     return model_info_with_pricing_overrides(profile, registration[1])
 
 
-def cost_map_key_prices_anything(key: str) -> bool:
+def cost_map_key_has_any_price(key: str) -> bool:
     entry: Final = _raw_cost_map_entry(key)
-    return entry is not None and _cost_map_entry_prices_anything(entry)
+    return entry is not None and any(
+        value is not None and is_server_derived_pricing_key(field) for field, value in entry.items()
+    )
 
 
 def _declares_rates(model_info: ModelInfo | None) -> bool:
-    return model_info is not None and cost_map_key_prices_anything(model_info["key"])
+    entry: Final = _raw_cost_map_entry(model_info["key"]) if model_info is not None else None
+    return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:

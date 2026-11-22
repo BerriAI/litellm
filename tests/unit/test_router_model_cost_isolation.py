@@ -1070,6 +1070,114 @@ def test_bedrock_model_id_deployment_prices_the_same_beside_an_arn_deployment_of
     ) == pytest.approx(20 * 0.01 + 80 * 0.001 + 3 * 0.02)
 
 
+@pytest.mark.parametrize(
+    ("profile_row", "field"),
+    (
+        ({"mode": "chat", "cache_read_input_token_cost": 0.005}, "cache_read_input_token_cost"),
+        (
+            {"input_cost_per_token": 0.05, "output_cost_per_token": 0.06, "cache_read_input_token_cost": 0.005},
+            "cache_read_input_token_cost",
+        ),
+        ({"mode": "image_generation", "output_cost_per_image": 0.09}, "output_cost_per_image"),
+    ),
+    ids=("cache_price_only", "no_mode", "image_price_only"),
+)
+def test_bedrock_model_id_deployment_takes_the_price_its_profile_row_declares(
+    monkeypatch: pytest.MonkeyPatch, profile_row: dict[str, object], field: str
+) -> None:
+    model: Final = "anthropic.priced-profile-row-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/priced-row-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+                "cache_read_input_token_cost": 0.001,
+                "output_cost_per_image": 0.06,
+            },
+            f"bedrock/{profile}": {"litellm_provider": "bedrock", **profile_row},
+        },
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "priced-profile-deployment", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+            }
+        ]
+    )
+    assert router.has_model_id("priced-profile-deployment")
+    assert litellm.model_cost["priced-profile-deployment"][field] == profile_row[field]
+
+
+def test_bedrock_deployment_with_its_profile_as_base_model_prices_the_same_beside_an_arn_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    model: Final = "anthropic.profile-base-model-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/base-model-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+                "cache_read_input_token_cost": 0.001,
+            },
+        },
+    )
+    by_model_id: Final = {
+        "model_name": "by-model-id",
+        "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+        "model_info": {
+            "id": "profile-base-model-deployment",
+            "base_model": f"bedrock/{profile}",
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.02,
+        },
+    }
+    by_arn: Final = {
+        "model_name": "by-arn",
+        "litellm_params": {"model": f"bedrock/{profile}"},
+        "model_info": {"id": "profile-arn-deployment"},
+    }
+
+    def cost() -> float:
+        return completion_cost(
+            model=model,
+            completion_response=ModelResponse(
+                model=model,
+                usage=Usage(
+                    prompt_tokens=100,
+                    completion_tokens=3,
+                    total_tokens=103,
+                    prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+                ),
+            ),
+            custom_llm_provider="bedrock",
+            custom_pricing=True,
+            router_model_id="profile-base-model-deployment",
+        )
+
+    Router(model_list=[by_model_id])
+    alone: Final = cost()
+    router: Final = Router(model_list=[by_arn, by_model_id])
+    assert router.has_model_id("profile-base-model-deployment")
+    assert cost() == pytest.approx(alone)
+
+
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting
     model must still bill cache_read and cache_creation tokens. Before the
