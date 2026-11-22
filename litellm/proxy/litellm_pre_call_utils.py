@@ -4096,13 +4096,13 @@ def _infer_provider_from_model_cost_family(bare_model: str) -> str | None:
     model_cost = litellm.model_cost
     if isinstance(model_cost, dict) and len(model_cost) != _MODEL_FAMILY_CACHE_LEN:
         _MODEL_FAMILY_PROVIDER_MAP.clear()
-        for sample_m, sample_info in model_cost.items():
-            if not isinstance(sample_m, str) or "/" in sample_m or not isinstance(sample_info, dict):
+        for sample_model, sample_info in model_cost.items():
+            if not isinstance(sample_model, str) or "/" in sample_model or not isinstance(sample_info, dict):
                 continue
-            fam, has_dash, _ = sample_m.lower().partition("-")
-            prov = sample_info.get("litellm_provider")
-            if has_dash and fam and isinstance(prov, str) and prov and fam not in _MODEL_FAMILY_PROVIDER_MAP:
-                _MODEL_FAMILY_PROVIDER_MAP[fam] = prov
+            fam, has_dash, _ = sample_model.lower().partition("-")
+            provider = sample_info.get("litellm_provider")
+            if has_dash and fam and isinstance(provider, str) and provider and fam not in _MODEL_FAMILY_PROVIDER_MAP:
+                _MODEL_FAMILY_PROVIDER_MAP[fam] = provider
         _MODEL_FAMILY_CACHE_LEN = len(model_cost)
     family, has_dash, _ = bare_model.lower().partition("-")
     return _MODEL_FAMILY_PROVIDER_MAP.get(family) if has_dash else None
@@ -4119,15 +4119,15 @@ def _rebuild_router_prefix_index(model_list: list) -> None:
     provider_to_rule: dict[str, tuple[str, str, str]] = {}
     pending_exact: list[tuple[str, str, str]] = []
 
-    for dep in model_list:
-        if isinstance(dep, dict):
-            public_name = dep.get("model_name", "")
-            litellm_params = dep.get("litellm_params") or {}
-            model_info = dep.get("model_info") or {}
+    for deployment in model_list:
+        if isinstance(deployment, dict):
+            public_name = deployment.get("model_name", "")
+            litellm_params = deployment.get("litellm_params") or {}
+            model_info = deployment.get("model_info") or {}
         else:
-            public_name = getattr(dep, "model_name", "")
-            litellm_params = getattr(dep, "litellm_params", None) or {}
-            model_info = getattr(dep, "model_info", None) or {}
+            public_name = getattr(deployment, "model_name", "")
+            litellm_params = getattr(deployment, "litellm_params", None) or {}
+            model_info = getattr(deployment, "model_info", None) or {}
 
         if not isinstance(public_name, str) or not public_name:
             continue
@@ -4142,16 +4142,16 @@ def _rebuild_router_prefix_index(model_list: list) -> None:
 
         if isinstance(litellm_params, dict):
             litellm_model = litellm_params.get("model", "")
-            dep_custom_provider = litellm_params.get("custom_llm_provider", "")
+            deployment_custom_provider = litellm_params.get("custom_llm_provider", "")
         else:
             litellm_model = getattr(litellm_params, "model", "")
-            dep_custom_provider = getattr(litellm_params, "custom_llm_provider", "")
+            deployment_custom_provider = getattr(litellm_params, "custom_llm_provider", "")
 
         if public_name.endswith("/*"):
             if isinstance(litellm_model, str) and litellm_model.endswith("/*"):
                 llm_wildcard = litellm_model
-            elif litellm_model == "*" and isinstance(dep_custom_provider, str) and dep_custom_provider:
-                llm_wildcard = f"{dep_custom_provider}/*"
+            elif litellm_model == "*" and isinstance(deployment_custom_provider, str) and deployment_custom_provider:
+                llm_wildcard = f"{deployment_custom_provider}/*"
             else:
                 continue
             public_prefix = public_name.removesuffix("*")
@@ -4167,7 +4167,7 @@ def _rebuild_router_prefix_index(model_list: list) -> None:
                     (
                         public_name,
                         litellm_model,
-                        dep_custom_provider if isinstance(dep_custom_provider, str) else "",
+                        deployment_custom_provider if isinstance(deployment_custom_provider, str) else "",
                     )
                 )
 
