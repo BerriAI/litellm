@@ -411,6 +411,25 @@ def test_a_gemini_response_schema_is_counted(config_field: str, schema_field: st
     assert with_schema - without_schema == litellm.token_counter(model=GEMINI_MODEL, text=json.dumps(schema))
 
 
+@pytest.mark.parametrize(("first", "later"), [("config", "generationConfig"), ("generationConfig", "generation_config")])
+def test_a_gemini_response_schema_under_a_later_config_name_is_counted(first: str, later: str) -> None:
+    schema: Final = {
+        "type": "OBJECT",
+        "properties": {f"field_{index}": {"type": "STRING", "description": "A customer note. " * 5} for index in range(10)},
+    }
+    question: Final = _user({"text": "Fill the form."})
+    capped: Final = {"maxOutputTokens": 64}
+    with_schema: Final = capped | {"responseSchema": schema}
+
+    without_schema: Final = _gemini_tokens(question, **{first: capped, later: capped})
+    schema_under_later: Final = _gemini_tokens(question, **{first: capped, later: with_schema})
+    schema_under_both: Final = _gemini_tokens(question, **{first: with_schema, later: with_schema})
+
+    assert without_schema is not None and schema_under_later is not None
+    assert schema_under_later - without_schema == litellm.token_counter(model=GEMINI_MODEL, text=json.dumps(schema))
+    assert schema_under_both == schema_under_later
+
+
 def test_inline_gemini_audio_counts_by_its_duration() -> None:
     question: Final = {"text": "Transcribe this."}
     text_only: Final = _gemini_tokens(_user(question))

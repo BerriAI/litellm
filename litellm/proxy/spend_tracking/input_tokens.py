@@ -24,7 +24,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS, PDF_DATA_URL_PREFIX
-from litellm.google_genai.adapters.transformation import genai_media_part, google_genai_request_config
+from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS, genai_media_part
 from litellm.litellm_core_utils.audio_utils.utils import audio_duration_tokens
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import (
@@ -378,9 +378,11 @@ def _first_mapping(part: Mapping[str, object], fields: Sequence[str]) -> Mapping
 
 
 def _gemini_response_schema_tokens(request_body: Mapping[str, object], model: str) -> int:
-    config: Final = as_str_mapping(google_genai_request_config(request_body))
-    if config is None:
-        return 0
+    configs: Final = (as_str_mapping(request_body.get(field)) for field in GOOGLE_GENAI_CONFIG_FIELDS)
+    return max((_gemini_config_response_schema_tokens(config, model) for config in configs if config), default=0)
+
+
+def _gemini_config_response_schema_tokens(config: Mapping[str, object], model: str) -> int:
     return sum(_count_text_tokens(model=model, text=config.get(field)) for field in _GEMINI_RESPONSE_SCHEMA_FIELDS)
 
 
