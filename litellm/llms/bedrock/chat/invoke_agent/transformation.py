@@ -210,23 +210,16 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         This is the same approach used in the existing AWSEventStreamDecoder.
         """
         try:
-            from botocore.eventstream import EventStreamBuffer
             from botocore.parsers import EventStreamJSONParser
         except ImportError:
             raise ImportError("boto3/botocore is required for AWS event stream parsing")
 
         events: Final[InvokeAgentEventList] = []
         parser: Final = EventStreamJSONParser()
-        event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = EventStreamTally("Bedrock Agents")
         request_id_headers: Final = provider_request_id_headers(response_headers)
 
-        # Add the entire response to the buffer
-        event_stream_buffer.add_data(raw_content)
-        tally.add_chunk(raw_content)
-
-        # Process all events in the buffer
-        for event in event_stream_buffer:
+        for event in tally.decode((raw_content,)):
             tally.add_event(event)
             if (exception_event := _exception_event_error(event, request_id_headers)) is not None:
                 raise exception_event

@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -36,9 +36,34 @@ class EventStreamTally:
         self.recognized_events = 0
         self.unrecognized_event_types: frozenset[str] = frozenset()
         self.unrecognized_head = b""
+        self.parser_error: str | None = None
 
-    def add_chunk(self, chunk: bytes) -> None:
-        self.bytes_received += len(chunk)
+    def decode(self, chunks: Iterable[bytes]) -> Iterator["EventStreamMessage"]:
+        from botocore.eventstream import EventStreamBuffer, ParserError
+
+        buffer: Final = EventStreamBuffer()
+        for chunk in chunks:
+            buffer.add_data(chunk)
+            self.bytes_received += len(chunk)
+            try:
+                yield from buffer
+            except ParserError as error:
+                self.parser_error = type(error).__name__
+                return
+
+    async def adecode(self, chunks: AsyncIterable[bytes]) -> AsyncIterator["EventStreamMessage"]:
+        from botocore.eventstream import EventStreamBuffer, ParserError
+
+        buffer: Final = EventStreamBuffer()
+        async for chunk in chunks:
+            buffer.add_data(chunk)
+            self.bytes_received += len(chunk)
+            try:
+                for event in buffer:
+                    yield event
+            except ParserError as error:
+                self.parser_error = type(error).__name__
+                return
 
     def add_event(self, event: "EventStreamMessage", headers: Mapping[str, object] = _NO_EVENT_HEADERS) -> None:
         self.events += 1
@@ -66,6 +91,15 @@ class EventStreamTally:
             f"{self.bytes_received} bytes received"
         )
         request_id_headers: Final = provider_request_id_headers(response_headers)
+        if self.parser_error is not None:
+            return UndecodedEventStream(
+                status_code=502,
+                message=(
+                    f"{self.provider} answered the stream with HTTP 200 but its body stopped decoding as an AWS "
+                    f"event stream after {self.events} events ({self.parser_error}, {detail})"
+                ),
+                headers=request_id_headers,
+            )
         if not self.events:
             return UndecodedEventStream(
                 status_code=502,

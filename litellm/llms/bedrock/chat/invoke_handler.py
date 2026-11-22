@@ -770,20 +770,14 @@ class AWSEventStreamDecoder:
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> Iterator[GChunk | ModelResponseStream | dict[str, object]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
-
-        event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = EventStreamTally("Bedrock", get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
-        for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+        for event in tally.decode(iterator):
+            message = self._decode_event(event, tally, request_id_headers)
+            if message:
+                # sse_event = ServerSentEvent(data=message, event="completion")
+                _data = json.loads(message)
+                yield self.chunk_parser(chunk_data=_data)
         undecoded: Final = tally.undecoded_stream(response_headers)
         if undecoded is not None:
             raise BedrockError(status_code=undecoded.status_code, message=undecoded.message, headers=undecoded.headers)
@@ -792,20 +786,14 @@ class AWSEventStreamDecoder:
         self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> AsyncIterator[GChunk | ModelResponseStream | dict]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
-
-        event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = EventStreamTally("Bedrock", get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         try:
-            async for chunk in iterator:
-                event_stream_buffer.add_data(chunk)
-                tally.add_chunk(chunk)
-                for event in event_stream_buffer:
-                    message = self._decode_event(event, tally, request_id_headers)
-                    if message:
-                        _data = json.loads(message)
-                        yield self.chunk_parser(chunk_data=_data)
+            async for event in tally.adecode(iterator):
+                message = self._decode_event(event, tally, request_id_headers)
+                if message:
+                    _data = json.loads(message)
+                    yield self.chunk_parser(chunk_data=_data)
         finally:
             await aclose_if_supported(iterator)
         undecoded: Final = tally.undecoded_stream(response_headers)
