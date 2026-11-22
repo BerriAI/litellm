@@ -3445,12 +3445,13 @@ class Logging(LiteLLMLoggingBaseClass):
         return combined_usage
 
     def _add_failed_attempts_spend(self, own_usage: Usage | None) -> None:
-        own_cost: Final = self.model_call_details.get("response_cost")
-        if own_usage is None or not isinstance(own_cost, (int, float)):
+        if own_usage is None:
             return
         failed_attempts: Final = self._failed_attempts_owed_on_success
         if not failed_attempts:
             return
+        stored_cost: Final = self.model_call_details.get("response_cost")
+        own_cost: Final = stored_cost if isinstance(stored_cost, (int, float)) else 0.0
         failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
         self.model_call_details.pop("failed_attempts_usage", None)
         self.failed_attempts_billed_on_success = failed_attempts

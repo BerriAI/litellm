@@ -250,14 +250,23 @@ class HealthCheckHelpers:
         return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
 
     @staticmethod
-    async def _image_health_check(image_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
+    async def _image_generation_health_check(
+        image_request: Callable[[], Awaitable["ImageResponse"]],
+    ) -> "ImageResponse":
         import litellm
-        from litellm.llms.gemini.empty_image_response import UnservedImageError
+        from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 
         try:
             return await image_request()
-        except UnservedImageError:
+        except (ImageRefusalError, UnservedImageError):
             return litellm.ImageResponse()
+
+    @staticmethod
+    async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
+        import litellm
+
+        try:
+            return await HealthCheckHelpers._image_generation_health_check(edit_request)
         except litellm.BadRequestError as e:
             if isinstance(e, litellm.ContentPolicyViolationError) or "moderation_blocked" in str(e):
                 return litellm.ImageResponse()
@@ -341,14 +350,14 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 file=get_audio_file_for_health_check(),
             ),
-            "image_generation": lambda: HealthCheckHelpers._image_health_check(
+            "image_generation": lambda: HealthCheckHelpers._image_generation_health_check(
                 image_request=lambda: litellm.aimage_generation(
                     **_filter_model_params(model_params=model_params),
                     prompt=prompt,
                 ),
             ),
-            "image_edit": lambda: HealthCheckHelpers._image_health_check(
-                image_request=lambda: litellm.aimage_edit(
+            "image_edit": lambda: HealthCheckHelpers._image_edit_health_check(
+                edit_request=lambda: litellm.aimage_edit(
                     **_filter_model_params(model_params=model_params),
                     image=get_image_file_for_health_check(),
                     prompt=IMAGE_EDIT_HEALTH_CHECK_PROMPT,

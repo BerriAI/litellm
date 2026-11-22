@@ -826,19 +826,40 @@ def test_failed_image_request_bills_what_the_provider_served_in_its_spend_row_an
     )
 
 
+def test_failed_image_generation_that_billed_nothing_sends_no_cost_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    client, _ = _image_generation_client(monkeypatch, UserAPIKeyAuth(api_key="sk-test"))
+    try:
+        with client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 429, response.text
+    assert "x-litellm-call-id" in response.headers
+    assert "x-litellm-response-cost" not in response.headers
+
+
 @pytest.mark.parametrize(
     "send",
     (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
 )
+@pytest.mark.parametrize(
+    ("served_cost", "billed"),
+    (pytest.param(0.5, 0.75, id="priced_fallback"), pytest.param(None, 0.25, id="unpriced_fallback")),
+)
 def test_image_cost_header_includes_the_billed_attempt_a_fallback_replaced(
-    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+    monkeypatch: pytest.MonkeyPatch,
+    send: Callable[[TestClient], httpx.Response],
+    served_cost: float | None,
+    billed: float,
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     client, handler = _image_generation_client(
         monkeypatch, UserAPIKeyAuth(api_key="sk-test", router_settings={"fallbacks": [{"A": ["B"]}]})
     )
     handler.owed_after_failure = (litellm.Usage(prompt_tokens=16, completion_tokens=0, total_tokens=16), 0.25)
-    handler.served_cost = 0.5
+    handler.served_cost = served_cost
     try:
         with client:
             response: Final = send(client)
@@ -847,4 +868,4 @@ def test_image_cost_header_includes_the_billed_attempt_a_fallback_replaced(
 
     assert response.status_code == 200, response.text
     assert handler.calls == ["failing", "working"]
-    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.75)
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(billed)
