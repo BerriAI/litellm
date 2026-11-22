@@ -1,3 +1,4 @@
+import functools
 import json
 from typing import Final
 
@@ -232,6 +233,29 @@ async def test_a_relayed_client_frame_keeps_a_tools_schema_as_the_caller_wrote_i
             "default": {"model": "text-group", "parameters": {"model": ["text-group"]}},
         },
     }
+
+    relayed: Final = await live_client_frame(
+        json.dumps({"type": "session.update", "session": _session({"model": "text-group", "tools": [tool]})}),
+        "openai",
+        _key(["all-proxy-models"]),
+    )
+
+    assert relayed.denial is None, relayed.denial
+    assert json.loads(relayed.frame) == {
+        "type": "session.update",
+        "session": _session({"model": "gpt-6-luna", "tools": [tool]}),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_with_live_and_text_groups")
+async def test_a_tools_schema_nested_many_levels_deep_is_relayed_as_the_caller_wrote_it() -> None:
+    schema: Final = functools.reduce(
+        lambda inner, _: {"type": "object", "properties": {"parameters": inner}},
+        range(40),
+        {"type": "object", "default": {"model": "text-group"}},
+    )
+    tool: Final = {"type": "function", "name": "nested", "parameters": schema}
 
     relayed: Final = await live_client_frame(
         json.dumps({"type": "session.update", "session": _session({"model": "text-group", "tools": [tool]})}),

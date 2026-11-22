@@ -1,7 +1,6 @@
 """Access and budget checks for what a GPT-Live session delegates to, and the provider names of its models."""
 
 import json
-import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, takewhile
@@ -203,35 +202,34 @@ def _renamed(model: JsonValue, name: Callable[[str], str]) -> JsonValue:
     return model
 
 
+def _model_selecting_children(value: JsonValue) -> Iterator[JsonValue]:
+    if isinstance(value, dict):
+        yield from (child for key, child in value.items() if key != _TOOL_SCHEMA_KEY)
+    elif isinstance(value, list):
+        yield from value
+
+
+def _next_model_selecting_level(level: tuple[JsonValue, ...], _depth: int) -> tuple[JsonValue, ...]:
+    return tuple(chain.from_iterable(map(_model_selecting_children, level)))
+
+
 def with_provider_model_names(session: Mapping[str, object], name: Callable[[str], str]) -> Mapping[str, object]:
     """`session` with every model its delegation selects renamed by `name`, leaving tool schemas as the caller wrote them."""
     if _DELEGATION_KEY not in session:
         return session
-
-    seal: Final = uuid.uuid4().hex
-
-    def _with_sealed_schema(node: dict[str, JsonValue]) -> dict[str, JsonValue]:  # mutable-ok: json's object_hook type
-        return (
-            {**node, _TOOL_SCHEMA_KEY: {seal: json.dumps(node[_TOOL_SCHEMA_KEY])}} if _TOOL_SCHEMA_KEY in node else node
-        )
-
-    def _with_renamed_model(node: dict[str, JsonValue]) -> dict[str, JsonValue]:  # mutable-ok: json's object_hook type
-        return {**node, "model": _renamed(node["model"], name)} if "model" in node else node
-
-    def _with_schema(node: dict[str, JsonValue]) -> JsonValue:  # mutable-ok: json's object_hook type
-        return _JSON.validate_json(str(node[seal])) if node.keys() == {seal} else node
-
     try:
-        delegation: Final = _JSON.validate_python(session[_DELEGATION_KEY])
+        delegation: Final = _JSON.validate_json(json.dumps(_JSON.validate_python(session[_DELEGATION_KEY])))
     except ValidationError:
         return session
-    sealed: Final = json.loads(json.dumps(delegation), object_hook=_with_sealed_schema)
-    renamed: Final = json.dumps(json.loads(json.dumps(sealed), object_hook=_with_renamed_model))
-    # A schema sealed inside another one comes out a level per pass, and the text has at most its own length of levels
-    opened: Final = accumulate(
-        range(len(renamed)), lambda text, _: json.dumps(json.loads(text, object_hook=_with_schema)), initial=renamed
+    levels: Final = takewhile(
+        bool, accumulate(range(_MAX_DELEGATION_DEPTH), _next_model_selecting_level, initial=(delegation,))
     )
-    return {**session, _DELEGATION_KEY: _JSON.validate_json(next(text for text in opened if seal not in text))}
+    for node in tuple(chain.from_iterable(levels)):
+        if isinstance(node, dict) and "model" in node:
+            node["model"] = _renamed(
+                node["model"], name
+            )  # the copy made above, renamed in place to stay linear in its size
+    return {**session, _DELEGATION_KEY: delegation}
 
 
 def deployment_delegation(
