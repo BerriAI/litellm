@@ -1127,3 +1127,61 @@ async def test_a_live_session_charges_a_delegated_response_to_the_delegated_mode
         model: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d")
         for model in ("gpt-live-1", "gpt-4o-mini")
     } == {"gpt-live-1": pytest.approx(voice_cost), "gpt-4o-mini": pytest.approx(delegated_cost)}
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_calls_its_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups: Final = ("a-shared", "z-capped")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": group, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}
+                for group in groups
+            ]
+        ),
+    )
+    delegated_cost: Final = (
+        1000 * litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-4o-mini"]["output_cost_per_token"]
+    )
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": delegated_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {"metadata": {"user_api_key_model_max_budget": dict.fromkeys(groups, budget)}},
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": "gpt-4o-mini",
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert {group: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{group}:1d") for group in groups} == {
+        group: pytest.approx(delegated_cost) for group in groups
+    }

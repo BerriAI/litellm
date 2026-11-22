@@ -908,7 +908,8 @@ def _names_provider_model(deployment_model: object, provider_model: str) -> bool
 
 
 def _budget_names_of(provider_model: str) -> tuple[str, ...]:
-    """The names a budget can know a provider's model by: the proxy models that call it, then its own name."""
+    """Every name a budget can know a provider's model by. The provider reports only its own name for a delegated
+    response, so each budgeted name is charged, which can over-count but never lets a delegation skip its budget."""
     router: Final = _proxy_router()
     if router is None:
         return (provider_model,)
@@ -1358,30 +1359,25 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             response_obj,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback response
         )
         charges: Final = (
-            ((model,), max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
-            *((_budget_names_of(delegated_model), cost) for delegated_model, cost in delegated_costs),
+            (model, max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
+            *itertools.chain.from_iterable(
+                ((budget_name, cost) for budget_name in _budget_names_of(delegated_model))
+                for delegated_model, cost in delegated_costs
+            ),
         )
-        budgeted_charges: Final = tuple(
-            (resolved_budgets, cost)
-            for budget_names, cost in charges
-            if (
-                resolved_budgets := next(
-                    (
-                        resolved
-                        for budget_name in budget_names
-                        if (
-                            resolved := _resolve_entity_model_budgets(
-                                model=budget_name,
-                                entity_budgets=_entity_budgets(budget_name),
-                                model_access_groups=self._model_access_groups,
-                                team_id=team_member_team_id,
-                            )
-                        )
-                    ),
-                    (),
-                )
+        resolved_charges: Final = tuple(
+            (
+                _resolve_entity_model_budgets(
+                    model=budget_name,
+                    entity_budgets=_entity_budgets(budget_name),
+                    model_access_groups=self._model_access_groups,
+                    team_id=team_member_team_id,
+                ),
+                cost,
             )
+            for budget_name, cost in charges
         )
+        budgeted_charges: Final = tuple(charge for charge in resolved_charges if charge[0])
         if not budgeted_charges:
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: "
