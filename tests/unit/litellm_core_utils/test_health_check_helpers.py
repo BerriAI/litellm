@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.health_check_helpers import (
     default_health_check_mode,
     native_health_check_mode,
 )
-from litellm.llms.gemini.empty_image_response import UnservedImageError
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.base import HiddenParams
@@ -149,13 +149,24 @@ def _gemini_no_image_answer() -> httpx.Response:
     ("probe_error", "healthy"),
     (
         pytest.param(
-            litellm.ContentPolicyViolationError(
+            ImageRefusalError(
                 message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
                 model="gemini-3.1-flash-image",
                 llm_provider="gemini",
+                response=_gemini_no_image_answer(),
+                provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
             ),
             True,
             id="refused",
+        ),
+        pytest.param(
+            litellm.ContentPolicyViolationError(
+                message="content_policy_violation",
+                model="dall-e-3",
+                llm_provider="openai",
+            ),
+            False,
+            id="provider-content-policy-error",
         ),
         pytest.param(
             UnservedImageError(
@@ -192,6 +203,21 @@ async def test_ahealth_check_image_generation_counts_a_model_answer_without_an_i
         )
 
     assert ("error" not in result) is healthy
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_image_edit_keeps_a_content_policy_block_healthy() -> None:
+    blocked: Final = litellm.ContentPolicyViolationError(
+        message="moderation_blocked",
+        model="gpt-image-1",
+        llm_provider="openai",
+    )
+    with patch(  # test-quality-ok: the public health-check path has no dependency injection seam
+        "litellm.aimage_edit", new_callable=AsyncMock, side_effect=blocked
+    ):
+        result = await ahealth_check({"model": "gpt-image-1", "api_key": "sk-test"}, mode="image_edit")
+
+    assert "error" not in result
 
 
 @pytest.mark.asyncio

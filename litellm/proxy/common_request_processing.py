@@ -1835,11 +1835,10 @@ def _header_value(value: float | None) -> str | None:
 def response_cost_with_failed_attempts(response_cost: object, logging_obj: object) -> float | str:
     if isinstance(response_cost, str):
         return response_cost
-    if not isinstance(response_cost, int | float):
-        return ""
+    own_cost: Final = response_cost if isinstance(response_cost, int | float) else 0.0
     if not isinstance(logging_obj, LiteLLMLoggingObj):
-        return response_cost or ""
-    return logging_obj.with_failed_attempts_owed(response_cost) or ""
+        return own_cost or ""
+    return logging_obj.with_failed_attempts_owed(own_cost) or ""
 
 
 def cost_headers(
@@ -2836,6 +2835,15 @@ class ProxyBaseLLMRequestProcessing:
         recomputed_cost: Final = logging_obj.response_cost_calculator(result=response)
         return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
 
+    @staticmethod
+    def _recovered_cost_with_failed_attempts(*, response: object, logging_obj: LiteLLMLoggingObj) -> float | str:
+        recovered: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=response, logging_obj=logging_obj
+        )
+        if "failed_attempts_billed_on_success" in logging_obj.model_call_details:
+            return recovered or ""
+        return response_cost_with_failed_attempts(recovered if isinstance(recovered, float) else None, logging_obj)
+
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
         if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
@@ -3313,7 +3321,7 @@ class ProxyBaseLLMRequestProcessing:
 
         recover_response_cost: Final = not response_cost and hidden_params.get("response_cost") is None
         computed_cost_for_headers: Final = (
-            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
+            self._recovered_cost_with_failed_attempts(response=response, logging_obj=logging_obj)
             if recover_response_cost
             else response_cost_with_failed_attempts(hidden_params.get("response_cost", response_cost), logging_obj)
         )

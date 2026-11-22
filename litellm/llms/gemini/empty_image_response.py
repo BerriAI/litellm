@@ -22,6 +22,10 @@ class UnservedImageError(UnprocessableEntityError):
     pass
 
 
+class ImageRefusalError(ContentPolicyViolationError):
+    pass
+
+
 class FailedImageBilling(Protocol):
     def response_cost_calculator(self, result: ImageResponse) -> float | None: ...
 
@@ -105,12 +109,12 @@ def empty_image_response_error(
     raw_response: httpx.Response,
     answer: ImageResponse,
     billing: FailedImageBilling,
-) -> ContentPolicyViolationError | UnservedImageError:
+) -> ImageRefusalError | UnservedImageError:
     result: Final = _parsed(response)
     feedback: Final = result.prompt_feedback
     if feedback is not None and feedback.block_reason:
         _bill_refusal(feedback.block_reason, billing, answer)
-        return ContentPolicyViolationError(
+        return ImageRefusalError(
             message=_with_detail(
                 f"Gemini blocked the image prompt, blockReason={feedback.block_reason}", feedback.block_reason_message
             ),
@@ -126,7 +130,7 @@ def empty_image_response_error(
     refusal: Final = next((candidate for candidate in candidates if _is_refusal(candidate)), None)
     if refusal is not None and refusal.finish_reason is not None:
         _bill_refusal(refusal.finish_reason, billing, answer)
-        return ContentPolicyViolationError(
+        return ImageRefusalError(
             message=_with_detail(
                 f"Gemini refused to return an image, finishReason={refusal.finish_reason}", refusal.finish_message
             ),

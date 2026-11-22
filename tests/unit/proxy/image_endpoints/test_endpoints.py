@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import logging
-import time
+import threading
 from collections.abc import Callable, Iterator, Mapping
 from types import SimpleNamespace
 from typing import Any, Dict, Final
@@ -464,6 +464,10 @@ class _BilledThenFailingImageHandler(litellm.CustomLLM):
 
 
 class _PricedImageHandler(litellm.CustomLLM):
+    def __init__(self, served_cost: float | None = 0.5) -> None:
+        super().__init__()
+        self.served_cost: Final = served_cost
+
     async def aimage_generation(
         self,
         model: str,
@@ -477,7 +481,7 @@ class _PricedImageHandler(litellm.CustomLLM):
         client: object | None = None,
     ) -> ImageResponse:
         served: Final = ImageResponse(data=[ImageObject(url="https://example.com/tree.png")])
-        served._hidden_params = {"response_cost": 0.5}
+        served._hidden_params = {} if self.served_cost is None else {"response_cost": self.served_cost}
         return served
 
     async def aimage_edit(
@@ -535,6 +539,7 @@ class _UnbilledFailingImageHandler(litellm.CustomLLM):
 
 class _SuccessUsageCapture(CustomLogger):
     logged_usage: tuple[object, object] | None = None
+    logged: Final = threading.Event()
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
@@ -542,6 +547,7 @@ class _SuccessUsageCapture(CustomLogger):
         payload: Final = kwargs.get("standard_logging_object")
         assert isinstance(payload, dict)
         self.logged_usage = (payload.get("prompt_tokens"), payload.get("completion_tokens"))
+        self.logged.set()
 
 
 def _image_regression_app(
@@ -634,18 +640,109 @@ def test_failed_image_request_bills_what_the_provider_charged_in_its_spend_row_a
     )
 
 
+def test_failed_image_generation_that_billed_nothing_sends_no_cost_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _UnbilledFailingImageHandler()}
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 503, response.text
+    assert "x-litellm-call-id" in response.headers
+    assert "x-litellm-response-cost" not in response.headers
+
+
+@pytest.mark.parametrize("field", ("is_async_call", "original_function"))
+def test_image_generation_accepts_a_body_field_named_like_a_setup_parameter(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _ParamRecordingImageHandler()}
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = client.post(
+                "/v1/images/generations", json={"model": "A", "prompt": "draw a tree", field: True}
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    ("deployments", "num_retries", "allowed_fails", "cooled_down"),
+    (
+        pytest.param(("one", "two", "three"), 2, 0, {"one", "two", "three"}, id="every_retried_deployment_cools_down"),
+        pytest.param(("one", "two"), 0, 1, set(), id="one_failure_counts_once"),
+    ),
+)
+def test_failed_image_attempts_each_count_toward_their_deployments_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+    deployments: tuple[str, ...],
+    num_retries: int,
+    allowed_fails: int,
+    cooled_down: set[str],
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _BilledThenFailingImageHandler()}
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "A",
+                "litellm_params": {"model": f"image-regression-A/{deployment}"},
+                "model_info": {"id": deployment},
+            }
+            for deployment in deployments
+        ],
+        num_retries=num_retries,
+        allowed_fails=allowed_fails,
+        cooldown_time=60,
+        retry_after=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 429, response.text
+    assert set(asyncio.run(async_get_cooldown_deployments(router, parent_otel_span=None))) == cooled_down
+
+
 @pytest.mark.parametrize(
     "send",
     (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
 )
+@pytest.mark.parametrize(
+    ("served_cost", "billed"),
+    (pytest.param(0.5, 0.75, id="priced_fallback"), pytest.param(None, 0.25, id="unpriced_fallback")),
+)
 def test_image_cost_header_includes_the_billed_attempt_a_fallback_replaced(
-    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+    monkeypatch: pytest.MonkeyPatch,
+    send: Callable[[TestClient], httpx.Response],
+    served_cost: float | None,
+    billed: float,
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     app: Final = _image_regression_app(
         monkeypatch,
         UserAPIKeyAuth(api_key="sk-test"),
-        {"A": _BilledThenFailingImageHandler(), "B": _PricedImageHandler()},
+        {"A": _BilledThenFailingImageHandler(), "B": _PricedImageHandler(served_cost)},
         fallbacks=({"A": ["B"]},),
     )
 
@@ -656,7 +753,7 @@ def test_image_cost_header_includes_the_billed_attempt_a_fallback_replaced(
         ProxyLogging._callback_capabilities_cache.clear()
 
     assert response.status_code == 200, response.text
-    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.75)
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(billed)
 
 
 def test_image_generation_keeps_a_keys_logging_callbacks_out_of_the_provider_params(
@@ -682,9 +779,9 @@ def test_image_generation_keeps_a_keys_logging_callbacks_out_of_the_provider_par
     assert handler.received_params == {"size": "1024x1024"}
 
 
-
-def test_a_fallback_after_a_billed_failure_logs_only_its_own_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_success_event_of_a_fallback_reports_the_tokens_it_billed(monkeypatch: pytest.MonkeyPatch) -> None:
     capture: Final = _SuccessUsageCapture()
+    capture.logged.clear()
     monkeypatch.setattr(litellm, "callbacks", [capture])
     app: Final = _image_regression_app(
         monkeypatch,
@@ -696,14 +793,12 @@ def test_a_fallback_after_a_billed_failure_logs_only_its_own_usage(monkeypatch: 
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
             response: Final = _send_generation(client)
-            deadline: Final = time.monotonic() + 10
-            while capture.logged_usage is None and time.monotonic() < deadline:
-                time.sleep(0.05)
+            assert capture.logged.wait(timeout=10)
     finally:
         ProxyLogging._callback_capabilities_cache.clear()
 
     assert response.status_code == 200, response.text
-    assert capture.logged_usage == (0, 0)
+    assert capture.logged_usage == (16, 2240)
 
 
 def test_a_failure_spend_row_keeps_the_billed_attempt_when_every_fallback_fails(

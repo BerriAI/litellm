@@ -2333,9 +2333,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if not failed_attempts:
             return
         own_usage: Final = get_usage_object(completion_response=served_response)
-        own_cost: Final = self.model_call_details.get("response_cost")
-        if own_usage is None or not isinstance(own_cost, (int, float)):
+        if own_usage is None:
             return
+        stored_cost: Final = self.model_call_details.get("response_cost")
+        own_cost: Final = stored_cost if isinstance(stored_cost, (int, float)) else 0.0
         failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
         self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
