@@ -2280,3 +2280,23 @@ def test_json_logs_report_an_uncaught_exception_as_one_error_record(capfd: pytes
     records: Final = _stderr_records(capfd)
     assert [(record["message"], record["level"]) for record in records] == [("startup step failed", "ERROR")]
     assert str(records[0]["stacktrace"]).endswith("LookupError: startup step failed")
+
+
+def test_json_logs_report_a_record_no_handler_takes_as_one_error_record(capfd: pytest.CaptureFixture[str]) -> None:
+    """A library logger with no handler anywhere above it falls back to logging.lastResort, which prints the
+    message and traceback as plain lines. asyncio reports an unretrieved task exception and an unclosed aiohttp
+    session this way when the operator configured no root handler. With JSON logs on it is one ERROR record,
+    and records below WARNING stay dropped as they are without JSON logs."""
+    turn_on_json()
+    unconfigured_library: Final = logging.Logger("unconfigured_library")
+    try:
+        raise ConnectionError("fire-and-forget task failed")
+    except ConnectionError:
+        unconfigured_library.exception("Task exception was never retrieved")
+    unconfigured_library.info("routine progress")
+
+    records: Final = _stderr_records(capfd)
+    assert [(record["message"], record["level"]) for record in records] == [
+        ("Task exception was never retrieved", "ERROR")
+    ]
+    assert str(records[0]["stacktrace"]).endswith("ConnectionError: fire-and-forget task failed")

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import importlib
+import logging
 import os
 import shutil
 import sys
@@ -401,6 +402,7 @@ def isolate_exception_hooks() -> Iterator[None]:
         hooks.setattr(sys, "excepthook", sys.excepthook)
         hooks.setattr(sys, "unraisablehook", sys.unraisablehook)
         hooks.setattr(threading, "excepthook", threading.excepthook)
+        hooks.setattr(logging, "lastResort", logging.lastResort)
         yield
 
 

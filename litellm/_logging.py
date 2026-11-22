@@ -921,6 +921,7 @@ def _setup_json_exception_handlers(formatter):
     error_handler.addFilter(_diagnostic_filter)
     error_handler.addFilter(_secret_filter)
     error_handler.addFilter(_correlation_filter)
+    error_handler.setLevel(logging.WARNING)
 
     # Setup excepthook for uncaught exceptions
     def json_excepthook(
@@ -946,6 +947,7 @@ def _setup_json_exception_handlers(formatter):
     sys.excepthook = json_excepthook
     sys.unraisablehook = json_unraisablehook
     threading.excepthook = json_thread_excepthook
+    logging.lastResort = error_handler
 
     # Configure asyncio exception handler if possible
     try:
