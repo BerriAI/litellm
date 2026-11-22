@@ -26,6 +26,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
 )
+from litellm.responses.bridge_check import has_global_safety_settings
 
 MediaFetcher: TypeAlias = Callable[[str, str | None], tuple[str, str]]
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
@@ -214,7 +215,7 @@ def _validate_request_params(
     if (
         params.get("safety_settings") is not None
         or params.get("safetySettings") is not None
-        or litellm.vertex_ai_safety_settings is not None
+        or has_global_safety_settings()
     ):
         raise litellm.BadRequestError(
             message="'safety_settings' cannot be sent to the Gemini Interactions API. "

@@ -237,6 +237,7 @@ class InteractionsChatStreamingIterator:
         self._pending_hop_token: str | None = None
         self._hop_usages: tuple[JsonValue, ...] = ()
         self._hop_open: bool = False
+        self._hop_delivered: bool = False
         self._images_sent: int = 0
         self._step_index_offset: int = 0
         self._highest_step_index: int = -1
@@ -577,6 +578,7 @@ class InteractionsChatStreamingIterator:
         if hop_body is not None:
             self._done = False
             self._hop_open = True
+            self._hop_delivered = False
             self._step_index_offset = self._highest_step_index + 1
         return hop_body
 
@@ -592,7 +594,7 @@ class InteractionsChatStreamingIterator:
         self._done = True
 
     def _fail_stream(self, error: Exception) -> None:
-        if not self._hop_open:
+        if not self._hop_open or self._hop_delivered:
             raise error
         self._end_after_failed_hop(error)
 
@@ -657,7 +659,9 @@ class InteractionsChatStreamingIterator:
             case "step.start" | "content.start":
                 self._buffer.extend(self._handle_step_start(event))
             case "step.delta" | "content.delta":
-                self._buffer.extend(self._handle_step_delta(event))
+                delivered: Final = self._handle_step_delta(event)
+                self._hop_delivered = self._hop_delivered or bool(delivered)
+                self._buffer.extend(delivered)
             case "interaction.completed" | "interaction.complete":
                 self._buffer.extend(self._handle_completed(event))
             case "error" | "interaction.failed" | "interaction.cancelled":

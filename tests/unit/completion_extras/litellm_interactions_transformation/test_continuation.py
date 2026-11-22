@@ -251,6 +251,42 @@ def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_stream_repor
     assert tokens == ["tok-1"]
 
 
+def test_streaming_bridge_raises_when_a_hop_fails_after_it_delivered_text_so_the_cut_is_not_passed_off_as_a_finish() -> (
+    None
+):
+    events: Final = (
+        {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+        {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": "upon "}},
+        {"event_type": "error", "error": {"code": "unavailable", "message": "dropped"}},
+    )
+    _, responder = _scripted(
+        (
+            _sse(_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(
+                200,
+                text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+                headers={"content-type": "text/event-stream"},
+            ),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        stream: Final = litellm.completion(
+            model=MODEL,
+            max_tokens=1000,
+            messages=list(MESSAGES),
+            stream=True,
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+        seen: Final = [next(stream), next(stream)]
+        with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="dropped"):
+            _ = list(stream)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in seen) == "Once upon "
+    assert [chunk.choices[0].finish_reason for chunk in seen] == [None, None]
+
+
 @pytest.mark.parametrize(
     ("store", "resends_input", "previous_interaction_id"),
     ((True, False, "v1_first"), (None, True, None)),

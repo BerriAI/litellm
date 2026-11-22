@@ -444,6 +444,10 @@ def _catalog_row(model: str, custom_llm_provider: str) -> Mapping[str, object] |
         return None
 
 
+def has_global_safety_settings() -> bool:
+    return litellm.vertex_ai_safety_settings is not None
+
+
 def should_route_to_interactions_api(
     *,
     model: str,
@@ -484,7 +488,7 @@ def should_route_to_interactions_api(
         return True
     return (
         _is_gemini_4_or_newer(model)
-        and litellm.vertex_ai_safety_settings is None
+        and not has_global_safety_settings()
         and candidate_count in _ONE_CANDIDATE
         and not asks_for_logprobs
         and not _needs_generate_content(str_keyed_mapping(optional_params), llm_map)
