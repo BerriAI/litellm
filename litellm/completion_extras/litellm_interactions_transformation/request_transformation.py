@@ -1042,12 +1042,12 @@ def transform_chat_to_interactions_request(
             key: normalized_params[key]
             for key in (
                 "previous_interaction_id",
-                "continuation_token",
                 "environment",
                 "response_modalities",
             )
             if normalized_params.get(key) is not None
         },
+        **({"continuation_token": token} if (token := normalized_params.get("continuation_token")) else {}),
     }
     interactions_params: Final = {
         **({"system_instruction": system_instruction} if system_instruction is not None else {}),

@@ -767,3 +767,17 @@ def test_function_tool_carrying_a_builtin_key_stays_a_function_so_a_denied_built
     )
 
     assert [tool["type"] for tool in prepared.optional_params["tools"]] == ["function"]
+
+
+@pytest.mark.parametrize(("token", "sent"), (("tok-1", "tok-1"), ("", None)), ids=("token", "empty"))
+def test_empty_continuation_token_is_dropped_so_google_does_not_reject_the_request(
+    token: str, sent: str | None
+) -> None:
+    prepared: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "Continue"}],
+        model="gemini-4-neon",
+        optional_params={"continuation_token": token},
+        litellm_params={},
+    )
+
+    assert prepared.optional_params.get("continuation_token") == sent

@@ -377,3 +377,29 @@ def test_streamed_images_and_audio_reach_the_caller() -> None:
         (1, "data:image/png;base64,Qg=="),
     ]
     assert audio == ["Qw=="]
+
+
+@pytest.mark.parametrize(
+    ("response_format", "capped"),
+    (
+        (None, True),
+        ({"type": "text", "mime_type": "application/json"}, True),
+        ({"type": "audio"}, False),
+        ([{"type": "text"}, {"type": "image"}], False),
+    ),
+    ids=("text", "json", "audio", "text-and-image"),
+)
+def test_default_output_budget_only_caps_text_answers(
+    response_format: object, capped: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.completion_extras.litellm_interactions_transformation.continuation import (
+        DEFAULT_OUTPUT_BUDGET_ENV,
+        with_default_output_budget,
+    )
+
+    monkeypatch.setenv(DEFAULT_OUTPUT_BUDGET_ENV, "100")
+    body: Final = {"input": "hi", **({"response_format": response_format} if response_format is not None else {})}
+
+    budgeted: Final = with_default_output_budget(body, lambda: 4096)
+
+    assert budgeted.get("generation_config") == ({"max_output_tokens": 100} if capped else None)

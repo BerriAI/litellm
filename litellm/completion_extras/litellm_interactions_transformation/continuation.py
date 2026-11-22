@@ -7,6 +7,7 @@ from typing import Final, TypeAlias
 from pydantic import JsonValue
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.env_utils import get_env_int_or_none
 from litellm.llms.vertex_ai.gemini.long_decode import DEFAULT_OUTPUT_BUDGET_ENV
 from litellm.responses.bridge_check import str_keyed_mapping
@@ -41,6 +42,13 @@ def resumable_body(
     return {key: value for key, value in request_body.items() if key != "input"}
 
 
+def _asks_for_media(response_format: object) -> bool:
+    return any(
+        (str_keyed_mapping(entry) or {}).get("type") in ("image", "audio")
+        for entry in as_object_list(response_format) or (response_format,)
+    )
+
+
 def with_default_output_budget(
     request_body: Mapping[str, object], model_max_output_tokens: Callable[[], int | None]
 ) -> Mapping[str, object]:
@@ -51,6 +59,8 @@ def with_default_output_budget(
     if "max_output_tokens" in generation_config or request_body.get("continuation_token"):
         return request_body
     if request_body.get("response_modalities") not in (None, ["text"], ["TEXT"]):
+        return request_body
+    if _asks_for_media(request_body.get("response_format")):
         return request_body
     model_max: Final = model_max_output_tokens()
     if model_max is None:
