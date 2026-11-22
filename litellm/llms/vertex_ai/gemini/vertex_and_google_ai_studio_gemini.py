@@ -208,9 +208,9 @@ def _turns_server_side_tools_off(params: Mapping[str, object]) -> bool:
     return any(params.get(key) is False for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS)
 
 
-def _forces_a_function_call(params: Mapping[str, object]) -> bool:
+def _pins_function_calling_mode(params: Mapping[str, object]) -> bool:
     match params.get("tool_choice"):
-        case "required" | {"function": {"name": str()}}:
+        case "required" | "none" | {"function": {"name": str()}}:
             return True
         case _:
             return False
@@ -495,7 +495,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
         keeps_the_old_drop: Final = any(
-            _turns_server_side_tools_off(params) or _forces_a_function_call(params) for params in param_sources
+            _turns_server_side_tools_off(params) or _pins_function_calling_mode(params) for params in param_sources
         )
         return not keeps_the_old_drop and self._supports_search_tools_with_functions(model)
 
