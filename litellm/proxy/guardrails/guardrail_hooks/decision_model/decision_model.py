@@ -106,6 +106,80 @@ def _chunk_text(text: str, max_chars: int) -> tuple[str, ...]:
     return tuple(text[start : start + max_chars] for start in range(0, len(text) - max_chars + step, step))
 
 
+def _message_role(message: Mapping[str, object] | object) -> str | None:
+    role: Final = message.get("role") if isinstance(message, Mapping) else getattr(message, "role", None)
+    return role if isinstance(role, str) else None
+
+
+def _last_index_where(
+    sequence: Sequence[Mapping[str, object] | object],
+    predicate: Callable[[Mapping[str, object] | object], bool],
+) -> int | None:
+    return next((idx for idx in range(len(sequence) - 1, -1, -1) if predicate(sequence[idx])), None)
+
+
+def _new_messages(
+    messages: Sequence[Mapping[str, object] | object],
+) -> tuple[Mapping[str, object] | object, ...]:
+    if not messages:
+        return ()
+    last_non_assistant: Final = _last_index_where(messages, lambda m: _message_role(m) != "assistant")
+    if last_non_assistant is None:
+        return tuple(messages)
+    prior_assistant: Final = _last_index_where(
+        messages[:last_non_assistant], lambda m: _message_role(m) == "assistant"
+    )
+    if prior_assistant is None:
+        return tuple(messages)
+    return tuple(messages[prior_assistant + 1 :])
+
+
+def _part_text(part: object) -> str | None:
+    if isinstance(part, Mapping):
+        val: Final = part.get("text")
+        return val if isinstance(val, str) else None
+    val: Final = getattr(part, "text", None)
+    return val if isinstance(val, str) else None
+
+
+def _message_content_texts(message: Mapping[str, object] | object) -> Iterator[str]:
+    content: Final = message.get("content") if isinstance(message, Mapping) else getattr(message, "content", None)
+    if isinstance(content, str):
+        if content.strip():
+            yield content
+    elif isinstance(content, (list, tuple)):
+        yield from (val for part in content if (val := _part_text(part)) is not None and val.strip())
+
+
+def _message_tool_calls(message: Mapping[str, object] | object) -> Iterator[object]:
+    role: Final = message.get("role") if isinstance(message, Mapping) else getattr(message, "role", None)
+    if role == "assistant":
+        tool_calls: Final = (
+            message.get("tool_calls") if isinstance(message, Mapping) else getattr(message, "tool_calls", None)
+        )
+        if isinstance(tool_calls, (list, tuple)):
+            yield from tool_calls
+
+
+def _scoped_request_texts(
+    inputs: GenericGuardrailAPIInputs,
+    request_data: Mapping[str, object],
+    screen_scope: Literal["all", "new_messages", "latest_turn"],
+) -> tuple[str, ...]:
+    if screen_scope == "all":
+        return tuple(text for text in inputs.get("texts") or [] if text and text.strip()) + _tool_call_texts(inputs)
+    raw_messages: Final = inputs.get("structured_messages") or request_data.get("messages")
+    if not isinstance(raw_messages, Sequence) or not raw_messages:
+        return tuple(text for text in inputs.get("texts") or [] if text and text.strip()) + _tool_call_texts(inputs)
+    new_msgs: Final = _new_messages(raw_messages)
+    content_texts: Final = tuple(chain.from_iterable(map(_message_content_texts, new_msgs)))
+    assistant_tool_calls: Final = tuple(chain.from_iterable(map(_message_tool_calls, new_msgs)))
+    tool_texts: Final = tuple(
+        dict.fromkeys(text for text in map(_tool_call_text, assistant_tool_calls) if text is not None)
+    )
+    return content_texts + tool_texts
+
+
 class DecisionModelGuardrail(CustomGuardrail):
     """Runs predicate checks on request/response text via the Decisions API and blocks on flagged checks."""
 
@@ -126,6 +200,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         streaming_end_of_stream_only: bool = False,
         streaming_sampling_rate: int = 5,
         streaming_buffer_until_moderated: bool | None = None,
+        screen_scope: Literal["all", "new_messages", "latest_turn"] = "all",
     ) -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base init takes untyped **kwargs
             guardrail_name=guardrail_name,
@@ -146,6 +221,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         self.streaming_sampling_rate = streaming_sampling_rate
         if streaming_buffer_until_moderated is not None:
             self.streaming_buffer_until_moderated = streaming_buffer_until_moderated
+        self.screen_scope: Final[Literal["all", "new_messages", "latest_turn"]] = screen_scope
         self._semaphores_by_loop: dict[AbstractEventLoop, Semaphore] = {}  # mutable-ok: per-loop semaphore registry
 
     @classmethod
@@ -312,26 +388,26 @@ class DecisionModelGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        texts: Final = tuple(text for text in inputs.get("texts") or [] if text and text.strip()) + _tool_call_texts(
-            inputs
+        texts: Final = (
+            _scoped_request_texts(inputs, request_data, self.screen_scope)
+            if input_type == "request"
+            else tuple(text for text in inputs.get("texts") or [] if text and text.strip()) + _tool_call_texts(inputs)
         )
         if not texts:
             return inputs
         start_time: Final = time()
 
         questions: Final = [
-            {"type": "predicate", "name": check.name, "instructions": check.instructions or ""} for check in self.checks
+            {"type": "predicate", "name": check.name, "instructions": check.instructions or ""}
+            for check in self.checks
         ]
         semaphore: Final = self._get_decision_semaphore()
         auth: Final = attached_auth(request_data)
-        responses: Final[list[OpenAIDecisionResponse]] = []  # mutable-ok: sequential per-text accumulator
-        errors: Final[list[Exception]] = []  # mutable-ok: sequential per-text accumulator
-        for text in texts:
-            text_responses, text_errors = await self._screen_text(text, questions, semaphore, auth)
-            responses.extend(text_responses)
-            errors.extend(text_errors)
-            if any(v["flagged"] and v["action"] == "block" for v in self._verdicts(responses)):
-                break
+        gathered_results: Final = await asyncio.gather(
+            *(self._screen_text(text, questions, semaphore, auth) for text in texts)
+        )
+        responses: Final = tuple(chain.from_iterable(text_responses for text_responses, _ in gathered_results))
+        errors: Final = tuple(chain.from_iterable(text_errors for _, text_errors in gathered_results))
         if errors and not responses:
             self._log(request_data, (), "guardrail_failed_to_respond", start_time)
             self._handle_call_failure(errors[0])

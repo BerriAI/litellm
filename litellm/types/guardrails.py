@@ -1268,6 +1268,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
     )
 
+    screen_scope: Literal["all", "new_messages", "latest_turn"] | None = Field(
+        default=None,
+        description="Which messages to screen. Implemented by guardrail='decision_model'.",
+    )
+
     forward_messages_as_sent: bool | None = Field(
         default=False,
         description=(

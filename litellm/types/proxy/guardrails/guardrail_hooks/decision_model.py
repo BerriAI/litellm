@@ -57,6 +57,13 @@ class DecisionModelGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
         ge=1,
         description="For streamed responses, score the accumulated response every Nth chunk. Each scan is a decisions call",
     )
+    screen_scope: Literal["all", "new_messages", "latest_turn"] = Field(
+        default="all",
+        description=(
+            "Which messages to screen: 'all' screens every message, while 'new_messages' (or 'latest_turn') "
+            "screens only messages after the last assistant turn"
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
