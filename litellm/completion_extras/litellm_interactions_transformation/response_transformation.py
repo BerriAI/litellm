@@ -97,13 +97,28 @@ def _convert_annotation(raw_anno: JsonMapping, char_offset: int) -> ChatCompleti
     return ChatCompletionAnnotation(type="url_citation", url_citation=citation)
 
 
-def _annotations_for_block(raw_annotations: JsonValue, char_offset: int) -> tuple[ChatCompletionAnnotation, ...]:
+def annotations_for_block(raw_annotations: JsonValue, char_offset: int) -> tuple[ChatCompletionAnnotation, ...]:
     if not isinstance(raw_annotations, list):
         return ()
     converted: Final = tuple(
         _convert_annotation(anno, char_offset) for anno in raw_annotations if isinstance(anno, dict)
     )
     return tuple(item for item in converted if item is not None)
+
+
+def _shifted(annotation: ChatCompletionAnnotation, by: int) -> ChatCompletionAnnotation:
+    citation: Final = annotation.get("url_citation")
+    if by == 0 or citation is None:
+        return annotation
+    return ChatCompletionAnnotation(
+        type="url_citation",
+        url_citation=ChatCompletionAnnotationURLCitation(
+            url=citation.get("url", ""),
+            title=citation.get("title", ""),
+            start_index=citation.get("start_index", 0) + by,
+            end_index=citation.get("end_index", 0) + by,
+        ),
+    )
 
 
 def _image_item_from_block(img_idx: int, block: JsonMapping) -> ImageURLListItem | None:
@@ -133,7 +148,7 @@ def parse_output_content_blocks(blocks: Sequence[JsonValue]) -> _ParsedOutputBlo
     offsets: Final = (0, *accumulate(len(piece) for piece in pieces))
     annotations: Final = tuple(
         chain.from_iterable(
-            _annotations_for_block(block.get("annotations"), offset) for block, offset in zip(text_blocks, offsets)
+            annotations_for_block(block.get("annotations"), offset) for block, offset in zip(text_blocks, offsets)
         )
     )
     image_blocks: Final = tuple(block for block in dict_blocks if block.get("type") == "image")
@@ -264,7 +279,12 @@ def _extract_steps(steps: Sequence[JsonValue]) -> _ExtractedSteps:
         reasoning_text="".join(p for p in reasoning_parts if p),
         thinking_blocks=thinking_blocks,
         tool_calls=tool_calls,
-        annotations=tuple(chain.from_iterable(p.annotations for p in output_parsed)),
+        annotations=tuple(
+            chain.from_iterable(
+                (_shifted(annotation, offset) for annotation in p.annotations)
+                for p, offset in zip(output_parsed, (0, *accumulate(len(p.text) for p in output_parsed)))
+            )
+        ),
         images=tuple(chain.from_iterable(p.images for p in output_parsed)),
         audio_data="".join(audio_chunks) if audio_chunks else None,
     )

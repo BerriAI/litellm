@@ -49,6 +49,7 @@ from .continuation import (
 )
 from .response_transformation import (
     FinishReason,
+    annotations_for_block,
     map_interactions_status_to_finish_reason,
     parse_output_content_blocks,
     transform_interactions_usage,
@@ -247,6 +248,9 @@ class InteractionsChatStreamingIterator:
         self._pending_thought_signature: str | None = None
         self._segment_signed_tool_call: bool = False
         self._unsigned_tools: Final[dict[int, tuple[int, str]]] = {}  # mutable-ok: thought-step -> unsigned tool slot
+        self._text_length: int = 0
+        self._last_text_start: int = 0
+        self._text_starts: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> offset of its first text
         self._thought_slots: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> thought-slot state
         self._tool_slots_by_step: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> tool-slot state
         self._buffer: Final[deque[ModelResponseStream]] = deque()  # mutable-ok: per-stream output FIFO queue
@@ -381,6 +385,7 @@ class InteractionsChatStreamingIterator:
                 initial_media: Final = self._media_delta(raw_step.get("content"))
                 if not initial_text and initial_media is None:
                     return ()
+                self._count_text(step_index, initial_text)
                 return (
                     self._build_chunk(
                         Delta(role="assistant", content=initial_text or None, **(initial_media or _NO_MEDIA))
@@ -388,9 +393,14 @@ class InteractionsChatStreamingIterator:
                 )
             case "text":
                 direct_text: Final = str(raw_step.get("text") or "")
+                self._count_text(step_index, direct_text)
                 return (self._build_chunk(Delta(role="assistant", content=direct_text)),) if direct_text else ()
             case _:
                 return ()
+
+    def _count_text(self, step_index: int, text: str) -> None:
+        self._last_text_start = self._text_starts.setdefault(step_index, self._text_length)
+        self._text_length += len(text)
 
     def _media_delta(self, raw_blocks: JsonValue) -> _MediaDelta | None:
         if not isinstance(raw_blocks, list):
@@ -419,7 +429,13 @@ class InteractionsChatStreamingIterator:
                 text_piece: Final = str(raw_delta.get("text") or "")
                 if not text_piece:
                     return ()
+                self._count_text(step_index, text_piece)
                 return (self._build_chunk(Delta(content=text_piece)),)
+            case "text_annotation_delta" | "annotations":
+                cited: Final = annotations_for_block(
+                    raw_delta.get("annotations"), self._text_starts.get(step_index, self._last_text_start)
+                )
+                return (self._build_chunk(Delta(annotations=list(cited))),) if cited else ()
             case "image" | "audio":
                 media: Final = self._media_delta([dict(raw_delta)])
                 return (self._build_chunk(Delta(**media)),) if media is not None else ()

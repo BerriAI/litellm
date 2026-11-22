@@ -447,3 +447,107 @@ def test_default_output_budget_only_caps_text_answers(
     budgeted: Final = with_default_output_budget(body, lambda: 4096)
 
     assert budgeted.get("generation_config") == ({"max_output_tokens": 100} if capped else None)
+
+
+def _cited(text: str, url: str, status: str, token: str | None = None) -> Mapping[str, object]:
+    cites: Final = [{"type": "url_citation", "start_index": 0, "end_index": len(text), "url": url, "title": url}]
+    return {
+        **_interaction(text, status, token),
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": text, "annotations": cites}]}],
+    }
+
+
+def _cited_sse(text: str, url: str, status: str, token: str | None = None) -> httpx.Response:
+    interaction: Final = _cited(text, url, status, token)
+    steps: Final = interaction["steps"]
+    assert isinstance(steps, list)
+    events: Final = (
+        {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+        {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": text}},
+        {
+            "event_type": "step.delta",
+            "index": 0,
+            "delta": {"type": "text_annotation_delta", "annotations": steps[0]["content"][0]["annotations"]},
+        },
+        {
+            "event_type": "interaction.completed",
+            "interaction": {key: value for key, value in interaction.items() if key != "steps"},
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+def test_citations_of_a_continued_answer_point_into_the_joined_text(stream: bool) -> None:
+    hops: Final = (
+        ("Once ", "https://a.example", "requires_continuation", "tok-1"),
+        ("upon.", "https://b.example", "completed", None),
+    )
+    _, responder = _scripted(
+        tuple(_cited_sse(*hop) if stream else httpx.Response(200, json=_cited(*hop)) for hop in hops)
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        answer: Final = litellm.completion(
+            model=MODEL,
+            max_tokens=1000,
+            messages=list(MESSAGES),
+            stream=stream,
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+        carriers: Final = (
+            [chunk.choices[0].delta for chunk in answer] if stream else [answer.choices[0].message]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # completion returns an untyped union
+        )
+
+    text: Final = "".join(carrier.content or "" for carrier in carriers)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]  # untyped union above
+    spans: Final = [
+        (text[cite["url_citation"]["start_index"] : cite["url_citation"]["end_index"]], cite["url_citation"]["url"])
+        for carrier in carriers  # pyright: ignore[reportUnknownVariableType]  # untyped union above
+        for cite in getattr(carrier, "annotations", None) or ()
+    ]
+    assert spans == [("Once ", "https://a.example"), ("upon.", "https://b.example")]
+
+
+def test_streamed_citations_sent_in_a_later_step_with_no_text_point_at_the_answer_before_them() -> None:
+    cites: Final = [
+        {"type": "url_citation", "start_index": 0, "end_index": 5, "url": "https://b.example", "title": "b"}
+    ]
+    events: Final = (
+        {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+        {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": "upon."}},
+        {"event_type": "step.start", "index": 1, "step": {"type": "model_output"}},
+        {"event_type": "step.delta", "index": 1, "delta": {"type": "text_annotation_delta", "annotations": cites}},
+        {"event_type": "interaction.completed", "interaction": {"id": "v1_second", "status": "completed"}},
+    )
+    _, responder = _scripted(
+        (
+            _sse(_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(
+                200,
+                text="".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            ),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        deltas: Final = [
+            chunk.choices[0].delta
+            for chunk in litellm.completion(
+                model=MODEL,
+                max_tokens=1000,
+                messages=list(MESSAGES),
+                stream=True,
+                api_key="k",
+                api_base=API_BASE,
+                client=HTTPHandler(client=raw_client),
+            )
+        ]
+
+    spans: Final = [
+        (cite["url_citation"]["start_index"], cite["url_citation"]["end_index"])
+        for delta in deltas
+        for cite in getattr(delta, "annotations", None) or ()
+    ]
+    assert spans == [(5, 10)]
