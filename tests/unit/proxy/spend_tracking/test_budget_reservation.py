@@ -916,7 +916,7 @@ def test_a_gemini_candidate_count_reserves_each_candidates_output(field: str) ->
     ],
     ids=["top-level", "top-level-snake", "generation-config", "sdk-config"],
 )
-def test_a_named_cached_content_reserves_the_rest_of_the_window_at_the_cache_read_rate_but_not_in_the_input_floor(
+def test_a_named_cached_content_holds_and_floors_the_rest_of_the_window_at_the_cache_read_rate(
     cached_content: dict[str, object],
 ) -> None:
     body: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 64}} | cached_content
@@ -930,7 +930,10 @@ def test_a_named_cached_content_reserves_the_rest_of_the_window_at_the_cache_rea
         + (_gemini_window() - question_tokens) * _gemini_rate("cache_read_input_token_cost")
         + 64 * _gemini_output_rate()
     )
-    assert floor == pytest.approx(question_tokens * _gemini_rate("input_cost_per_token"))
+    assert floor == pytest.approx(
+        question_tokens * _gemini_rate("input_cost_per_token")
+        + (_gemini_window() - question_tokens) * _gemini_rate("cache_read_input_token_cost")
+    )
 
 
 @pytest.mark.parametrize(
@@ -962,6 +965,14 @@ def test_a_gemini_body_whose_input_google_sizes_on_its_side_reserves_the_whole_w
 _CACHED_BODY: Final = GEMINI_QUESTION | {
     "cachedContent": "cachedContents/ctx-1",
     "generationConfig": {"maxOutputTokens": 100},
+}
+_THRESHOLD_PRICED: Final = {
+    "input_cost_per_token": 1e-06,
+    "input_cost_per_token_above_200k_tokens": 2e-06,
+    "cache_read_input_token_cost": 1e-07,
+    "cache_read_input_token_cost_above_200k_tokens": 2e-07,
+    "output_cost_per_token": 4e-06,
+    "output_cost_per_token_above_200k_tokens": 6e-06,
 }
 
 
@@ -999,6 +1010,27 @@ _CACHED_BODY: Final = GEMINI_QUESTION | {
             200 * 3e-06 + 9_800 * 3e-07 + 100 * 6e-06,
             id="tiered-prices-at-the-tier-the-whole-window-falls-in",
         ),
+        pytest.param(
+            _THRESHOLD_PRICED | {"max_input_tokens": 300_000},
+            200 * 2e-06 + 299_800 * 2e-07 + 100 * 6e-06,
+            id="a-window-past-a-price-threshold-holds-at-the-higher-rates",
+        ),
+        pytest.param(
+            _THRESHOLD_PRICED | {"max_input_tokens": 150_000},
+            200 * 1e-06 + 149_800 * 1e-07 + 100 * 4e-06,
+            id="a-window-under-a-price-threshold-keeps-the-base-rates",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_token": 1e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "cache_read_input_audio_token_cost": 3e-07,
+                "output_cost_per_token": 4e-06,
+                "max_input_tokens": 10_000,
+            },
+            200 * 1e-06 + 9_800 * 3e-07 + 100 * 4e-06,
+            id="a-cache-that-may-hold-audio-is-held-at-the-audio-cache-rate",
+        ),
     ],
 )
 def test_cached_content_reservation_prices_the_rest_of_the_window(
@@ -1015,6 +1047,82 @@ def test_cached_content_reservation_prices_the_rest_of_the_window(
     )
 
     assert reserved == pytest.approx(expected)
+
+
+def test_a_gemini_prompt_past_a_price_threshold_is_held_at_the_higher_rates() -> None:
+    reserved: Final = _max_cost_for_cost_info(
+        request_body=GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 100}},
+        route=GEMINI_ROUTES[0],
+        model="custom-gemini",
+        model_info=_THRESHOLD_PRICED,
+        requested_output_tokens=100,
+        output_multiplier=1,
+        input_tokens=250_000,
+    )
+
+    assert reserved == pytest.approx(250_000 * 2e-06 + 100 * 6e-06)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"generationConfig": {"maxOutputTokens": 4096}},
+        {"contents": [{"role": "user", "parts": [{"text": "Summarize the history of Paris. " * 400}]}]},
+    ],
+    ids=["output-cap", "contents"],
+)
+async def test_a_gemini_hold_is_sized_from_the_body_extra_body_sends(
+    spend_counter_store, overrides: dict[str, object]
+) -> None:
+    requested: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 1}}
+    sent: Final = requested | overrides
+
+    reservation: Final = await reserve_budget_for_request(
+        request_body=requested | {"extra_body": overrides},
+        route=GEMINI_ROUTES[2],
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="extra-body-key", max_budget=10000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(
+        estimate_request_max_cost(request_body=sent, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    assert reservation["input_cost"] == pytest.approx(
+        estimate_request_input_cost(request_body=sent, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    assert reservation["reserved_cost"] > (
+        estimate_request_max_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None) or 0
+    )
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.parametrize(
+    ("request_body", "input_tokens", "expected"),
+    [
+        pytest.param(_CACHED_BODY, 200, 200 * 2e-06 + 299_800 * 2e-07, id="a-cached-window-past-a-price-threshold"),
+        pytest.param(GEMINI_QUESTION, 250_000, 250_000 * 2e-06, id="a-prompt-past-a-price-threshold"),
+        pytest.param(GEMINI_QUESTION, 150_000, 150_000 * 1e-06, id="a-prompt-under-a-price-threshold"),
+    ],
+)
+def test_the_input_floor_prices_a_gemini_prompt_at_the_rates_its_size_bills_at(
+    request_body: dict[str, object], input_tokens: int, expected: float
+) -> None:
+    floor: Final = _input_cost_for_cost_info(
+        request_body=request_body,
+        route=GEMINI_ROUTES[0],
+        model="custom-gemini",
+        model_info=_THRESHOLD_PRICED | {"max_input_tokens": 300_000},
+        input_tokens=input_tokens,
+    )
+
+    assert floor == pytest.approx(expected)
 
 
 def test_cached_content_without_an_input_or_cache_read_price_cannot_be_reserved() -> None:

@@ -343,14 +343,18 @@ def test_every_gemini_turn_counts_whatever_its_role() -> None:
     assert with_tool_turns - question_only >= 200
 
 
-def test_a_gemini_thought_signature_is_not_counted() -> None:
+@pytest.mark.parametrize("field", ["thoughtSignature", "thought_signature"])
+def test_a_gemini_thought_signature_counts_its_decoded_size_because_gemini_bills_the_thinking_it_carries(
+    field: str,
+) -> None:
     call: Final = {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}
-    signed: Final = {"role": "model", "parts": [{**call, "thoughtSignature": base64.b64encode(b"s" * 3000).decode()}]}
+    signed: Final = {"role": "model", "parts": [{**call, field: base64.b64encode(b"s" * 3000).decode()}]}
 
     unsigned_tokens: Final = _gemini_tokens(_user({"text": "Weather?"}), {"role": "model", "parts": [call]})
+    signed_tokens: Final = _gemini_tokens(_user({"text": "Weather?"}), signed)
 
-    assert unsigned_tokens is not None
-    assert _gemini_tokens(_user({"text": "Weather?"}), signed) == unsigned_tokens
+    assert unsigned_tokens is not None and signed_tokens is not None
+    assert signed_tokens - unsigned_tokens == 3000
 
 
 @pytest.mark.parametrize("field", ["systemInstruction", "system_instruction"])

@@ -322,8 +322,10 @@ _GEMINI_FUNCTION_DECLARATION_FIELDS: Final = frozenset({"functionDeclarations", 
 _GEMINI_INLINE_DATA_FIELDS: Final = ("inlineData", "inline_data")
 _GEMINI_FILE_DATA_FIELDS: Final = ("fileData", "file_data")
 _GEMINI_FUNCTION_RESPONSE_FIELDS: Final = ("functionResponse", "function_response")
-_GEMINI_UNBILLED_PART_FIELDS: Final = frozenset({"thoughtSignature", "thought_signature"})
-_GEMINI_SEPARATELY_COUNTED_PART_FIELDS: Final = _GEMINI_UNBILLED_PART_FIELDS | frozenset(_GEMINI_INLINE_DATA_FIELDS)
+_GEMINI_THOUGHT_SIGNATURE_FIELDS: Final = ("thoughtSignature", "thought_signature")
+_GEMINI_SEPARATELY_COUNTED_PART_FIELDS: Final = frozenset(
+    (*_GEMINI_THOUGHT_SIGNATURE_FIELDS, *_GEMINI_INLINE_DATA_FIELDS)
+)
 _GEMINI_RESPONSE_SCHEMA_FIELDS: Final = (
     "responseSchema",
     "response_schema",
@@ -430,8 +432,16 @@ def _gemini_part_tokens(part: object, counter: _GeminiCounter) -> int | None:
             _gemini_inline_audio_tokens(fields, counter.audio_models) if has_inline_data else 0,
             _count_text_tokens(model=counter.model, text=text) if isinstance(text, str) else 0,
             _gemini_structured_part_tokens(billed, counter) if billed else 0,
+            _thought_signature_tokens(fields),
         )
     )
+
+
+def _thought_signature_tokens(part: Mapping[str, object]) -> int:
+    """Gemini bills a returned thought signature as the earlier turn's thinking tokens, held at its decoded byte
+    length as an upper bound."""
+    signatures: Final = (part.get(field) for field in _GEMINI_THOUGHT_SIGNATURE_FIELDS)
+    return sum(len(signature) * 3 // 4 for signature in signatures if isinstance(signature, str))
 
 
 def _gemini_inline_audio_tokens(part: Mapping[str, object], audio_models: Sequence[str]) -> int | None:

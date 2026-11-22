@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_modality_token_cost_key
 from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
@@ -314,18 +315,21 @@ async def reserve_budget_for_request(
     if not counters:
         return None
 
+    body_fields: Final = _WINDOW_OBJECT.validate_python(request_body)
+    extra_body_sent_fields: Final = _sent_generate_content_body(body_fields, route)
+    sent_body: Final = dict(body_fields if extra_body_sent_fields is None else extra_body_sent_fields)
     input_token_counts: Final = await count_request_input_tokens(
-        request_body=request_body,
+        request_body=sent_body,
         route=route,
         llm_router=llm_router,
         team_id=valid_token.team_id,
-        raw_body=raw_body,
+        raw_body=raw_body if extra_body_sent_fields is None else None,
         path_params=path_params,
     )
 
     reservation_cost: Final = apply_customer_cost_margin_to_estimate(
         estimate_request_max_cost(
-            request_body=request_body,
+            request_body=sent_body,
             route=route,
             llm_router=llm_router,
             input_token_counts=input_token_counts,
@@ -345,7 +349,7 @@ async def reserve_budget_for_request(
         input_token_counts=input_token_counts,
         input_cost=apply_customer_cost_margin_to_estimate(
             estimate_request_input_cost(
-                request_body=request_body,
+                request_body=sent_body,
                 route=route,
                 llm_router=llm_router,
                 input_token_counts=input_token_counts,
@@ -355,6 +359,15 @@ async def reserve_budget_for_request(
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )
+
+
+def _sent_generate_content_body(request_body: Mapping[str, object], route: str) -> Mapping[str, object] | None:
+    """The generateContent body as the provider receives it when `extra_body` replaces the top-level fields it
+    names, else None."""
+    extra_body: Final = as_str_mapping(request_body.get("extra_body"))
+    if extra_body is None or not route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
+        return None
+    return {**{key: value for key, value in request_body.items() if key != "extra_body"}, **extra_body}
 
 
 async def _forwards_subscription_oauth(
@@ -1312,16 +1325,10 @@ def _input_cost_for_cost_info(
     )
     if estimated_input_tokens is None:
         return None
-    holds_audio: Final = gemini_body_has_inline_audio(REQUEST_BODY_FIELDS.validate_python(request_body))
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
-        if tier is not None:
-            return estimated_input_tokens * _tier_input_rate(tier, holds_audio=holds_audio)
-    input_cost_per_token: Final = _input_rate(model_info, holds_audio=holds_audio)
-    if input_cost_per_token is None:
-        return None
-    return estimated_input_tokens * input_cost_per_token
+    body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
+    cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
+    rates: Final = _hold_rates(body, model_info, prompt_tokens=estimated_input_tokens + cached_tokens)
+    return _prompt_cost(rates, input_tokens=estimated_input_tokens, cached_tokens=cached_tokens)
 
 
 def _estimate_request_max_cost_for_model(
@@ -1392,46 +1399,64 @@ def _max_cost_for_cost_info(
         return None
 
     body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
-    holds_audio: Final = gemini_body_has_inline_audio(body)
     cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
+    rates: Final = _hold_rates(body, model_info, prompt_tokens=estimated_input_tokens + cached_tokens)
+    prompt_cost: Final = _prompt_cost(rates, input_tokens=estimated_input_tokens, cached_tokens=cached_tokens)
+    if prompt_cost is None or (rates.output is None and output_tokens > 0):
+        return None
+    return prompt_cost + output_tokens * output_multiplier * (rates.output or 0.0)
+
+
+@dataclass(frozen=True, slots=True)
+class _HoldRates:
+    input: float | None
+    cached: float | None
+    output: float | None
+
+
+def _hold_rates(body: Mapping[str, object], model_info: Mapping[str, object], *, prompt_tokens: int) -> _HoldRates:
+    """Per-token rates for a prompt of `prompt_tokens`, cached tokens included, since its size picks the tier or the
+    `_above_<n>_tokens` prices. Output is held at the higher of the standard and reasoning rates because the
+    reasoning share is unknown before the request runs."""
+    holds_audio: Final = gemini_body_has_inline_audio(body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(
-            tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens + cached_tokens
+    tier: Final = (
+        select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=prompt_tokens)
+        if isinstance(tiered_pricing, list) and tiered_pricing
+        else None
+    )
+    if tier is not None:
+        return _HoldRates(
+            input=_tier_input_rate(tier, holds_audio=holds_audio),
+            cached=tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
+            output=max(tier_rate(tier, "output_cost_per_token"), tier_rate(tier, "output_cost_per_reasoning_token")),
         )
-        if tier is not None:
-            output_rate = max(
-                tier_rate(tier, "output_cost_per_token"),
-                tier_rate(tier, "output_cost_per_reasoning_token"),
-            )
-            return (
-                estimated_input_tokens * _tier_input_rate(tier, holds_audio=holds_audio)
-                + cached_tokens * tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
-                + output_tokens * output_multiplier * output_rate
-            )
+    prompt_rate: Final = partial(_prompt_size_rate, model_info, prompt_tokens if "contents" in body else None)
+    output_rates: Final = tuple(
+        rate
+        for rate in (
+            prompt_rate(_to_float(model_info.get("output_cost_per_token")), ("output_cost_per_token",)),
+            prompt_rate(
+                _to_float(model_info.get("output_cost_per_reasoning_token")), ("output_cost_per_reasoning_token",)
+            ),
+        )
+        if rate is not None
+    )
+    return _HoldRates(
+        input=prompt_rate(
+            _input_rate(model_info, holds_audio=holds_audio),
+            ("input_cost_per_token", "input_cost_per_audio_token") if holds_audio else ("input_cost_per_token",),
+        ),
+        cached=prompt_rate(_cache_read_rate(model_info), _CACHE_READ_COST_KEYS),
+        output=max(output_rates, default=None),
+    )
 
-    input_cost_per_token: Final = _input_rate(model_info, holds_audio=holds_audio)
-    cached_cost_per_token: Final = _highest_deployment_rate(model_info, "cache_read_input_token_cost")
-    output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
-    output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
-    if cached_tokens > 0 and cached_cost_per_token is None:
-        return None
-    cost = cached_tokens * (cached_cost_per_token or 0.0)
-    if input_cost_per_token is not None:
-        cost += estimated_input_tokens * input_cost_per_token
-    elif estimated_input_tokens > 0:
-        return None
 
-    # The reasoning-token share is unknown before the request runs, so reserve every
-    # output token at the higher of the standard and reasoning rates to avoid
-    # under-reserving reasoning-heavy requests.
-    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
-    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
-        cost += output_tokens * output_multiplier * output_rate
-    elif output_tokens > 0:
+def _prompt_cost(rates: _HoldRates, *, input_tokens: int, cached_tokens: int) -> float | None:
+    priced: Final = ((input_tokens, rates.input), (cached_tokens, rates.cached))
+    if any(rate is None and tokens > 0 for tokens, rate in priced):
         return None
-
-    return cost
+    return sum(tokens * (rate or 0.0) for tokens, rate in priced)
 
 
 def _estimate_image_generation_cost(
@@ -1716,6 +1741,32 @@ def _input_rate(model_info: Mapping[str, object], *, holds_audio: bool) -> float
     text_rate: Final = _to_float(model_info.get("input_cost_per_token"))
     audio_rate: Final = _highest_deployment_rate(model_info, "input_cost_per_audio_token") if holds_audio else None
     return text_rate if text_rate is None or audio_rate is None else max(text_rate, audio_rate)
+
+
+_CACHE_READ_COST_KEYS: Final = ("cache_read_input_token_cost", "cache_read_input_audio_token_cost")
+
+
+def _cache_read_rate(model_info: Mapping[str, object]) -> float | None:
+    text_rate: Final = _highest_deployment_rate(model_info, "cache_read_input_token_cost")
+    audio_rate: Final = _to_float(model_info.get("cache_read_input_audio_token_cost"))
+    return text_rate if text_rate is None or audio_rate is None else max(text_rate, audio_rate)
+
+
+def _prompt_size_rate(
+    model_info: Mapping[str, object], prompt_tokens: int | None, rate: float | None, cost_keys: Sequence[str]
+) -> float | None:
+    """`rate`, raised to the highest of `cost_keys`' `_above_<n>_tokens` prices a prompt of `prompt_tokens` bills at."""
+    if rate is None or prompt_tokens is None:
+        return rate
+    above_keys: Final = (
+        get_modality_token_cost_key(model_info, key, prompt_tokens, threshold_is_inclusive=True) for key in cost_keys
+    )
+    above_rates: Final = tuple(
+        above_rate
+        for key in above_keys
+        if key not in cost_keys and (above_rate := _to_float(model_info.get(key))) is not None
+    )
+    return max((rate, *above_rates))
 
 
 def _tier_input_rate(tier: Mapping[str, object], *, holds_audio: bool) -> float:
