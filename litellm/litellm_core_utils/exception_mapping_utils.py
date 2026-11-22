@@ -2788,16 +2788,13 @@ def exception_type(
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
     extra_information: Final = request_debug_info.with_prompt
     try:
-        error_str = (
-            redact_secret_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
+        raw_error_str: Final = (
+            str(mappable_exception.message)
+            if (model or custom_llm_provider) and hasattr(original_exception, "message")
+            else str(original_exception)
         )
+        error_str = redact_secret_string(raw_error_str) if _ENABLE_SECRET_REDACTION else raw_error_str
         if model or custom_llm_provider:
-            if hasattr(original_exception, "message"):
-                error_str = (
-                    redact_secret_string(str(mappable_exception.message))
-                    if _ENABLE_SECRET_REDACTION
-                    else str(mappable_exception.message)
-                )
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
