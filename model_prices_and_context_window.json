@@ -95,6 +95,9 @@
             "realtime_ga_only": 1
         },
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/a-new-chapter-for-realtime-ai-reasoning-translation-and-real-time-transcription/4517124",
+        "supported_endpoints": [
+            "/v1/realtime/translations"
+        ],
         "supported_modalities": [
             "audio"
         ],
@@ -116,6 +119,9 @@
             "realtime_ga_only": 1
         },
         "source": "https://ai.azure.com/catalog/models/gpt-realtime-translate",
+        "supported_endpoints": [
+            "/v1/realtime/translations"
+        ],
         "supported_modalities": [
             "audio"
         ],
@@ -14362,6 +14368,7 @@
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "azure_ai",
+        "token_count_tool_framing": 27,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "mode": "chat",
@@ -14448,6 +14455,10 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
+        "token_count_framing": 161,
+        "token_count_tool_framing": 314,
+        "token_count_responses_framing": 167,
+        "token_count_responses_tool_framing": 183,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "mode": "chat",
@@ -41320,6 +41331,48 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 100000
     },
+    "gradium/default": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-202602": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-beta": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": {
         "input_cost_per_token": 0,
         "litellm_provider": "lemonade",
@@ -57569,6 +57622,8 @@
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "vertex_ai",
+        "token_count_framing": 328,
+        "token_count_tool_framing": 372,
         "max_input_tokens": 200000,
         "max_output_tokens": 200000,
         "mode": "chat",
@@ -58516,6 +58571,8 @@
         "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "xai",
+        "token_count_framing": 185,
+        "token_count_tool_framing": 214,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
@@ -65403,6 +65460,8 @@
         "input_cost_per_token_flex": 6.25e-07,
         "input_cost_per_token_priority": 2.1875e-06,
         "litellm_provider": "bedrock_mantle",
+        "token_count_framing": 23,
+        "token_count_tool_framing": 216,
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "mode": "chat",
@@ -68006,6 +68065,9 @@
         "litellm_provider": "openai",
         "mode": "realtime",
         "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/live/sessions"
+        ],
         "supported_modalities": [
             "text",
             "audio"
@@ -68025,6 +68087,9 @@
         "max_output_tokens": 2000,
         "mode": "realtime",
         "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/realtime/translations"
+        ],
         "supported_modalities": [
             "audio"
         ],
@@ -73979,6 +74044,8 @@
     "bedrock_mantle/us-gov-west-1/xai.grok-4.3": {
         "use_openai_responses_path": true,
         "litellm_provider": "bedrock_mantle",
+        "token_count_framing": 23,
+        "token_count_tool_framing": 216,
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "mode": "chat",
@@ -75899,6 +75966,8 @@
     },
     "perplexity/xai/grok-4.3": {
         "litellm_provider": "perplexity",
+        "token_count_framing": 204,
+        "token_count_tool_framing": 340,
         "mode": "responses",
         "supports_web_search": true,
         "supports_function_calling": true,
@@ -77620,6 +77689,9 @@
         "litellm_provider": "azure",
         "mode": "realtime",
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supported_endpoints": [
+            "/v1/live/sessions"
+        ],
         "supported_modalities": [
             "text",
             "audio"
@@ -77694,6 +77766,9 @@
         "max_output_tokens": 4096,
         "mode": "realtime",
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supported_endpoints": [
+            "/v1/realtime/translations"
+        ],
         "supported_modalities": [
             "audio"
         ],
@@ -86781,6 +86856,8 @@
         "input_cost_per_token_above_200k_tokens": 3.375e-06,
         "output_cost_per_token_above_200k_tokens": 6.75e-06,
         "litellm_provider": "kyma",
+        "token_count_framing": 185,
+        "token_count_tool_framing": 214,
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
@@ -124407,6 +124484,9 @@
         "litellm_provider": "openai",
         "mode": "realtime",
         "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/live/sessions"
+        ],
         "supported_modalities": [
             "text",
             "audio"

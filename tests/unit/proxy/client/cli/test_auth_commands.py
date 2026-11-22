@@ -40,7 +40,11 @@ from litellm.proxy.client.cli.commands.auth import (
     print_token,
     whoami,
 )
-from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner, installed_executable, lite_api_key_helper
+from litellm.proxy.client.cli.commands.claude_settings import (
+    SettingsFileOwner,
+    installed_executable,
+    lite_api_key_helper,
+)
 
 
 @pytest.fixture
@@ -1027,6 +1031,20 @@ class TestPrintTokenCommand:
         assert result.exit_code == 0
         assert result.output.strip() == "sk-prod-fresh"
         mock_post.assert_not_called()
+
+    def test_otel_headers_prints_the_same_key_as_the_headers_claude_code_sends_telemetry_with(self):
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url="https://litellm-proxy.corp.com",
+                key="sk-prod-fresh",
+                timestamp=time.time(),
+            ),
+        ):
+            result = self.runner.invoke(print_token, ["--otel-headers"], obj={})
+
+        assert result.exit_code == 0
+        assert json.loads(result.output) == {"Authorization": "Bearer sk-prod-fresh"}
 
     def test_explicit_base_url_mismatch_fails_cleanly(self):
         """When the caller *does* explicitly pass --base-url, a token issued
@@ -2043,9 +2061,7 @@ class TestPkceLogoutCommand:
         assert "Logged out successfully" not in result.output
         clear.assert_not_called()
 
-    def test_a_logout_that_reaches_the_keychain_late_still_revokes_the_login(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_logout_that_reaches_the_keychain_late_still_revokes_the_login(self, isolated_home, secret_vault_factory):
         unlocked = secret_vault_factory()
         save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
         locked = secret_vault_factory(blob=unlocked.blob, available=False)
@@ -2100,9 +2116,7 @@ class TestPkceLogoutCommand:
             patch("litellm.proxy.client.cli.interface.show_commands"),
         ):
             self.runner.invoke(logout, obj={"secret_vault": locked})
-            result = self.runner.invoke(
-                login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": unlocked}
-            )
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": unlocked})
 
         assert result.exit_code == 0, result.output
         assert "Could not revoke" not in result.output
@@ -2301,7 +2315,10 @@ class TestPkceLogoutCommand:
         assert printed.stdout == "sk-cli-rotated\n"
         assert ("Could not revoke" in printed.stderr) is (revocation_status != 200)
         assert [
-            post["token"] for session in _FakeSession.instances for url, post in session.posts if url.endswith("/revoke")
+            post["token"]
+            for session in _FakeSession.instances
+            for url, post in session.posts
+            if url.endswith("/revoke")
         ] == ["llm_srefresh_old", "llm_srefresh_rotated"]
 
     def test_a_logout_after_the_keychain_refused_the_erase_does_not_revoke_the_login_again(
@@ -2631,7 +2648,10 @@ def test_print_token_without_a_context_object_reports_no_login_when_nothing_is_s
 @pytest.mark.parametrize(
     ("obj", "expected_command"),
     [
-        ({"base_url": "https://proxy.example.com/", "base_url_explicit": True}, "lite --base-url https://proxy.example.com login --pkce"),
+        (
+            {"base_url": "https://proxy.example.com/", "base_url_explicit": True},
+            "lite --base-url https://proxy.example.com login --pkce",
+        ),
         ({"base_url": "https://proxy.example.com", "base_url_explicit": False}, "lite login --pkce"),
     ],
     ids=["helper-names-its-proxy", "default-proxy"],

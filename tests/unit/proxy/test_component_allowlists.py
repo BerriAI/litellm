@@ -31,7 +31,7 @@ from functools import partial
 from typing import Final, Literal, NoReturn
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -67,7 +67,7 @@ from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
 from litellm.integrations.lens.proxy import tracing_endpoints
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
-from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
@@ -197,29 +197,47 @@ def test_composed_lifespan_propagates_lifecycle_failures(
 
 
 @pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
-@pytest.mark.parametrize("authorization", (None, "Bearer team-a-key", "Bearer team-b-key"))
-def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_component(
-    component_lifespan: Lifespan[Starlette], authorization: str | None
+@pytest.mark.parametrize("path", ("/v1/traces", "/v1/logs"))
+def test_otlp_upload_routes_authenticate_and_answer_on_each_component(
+    component_lifespan: Lifespan[Starlette], path: str
+) -> None:
+    application: Final = FastAPI()
+    application.include_router(tracing_endpoints.router)
+    application.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: None
+    application.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-team-a", team_id="team-a")
+    application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+
+    with TestClient(application) as client:
+        response: Final = client.post(
+            path, content=b'{"resourceLogs": []}', headers={"content-type": "application/json"}
+        )
+
+    assert response.status_code == 501, response.text
+    assert response.json() == {"message": "Agent tracing is not enabled on this gateway."}
+
+
+@pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
+@pytest.mark.parametrize("path", ("/v1/traces", "/v1/logs"))
+def test_otlp_upload_routes_refuse_a_rejected_key_on_each_component(
+    component_lifespan: Lifespan[Starlette], path: str
 ) -> None:
     application: Final = FastAPI()
     application.include_router(tracing_endpoints.router)
 
-    def unused_dependency() -> NoReturn:
-        pytest.fail("Retired uploads must not resolve authentication, tenant, or storage dependencies")
+    def reject_key() -> NoReturn:
+        raise HTTPException(status_code=401, detail="Invalid key")
 
-    application.dependency_overrides[tracing_endpoints.provide_receiver] = unused_dependency
-    application.dependency_overrides[get_log_team_lookup] = unused_dependency
-    application.dependency_overrides[user_api_key_auth] = unused_dependency
+    application.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: None
+    application.dependency_overrides[user_api_key_auth] = reject_key
     application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
-    headers: Final = {"content-type": "application/json"} | (
-        {"Authorization": authorization} if authorization is not None else {}
-    )
 
     with TestClient(application) as client:
-        response: Final = client.post("/v1/logs", content=b'{"resourceLogs": []}', headers=headers)
+        response: Final = client.post(
+            path, content=b'{"resourceLogs": []}', headers={"content-type": "application/json"}
+        )
 
-    assert response.status_code == 410, response.text
-    assert response.json() == {"message": "Send logs directly to the Lens endpoint shown in Lens setup."}
+    assert response.status_code == 401, response.text
+    assert response.json() == {"detail": "Invalid key"}
 
 
 def test_backend_mount_paths_defined():
