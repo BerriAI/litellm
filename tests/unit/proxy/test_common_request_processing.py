@@ -12361,3 +12361,43 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+@pytest.mark.parametrize(
+    ("caching_details", "served_from_cache"),
+    [
+        ({"cache_hit": True, "cache_duration_ms": 1.0}, True),
+        ({"cache_hit": False, "cache_duration_ms": None}, False),
+        (None, False),
+    ],
+)
+def test_a_cache_hit_sends_no_cost_headers_where_a_fresh_call_sends_its_price(caching_details, served_from_cache):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.common_request_processing import cost_headers
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = Logging(
+        model="dashscope/qwen-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="cache-hit-cost-header",
+        function_id="cache-hit-cost-header",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.caching_details = caching_details
+    response = ModelResponse(
+        model="qwen-turbo",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+        usage=Usage(prompt_tokens=1200, completion_tokens=400, total_tokens=1600),
+    )
+
+    cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(response=response, logging_obj=logging_obj)
+    headers = cost_headers(cost, logging_obj)
+
+    if served_from_cache:
+        assert not any(headers.values())
+    else:
+        assert float(headers["x-litellm-response-cost"]) > 0
+        assert headers["x-litellm-response-cost-input"] is not None
