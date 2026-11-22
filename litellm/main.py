@@ -5349,6 +5349,33 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
     )
 
 
+def _responses_bridge_fakes_stream(model: str, custom_llm_provider: str, optional_params: Mapping[str, object]) -> bool:
+    if optional_params.get("fake_stream") is True:
+        return True
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=custom_llm_provider, model=model
+    )
+    return responses_config is not None and responses_config.should_fake_stream(
+        model=model, stream=True, custom_llm_provider=custom_llm_provider
+    )
+
+
+def _bridge_params_without_unretrievable_background_run(
+    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    *,
+    streams_upstream: bool | None,
+    routing_kwargs: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    if streams_upstream is True and not _responses_bridge_fakes_stream(model, custom_llm_provider, optional_params):
+        return optional_params
+    from litellm.completion_extras.litellm_responses_transformation.transformation import without_background_run
+    from litellm.litellm_core_utils.tool_fields import drop_policy
+
+    return without_background_run(optional_params, drop_policy(routing_kwargs), model, custom_llm_provider)
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -6079,10 +6106,6 @@ def completion(
         )
         if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
-            from litellm.completion_extras.litellm_responses_transformation.transformation import (
-                without_background_run,
-            )
-            from litellm.litellm_core_utils.tool_fields import drop_policy
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
@@ -6109,13 +6132,12 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=optional_params
-                if stream
-                else without_background_run(
-                    cast("Mapping[str, object]", optional_params),  # cast-ok: completion's untyped optional_params
-                    drop_policy(cast("Mapping[str, object]", kwargs)),  # cast-ok: kwargs is the untyped request dict
-                    model,
-                    custom_llm_provider,
+                optional_params=_bridge_params_without_unretrievable_background_run(
+                    cast("dict[str, object]", optional_params),  # cast-ok: completion's untyped optional_params
+                    streams_upstream=dispatch_stream,
+                    routing_kwargs=cast("Mapping[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
                 ),
                 litellm_params=litellm_params,
                 timeout=timeout,
