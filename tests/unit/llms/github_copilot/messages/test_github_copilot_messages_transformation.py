@@ -96,7 +96,7 @@ def test_other_document_sources_keep_the_existing_wire_format(source: dict[str, 
     assert result["messages"] == messages
 
 
-@pytest.mark.parametrize("text", ["<html>Keep <script> and whitespace.\n</html>", "", "  \n  "])
+@pytest.mark.parametrize("text", ["<html>Keep <script> and whitespace.\n</html>", "  \n  "])
 def test_plain_document_text_is_not_parsed_or_base64_encoded(text: str) -> None:
     messages: Final = [{"role": "user", "content": [{"type": "document", "source": {"type": "text", "data": text}}]}]
     result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
@@ -107,6 +107,31 @@ def test_plain_document_text_is_not_parsed_or_base64_encoded(text: str) -> None:
         headers={},
     )
     assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": text}]}]
+
+
+@pytest.mark.parametrize(
+    ("document_fields", "expected"),
+    [
+        ({}, [{"type": "text", "text": "What is in this file?"}]),
+        (
+            {"title": "empty.txt"},
+            [{"type": "text", "text": "Title: empty.txt"}, {"type": "text", "text": "What is in this file?"}],
+        ),
+    ],
+)
+def test_empty_text_document_never_becomes_an_empty_text_block(
+    document_fields: dict[str, object], expected: list[dict[str, object]]
+) -> None:
+    document: Final = {"type": "document", "source": {"type": "text", "data": ""}, **document_fields}
+    messages: Final = [{"role": "user", "content": [document, {"type": "text", "text": "What is in this file?"}]}]
+    result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["messages"] == [{"role": "user", "content": expected}]
 
 
 def test_anthropic_keeps_text_documents_and_their_citations() -> None:
@@ -187,6 +212,38 @@ def test_text_document_fallback_does_not_silently_break_document_citations(cited
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
+
+
+def test_drop_params_drops_document_citations_instead_of_rejecting_the_request() -> None:
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "document", "source": {"type": "text", "data": "Source"}, "citations": {"enabled": True}},
+                {
+                    "type": "document",
+                    "source": {"type": "url", "url": "https://example.com/report.pdf"},
+                    "citations": {"enabled": True},
+                },
+            ],
+        }
+    ]
+    result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+    assert result["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Source"},
+                {"type": "document", "source": {"type": "url", "url": "https://example.com/report.pdf"}},
+            ],
+        }
+    ]
 
 
 def test_github_copilot_anthropic_messages_get_complete_url():
