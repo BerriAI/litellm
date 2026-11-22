@@ -10225,6 +10225,94 @@ async def test_a_caller_oauth_token_keeps_its_own_id_only_when_anthropic_receive
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["messages", "chat", "responses"])
+@pytest.mark.parametrize(
+    "request_headers,body_headers,sent_authorization",
+    [
+        (
+            {},
+            {"authorization": "Bearer sk-ant-api03-caller", "Authorization": "Bearer sk-ant-oat01-caller"},
+            ["Bearer sk-ant-api03-caller", "Bearer sk-ant-oat01-deployment"],
+        ),
+        (
+            {"authorization": "Bearer sk-ant-oat01-caller"},
+            {"authorization": "Bearer sk-ant-api03-caller"},
+            ["Bearer sk-ant-oat01-caller"],
+        ),
+        ({}, {"authorization": "Bearer sk-ant-oat01-caller"}, ["Bearer sk-ant-oat01-caller"]),
+    ],
+    ids=[
+        "configured_token_sent_behind_a_caller_value",
+        "request_header_token_replaces_a_body_value_ahead_of_the_configured_token",
+        "body_headers_token_ahead_of_the_configured_token",
+    ],
+)
+async def test_the_pin_follows_every_authorization_value_litellm_sends(
+    recording_anthropic: tuple[str, list[Message]],
+    route: str,
+    request_headers: dict[str, str],
+    body_headers: dict[str, str],
+    sent_authorization: list[str],
+) -> None:
+    from litellm import Router
+
+    api_base, received = recording_anthropic
+    updated: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        await _request_data_added_by_the_proxy(
+            {"headers": body_headers},
+            {"x-litellm-api-key": "Bearer sk-virtual-key", **request_headers},
+            {},
+            _PINNED_KEY,
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_base": api_base,
+                    "api_key": "sk-ant-api03-deployment",
+                    "extra_headers": {"Authorization": "Bearer sk-ant-oat01-deployment"},
+                },
+            }
+        ]
+    )
+    headers: Final = updated["headers"]
+    provider_specific_header: Final = updated["provider_specific_header"]
+    if route == "chat":
+        await router.acompletion(
+            model="claude",
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=8,
+            headers=headers,
+            provider_specific_header=provider_specific_header,
+        )
+    elif route == "messages":
+        await router.aanthropic_messages(
+            model="claude",
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=8,
+            headers=headers,
+            provider_specific_header=provider_specific_header,
+        )
+    else:
+        await router.aresponses(
+            model="claude",
+            input="Say OK",
+            max_output_tokens=8,
+            headers=headers,
+            provider_specific_header=provider_specific_header,
+        )
+
+    assert len(received) == 1
+    assert ", ".join(received[0].get_all("authorization") or ()) == ", ".join(sent_authorization)
+    assert received[0].get_all("anthropic-user-profile-id") == (
+        ["uprof_key"] if "Bearer sk-ant-oat01-deployment" in sent_authorization else None
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "deployment_headers,sent_profile",
     [

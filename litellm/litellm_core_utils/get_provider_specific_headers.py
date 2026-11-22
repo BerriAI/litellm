@@ -73,21 +73,33 @@ def _applies_to_call(
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
 
 
-def _first_text_value_by_name(headers: Mapping[str, object]) -> Mapping[str, str]:
+def _text_values_named(headers: Mapping[str, object], lowered: str) -> tuple[str, ...]:
+    return tuple(value if isinstance(value, str) else "" for name, value in headers.items() if name.lower() == lowered)
+
+
+def _text_values_by_name(headers: Mapping[str, object]) -> Mapping[str, tuple[str, ...]]:
     return MappingProxyType(
-        dict(
-            reversed(tuple((name.lower(), value if isinstance(value, str) else "") for name, value in headers.items()))
-        )
+        {lowered: _text_values_named(headers, lowered) for lowered in frozenset(name.lower() for name in headers)}
     )
 
 
-def _sends(first_values: Mapping[str, str], name: str, prefix: str, caller_credentials: frozenset[str]) -> bool:
-    value: Final = first_values.get(name)
-    return value is not None and value.startswith(prefix) and value not in caller_credentials
+def _sent_values(values: tuple[str, ...], prefix: str) -> tuple[str, ...]:
+    return values[:1] if values and values[0].startswith(prefix) else values
+
+
+def _sends(
+    values_by_name: Mapping[str, tuple[str, ...]], name: str, prefix: str, not_configured: frozenset[str]
+) -> bool:
+    return any(
+        value.startswith(prefix) and value not in not_configured
+        for value in _sent_values(values_by_name.get(name, ()), prefix)
+    )
 
 
 def _configures_a_listed_credential(
-    scoped_header: ProviderSpecificHeader, configured_values: Mapping[str, str]
+    scoped_header: ProviderSpecificHeader,
+    sent_values: Mapping[str, tuple[str, ...]],
+    contributed_values: frozenset[str],
 ) -> bool:
     credential_headers: Final = frozenset(
         name.lower() for name in scoped_header.get("configured_credential_headers", ())
@@ -95,8 +107,8 @@ def _configures_a_listed_credential(
     if not credential_headers:
         return True
     prefix: Final = scoped_header.get("configured_credential_prefix", "")
-    caller_credentials: Final = frozenset(scoped_header.get("caller_credentials", ()))
-    configured: Final = any(_sends(configured_values, name, prefix, caller_credentials) for name in credential_headers)
+    not_configured: Final = frozenset(scoped_header.get("caller_credentials", ())) | contributed_values
+    configured: Final = any(_sends(sent_values, name, prefix, not_configured) for name in credential_headers)
     return configured != scoped_header.get("without_configured_credential", False)
 
 
@@ -150,11 +162,12 @@ class ProviderSpecificHeaderUtils:
         deployment's `base_model` takes the Anthropic user profile id, entries marked
         `non_user_profile_id_models_only` only when neither does, and entries marked `yields_to_configured` never
         replace a header already in `configured_headers`, and
-        entries listing `configured_credential_headers` contribute only when the first of `configured_headers` under one
-        of those names, in any letter case, is the one sent: under a name no other applicable entry replaces, starting
-        with `configured_credential_prefix` when the entry sets one, and not one of the entry's `caller_credentials`,
-        and those also marked
-        `without_configured_credential` only when it does not.
+        entries listing `configured_credential_headers` contribute only when a value under one of those names, in any
+        letter case, is sent that starts with `configured_credential_prefix`, is not one of the entry's
+        `caller_credentials`, and is not a value another applicable entry contributes. The values sent are
+        `configured_headers` after the other applicable entries replace the ones of the same name, and only the first
+        is sent when it starts with that prefix, since the OAuth handling then drops the rest. Entries also marked `without_configured_credential` contribute only when no such value is
+        sent.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider
@@ -176,20 +189,21 @@ class ProviderSpecificHeaderUtils:
             for scoped_header in scoped_headers
             if _applies_to_call(scoped_header, custom_llm_provider, native_anthropic_messages, takes_user_profile_id)
         )
-        replaced_names: Final = frozenset(
-            chain.from_iterable(
-                _contributed_headers(scoped_header, configured_names)
-                for scoped_header in applicable
-                if not scoped_header.get("configured_credential_headers")
+        replacing: Final = MappingProxyType(
+            dict(
+                chain.from_iterable(
+                    _contributed_headers(scoped_header, configured_names).items()
+                    for scoped_header in applicable
+                    if not scoped_header.get("configured_credential_headers")
+                )
             )
         )
-        kept_configured: Final = _first_text_value_by_name(
-            {name: value for name, value in configured.items() if name not in replaced_names}
-        )
+        sent_values: Final = _text_values_by_name({**configured, **replacing})
+        contributed_values: Final = frozenset(replacing.values())
         return dict(
             chain.from_iterable(
                 _contributed_headers(scoped_header, configured_names).items()
                 for scoped_header in applicable
-                if _configures_a_listed_credential(scoped_header, kept_configured)
+                if _configures_a_listed_credential(scoped_header, sent_values, contributed_values)
             )
         )

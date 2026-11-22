@@ -1754,6 +1754,7 @@ def responses(
             custom_llm_provider=custom_llm_provider,
             model=model,
             base_model=deployment_base_model(request_kwargs, request_kwargs.get("model_info")),
+            client_headers=_STR_MAPPING.validate_python(client_headers) if isinstance(client_headers, dict) else None,
         )
         local_vars["extra_headers"] = provider_headers
 
