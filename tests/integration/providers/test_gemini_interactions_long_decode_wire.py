@@ -1,5 +1,7 @@
 import json
+from collections.abc import Callable
 from typing import Final
+from uuid import uuid4
 
 import pytest
 from integration._support.client import (  # pyright: ignore[reportUnknownVariableType]  # integration fixture module
@@ -40,14 +42,24 @@ def _single_row(rows: list[dict[str, JsonValue]]) -> bool:  # mutable-ok: predic
     return len(rows) == 1
 
 
-def _scripted(request: Request) -> Reply:
-    assert request.target == "/v1beta/interactions"
-    hop: Final = _SECOND_HOP if "continuation_token" in json.loads(request.body) else _FIRST_HOP
-    return Reply(body=json.dumps(hop).encode())
+def _fresh_answer_id() -> str:
+    return f"v1_long_decode_{uuid4().hex}"
+
+
+def _scripted(answer_id: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        assert request.target == "/v1beta/interactions"
+        hop: Final = (
+            _SECOND_HOP if "continuation_token" in json.loads(request.body) else {**_FIRST_HOP, "id": answer_id}
+        )
+        return Reply(body=json.dumps(hop).encode())
+
+    return respond
 
 
 def test_gemini_4_chat_answer_google_ends_early_is_continued_into_one_answer_billed_once(gateway: Gateway) -> None:
-    with wire_server(_scripted) as wire, gateway.scenario() as scenario:
+    answer_id: Final = _fresh_answer_id()
+    with wire_server(_scripted(answer_id)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model=_MODEL,
             api_base=wire.url,
@@ -69,12 +81,12 @@ def test_gemini_4_chat_answer_google_ends_early_is_continued_into_one_answer_bil
         choice: Final = payload["choices"][0]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         assert choice["message"]["content"] == "The first half, then the second half."  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         assert choice["finish_reason"] == "stop"  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
-        assert payload["id"] == "v1_long_decode_first_hop"
+        assert payload["id"] == answer_id
         assert payload["usage"]["completion_tokens"] == 150  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         billed: Final = float(response.headers["x-litellm-response-cost"])
         assert billed == pytest.approx(20 * _INPUT_COST + 150 * _OUTPUT_COST)  # pyright: ignore[reportUnknownMemberType]  # pytest.approx untyped overload
         rows: Final[list[dict[str, JsonValue]]] = eventually(  # mutable-ok: read_rows return contract
-            lambda: _spend_of("v1_long_decode_first_hop"), _single_row, seconds=70
+            lambda: _spend_of(answer_id), _single_row, seconds=70
         )
         spend: Final = rows[0]["spend"]
         assert isinstance(spend, (int, float, str))
@@ -82,7 +94,8 @@ def test_gemini_4_chat_answer_google_ends_early_is_continued_into_one_answer_bil
 
 
 def test_gemini_4_chat_answer_with_no_output_cap_is_not_continued_and_returns_its_token(gateway: Gateway) -> None:
-    with wire_server(_scripted) as wire, gateway.scenario() as scenario:
+    answer_id: Final = _fresh_answer_id()
+    with wire_server(_scripted(answer_id)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_KEY)
         response: Final = gateway.request(
             "POST",
@@ -113,14 +126,20 @@ def _hop_events(hop: dict[str, JsonValue]) -> tuple[bytes, ...]:  # mutable-ok: 
     return (*(f"data: {json.dumps(event)}\n\n".encode() for event in events), b"data: [DONE]\n\n")
 
 
-def _scripted_stream(request: Request) -> Reply:
-    assert request.target == "/v1beta/interactions?alt=sse"
-    hop: Final = _SECOND_HOP if "continuation_token" in json.loads(request.body) else _FIRST_HOP
-    return Reply(content_type="text/event-stream", chunks=_hop_events(hop))
+def _scripted_stream(answer_id: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        assert request.target == "/v1beta/interactions?alt=sse"
+        hop: Final = (
+            _SECOND_HOP if "continuation_token" in json.loads(request.body) else {**_FIRST_HOP, "id": answer_id}
+        )
+        return Reply(content_type="text/event-stream", chunks=_hop_events(hop))
+
+    return respond
 
 
 def test_gemini_4_chat_stream_google_ends_early_is_continued_under_one_id_with_summed_usage(gateway: Gateway) -> None:
-    with wire_server(_scripted_stream) as wire, gateway.scenario() as scenario:
+    answer_id: Final = _fresh_answer_id()
+    with wire_server(_scripted_stream(answer_id)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_KEY)
         response: Final = gateway.request(
             "POST",
@@ -145,7 +164,7 @@ def test_gemini_4_chat_stream_google_ends_early_is_continued_under_one_id_with_s
             "The first half, then the second half."
         )
         assert tuple(choice["finish_reason"] for choice in choices if choice.get("finish_reason")) == ("stop",)  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
-        assert {chunk["id"] for chunk in chunks} == {"v1_long_decode_first_hop"}
+        assert {chunk["id"] for chunk in chunks} == {answer_id}
         usages: Final = tuple(chunk["usage"] for chunk in chunks if chunk.get("usage"))
         assert usages[-1]["completion_tokens"] == 150  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         assert wire.received.qsize() == 2
