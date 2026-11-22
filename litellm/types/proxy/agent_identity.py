@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 from uuid import UUID
 
 from pydantic import ConfigDict, Field, field_validator
@@ -30,6 +30,10 @@ class EntraIdentityConfig(LiteLLMBaseModel):
     @property
     def issuer(self) -> str:
         return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
+
+
+OKTA_CUSTOM_ISSUER_PATTERN: Final = r"^https://[^/?#]+/oauth2/[^/?#]+$"
+OKTA_ISSUER_PATTERN: Final = r"^https://[^/?#]+(/oauth2/[^/?#]+)?$"
 
 
 class AgentIdentityBinding(LiteLLMBaseModel):

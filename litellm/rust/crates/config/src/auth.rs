@@ -207,6 +207,14 @@ pub struct JwtIssuerConfig {
     pub customer_team_id_jwt_field: Option<ClaimPath>,
     pub virtual_key_claim_field: Option<ClaimPath>,
     pub unregistered_jwt_client_behavior: Option<UnregisteredJwtClientBehavior>,
+    pub agent_identity_provider: Option<AgentIdentityProvider>,
+    pub okta_org: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentIdentityProvider {
+    Okta,
 }
 
 /// `general_settings.litellm_jwtauth`, with `LiteLLM_JWTAuth`'s defaults. `custom_validate` is
