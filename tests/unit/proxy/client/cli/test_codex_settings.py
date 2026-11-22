@@ -143,7 +143,7 @@ def test_undo_keeps_provider_credentials_and_endpoint_together(tmp_path: Path) -
     path.write_text('[model_providers.litellm]\nbase_url = "https://old.example.com/v1"\n'
                     'http_headers = { Authorization = "Bearer old-key" }\n')
     configure_codex_settings(GATEWAY, KEY, MODEL, path)
-    path.write_text(path.read_text().replace(GATEWAY, "https://user.example.com"))
+    path.write_text(path.read_text().replace(GATEWAY + "/v1\"\n", "https://user.example.com/v1\"\n"))
     outcome: Final = unconfigure_codex_settings(path)
     provider: Final = tomlkit.parse(path.read_text())["model_providers"]["litellm"]
     assert outcome.kept == ("model_providers.litellm",)
@@ -339,3 +339,69 @@ def test_undo_does_not_require_codex_to_remain_installed(
     assert outcome.restored and not outcome.kept
     assert tomlkit.parse(path.read_text()) == tomlkit.parse(original)
     assert not codex_configure_state_path(path).exists()
+
+
+def _exporter(signal: str, key: str = KEY) -> dict[str, dict[str, object]]:
+    return {
+        "otlp-http": {
+            "endpoint": f"{GATEWAY}/v1/{signal}",
+            "protocol": "json",
+            "headers": {"Authorization": "Bearer " + key},
+        }
+    }
+
+
+_GATEWAY_OTEL: Final = {"exporter": _exporter("logs"), "trace_exporter": _exporter("traces"), "log_user_prompt": True}
+
+
+@pytest.mark.parametrize("existing,expected", [
+    pytest.param("", _GATEWAY_OTEL, id="nothing_set"),
+    pytest.param(
+        "[otel]\nlog_user_prompt = false\n",
+        {**_GATEWAY_OTEL, "log_user_prompt": False},
+        id="prompt_opt_out_stays",
+    ),
+    pytest.param(
+        '[otel]\nexporter = "none"\n',
+        {"exporter": "none", "log_user_prompt": True},
+        id="own_log_exporter_keeps_both_exporters",
+    ),
+    pytest.param(
+        '[otel]\ntrace_exporter = { otlp-http = { endpoint = "https://mine.example.com/v1/traces", '
+        'protocol = "json" } }\n',
+        {
+            "trace_exporter": {"otlp-http": {"endpoint": "https://mine.example.com/v1/traces", "protocol": "json"}},
+            "log_user_prompt": True,
+        },
+        id="own_trace_exporter_keeps_both_exporters",
+    ),
+])
+def test_configure_sends_codex_telemetry_to_the_gateway_unless_the_user_chose_otherwise(
+    tmp_path: Path, existing: str, expected: dict[str, object]
+) -> None:
+    path: Final = tmp_path / "config.toml"
+    path.write_text(existing)
+    configure_codex_settings(GATEWAY, KEY, MODEL, path)
+    assert tomlkit.parse(path.read_text())["otel"] == expected
+
+
+def test_reconfigure_rotates_the_telemetry_key_and_undo_removes_it(tmp_path: Path) -> None:
+    path: Final = tmp_path / "config.toml"
+    configure_codex_settings(GATEWAY, KEY, MODEL, path)
+    configure_codex_settings(GATEWAY, "sk-rotated", MODEL, path)
+    rotated: Final = tomlkit.parse(path.read_text())["otel"]
+    unconfigure_codex_settings(path)
+    assert rotated == {
+        "exporter": _exporter("logs", "sk-rotated"),
+        "trace_exporter": _exporter("traces", "sk-rotated"),
+        "log_user_prompt": True,
+    }
+    assert not path.exists()
+
+
+def test_undo_restores_the_users_own_otel_settings(tmp_path: Path) -> None:
+    path: Final = tmp_path / "config.toml"
+    path.write_text('[otel]\nenvironment = "dev"\n')
+    configure_codex_settings(GATEWAY, KEY, MODEL, path)
+    unconfigure_codex_settings(path)
+    assert tomlkit.parse(path.read_text()) == {"otel": {"environment": "dev"}}

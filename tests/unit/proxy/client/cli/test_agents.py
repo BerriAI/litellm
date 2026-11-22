@@ -16,6 +16,7 @@ import requests
 from click.testing import CliRunner
 
 from litellm.proxy.client.cli.commands.agents import (
+    OPENCODE_CONFIG_CONTENT_ENV,
     AgentRunError,
     ModelSyncArgs,
     ModelSyncSkipped,
@@ -588,6 +589,42 @@ class TestOpencodeModelSync:
         captured = {}
         env = opencode_model_sync_env(base_env or {}, base_url, "sk-key", get=_routed_get(captured, listing, groups))
         return captured, env
+
+    @pytest.mark.parametrize(
+        "base_env,expected_env,expected_flag",
+        [
+            pytest.param(
+                {},
+                {
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4000",
+                    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer sk-key",
+                    "OTEL_BSP_SCHEDULE_DELAY": "1000",
+                },
+                {"openTelemetry": True},
+                id="nothing_set",
+            ),
+            pytest.param(
+                {"OTEL_BSP_SCHEDULE_DELAY": "250"},
+                {
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4000",
+                    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer sk-key",
+                },
+                {"openTelemetry": True},
+                id="own_flush_interval_stays",
+            ),
+            pytest.param(
+                {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://mine.example.com"}, {}, None, id="own_endpoint_stays"
+            ),
+            pytest.param({"OTEL_SDK_DISABLED": "true"}, {}, None, id="sdk_disabled_stays_off"),
+        ],
+    )
+    def test_sends_telemetry_to_the_gateway_unless_the_user_chose_otherwise(
+        self, base_env, expected_env, expected_flag
+    ):
+        _, env = self._sync(self._listing(), base_env=base_env)
+
+        assert {key: value for key, value in env.items() if key != OPENCODE_CONFIG_CONTENT_ENV} == expected_env
+        assert json.loads(env[OPENCODE_CONFIG_CONTENT_ENV]).get("experimental") == expected_flag
 
     def test_declares_proxy_as_litellm_provider_with_listed_models(self):
         listing = self._listing(

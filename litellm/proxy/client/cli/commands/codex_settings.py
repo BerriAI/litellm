@@ -28,7 +28,10 @@ from litellm.types.llms.base_model import LiteLLMBaseModel
 from .agents import CODEX_PROXY_PROVIDER, codex_proxy_provider
 
 _PROVIDER_PATH: Final = f"model_providers.{CODEX_PROXY_PROVIDER}"
-_OWNED_PATHS: Final = ("model_provider", "model", "profile", _PROVIDER_PATH)
+_EXPORTER_PATHS: Final = ("otel.exporter", "otel.trace_exporter")
+_LOG_USER_PROMPT_PATH: Final = "otel.log_user_prompt"
+_OTEL_PATHS: Final = (*_EXPORTER_PATHS, _LOG_USER_PROMPT_PATH)
+_OWNED_PATHS: Final = ("model_provider", "model", "profile", _PROVIDER_PATH, *_OTEL_PATHS)
 _Table: TypeAlias = TOMLDocument | Table | InlineTable | OutOfOrderTableProxy
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _MIN_CODEX_VERSION: Final = (0, 129, 0)
@@ -185,6 +188,27 @@ def _commit(path: Path, staged: str | None, commit: Callable[[str, str], None]) 
         commit(staged, str(path))
 
 
+def _telemetry(base_url: str, api_key: str) -> Mapping[str, str]:
+    """Codex's own logs and traces, sent to the gateway that takes its model calls and under the same key:
+    Lens shows a session from these. `log_user_prompt` adds the typed prompt, which Codex redacts by default.
+    The exporters are written only when the user has neither of their own, and `log_user_prompt` only when
+    they have not set it, so an exporter or an opt out they chose stays."""
+    root: Final = base_url.rstrip("/")
+    authorization: Final = json.dumps(f"Bearer {api_key}")
+    return MappingProxyType(
+        {
+            **{
+                path: (
+                    f"value = {{ otlp-http = {{ endpoint = {json.dumps(f'{root}/v1/{signal}')}, "
+                    f'protocol = "json", headers = {{ Authorization = {authorization} }} }} }}\n'
+                )
+                for path, signal in zip(_EXPORTER_PATHS, ("logs", "traces"), strict=True)
+            },
+            _LOG_USER_PROMPT_PATH: "value = true\n",
+        }
+    )
+
+
 def configure_codex_settings(
     base_url: str,
     api_key: str,
@@ -204,7 +228,7 @@ def configure_codex_settings(
     selections: Final = tomlkit.parse(
         tomlkit.dumps(MappingProxyType({"model_provider": CODEX_PROXY_PROVIDER, "model": model}))
     )
-    merged: Final = _with(
+    routed: Final = _with(
         _with(
             _with(_with(current, "profile", None), "model", _snapshot(selections, "model")),
             "model_provider",
@@ -212,6 +236,20 @@ def configure_codex_settings(
         ),
         _PROVIDER_PATH,
         provider,
+    )
+
+    def replaceable(path: str) -> bool:
+        return _snapshot(current, path) is None or (earlier is not None and _ours(current, path, earlier))
+
+    merged: Final = reduce(
+        lambda document, item: _with(document, item[0], item[1]),
+        (
+            (path, snapshot)
+            for path, snapshot in _telemetry(base_url, api_key).items()
+            if (path == _LOG_USER_PROMPT_PATH and replaceable(path))
+            or (path != _LOG_USER_PROMPT_PATH and all(replaceable(exporter) for exporter in _EXPORTER_PATHS))
+        ),
+        routed,
     )
     owned: Final = tuple(
         path
@@ -282,10 +320,16 @@ def unconfigure_codex_settings(
     ours: Final = tuple(path for path in receipt.written if settings_path.exists() and _ours(current, path, receipt))
     restored_owned: Final = reduce(lambda document, path: _with(document, path, receipt.previous[path]), ours, current)
     providers: Final = _table(_mapping(restored_owned).get("model_providers"))
-    restored: Final = (
+    without_providers: Final = (
         _with(restored_owned, "model_providers", None)
         if providers is not None and not providers and not receipt.providers_existed
         else restored_owned
+    )
+    otel: Final = _table(_mapping(without_providers).get("otel"))
+    restored: Final = (
+        _with(without_providers, "otel", None)
+        if otel is not None and not otel and any(path in _OTEL_PATHS for path in ours)
+        else without_providers
     )
     target: Final = settings_path.resolve()
     file_removed: Final = not restored.as_string().strip() and not (receipt.file_existed and target.exists())

@@ -69,6 +69,10 @@ ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
+OTEL_EXPORTER_OTLP_ENDPOINT_ENV: Final = "OTEL_EXPORTER_OTLP_ENDPOINT"
+OTEL_EXPORTER_OTLP_HEADERS_ENV: Final = "OTEL_EXPORTER_OTLP_HEADERS"
+OTEL_SDK_DISABLED_ENV: Final = "OTEL_SDK_DISABLED"
+OTEL_BSP_SCHEDULE_DELAY_ENV: Final = "OTEL_BSP_SCHEDULE_DELAY"
 OPENCODE_PROVIDER_ID: Final = "litellm"
 OPENCODE_PROVIDER_NAME: Final = "LiteLLM"
 OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
@@ -797,8 +801,13 @@ class _OpenCodeProvider(LiteLLMBaseModel):
     models: Mapping[str, _OpenCodeModel]
 
 
+class _OpenCodeExperimental(LiteLLMBaseModel):
+    openTelemetry: bool
+
+
 class _OpenCodeConfig(LiteLLMBaseModel):
     provider: Mapping[str, _OpenCodeProvider]
+    experimental: _OpenCodeExperimental | None = None
 
 
 _NO_GROUPS: Final[Mapping[str, ModelLimits]] = MappingProxyType({})
@@ -836,7 +845,11 @@ def _opencode_model_entry(model: ListedModel, groups: Mapping[str, ModelLimits])
 
 
 def opencode_provider_config(
-    base_url: str, models: Sequence[ListedModel], groups: Mapping[str, ModelLimits] = _NO_GROUPS
+    base_url: str,
+    models: Sequence[ListedModel],
+    groups: Mapping[str, ModelLimits] = _NO_GROUPS,
+    *,
+    telemetry: bool = False,
 ) -> str:
     """OPENCODE_CONFIG_CONTENT declaring the proxy as OpenCode provider `litellm`.
 
@@ -846,6 +859,7 @@ def opencode_provider_config(
     it never lands in the config text. OpenCode merges this inline config over
     the user's own files, leaving unrelated keys and providers untouched.
     `groups` is /model_group/info by model group, where the reasoning efforts come from.
+    `telemetry` turns on OpenCode's AI SDK spans, which carry each model call's messages, reply and tool calls.
     """
     chat_models: Final = _chat_models(models)
     provider: Final = _OpenCodeProvider(
@@ -857,7 +871,10 @@ def opencode_provider_config(
         ),
         models=MappingProxyType({m.id: _opencode_model_entry(m, groups) for m in chat_models}),
     )
-    config: Final = _OpenCodeConfig(provider=MappingProxyType({OPENCODE_PROVIDER_ID: provider}))
+    config: Final = _OpenCodeConfig(
+        provider=MappingProxyType({OPENCODE_PROVIDER_ID: provider}),
+        experimental=_OpenCodeExperimental(openTelemetry=True) if telemetry else None,
+    )
     return config.model_dump_json(exclude_none=True)
 
 
@@ -882,7 +899,29 @@ def opencode_model_sync_env(
     if isinstance(listing, ModelSyncSkipped):
         return listing
     groups: Final = fetch_model_limits(base_url, api_key, get=get)
-    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups)})
+    telemetry: Final = _opencode_telemetry_env(base_env, base_url, api_key)
+    return MappingProxyType(
+        {
+            OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups, telemetry=bool(telemetry)),
+            **telemetry,
+        }
+    )
+
+
+def _opencode_telemetry_env(base_env: Mapping[str, str], base_url: str, api_key: str) -> Mapping[str, str]:
+    """OpenCode's traces, sent to the gateway that takes its model calls and under the same key: Lens shows a
+    session, with each model call's content, from these. Empty when the user already exports somewhere else
+    or turned the OpenTelemetry SDK off, so their own destination or opt out stays. OpenCode does not flush
+    on exit, so spans go out every second instead of every five: a short `opencode run` otherwise sends none."""
+    if OTEL_EXPORTER_OTLP_ENDPOINT_ENV in base_env or base_env.get(OTEL_SDK_DISABLED_ENV, "").lower() == "true":
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            OTEL_EXPORTER_OTLP_ENDPOINT_ENV: base_url.rstrip("/"),
+            OTEL_EXPORTER_OTLP_HEADERS_ENV: f"Authorization=Bearer {api_key}",
+            **({} if OTEL_BSP_SCHEDULE_DELAY_ENV in base_env else {OTEL_BSP_SCHEDULE_DELAY_ENV: "1000"}),
+        }
+    )
 
 
 def _codex_row(
