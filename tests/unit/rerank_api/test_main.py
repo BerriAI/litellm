@@ -488,6 +488,26 @@ def test_rerank_bedrock_short_model_name(monkeypatch):
         assert model_config["modelArn"] == "arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0"
 
 
+def test_bedrock_rerank_filters_unsupported_credentials_params():
+    config: Final = litellm.BedrockRerankConfig()
+    mapped: Final = config.map_cohere_rerank_params(
+        non_default_params={
+            "top_n": 5,
+            "aws_secret_access_key": "sensitive-secret-token",
+            "aws_session_token": "sensitive-session",
+            "unsupported_extra": "drop_me",
+        },
+        model="amazon.rerank-v1:0",
+        drop_params=False,
+        query="test query",
+        documents=["doc 1"],
+    )
+    assert mapped["top_n"] == 5
+    assert "aws_secret_access_key" not in mapped
+    assert "aws_session_token" not in mapped
+    assert "unsupported_extra" not in mapped
+
+
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])

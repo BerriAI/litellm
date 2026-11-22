@@ -89,15 +89,18 @@ class BedrockRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
     ) -> dict:
-        result: Final = {
+        supported_params: Final = self.get_supported_cohere_rerank_params(model)
+        filtered_non_default: Final = {
+            key: value for key, value in non_default_params.items() if key in supported_params
+        }
+        return {
             "query": query,
             "documents": documents,
             "top_n": top_n,
             "return_documents": return_documents,
             "rank_fields": rank_fields,
+            **filtered_non_default,
         }
-        result.update(non_default_params)
-        return result
 
     def _transform_sources(self, documents: Sequence[str | dict]) -> list[BedrockRerankSource]:
         """
