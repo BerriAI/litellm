@@ -121,9 +121,11 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def loads_json_object(payload: str | bytes) -> Mapping[str, object] | None:
+def loads_json_object(payload: str | bytes | bytearray) -> Mapping[str, object] | None:
     opens_object: Final = (
-        payload.lstrip().startswith(b"{") if isinstance(payload, bytes) else payload.lstrip().startswith("{")
+        payload.lstrip().startswith(b"{")
+        if isinstance(payload, (bytes, bytearray))
+        else payload.lstrip().startswith("{")
     )
     if not opens_object:
         return None

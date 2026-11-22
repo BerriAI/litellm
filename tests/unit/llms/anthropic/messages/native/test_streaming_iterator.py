@@ -275,6 +275,14 @@ def test_a_deeply_nested_data_line_does_not_hide_the_error_event_after_it(deep_p
     assert is_provider_error_chunk(deep_array_frame) is False
 
 
+def test_parse_anthropic_error_event_from_sse_bytearray():
+    sse_chunk: Final = bytearray(
+        b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}\n\n'
+    )
+
+    assert parse_anthropic_error_event(sse_chunk) == ("overloaded_error", "Overloaded", 503)
+
+
 class TestIsAnthropicContentDeltaChunk:
     def test_dict_content_block_delta(self):
         assert is_anthropic_content_delta_chunk({"type": "content_block_delta"}) is True

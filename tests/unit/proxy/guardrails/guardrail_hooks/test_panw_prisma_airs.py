@@ -2408,6 +2408,32 @@ class TestPanwAirsStreamingBytesScan:
         assert json.loads(error_event.removeprefix("data: "))["error"]["type"] == "guardrail_scan_error"
 
     @pytest.mark.asyncio
+    async def test_streaming_bytes_skips_a_deeply_nested_array_line_and_scans_the_text(self):
+        handler = make_handler()
+        sse_bytes: Final = [
+            b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+        ]
+
+        async def mock_response_iter():
+            for chunk in sse_bytes:
+                yield chunk
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+            chunks_received: Final[list[object]] = [
+                chunk
+                async for chunk in handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    response=mock_response_iter(),
+                    request_data={"messages": [{"role": "user", "content": "test"}], "model": "claude-3-5-sonnet"},
+                )
+            ]
+
+        assert chunks_received == sse_bytes
+        assert mock_api.call_args.kwargs["content"] == "Hello"
+
+    @pytest.mark.asyncio
     async def test_bytes_streaming_success_adds_observability_header(self):
         """Test that raw-streaming success path calls both observability functions."""
         handler = make_handler()
