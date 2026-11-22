@@ -3,6 +3,7 @@ import socket
 import ssl
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Final, TypeAlias
 from urllib.parse import ParseResult, urlparse, urlunparse
 
@@ -101,6 +102,11 @@ def _verify_setting() -> bool | ssl.SSLContext | str:
     return setting if isinstance(setting, (bool, ssl.SSLContext, str)) else True
 
 
+@lru_cache(maxsize=8)
+def _tls_context(verify: bool | ssl.SSLContext | str) -> ssl.SSLContext:
+    return httpx.create_ssl_context(verify=verify, trust_env=False)
+
+
 async def post_callback(
     url: str,
     body: bytes,
@@ -127,34 +133,33 @@ async def _post_pinned(
     pinned: Final = await pin(url, resolve)
     if isinstance(pinned, Error):
         return Error(pinned.error)
-    async with httpx.AsyncClient(
-        verify=_verify_setting(),
-        follow_redirects=False,
-        timeout=DELIVERY_TIMEOUT_SECONDS,
-        trust_env=False,
-        transport=transport,
-    ) as client:
+    # IP-pinned connections cannot share a pool across distinct TLS hostnames.
+    async with transport or httpx.AsyncHTTPTransport(verify=_tls_context(_verify_setting()), trust_env=False) as sender:
         for target in pinned.ok.urls:
-            outcome = await _post_once(client, target, pinned.ok, body, headers)
+            outcome = await _post_once(sender, target, pinned.ok, body, headers)
             if outcome is not None:
                 return outcome
         return Error("connection_refused")
 
 
 async def _post_once(
-    client: httpx.AsyncClient, target: str, pinned: PinnedUrl, body: bytes, headers: Mapping[str, str]
+    sender: httpx.AsyncBaseTransport, target: str, pinned: PinnedUrl, body: bytes, headers: Mapping[str, str]
 ) -> Result[CallbackResponse, CallbackFailure] | None:
     """None when no connection was made, so nothing was sent and the next address may be tried."""
     try:
-        async with client.stream(
+        request: Final = httpx.Request(
             "POST",
             target,
             content=body,
             headers={**headers, "host": pinned.host_header, "accept-encoding": "identity"},
-            extensions={"sni_hostname": pinned.hostname},
-        ) as response:
+            extensions={"sni_hostname": pinned.hostname, "timeout": httpx.Timeout(DELIVERY_TIMEOUT_SECONDS).as_dict()},
+        )
+        response: Final = await sender.handle_async_request(request)
+        try:
             received: Final = await _read_capped(response)
             return Ok(CallbackResponse(status=response.status_code, body=received))
+        finally:
+            await response.aclose()
     except httpx.ConnectTimeout:
         return None
     except httpx.TimeoutException:

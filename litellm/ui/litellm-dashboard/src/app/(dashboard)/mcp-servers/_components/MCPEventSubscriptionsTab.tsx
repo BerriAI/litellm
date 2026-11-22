@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
+import { createParser, useQueryState } from "nuqs";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,14 @@ import { SubscriptionActions } from "./SubscriptionActions";
 import { argumentsSummary } from "./eventSubscriptionView";
 
 const subscriptionKeys = createQueryKeys("mcpEventSubscriptions");
+const offsetParser = createParser({
+  parse(value) {
+    const offset = Number(value);
+    return Number.isSafeInteger(offset) && offset >= 0 ? offset : null;
+  },
+  serialize: String,
+}).withDefault(0);
+
 const columns = [
   "event",
   "server",
@@ -31,7 +40,7 @@ export function MCPEventSubscriptionsTab({
   canManage: boolean;
 }) {
   const { t } = useTranslation();
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useQueryState("subscriptionOffset", offsetParser);
   const { data, error, isLoading, isFetching, refetch } = useQuery({
     queryKey: subscriptionKeys.list({ page: offset }),
     queryFn: () => fetchMCPEventSubscriptions(accessToken!, offset, 1),
@@ -81,8 +90,14 @@ export function MCPEventSubscriptionsTab({
           </TableBody>
         </Table>
       )}
-      {offset > 0 && <Button onClick={() => setOffset(Math.max(0, offset - 500))}>{t("common.previous")}</Button>}
-      {data?.next_offset != null && <Button onClick={() => setOffset(data.next_offset!)}>{t("common.next")}</Button>}
+      {offset > 0 && (
+        <Button onClick={() => setOffset(Math.max(0, offset - 500))}>
+          {t("mcpServers.eventSubscriptionsTab.previous")}
+        </Button>
+      )}
+      {data?.next_offset != null && (
+        <Button onClick={() => setOffset(data.next_offset!)}>{t("mcpServers.eventSubscriptionsTab.next")}</Button>
+      )}
     </section>
   );
 }
