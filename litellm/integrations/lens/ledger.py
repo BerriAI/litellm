@@ -32,6 +32,16 @@ def _owner(row: Mapping[str, object]) -> tuple[str, str, str]:
     return api_key, team_id, user
 
 
+def _record_owner(row: Mapping[str, object]) -> tuple[str, str, str]:
+    """The callback record's owner as its spend log row stores it: a logged key that is not already a hash or a
+    known alias is hashed, as the row builder hashes it, so a custom auth key meets its committed delivery."""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import redact_logged_api_key
+
+    api_key, team_id, user = _owner(row)
+    stored: Final = redact_logged_api_key(api_key, already_redacted=True, key_alias=row.get("key_alias"))
+    return stored or "", team_id, user
+
+
 def _committed_key(committed: Mapping[str, object]) -> CorrelationKey | None:
     request_id: Final = _text(committed.get("request_id"))
     started: Final = _text(committed.get("startTime"))
@@ -183,7 +193,7 @@ class LedgerHandoff:
     def hold(self, request_id: str, started: int, row: SpendLogRecord, size: int) -> Release:
         """Holds the callback's record for the request that started at ``started`` UTC microseconds."""
         expired: Final = self._expire()
-        key: Final = (strip_cache_hit_suffix(request_id), *_owner(row), started)
+        key: Final = (strip_cache_hit_suffix(request_id), *_record_owner(row), started)
         early: Final = self.waiting.get(key)
         if early is not None:
             committed: Final = self._pop_committed(early)

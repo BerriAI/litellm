@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 from collections.abc import Mapping
@@ -25,6 +26,10 @@ from litellm.integrations.lens.exporter import (
 )
 
 
+_HASH_TEST: Final = hashlib.sha256(b"key-test").hexdigest()
+_HASH_A: Final = hashlib.sha256(b"key-a").hexdigest()
+_HASH_B: Final = hashlib.sha256(b"key-b").hexdigest()
+_HASH_FLUSH: Final = hashlib.sha256(b"key-flush").hexdigest()
 _LOGGED_START: Final = 1_795_310_982.168072
 _LOGGED_MOMENT: Final = datetime.fromtimestamp(_LOGGED_START, tz=timezone.utc)
 _LOGGED_START_TEXT: Final = _LOGGED_MOMENT.isoformat()
@@ -122,7 +127,7 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
                     "model": "test-model",
                     "response_cost": 0.12,
                     "model_map_information": {"model_map_value": {"extra_pricing_metadata": None}},
-                    "metadata": {"user_api_key_hash": "hash-test", "user_api_key_team_id": "team-test"},
+                    "metadata": {"user_api_key_hash": _HASH_TEST, "user_api_key_team_id": "team-test"},
                     "messages": [{"role": "user", "content": "Check a refund"}],
                     "response": {"choices": [{"message": {"content": "Refund failed"}}]},
                 },
@@ -132,7 +137,7 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
             None,
         )
         try:
-            exporter.ledger_committed((_commit("response-test", 0.12, api_key="hash-test", team_id="team-test"),))
+            exporter.ledger_committed((_commit("response-test", 0.12, api_key=_HASH_TEST, team_id="team-test"),))
             request: Final = await asyncio.wait_for(received, timeout=5)
         finally:
             await exporter.aclose()
@@ -141,7 +146,7 @@ async def test_request_export_ignores_unrelated_model_metadata_and_preserves_bil
     assert len(rows) == 1
     assert rows[0]["response_id"] == "response-test"
     assert rows[0]["spend"] == 0.12
-    assert rows[0]["api_key"] == "hash-test"
+    assert rows[0]["api_key"] == _HASH_TEST
     assert rows[0]["team_id"] == "team-test"
     assert (rows[0]["messages"], rows[0]["response"]) == ("", "")
     assert exporter.rows_written == 1
@@ -371,7 +376,7 @@ async def test_a_request_with_a_conversation_over_the_budget_reaches_lens_with_i
                         "status": "success",
                         "response_cost": 0.42,
                         "prompt_tokens": 250000,
-                        "metadata": {"user_api_key_hash": "hash-test"},
+                        "metadata": {"user_api_key_hash": _HASH_TEST},
                         **conversation,
                     },
                 },
@@ -380,13 +385,13 @@ async def test_a_request_with_a_conversation_over_the_budget_reaches_lens_with_i
                 None,
             )
             assert (received.empty(), exporter.buffered_events, exporter.rows_dropped) == (True, 0, 0)
-            exporter.ledger_committed(({**_commit("long-1", 0.42, api_key="hash-test"), "prompt_tokens": 250000},))
+            exporter.ledger_committed(({**_commit("long-1", 0.42, api_key=_HASH_TEST), "prompt_tokens": 250000},))
             request: Final = await asyncio.wait_for(received.get(), timeout=5)
         finally:
             await exporter.aclose()
     rows: Final = json.loads(request.content)
     assert [(row["request_id"], row["spend"], row["prompt_tokens"], row["api_key"]) for row in rows] == [
-        ("long-1", 0.42, 250000, "hash-test")
+        ("long-1", 0.42, 250000, _HASH_TEST)
     ]
     assert (rows[0]["messages"], rows[0]["response"]) == ("", "")
     assert (received.empty(), exporter.rows_dropped) == (True, 0)
@@ -721,9 +726,7 @@ async def test_a_committed_trace_or_log_ingest_call_is_never_exported_as_a_cost_
     assert (sent.empty(), exporter.rows_written, handoff.held_bytes) == (True, 1, 0)
 
 
-def _owned_event(
-    call_id: str, logged_start: float, key_hash: str = "hash-a", alias: str = "alias"
-) -> dict[str, object]:
+def _owned_event(call_id: str, logged_start: float, key_hash: str = _HASH_A, alias: str = "alias") -> dict[str, object]:
     return {
         "response_cost": 0.5,
         "litellm_call_id": call_id,
@@ -737,7 +740,7 @@ def _owned_event(
     }
 
 
-def _owned_commit(delivery_id: str, started: datetime, key_hash: str = "hash-a") -> Mapping[str, object]:
+def _owned_commit(delivery_id: str, started: datetime, key_hash: str = _HASH_A) -> Mapping[str, object]:
     return {
         "request_id": f"chatcmpl-1_cache_hit{started.timestamp()!r}",
         "delivery_id": delivery_id,
@@ -785,13 +788,13 @@ async def test_each_callback_matches_its_commit_by_the_start_its_spend_log_row_r
             await callback(_owned_event("call-1", _LOGGED_START), None, _CALLBACK_MOMENT, None)
             if not commit_first:
                 exporter.ledger_committed((_owned_commit("d1", committed_start),))
-            exporter.ledger_committed((_owned_commit("d-flush", _LOGGED_MOMENT, key_hash="hash-flush"),))
+            exporter.ledger_committed((_owned_commit("d-flush", _LOGGED_MOMENT, key_hash=_HASH_FLUSH),))
             await exporter.async_log_success_event(
-                _owned_event("call-flush", _LOGGED_START, key_hash="hash-flush"), None, None, None
+                _owned_event("call-flush", _LOGGED_START, key_hash=_HASH_FLUSH), None, None, None
             )
             body: Final = await asyncio.wait_for(sent.bodies.get(), timeout=5)
             rows: Final = TypeAdapter(list[dict[str, object]]).validate_json(body)
-            flushed: Final = any(row["api_key"] == "hash-flush" for row in rows)
+            flushed: Final = any(row["api_key"] == _HASH_FLUSH for row in rows)
             more: Final = (
                 []
                 if flushed
@@ -802,7 +805,7 @@ async def test_each_callback_matches_its_commit_by_the_start_its_spend_log_row_r
         finally:
             await exporter.aclose()
     exported: Final = sorted(str(row["api_key"]) for row in (*rows, *more))
-    assert exported == (["hash-a", "hash-flush"] if pairs else ["hash-flush"])
+    assert exported == ([_HASH_A, _HASH_FLUSH] if pairs else [_HASH_FLUSH])
 
 
 @pytest.mark.asyncio
@@ -849,10 +852,10 @@ async def test_a_commit_of_another_tenant_never_exports_a_record_with_the_same_r
         exporter.start()
         try:
             if commit_first:
-                exporter.ledger_committed((_owned_commit("d-b", _LOGGED_MOMENT, key_hash="hash-b"),))
+                exporter.ledger_committed((_owned_commit("d-b", _LOGGED_MOMENT, key_hash=_HASH_B),))
             await exporter.async_log_success_event(_owned_event("call-a", _LOGGED_START), None, None, None)
             if not commit_first:
-                exporter.ledger_committed((_owned_commit("d-b", _LOGGED_MOMENT, key_hash="hash-b"),))
+                exporter.ledger_committed((_owned_commit("d-b", _LOGGED_MOMENT, key_hash=_HASH_B),))
         finally:
             await exporter.aclose()
     assert (sent.bodies.empty(), exporter.rows_written, exporter.rows_dropped) == (True, 0, 2)
