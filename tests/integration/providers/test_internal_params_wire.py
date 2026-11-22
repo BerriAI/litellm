@@ -534,7 +534,7 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "groq", "helicone", "heroku", "hosted_vllm", "hostinger_router", "huggingface", "hyperbolic", "inception",
     "inferenceapis", "kyma", "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy",
     "llamafile", "lm_studio", "maritalk", "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot",
-    "morph", "nadir", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
+    "morph", "nadir", "nagaai", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
     "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity", "petals",
     "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "resetdata", "sail",
     "sambanova", "sarvam", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
