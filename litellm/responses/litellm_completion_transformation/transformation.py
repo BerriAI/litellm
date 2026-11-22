@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.factory import tool_call_id_prefix
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -585,6 +586,14 @@ class ChatCompletionSession(TypedDict, total=False):
 
 
 ########### End of Initialize Classes used for Responses API  ###########
+
+
+def _answered_call_id(tool_call_id: str, call_ids: Sequence[str]) -> str | None:
+    if tool_call_id in call_ids:
+        return tool_call_id
+    prefix: Final = tool_call_id_prefix(tool_call_id)
+    same_call: Final = frozenset(call_id for call_id in call_ids if tool_call_id_prefix(call_id) == prefix)
+    return next(iter(same_call)) if len(same_call) == 1 else None
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -1593,17 +1602,23 @@ class LiteLLMCompletionResponsesConfig:
         return []
 
     @staticmethod
-    def _check_tool_call_exists(tool_calls: Sequence[object], tool_call_id: str) -> bool:
-        """Check if a tool_call with the given ID exists in the list."""
-        for tool_call in tool_calls:
-            tool_call_id_to_check: object = None
-            if isinstance(tool_call, dict):
-                tool_call_id_to_check = _ANY_KEY_DICT_ADAPTER.validate_python(tool_call).get("id")
-            elif hasattr(tool_call, "id"):
-                tool_call_id_to_check = getattr(tool_call, "id", None)
-            if tool_call_id_to_check == tool_call_id:
-                return True
-        return False
+    def _tool_call_id(tool_call: object) -> object:
+        return (
+            _ANY_KEY_DICT_ADAPTER.validate_python(tool_call).get("id")
+            if isinstance(tool_call, dict)
+            else getattr(tool_call, "id", None)
+        )
+
+    @staticmethod
+    def _id_of_the_call_answered_by(tool_call_id: str, tool_calls: Sequence[object]) -> str | None:
+        return _answered_call_id(
+            tool_call_id,
+            tuple(
+                call_id
+                for call_id in map(LiteLLMCompletionResponsesConfig._tool_call_id, tool_calls)
+                if isinstance(call_id, str)
+            ),
+        )
 
     @staticmethod
     def _reconstruct_tool_call_from_tools(tool_call_id: str, tools: Sequence[object]) -> dict[str, object] | None:
@@ -1796,14 +1811,6 @@ class LiteLLMCompletionResponsesConfig:
                 tool_call_id = LiteLLMCompletionResponsesConfig._recover_tool_call_id_from_assistant(
                     prev_assistant, message
                 )
-                if tool_call_id:
-                    # Type-safe way to set tool_call_id on tool message
-                    if isinstance(message, dict):
-                        # Cast to dict to allow setting tool_call_id
-                        message_dict = cast(dict[str, object], message)
-                        message_dict["tool_call_id"] = tool_call_id
-                    elif hasattr(message, "tool_call_id"):
-                        setattr(message, "tool_call_id", tool_call_id)
 
             # Only remove messages with empty tool_call_id if we have other non-tool messages
             # This prevents ending up with an empty messages list when using previous_response_id
@@ -1824,7 +1831,13 @@ class LiteLLMCompletionResponsesConfig:
                 prev_assistant = fixed_messages[prev_assistant_idx]
                 tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(prev_assistant)
 
-                if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(tool_calls, tool_call_id):
+                if (
+                    answered_call_id := LiteLLMCompletionResponsesConfig._id_of_the_call_answered_by(
+                        tool_call_id, tool_calls
+                    )
+                ) is not None:
+                    tool_call_id = answered_call_id
+                else:
                     _tool_use_definition: object = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
 
                     if not _tool_use_definition and tools:
@@ -1843,6 +1856,13 @@ class LiteLLMCompletionResponsesConfig:
                             len(tool_calls),
                         )
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(prev_assistant, tool_call_chunk)
+
+            if tool_call_id != tool_call_id_raw:
+                if isinstance(message, dict):
+                    message_dict = cast(dict[str, object], message)
+                    message_dict["tool_call_id"] = tool_call_id
+                elif hasattr(message, "tool_call_id"):
+                    setattr(message, "tool_call_id", tool_call_id)
 
         # Remove messages with empty tool_call_id that couldn't be fixed
         for idx in reversed(messages_to_remove):

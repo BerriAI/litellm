@@ -2,6 +2,7 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "without_altered_provider_state",  # DEFAULT_MAX_RECURSE_DEPTH bound, walks one stored JSON document.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
     "remove_additional_properties",

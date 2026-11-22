@@ -7,6 +7,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.responses.litellm_completion_transformation.provider_signed_state import without_altered_provider_state
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -47,6 +48,20 @@ _FAILED_TURN_STATUS: Final = "failure"
 
 def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
     return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
+
+
+def _stored_response(spend_log: Mapping[str, object]) -> object:
+    return spend_log.get("response", "{}")
+
+
+def _replayable(stored: object, spend_log: "SpendLogsPayload") -> object:
+    replayable: Final = without_altered_provider_state(stored)
+    if replayable != stored:
+        verbose_proxy_logger.warning(
+            "previous_response_id replay leaves out reasoning the stored turn %s holds cut or redacted",
+            spend_log.get("request_id"),
+        )
+    return replayable
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -145,8 +160,8 @@ class ResponsesSessionHandler:
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param: Final = proxy_server_request_dict.get("input") or proxy_server_request_dict.get(
-                "messages"
+            _response_input_param: Final = _replayable(
+                proxy_server_request_dict.get("input") or proxy_server_request_dict.get("messages"), spend_log
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -170,7 +185,7 @@ class ResponsesSessionHandler:
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output: Final = spend_log.get("response", "{}")
+        _response_output: Final = _replayable(_stored_response(spend_log), spend_log)
         if isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response: Final = ModelResponse(**_response_output)

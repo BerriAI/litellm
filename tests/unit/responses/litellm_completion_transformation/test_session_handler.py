@@ -7,14 +7,18 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
+    _sanitize_request_body_for_spend_logs_payload,
 )
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import Message
 
@@ -814,3 +818,122 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+def _role_and_content(message: object) -> tuple[object, object]:
+    return message_field(message, "role"), message_field(message, "content")
+
+
+def _tool_call_ids(message: object) -> tuple[str, ...]:
+    tool_calls: Final = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+    return tuple(call["id"] if isinstance(call, dict) else call.id for call in tool_calls or ())
+
+
+async def _history_from_stored_turns(
+    spend_logs: tuple[dict[str, object], ...], previous_response_id: str
+) -> ChatCompletionSession:
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([spend_logs])):
+        return await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            previous_response_id
+        )
+
+
+_WHOLE_THINKING_BLOCK: Final = {"type": "thinking", "thinking": "Count.", "signature": "Eq0BCkYI=="}
+_LONG_SIGNATURE: Final = "Eq0BCkYICxgCKkB" * 2000
+
+
+def _stored_cut(stored: dict[str, object]) -> dict[str, object]:
+    return _sanitize_request_body_for_spend_logs_payload(stored)
+
+
+def _answered_turn(message: dict[str, object], turn_input: object = "Count the triples.") -> dict[str, object]:
+    return {
+        "request_id": "resp_signed",
+        "session_id": "session-signed",
+        "proxy_server_request": json.dumps({"input": turn_input}),
+        "response": {
+            "id": "chatcmpl-signed",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", **message}}],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stored_with_a_cut_thinking_block_replays_without_it_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+):
+    cut_block: Final = _stored_cut({**_WHOLE_THINKING_BLOCK, "signature": _LONG_SIGNATURE})
+    turn: Final = _answered_turn({"content": "954", "thinking_blocks": [_WHOLE_THINKING_BLOCK, cut_block]})
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns((turn,), "resp_signed")
+
+    answer: Final = session["messages"][-1]
+    assert _role_and_content(answer) == ("assistant", "954")
+    assert message_field(answer, "thinking_blocks") == [_WHOLE_THINKING_BLOCK]
+    assert [record.getMessage() for record in caplog.records if "resp_signed" in record.getMessage()] == [
+        "previous_response_id replay leaves out reasoning the stored turn resp_signed holds cut or redacted"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stored_whole_replays_its_signed_thinking_block_silently(caplog: pytest.LogCaptureFixture):
+    signed_block: Final = {**_WHOLE_THINKING_BLOCK, "signature": _LONG_SIGNATURE}
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns(
+            (_answered_turn({"content": "954", "thinking_blocks": [signed_block]}),), "resp_signed"
+        )
+
+    assert message_field(session["messages"][-1], "thinking_blocks") == [signed_block]
+    assert not [record for record in caplog.records if "leaves out reasoning" in record.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_stored_with_a_cut_thought_signature_replays_unsigned():
+    cut_fields: Final = _stored_cut({"thought_signature": _LONG_SIGNATURE})
+    call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{}"},
+        "provider_specific_fields": cut_fields,
+    }
+
+    session: Final = await _history_from_stored_turns(
+        (_answered_turn({"content": None, "tool_calls": [call]}),), "resp_signed"
+    )
+
+    answer: Final = session["messages"][-1]
+    assert _tool_call_ids(answer) == ("call_1",)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD not in json.dumps(answer, default=lambda value: value.model_dump())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "signature, replayed",
+    [
+        pytest.param("Eq0BCkYI==", True, id="whole-reasoning-item"),
+        pytest.param(_LONG_SIGNATURE, False, id="cut-reasoning-item"),
+    ],
+)
+async def test_reasoning_a_client_sent_back_in_a_stored_request_replays_only_when_stored_whole(
+    signature: str, replayed: bool
+):
+    sent_block: Final = {**_WHOLE_THINKING_BLOCK, "signature": signature}
+    sent_input: Final = _stored_cut(
+        {
+            "input": [
+                {"role": "user", "content": "Count the triples."},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": json.dumps([sent_block])},
+                {"role": "assistant", "content": "954"},
+                {"role": "user", "content": "And now?"},
+            ]
+        }
+    )["input"]
+
+    session: Final = await _history_from_stored_turns((_answered_turn({"content": "955"}, sent_input),), "resp_signed")
+
+    blocks: Final = [message_field(message, "thinking_blocks") for message in session["messages"]]
+    assert [block for block in blocks if block] == ([[sent_block]] if replayed else [])
+    assert [content for _, content in map(_role_and_content, session["messages"])][-1] == "955"

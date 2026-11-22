@@ -3,10 +3,10 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
-from functools import reduce
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
@@ -64,6 +65,7 @@ from litellm.proxy._types import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token, query_raw_within_statement_timeout
+from litellm.responses.litellm_completion_transformation.provider_signed_state import is_provider_signed
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -1172,11 +1174,21 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
+def _stored_whole(value: object, sanitized: Callable[[object], object]) -> object:
+    if isinstance(value, str):
+        return value
+    items: Final = as_object_list(value)
+    if items is None:
+        return sanitized(value)
+    return [item if isinstance(item, str) else sanitized(item) for item in items]
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
+    keep_replayed_provider_state: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1206,7 +1218,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials
+                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_replayed_provider_state
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
@@ -1244,13 +1256,14 @@ def _sanitize_request_body_for_spend_logs_payload(
             return value
         return value
 
-    return {
-        k: REDACTED_BY_LITELM_STRING
-        if mask_credentials and _is_request_body_credential(k, v)
-        else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
-        for k, v in request_body.items()
-        if k not in _SENSITIVE_REQUEST_BODY_KEYS
-    }
+    def _stored_value(key: str, value: object) -> object:
+        if mask_credentials and _is_request_body_credential(key, value):
+            return REDACTED_BY_LITELM_STRING
+        if keep_replayed_provider_state and is_provider_signed(request_body, key, value):
+            return _stored_whole(value, partial(_sanitize_value, mask_credentials=mask_credentials))
+        return _sanitize_value(value, mask_credentials and not _is_spend_log_content(request_body, key))
+
+    return {k: _stored_value(k, v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
@@ -1867,24 +1880,25 @@ def _get_response_for_spend_logs_payload(
                 response_obj["tool_calls"] = realtime_tool_calls
 
         # Apply message redaction if turn_off_message_logging is enabled
-        if kwargs is not None:
-            from litellm.litellm_core_utils.redact_messages import (
-                perform_redaction,
-                should_redact_message_logging,
-            )
+        from litellm.litellm_core_utils.redact_messages import (
+            perform_redaction,
+            should_redact_message_logging,
+        )
 
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            model_call_details: Final = {
-                "litellm_params": litellm_params,
+        redacted: Final = kwargs is not None and should_redact_message_logging(
+            model_call_details={
+                "litellm_params": kwargs.get("litellm_params", {}),
                 "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params"),
             }
+        )
+        # If redaction is enabled, convert to serializable dict before redacting
+        if redacted:
+            response_obj = _convert_to_json_serializable_dict(response_obj)
+            response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
-            # If redaction is enabled, convert to serializable dict before redacting
-            if should_redact_message_logging(model_call_details=model_call_details):
-                response_obj = _convert_to_json_serializable_dict(response_obj)
-                response_obj = perform_redaction(model_call_details={}, result=response_obj)
-
-        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload({"response": response_obj})
+        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
+            {"response": response_obj}, keep_replayed_provider_state=not redacted
+        )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
 

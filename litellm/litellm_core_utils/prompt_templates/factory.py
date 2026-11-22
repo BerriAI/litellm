@@ -1267,6 +1267,10 @@ def encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: str
 _encode_tool_call_id_with_signature = encode_tool_call_id_with_signature
 
 
+def tool_call_id_prefix(tool_call_id: object) -> str | None:
+    return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if isinstance(tool_call_id, str) else None
+
+
 def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     """Extract thought signature from tool call's provider_specific_fields.
 
