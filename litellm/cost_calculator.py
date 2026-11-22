@@ -1002,10 +1002,10 @@ def cost_map_key_prices_anything(key: str) -> bool:
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
-def cost_map_key_has_any_price(key: str) -> bool:
-    entry: Final = _raw_cost_map_entry(key)
-    return entry is not None and any(
-        value is not None and is_server_derived_pricing_key(field) for field, value in entry.items()
+def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
+    entry: Final = _raw_cost_map_entry(key) or {}
+    return MappingProxyType(
+        {field: value for field, value in entry.items() if value is not None and is_server_derived_pricing_key(field)}
     )
 
 

@@ -61,7 +61,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
-from litellm.cost_calculator import cost_map_key_has_any_price
+from litellm.cost_calculator import cost_map_key_declared_prices
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -128,7 +128,6 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     LlmProvidersSet,
-    is_server_derived_pricing_key,
     shared_backend_model_info,
 )
 from litellm.utils import (
@@ -417,7 +416,7 @@ def cost_map_backend_model(deployment: Deployment) -> str:
     if isinstance(invoked_model, str) and invoked_model and _bedrock_profile(params, model):
         profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
         profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-        if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_has_any_price(profile_info["key"]):
+        if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_declared_prices(profile_info["key"]):
             return profile_model
     return model
 
@@ -455,11 +454,11 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
     profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
-    if isinstance(profile_info, ModelInfoLookupMiss) or not cost_map_key_has_any_price(profile_info["key"]):
+    if isinstance(profile_info, ModelInfoLookupMiss):
         return {}
-    explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(priced)
-    priced_info: Final = pricing_with_overrides(profile_info, explicit_info)
-    return {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
+    return pricing_with_overrides(
+        cost_map_key_declared_prices(profile_info["key"]), _MODEL_INFO_ADAPTER.validate_python(priced)
+    )
 
 
 def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
