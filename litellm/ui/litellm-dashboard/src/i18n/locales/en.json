@@ -14807,6 +14807,8 @@
       }
     },
     "eventSubscriptionsTab": {
+      "next": "Next page",
+      "previous": "Previous page",
       "title": "Event subscriptions",
       "description": "Webhook subscriptions the gateway relays from upstream MCP servers to clients. Push and poll subscriptions last only as long as a request and are not listed.",
       "refresh": "Refresh",
