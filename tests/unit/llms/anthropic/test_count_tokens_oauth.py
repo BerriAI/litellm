@@ -64,7 +64,12 @@ async def test_count_tokens_profile_matches_the_credential_actually_sent(
     monkeypatch.setattr(litellm, "anthropic_key", None)
     monkeypatch.setattr(litellm, "api_key", None)
     counter: Final = _with_client_identity(
-        AnthropicTokenCounter(), caller_token, "uprof_admin", caller_profile, {"model": "anthropic/claude-sonnet-4-5"}
+        AnthropicTokenCounter(),
+        caller_token,
+        "uprof_admin",
+        caller_profile,
+        {"model": "anthropic/claude-sonnet-4-5"},
+        None,
     )
     assert counter is not None
     with respx.mock(assert_all_called=True) as upstream:
