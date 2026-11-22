@@ -1213,6 +1213,21 @@ def test_a_gemini_config_name_without_an_output_cap_keeps_the_uncapped_hold(unca
     )
 
 
+@pytest.mark.parametrize(("uncapped", "capped"), [("generationConfig", "config"), ("generation_config", "generationConfig")])
+def test_a_gemini_config_name_without_an_output_cap_keeps_a_larger_cap_from_another_name(
+    uncapped: str, capped: str
+) -> None:
+    capped_body: Final = GEMINI_QUESTION | {capped: {"maxOutputTokens": 60000}}
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=capped_body | {uncapped: {"temperature": 0.5}}, route=GEMINI_ROUTES[0], llm_router=None
+    )
+
+    assert reserved == pytest.approx(
+        estimate_request_max_cost(request_body=capped_body, route=GEMINI_ROUTES[0], llm_router=None)
+    )
+
+
 @pytest.mark.parametrize(
     ("request_body", "input_tokens", "expected"),
     [

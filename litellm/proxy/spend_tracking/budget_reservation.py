@@ -1773,9 +1773,11 @@ def _gemini_output_token_cap(request_body: Mapping[str, object]) -> int | None:
         _largest_int(config.get(field) for field in _GEMINI_OUTPUT_TOKEN_FIELDS)
         for config in _gemini_generation_configs(request_body)
     )
-    if not caps or None in caps:
+    explicit_caps: Final = tuple(cap for cap in caps if cap is not None)
+    if not explicit_caps:
         return None
-    return max(cap for cap in caps if cap is not None)
+    uncapped_floor: Final = (DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,) if None in caps else ()
+    return max((*explicit_caps, *uncapped_floor))
 
 
 def _largest_int(values: Iterable[object]) -> int | None:
