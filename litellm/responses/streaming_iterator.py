@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast,
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs
 
 import litellm
@@ -28,6 +29,7 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
@@ -1573,6 +1575,56 @@ def partial_responses_incomplete_event_on_disconnect(stream: object) -> Response
         verbose_logger.debug("Failed to build partial Responses API response for disconnect billing: %s", e)
         return None
     return partial if isinstance(partial, ResponseIncompleteEvent) else None
+
+
+_STR_KEYED: Final = TypeAdapter(Mapping[str, object])
+
+
+def _summed_count(primary: object, fallback: object) -> object:
+    if isinstance(primary, Mapping) and isinstance(fallback, Mapping):
+        return _summed_counts(_STR_KEYED.validate_python(primary), _STR_KEYED.validate_python(fallback))
+    if isinstance(primary, (int, float)) and isinstance(fallback, (int, float)):
+        return primary + fallback
+    return primary if fallback is None else fallback
+
+
+def _summed_counts(primary: Mapping[str, object], fallback: Mapping[str, object]) -> Mapping[str, object]:
+    keys: Final = (*primary, *(key for key in fallback if key not in primary))
+    return MappingProxyType({key: _summed_count(primary.get(key), fallback.get(key)) for key in keys})
+
+
+def _usage_of_both_deployments(
+    primary: ResponseAPIUsage | None, fallback: ResponseAPIUsage | None
+) -> ResponseAPIUsage | None:
+    if primary is None or fallback is None:
+        return fallback if primary is None else primary
+    return ResponseAPIUsage.model_validate(
+        to_jsonable_python(_summed_counts(primary.model_dump(), fallback.model_dump()), fallback=dict)
+    )
+
+
+def _response_cost(response: ResponsesAPIResponse) -> object:
+    return (get_hidden_params(response) or {}).get("response_cost")
+
+
+def partial_billed_for_both_deployments(
+    primary: ResponseIncompleteEvent, fallback: ResponseIncompleteEvent
+) -> ResponseIncompleteEvent:
+    primary_cost: Final = _response_cost(primary.response)
+    fallback_cost: Final = _response_cost(fallback.response)
+    billed: Final = fallback.response.model_copy(
+        update={"usage": _usage_of_both_deployments(primary.response.usage, fallback.response.usage)}
+    )
+    set_hidden_params(
+        billed,
+        {
+            **(get_hidden_params(fallback.response) or {}),
+            "response_cost": primary_cost + fallback_cost
+            if isinstance(primary_cost, (int, float)) and isinstance(fallback_cost, (int, float))
+            else None,
+        },
+    )
+    return fallback.model_copy(update={"response": billed})
 
 
 def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:

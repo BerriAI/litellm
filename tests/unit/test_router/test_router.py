@@ -12,7 +12,7 @@ import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -74,7 +74,15 @@ from litellm.router_utils.fallback_event_handlers import (
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRequest,
+    ResponseIncompleteEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
@@ -27764,3 +27772,80 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     wrapped.adopt_fallback_headers(fallback)
 
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
+
+
+def _cut_responses_stream(
+    response_id: str, usage: Mapping[str, object] | None, response_cost: float | None
+) -> MagicMock:
+    response: Final = ResponsesAPIResponse.model_validate(
+        MappingProxyType(
+            {
+                "id": response_id,
+                "object": "response",
+                "created_at": 1,
+                "status": "incomplete",
+                "model": "claude-haiku-5-5",
+                "output": (),
+                "usage": usage,
+            }
+        )
+    )
+    response.hidden_params["response_cost"] = response_cost
+    stream: Final = MagicMock(spec=BaseResponsesAPIStreamingIterator)
+    stream.partial_response_on_disconnect = MagicMock(
+        return_value=ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=response)
+    )
+    return stream
+
+
+def _cut_usage(input_tokens: int, cached_tokens: int) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "input_tokens": input_tokens,
+            "input_tokens_details": MappingProxyType({"cached_tokens": cached_tokens}),
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+        }
+    )
+
+
+async def _billed_after_a_fallback(primary: MagicMock, fallback: MagicMock) -> ResponsesAPIResponse:
+    router: Final = Router(
+        model_list=[{"model_name": "primary", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "k"}}]
+    )
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": AsyncMock()},
+    )
+    wrapped.adopt_fallback_headers(fallback)
+    billed: Final = wrapped.partial_response_on_disconnect()
+    assert billed is not None
+    return billed.response
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_after_a_fallback_bills_the_tokens_cache_reads_and_cost_of_both_deployments():
+    billed: Final = await _billed_after_a_fallback(
+        _cut_responses_stream("resp_primary", _cut_usage(25, 10), 0.0000025),
+        _cut_responses_stream("resp_fallback", _cut_usage(30, 20), 0.000004),
+    )
+
+    assert billed.id == "resp_fallback"
+    assert billed.usage is not None
+    assert billed.usage.input_tokens == 55
+    assert billed.usage.input_tokens_details is not None
+    assert billed.usage.input_tokens_details.cached_tokens == 30
+    assert (get_hidden_params(billed) or {}).get("response_cost") == pytest.approx(0.0000065)
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_after_a_fallback_from_a_deployment_that_reported_no_usage_bills_the_fallbacks_usage():
+    billed: Final = await _billed_after_a_fallback(
+        _cut_responses_stream("resp_primary", None, None),
+        _cut_responses_stream("resp_fallback", _cut_usage(30, 20), 0.000004),
+    )
+
+    assert billed.usage is not None
+    assert billed.usage.input_tokens == 30
+    assert billed.usage.input_tokens_details is not None
+    assert billed.usage.input_tokens_details.cached_tokens == 20
