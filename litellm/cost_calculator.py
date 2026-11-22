@@ -1013,6 +1013,18 @@ def _declares_rates(model_info: ModelInfo | None) -> bool:
     return model_info is not None and cost_map_key_prices_anything(model_info["key"])
 
 
+def _maps_to_row_without_prices(model: str, custom_llm_provider: str | None) -> bool:
+    key: Final = cached_cost_map_key(model, custom_llm_provider)
+    return (
+        key is not None
+        and _raw_cost_map_entry(key) is not None
+        and not any(
+            value is not None and is_server_derived_pricing_key(field)
+            for field, value in declared_cost_map_pricing(key, model, custom_llm_provider).items()
+        )
+    )
+
+
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
     """The provider to price an explicit base_model under, when the deployment's own provider has
     no rates for it (e.g. chatgpt/ subscription rows) but the base model's own row does"""
@@ -1056,7 +1068,7 @@ def select_model_name_for_cost_calc(
 ) -> str | None:
     """
     1. If custom pricing is true, return received model name
-    2. If base_model is set (e.g. for azure models), return that
+    2. If base_model is set (e.g. for azure models), return that, unless its cost-map row sets no price
     3. If completion response has model set return that, unless only the requested model's cost-map row has rates
     4. Check if model is passed in return that
     """
@@ -1082,6 +1094,11 @@ def select_model_name_for_cost_calc(
         if not explicit_pricing and priced_from_response
         else None
     )
+    priced_base_model: Final = (
+        base_model
+        if base_model is not None and not _maps_to_row_without_prices(base_model, custom_llm_provider)
+        else None
+    )
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
@@ -1093,8 +1110,8 @@ def select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None or bedrock_pricing_model is not None:
-        return_model = base_model if base_model is not None else bedrock_pricing_model
+    elif priced_base_model is not None or bedrock_pricing_model is not None:
+        return_model = priced_base_model if priced_base_model is not None else bedrock_pricing_model
 
     elif provider_response_model is not None:
         return _served_or_priced_requested_model(

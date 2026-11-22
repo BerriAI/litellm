@@ -1552,6 +1552,51 @@ def test_bedrock_deployment_with_its_profile_as_base_model_prices_the_same_besid
     assert cost() == pytest.approx(alone)
 
 
+
+def test_bedrock_deployment_with_its_profile_as_unpriced_base_model_bills_served_model_rates_beside_an_arn_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "anthropic.profile-unpriced-base-model-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unpriced-base-model-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+            },
+        },
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "by-arn",
+                "litellm_params": {"model": f"bedrock/{profile}"},
+                "model_info": {"id": "unpriced-profile-arn-deployment"},
+            },
+            {
+                "model_name": "by-base-model",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "unpriced-profile-base-model-deployment", "base_model": f"bedrock/{profile}"},
+            },
+        ]
+    )
+
+    response: Final = router.completion(
+        model="by-base-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response=litellm.ModelResponse(
+            model=model, usage=litellm.Usage(prompt_tokens=100, completion_tokens=3, total_tokens=103)
+        ),
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response._hidden_params["response_cost"] == pytest.approx(100 * 0.03 + 3 * 0.04)
+
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting
     model must still bill cache_read and cache_creation tokens. Before the
