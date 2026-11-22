@@ -27906,6 +27906,7 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
         logging_obj: Final = MagicMock(spec=LiteLLMLogging)
         logging_obj.model_call_details = {"litellm_params": {}}
         logging_obj.completion_start_time = None
+        logging_obj.cost_breakdown = None
         iterator: Final = ResponsesAPIStreamingIterator(
             response=httpx.Response(200),
             model="gpt-5.4",
