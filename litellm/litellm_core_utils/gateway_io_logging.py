@@ -209,7 +209,7 @@ _IPV4_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?<![0-9.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![0-9.])"
 )
 _IPV6_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])"
+    r"(?<![0-9A-Fa-f:])(?:(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}|:(?::[0-9A-Fa-f]{1,4}){1,7}|::)(?![0-9A-Fa-f:])"
 )
 
 
@@ -785,7 +785,9 @@ def build_gateway_io_metadata(
             sanitized_model=sanitized_model,
             sanitized_model_group=sanitized_model_group,
         )
-    if redact_ip_addresses and ext_headers:
+    if redact_ip_addresses:
+        if ext_api_base:
+            ext_api_base, _ = _scrub_text(ext_api_base, redact_ip_addresses=True)
         for hk, hv in list(ext_headers.items()):
             scrubbed_hv, was_ip = _scrub_text(hv, redact_ip_addresses=True)
             if was_ip:
