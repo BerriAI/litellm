@@ -7340,6 +7340,96 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
     ]
 
 
+_ORDER_TOOLS: Final = [
+    {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+    for name in ("cancel_order", "get_order", "get_invoice")
+]
+_ORDER_CALLS: Final = (("toolu_1", "get_order"), ("toolu_2", "get_invoice"))
+
+
+def _order_call(call_id: str, name: str) -> dict[str, object]:
+    return {"type": "function_call", "call_id": call_id, "name": name, "arguments": "{}"}
+
+
+def _order_output(call_id: str) -> dict[str, object]:
+    return {"type": "function_call_output", "call_id": call_id, "output": "ok"}
+
+
+async def _replayed_order_calls(
+    input_items: Sequence[Mapping[str, object]], *, model: str, provider: str
+) -> tuple[list[tuple[str, str]], ...]:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        stored: Final = [
+            {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+            for call_id, name in _ORDER_CALLS
+        ]
+        return ChatCompletionSession(
+            messages=[
+                {"role": "user", "content": "Where is my order?"},
+                {"role": "assistant", "content": None, "tool_calls": stored},
+            ],
+            litellm_session_id=None,
+        )
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="resp_order",
+        litellm_completion_request=LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=cast(ResponseInputParam, list(input_items)),
+            responses_api_request={"previous_response_id": "resp_order", "tools": _ORDER_TOOLS},
+            custom_llm_provider=provider,
+        ),
+        instructions=None,
+        session_lookup=session_lookup,
+    )
+    return tuple(
+        [(call["id"], call["function"]["name"]) for call in message["tool_calls"]]
+        for message in request["messages"]
+        if message.get("tool_calls")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "said_before_the_first_call",
+    [
+        {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "Both, then."}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Both, then."}]},
+    ],
+    ids=["reasoning", "text"],
+)
+async def test_calls_resent_after_the_assistants_words_stay_the_calls_the_client_sent(
+    said_before_the_first_call: Mapping[str, object],
+) -> None:
+    resent: Final = [item for call in _ORDER_CALLS for item in (_order_call(*call), _order_output(call[0]))]
+
+    replayed: Final = await _replayed_order_calls(
+        [said_before_the_first_call, *resent], model="house-model", provider="hosted_vllm"
+    )
+
+    assert replayed == (list(_ORDER_CALLS), [_ORDER_CALLS[0]], [_ORDER_CALLS[1]])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [("claude-sonnet-5-5", "anthropic"), ("gemini-3.8-flash", "gemini"), ("house-model", "hosted_vllm")],
+)
+@pytest.mark.parametrize("together", [True, False], ids=["together", "one-by-one"])
+async def test_calls_the_client_resends_with_their_outputs_are_made_once(
+    together: bool, model: str, provider: str
+) -> None:
+    calls: Final = [_order_call(*call) for call in _ORDER_CALLS]
+    outputs: Final = [_order_output(call_id) for call_id, _ in _ORDER_CALLS]
+    one_by_one: Final = [item for pair in zip(calls, outputs) for item in pair]
+
+    replayed: Final = await _replayed_order_calls(
+        [*calls, *outputs] if together else one_by_one, model=model, provider=provider
+    )
+
+    assert replayed == (list(_ORDER_CALLS),)
+
+
 def test_cache_control_on_function_call_output():
     """cache_control on a function_call_output should be passed through to tool message"""
     TOOL_CALLS_CACHE.set_cache(

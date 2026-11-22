@@ -75,6 +75,10 @@ def test_a_cut_value_is_no_truncation_of_another_value(whole: str):
     assert not is_truncation_of(truncated_for_db(_LONG, 100), whole)
 
 
+def test_a_value_shorter_than_what_storage_kept_is_not_what_storage_cut():
+    assert not is_truncation_of(truncated_for_db("x" * 105, 100), "x" * 95)
+
+
 def test_a_whole_value_is_no_truncation_of_itself():
     assert not is_truncation_of(_LONG, _LONG)
 
