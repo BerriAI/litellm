@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.db_truncation import TRUNCATION_MARKER
 from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -70,7 +71,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _SCRUBBED_ERROR_TEXT_FIELDS,
     _SPEND_LOGS_PRIVACY_METADATA_ADAPTER,
     _TOOL_OUTPUT_BLOCK_TYPES,
-    _TRUNCATION_MARKER,
     _adapter_route_call_type,
     _block_type,
     _compaction_summary_for_db,
@@ -158,7 +158,7 @@ def _overlap_at_start(text: str, spelling: str) -> int:
 
 
 def _scrub_raw_model_split_by_truncation(text: str, spellings: tuple[str, ...]) -> str:
-    marker: Final = _TRUNCATION_MARKER.search(text)
+    marker: Final = TRUNCATION_MARKER.search(text)
     if marker is None:
         return text
     head: Final = text[: marker.start()]

@@ -1408,6 +1408,34 @@ class TestLiteLLMCompletionResponsesConfig:
         assert getattr(tool_call, "namespace", None) is None
 
 
+_SIGNED_ID: Final = f"call_paired{THOUGHT_SIGNATURE_SEPARATOR}{'A' * 3000}"
+_OTHER_SIGNED_ID: Final = f"call_paired{THOUGHT_SIGNATURE_SEPARATOR}{'B' * 3000}"
+
+
+def _paired_tool_ids(
+    assistant_message: type[dict] | type[Message],
+    result_message: type[dict] | type[Message],
+    call_ids: Sequence[str],
+    result_ids: Sequence[str],
+) -> tuple[list[object], list[object]]:
+    calls: Final = [
+        {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        for call_id in call_ids
+    ]
+    _, answered, *results = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+        messages=[
+            {"role": "user", "content": "What is the weather?"},
+            assistant_message(role="assistant", content=None, tool_calls=calls),
+            *(result_message(role="tool", content="sunny", tool_call_id=result_id) for result_id in result_ids),
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+    )
+    return (
+        [message_field(call, "id") for call in message_field(answered, "tool_calls")],
+        [message_field(result, "tool_call_id") for result in results],
+    )
+
+
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""
 
@@ -1835,54 +1863,74 @@ class TestFunctionCallTransformation:
         assert function.get("arguments") == '{"query": "attribute objects"}'
 
     @pytest.mark.parametrize("result_message", [dict, Message])
-    def test_ensure_tool_results_answer_the_signed_call_a_cut_result_id_names(
-        self, result_message: type[dict] | type[Message]
-    ):
-        signed_call_id: Final = f"call_weather{THOUGHT_SIGNATURE_SEPARATOR}{'S' * 3000}"
-        cut_result_id: Final = f"{signed_call_id[:1000]}...cut...{signed_call_id[-1000:]}"
-        weather_call: Final = {
-            "id": signed_call_id,
-            "type": "function",
-            "function": {"name": "get_weather", "arguments": "{}"},
-        }
-
-        fixed_messages: Final = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=[
-                {"role": "user", "content": "What is the weather?"},
-                {"role": "assistant", "content": None, "tool_calls": [weather_call]},
-                result_message(role="tool", content="sunny", tool_call_id=cut_result_id),
-            ],
-            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
-        )
-
-        assert [call.get("id") for call in fixed_messages[1].get("tool_calls", [])] == [signed_call_id]
-        assert fixed_messages[2].get("tool_call_id") == signed_call_id
-
+    @pytest.mark.parametrize("assistant_message", [dict, Message])
     @pytest.mark.parametrize(
-        "call_ids",
+        "call_ids, result_ids, paired_call_ids, paired_result_ids",
         [
-            (f"call_1{THOUGHT_SIGNATURE_SEPARATOR}AAA", f"call_1{THOUGHT_SIGNATURE_SEPARATOR}BBB"),
-            (f"call_1{THOUGHT_SIGNATURE_SEPARATOR}AAA", "call_1"),
+            pytest.param([_SIGNED_ID], ["call_paired"], [_SIGNED_ID], [_SIGNED_ID], id="unsigned-result"),
+            pytest.param(["call_paired"], [_SIGNED_ID], ["call_paired"], ["call_paired"], id="unsigned-call"),
+            pytest.param(
+                [_SIGNED_ID, _SIGNED_ID],
+                ["call_paired"],
+                [_SIGNED_ID, _SIGNED_ID],
+                [_SIGNED_ID],
+                id="unsigned-result-of-a-repeated-call",
+            ),
+            pytest.param(
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                id="both-results-signed",
+            ),
+            pytest.param(
+                [_SIGNED_ID, "call_paired"],
+                [_SIGNED_ID, "call_paired"],
+                [_SIGNED_ID, "call_paired"],
+                [_SIGNED_ID, "call_paired"],
+                id="one-result-of-each-call",
+            ),
+            pytest.param(
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                ["call_paired"],
+                [_SIGNED_ID, _OTHER_SIGNED_ID, "call_paired"],
+                ["call_paired"],
+                id="unsigned-result-two-calls-fit",
+            ),
+            pytest.param(
+                [_SIGNED_ID],
+                [_OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_OTHER_SIGNED_ID],
+                id="result-with-another-signature",
+            ),
+            pytest.param(
+                [f"call_paired0{THOUGHT_SIGNATURE_SEPARATOR}AAA"],
+                ["call_paired"],
+                [f"call_paired0{THOUGHT_SIGNATURE_SEPARATOR}AAA", "call_paired"],
+                ["call_paired"],
+                id="result-id-that-starts-the-call-id",
+            ),
         ],
     )
-    def test_ensure_tool_results_keep_the_call_their_id_names_exactly(self, call_ids: tuple[str, str]):
-        fixed_messages: Final = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=[
-                {"role": "user", "content": "What is the weather?"},
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
-                        for call_id in call_ids
-                    ],
-                },
-                *({"role": "tool", "content": "sunny", "tool_call_id": call_id} for call_id in call_ids),
-            ],
-            tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+    def test_ensure_tool_results_pair_with_the_one_call_whose_id_they_carry_signed_or_not(
+        self,
+        result_message: type[dict] | type[Message],
+        assistant_message: type[dict] | type[Message],
+        call_ids: list[str],
+        result_ids: list[str],
+        paired_call_ids: list[str],
+        paired_result_ids: list[str],
+    ):
+        assert _paired_tool_ids(assistant_message, result_message, call_ids, result_ids) == (
+            paired_call_ids,
+            paired_result_ids,
         )
 
-        assert [message.get("tool_call_id") for message in fixed_messages[2:]] == list(call_ids)
+    def test_ensure_tool_results_never_pair_with_a_call_that_has_no_id(self):
+        result_id: Final = f"{THOUGHT_SIGNATURE_SEPARATOR}AAA"
+
+        assert _paired_tool_ids(dict, dict, [""], [result_id]) == (["", result_id], [result_id])
 
 
 class TestToolChoiceTransformation:

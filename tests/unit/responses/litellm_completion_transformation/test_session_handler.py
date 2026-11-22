@@ -1341,19 +1341,29 @@ async def test_a_turn_after_a_compaction_item_keeps_the_stored_call_its_tool_out
     assert ("user", "Weather in Paris?") not in map(_role_and_content, session["messages"])
 
 
-@pytest.mark.asyncio
-async def test_a_turn_after_a_compaction_item_keeps_the_signed_call_its_cut_tool_output_answers():
-    signed_call_id: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{'S' * 3000}"
-    stored_output_call_id: Final = _sanitize_request_body_for_spend_logs_payload({"call_id": signed_call_id})["call_id"]
+_SIGNED_CALL_ID: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{'S' * 3000}"
+_CUT_SIGNED_CALL_ID: Final = _sanitize_request_body_for_spend_logs_payload({"call_id": _SIGNED_CALL_ID})["call_id"]
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_call_id, replayed_call_id",
+    [
+        pytest.param(_SIGNED_CALL_ID, _SIGNED_CALL_ID, id="call-stored-whole"),
+        pytest.param(_CUT_SIGNED_CALL_ID, "call_1", id="call-stored-cut"),
+    ],
+)
+async def test_a_turn_after_a_compaction_item_keeps_the_signed_call_its_cut_tool_output_answers(
+    stored_call_id: str, replayed_call_id: str
+):
     session: Final = await _history_from_stored_turns(
-        (_weather_call_turn(signed_call_id), _compacted_weather_answer("resp_compacted", stored_output_call_id)),
+        (_weather_call_turn(stored_call_id), _compacted_weather_answer("resp_compacted", _CUT_SIGNED_CALL_ID)),
         "resp_compacted",
     )
 
     roles: Final = [_role_and_content(message)[0] for message in session["messages"]]
     assert roles == ["user", "assistant", "tool", "assistant"]
-    assert _tool_call_ids(session["messages"][1]) == (signed_call_id,)
+    assert _tool_call_ids(session["messages"][1]) == (replayed_call_id,)
 
 
 _WHOLE_THINKING_BLOCK: Final = {"type": "thinking", "thinking": "Count.", "signature": "Eq0BCkYI=="}
@@ -1390,9 +1400,7 @@ async def test_a_turn_stored_with_a_cut_thinking_block_replays_without_it_and_sa
     answer: Final = session["messages"][-1]
     assert _role_and_content(answer) == ("assistant", "954")
     assert message_field(answer, "thinking_blocks") == [_WHOLE_THINKING_BLOCK]
-    assert [record.getMessage() for record in caplog.records if "resp_signed" in record.getMessage()] == [
-        "previous_response_id replay leaves out reasoning the stored turn resp_signed holds cut or redacted"
-    ]
+    assert [record.levelname for record in caplog.records if "resp_signed" in record.getMessage()] == ["WARNING"]
 
 
 @pytest.mark.asyncio
@@ -1405,18 +1413,19 @@ async def test_a_turn_stored_whole_replays_its_signed_thinking_block_silently(ca
         )
 
     assert message_field(session["messages"][-1], "thinking_blocks") == [signed_block]
-    assert not [record for record in caplog.records if "leaves out reasoning" in record.getMessage()]
+    assert not [record for record in caplog.records if "resp_signed" in record.getMessage()]
 
 
 @pytest.mark.asyncio
 async def test_a_tool_call_stored_with_a_cut_thought_signature_replays_unsigned():
-    cut_fields: Final = _stored_cut({"thought_signature": _LONG_SIGNATURE})
-    call: Final = {
-        "id": "call_1",
-        "type": "function",
-        "function": {"name": "get_weather", "arguments": "{}"},
-        "provider_specific_fields": cut_fields,
-    }
+    call: Final = _stored_cut(
+        {
+            "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG_SIGNATURE}",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+            "provider_specific_fields": {"thought_signature": _LONG_SIGNATURE},
+        }
+    )
 
     session: Final = await _history_from_stored_turns(
         (_answered_turn({"content": None, "tool_calls": [call]}),), "resp_signed"

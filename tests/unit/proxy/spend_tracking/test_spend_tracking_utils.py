@@ -1951,17 +1951,18 @@ def test_spend_row_masks_tokens_inside_the_signed_reasoning_it_keeps_whole(monke
 
 
 @pytest.mark.parametrize("wrapped", [lambda value: value, lambda value: [value]], ids=["object", "list-of-objects"])
-def test_spend_row_still_bounds_an_object_under_a_signature_key(
+def test_spend_row_still_bounds_and_masks_an_object_under_a_signature_key(
     monkeypatch: pytest.MonkeyPatch, wrapped: Callable[[dict[str, str]], object]
 ):
     monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
-    response: Final = {"thought_signatures": wrapped({"note": _text_past_the_db_cap()})}
+    response: Final = {"thought_signatures": wrapped({"note": _text_past_the_db_cap(), "api_key": "sk-in-a-signature"})}
 
     stored: Final = json.loads(
         _get_response_for_spend_logs_payload(cast(StandardLoggingPayload, {"response": response}))
     )
 
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in json.dumps(stored["thought_signatures"])
+    assert "sk-in-a-signature" not in json.dumps(stored["thought_signatures"])
 
 
 @pytest.mark.parametrize("ledger", [True, False])

@@ -23,8 +23,6 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
-    LITELLM_TRUNCATED_PAYLOAD_FIELD,
-    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
@@ -48,6 +46,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.db_truncation import TRUNCATION_MARKER, truncated_for_db
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import (
     BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
@@ -580,10 +579,6 @@ def _is_configured_model_group(  # pyright: ignore[reportUnusedFunction]  # shar
     return registry.resolve(model_group, kind="recognized") or model_group in registry.names(kind="team_public")
 
 
-_TRUNCATION_MARKER: Final = re.compile(
-    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
-    rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
-)
 _SCRUBBED_ERROR_TEXT_FIELDS: Final = frozenset(("error_message", "traceback"))
 
 
@@ -944,21 +939,8 @@ def _without_tokens(value: str) -> str:
     return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
 
 
-def _truncated_for_db(value: str, max_length: int) -> str:
-    if len(value) <= max_length:
-        return value
-    start_chars: Final = int(max_length * 0.35)
-    end_chars: Final = int(max_length * 0.65)
-    return (
-        f"{value[:start_chars]}"
-        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {len(value) - start_chars - end_chars} chars. "
-        f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-        f"{value[-min(end_chars, max_length - start_chars) :]}"
-    )
-
-
 def _compaction_summary_for_db(summary: str) -> str:
-    return _truncated_for_db(
+    return truncated_for_db(
         _without_tokens(summary), max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
     )
 
@@ -1009,7 +991,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            return _truncated_for_db(_without_tokens(value), max_string_length_prompt_in_db)
+            return truncated_for_db(_without_tokens(value), max_string_length_prompt_in_db)
         return value
 
     def _stored_whole(value: object) -> object:
@@ -1283,7 +1265,7 @@ _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
 _MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
 _LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
-_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
+_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({TRUNCATION_MARKER.pattern})")
 _IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
 _IPV6_ADDRESS_CANDIDATE: Final = re.compile(
     r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
