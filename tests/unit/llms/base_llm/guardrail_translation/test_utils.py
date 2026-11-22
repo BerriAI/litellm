@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_response_usage,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
@@ -32,3 +33,17 @@ def test_a_per_guardrail_skip_flag_wins_over_the_global_setting(
 
     assert effective_skip_system_message_for_guardrail(guardrail) is expected
     assert effective_skip_tool_message_for_guardrail(guardrail) is expected
+
+
+@pytest.mark.parametrize(
+    "undecodable_payload",
+    [b"9" * 5000, b"[" * 100_000 + b"]" * 100_000],
+    ids=["huge-number", "deep-nesting"],
+)
+def test_blocked_response_usage_reads_usage_past_a_data_line_it_cannot_decode(undecodable_payload: bytes) -> None:
+    message_start: Final = b'event: message_start\ndata: {"type": "message_start", "message": {"usage": {"input_tokens": 11, "output_tokens": 1}}}\n\n'
+    message_delta: Final = b'event: message_delta\ndata: {"type": "message_delta", "usage": {"output_tokens": 7}}\n\n'
+
+    stream: Final = message_start + b"event: ping\ndata: " + undecodable_payload + b"\n\n" + message_delta
+
+    assert blocked_response_usage([stream]) == {"input_tokens": 11, "output_tokens": 7}

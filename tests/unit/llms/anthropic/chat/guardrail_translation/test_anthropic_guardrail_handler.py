@@ -6,6 +6,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
+import logging
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -382,6 +383,38 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
 
         assert refusal.value.guardrail_name == "test"
         assert refusal.value.blocked_content is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream_ended", [True, False], ids=["ended", "mid-stream"])
+    async def test_a_text_event_split_across_data_lines_is_refused_before_the_guardrail_runs(self, stream_ended: bool):
+        split_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0,\n'
+            b'data: "delta": {"type": "text_delta", "text": "world"}}\n\n'
+        )
+        ended_chunks = self._ended_sse_chunks()
+        chunks: Final[list[bytes]] = [*ended_chunks[:3], split_text_chunk, *(ended_chunks[4:] if stream_ended else ())]
+
+        assert AnthropicMessagesHandler().get_streaming_scan_key(chunks) is None
+        with pytest.raises(GuardrailRaisedException):
+            await AnthropicMessagesHandler().process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._guardrail_that_must_not_run(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    def test_a_text_event_the_guardrail_cannot_decode_keeps_its_text_out_of_the_warning_log(self, caplog):
+        hidden_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+            b'"delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}, "padding": ' + b"9" * 5000 + b"}\n\n"
+        )
+        ended_chunks = self._ended_sse_chunks()
+        chunks: Final[list[bytes]] = [*ended_chunks[:3], hidden_text_chunk, *ended_chunks[4:]]
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            AnthropicMessagesHandler().get_streaming_string_so_far(chunks)
+
+        assert "4111" not in caplog.text
 
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:

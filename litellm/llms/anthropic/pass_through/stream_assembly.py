@@ -7,7 +7,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import is_undecodable_json_object, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_undecodable_json_object, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.chat.handler import (
@@ -465,9 +465,25 @@ def _has_undecodable_object_event(sse_stream: str) -> bool:
     )
 
 
-def has_undecodable_object_event(all_chunks: Sequence[object]) -> bool:
+def _is_json_no_reader_can_take(payload: str) -> bool:
+    try:
+        value: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    if value is None:
+        return False
+    event: Final = as_str_mapping(value)
+    return event is None or isinstance(event.get("type"), (list, dict))
+
+
+def has_unreadable_json_event(all_chunks: Sequence[object]) -> bool:
+    """Whether a frame's data is JSON that no reader of these streams can take as an event."""
     sse_stream: Final = _joined_sse_stream(all_chunks)
-    return sse_stream is not None and _has_undecodable_object_event(sse_stream)
+    return sse_stream is not None and any(
+        _is_json_no_reader_can_take(_sse_data_payload(event) or "") for event in split_sse_chunk_into_events(sse_stream)
+    )
 
 
 def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:

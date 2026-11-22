@@ -2494,8 +2494,9 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("first_frame", [True, False], ids=["first-frame", "after-block-start"])
 @pytest.mark.parametrize("padding", [b"[" * 100_000 + b"]" * 100_000, b"9" * 5000], ids=["deep", "huge-number"])
-async def test_apply_to_output_streaming_anthropic_sse_refuses_a_text_event_it_cannot_decode(padding):
+async def test_apply_to_output_streaming_anthropic_sse_refuses_a_text_event_it_cannot_decode(padding, first_frame):
     guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
@@ -2505,7 +2506,7 @@ async def test_apply_to_output_streaming_anthropic_sse_refuses_a_text_event_it_c
         b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
         b'"delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}, "padding": ' + padding + b"}\n\n"
     )
-    byte_chunks = [
+    opening_chunks = [
         _anthropic_sse(
             "message_start",
             {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
@@ -2514,11 +2515,17 @@ async def test_apply_to_output_streaming_anthropic_sse_refuses_a_text_event_it_c
             "content_block_start",
             {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         ),
-        hidden_card_chunk,
+    ]
+    closing_chunks = [
         _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
         _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
         _anthropic_sse("message_stop", {"type": "message_stop"}),
     ]
+    byte_chunks = (
+        [hidden_card_chunk, *opening_chunks, *closing_chunks]
+        if first_frame
+        else [*opening_chunks, hidden_card_chunk, *closing_chunks]
+    )
 
     async def mock_stream():
         for b in byte_chunks:
@@ -2538,6 +2545,49 @@ async def test_apply_to_output_streaming_anthropic_sse_refuses_a_text_event_it_c
         await collect()
 
     assert b"4111" not in b"".join(collected)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_masks_past_a_leading_non_object_frame():
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+    byte_chunks = [
+        b"data: 5\n\n",
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        )
+    ]
+
+    assert b"4111" not in b"".join(collected)
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
 
 
 @pytest.mark.asyncio
@@ -3457,6 +3507,24 @@ def test_unmask_sse_bytes_chunk_handles_malformed_json():
     chunk = b"data: {not valid json}\n\n"
     result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
     assert result == chunk
+
+
+@pytest.mark.parametrize(
+    "undecodable_payload",
+    [b"9" * 5000, b"[" * 100_000 + b"]" * 100_000],
+    ids=["huge-number", "deep-nesting"],
+)
+def test_unmask_sse_bytes_chunk_unmasks_the_next_event_past_one_it_cannot_decode(undecodable_payload: bytes):
+    undecodable_line = b"data: " + undecodable_payload
+    masked_delta = b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi <PERSON_1>"}}'
+
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        undecodable_line + b"\n\n" + masked_delta + b"\n\n", {"<PERSON_1>": "Bobby"}
+    )
+
+    undecodable_out, delta_out = result.split(b"\n\n")[:2]
+    assert undecodable_out == undecodable_line
+    assert json.loads(delta_out.removeprefix(b"data: "))["delta"]["text"] == "Hi Bobby"
 
 
 def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():

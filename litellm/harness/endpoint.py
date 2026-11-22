@@ -212,7 +212,7 @@ class SSEUsageParser:
             return
         try:
             event: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(payload))
-        except ValueError:
+        except (ValueError, RecursionError):
             return
         if isinstance(event, Mapping):
             self.absorb(_JSON_OBJECT_ADAPTER.validate_python(event))
