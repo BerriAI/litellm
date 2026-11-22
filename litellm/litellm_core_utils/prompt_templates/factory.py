@@ -1597,12 +1597,15 @@ def convert_to_gemini_tool_call_result(
                     # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
                     source = content.get("source", {})
                     if isinstance(source, dict) and source.get("type") == "base64":
+                        base64_source = cast(  # cast-ok: Anthropic base64 source identified by its type
+                            AnthropicContentParamSource, source
+                        )
                         try:
                             media_parts.append(
                                 {
                                     "inline_data": BlobType(
-                                        data=source.get("data", ""),
-                                        mime_type=source.get("media_type", "image/jpeg"),
+                                        data=base64_source.get("data", ""),
+                                        mime_type=base64_source.get("media_type", "image/jpeg"),
                                     )
                                 }
                             )
