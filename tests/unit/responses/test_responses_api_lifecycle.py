@@ -9,6 +9,7 @@ import httpx
 import openai
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -600,6 +601,7 @@ async def test_a_routed_create_on_a_deployment_that_forces_stream_still_streams(
     assert event_types == ("response.output_text.delta", "response.completed")
     assert json.loads(call.request.content)["stream"] is True
 
+
 class _SuccessLog(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -664,3 +666,184 @@ async def test_cancel_responses_reply_carries_the_id_retrieve_gives_for_the_same
     assert isinstance(retrieved, ResponsesAPIResponse)
     assert cancelled.id == retrieved.id
     assert cancelled.id != upstream_id
+
+
+LoggedOperation: TypeAlias = Literal["create", "compact", "get", "delete", "list_input_items", "cancel"]
+_LOGGED_CALL_ID: Final = "provider-label-call"
+_SYNTHETIC_MODEL: Final = "provider-label-model"
+_SYNTHETIC_API_KEY: Final = "sk-test"
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderEndpoint:
+    provider: str
+    api_base: str
+    responses_url: str
+    compact_url: str
+    api_version: str | None = None
+
+    @property
+    def model(self) -> str:
+        return f"{self.provider}/{_SYNTHETIC_MODEL}"
+
+
+_OPENAI_ENDPOINT: Final = _ProviderEndpoint(
+    provider="openai",
+    api_base="https://api.openai.com/v1",
+    responses_url="https://api.openai.com/v1/responses",
+    compact_url="https://api.openai.com/v1/responses/compact",
+)
+_AZURE_ENDPOINT: Final = _ProviderEndpoint(
+    provider="azure",
+    api_base="https://example-resource.openai.azure.com",
+    responses_url="https://example-resource.openai.azure.com/openai/responses",
+    compact_url="https://example-resource.openai.azure.com/openai/v1/responses/compact",
+    api_version="2025-03-01-preview",
+)
+_LOGGED_PROVIDER_CASES: Final[tuple[tuple[LoggedOperation, _ProviderEndpoint], ...]] = (
+    ("create", _OPENAI_ENDPOINT),
+    ("create", _AZURE_ENDPOINT),
+    ("compact", _OPENAI_ENDPOINT),
+    ("compact", _AZURE_ENDPOINT),
+    ("get", _OPENAI_ENDPOINT),
+    ("get", _AZURE_ENDPOINT),
+    ("delete", _OPENAI_ENDPOINT),
+    ("delete", _AZURE_ENDPOINT),
+    ("list_input_items", _OPENAI_ENDPOINT),
+    ("list_input_items", _AZURE_ENDPOINT),
+    ("cancel", _OPENAI_ENDPOINT),
+    ("cancel", _AZURE_ENDPOINT),
+)
+
+
+class _LoggedLitellmParams(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+        self.logged: queue.Queue[object] = queue.Queue()
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if kwargs.get("litellm_call_id") == _LOGGED_CALL_ID:
+            self.logged.put(kwargs.get("litellm_params"))
+
+    def logged_provider(self) -> object:
+        return _LITELLM_PARAMS.validate_python(self.logged.get(timeout=10)).get("custom_llm_provider")
+
+
+def _mock_response_lifecycle(mock_router: respx.MockRouter, endpoint: _ProviderEndpoint) -> None:
+    stored_url: Final = f"{endpoint.responses_url}/{_STORED_RESPONSE_ID}"
+    stored: Final = {**_stored_response("completed"), "model": _SYNTHETIC_MODEL}
+    deleted: Final = {"id": _STORED_RESPONSE_ID, "object": "response", "deleted": True}
+    mock_router.post(url__startswith=f"{stored_url}/cancel").mock(return_value=httpx.Response(200, json=stored))
+    mock_router.get(url__startswith=f"{stored_url}/input_items").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": []})
+    )
+    mock_router.post(url__startswith=endpoint.compact_url).mock(return_value=httpx.Response(200, json=stored))
+    mock_router.post(url__startswith=endpoint.responses_url).mock(return_value=httpx.Response(200, json=stored))
+    mock_router.delete(url__startswith=stored_url).mock(return_value=httpx.Response(200, json=deleted))
+    mock_router.get(url__startswith=stored_url).mock(return_value=httpx.Response(200, json=stored))
+
+
+def _encoded_response_id(endpoint: _ProviderEndpoint) -> str:
+    created: Final = litellm.responses(
+        model=endpoint.model,
+        input="hello",
+        api_key=_SYNTHETIC_API_KEY,
+        api_base=endpoint.api_base,
+        api_version=endpoint.api_version,
+    )
+    assert isinstance(created, ResponsesAPIResponse)
+    return created.id
+
+
+def _run_logged_operation(operation: LoggedOperation, endpoint: _ProviderEndpoint, encoded_id: str) -> None:
+    match operation:
+        case "create":
+            litellm.responses(
+                model=endpoint.model,
+                input="hello",
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "compact":
+            litellm.compact_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                model=endpoint.model,
+                input="hello",
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "get":
+            litellm.get_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "delete":
+            litellm.delete_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "list_input_items":
+            litellm.list_input_items(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "cancel":
+            litellm.cancel_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+
+
+@pytest.mark.parametrize(
+    ("operation", "endpoint"),
+    _LOGGED_PROVIDER_CASES,
+    ids=tuple(f"{operation}-{endpoint.provider}" for operation, endpoint in _LOGGED_PROVIDER_CASES),
+)
+def test_a_response_operation_logs_the_provider_it_inferred_or_decoded(
+    monkeypatch: pytest.MonkeyPatch, operation: LoggedOperation, endpoint: _ProviderEndpoint
+) -> None:
+    provider_log: Final = _LoggedLitellmParams()
+    with respx.mock(assert_all_called=False) as mock_router:
+        _mock_response_lifecycle(mock_router, endpoint)
+        encoded_id: Final = _encoded_response_id(endpoint)
+        monkeypatch.setattr(litellm, "callbacks", [provider_log])
+        _run_logged_operation(operation, endpoint, encoded_id)
+
+    assert provider_log.logged_provider() == endpoint.provider
+
+
+def test_a_stale_explicit_provider_logs_the_provider_decoded_from_the_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_log: Final = _LoggedLitellmParams()
+    with respx.mock(assert_all_called=False) as mock_router:
+        _mock_response_lifecycle(mock_router, _OPENAI_ENDPOINT)
+        encoded_id: Final = _encoded_response_id(_OPENAI_ENDPOINT)
+        monkeypatch.setattr(litellm, "callbacks", [provider_log])
+        litellm.get_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+            response_id=encoded_id,
+            custom_llm_provider=_AZURE_ENDPOINT.provider,
+            litellm_call_id=_LOGGED_CALL_ID,
+            api_key=_SYNTHETIC_API_KEY,
+            api_base=_OPENAI_ENDPOINT.api_base,
+        )
+
+    assert provider_log.logged_provider() == _OPENAI_ENDPOINT.provider

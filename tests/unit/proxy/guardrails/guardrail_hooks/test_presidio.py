@@ -1783,6 +1783,48 @@ async def test_pii_tokens_in_metadata_used_for_unmasking():
     assert response.choices[0].message.content == "Hello John, how can I help you?"
 
 
+@pytest.mark.asyncio
+async def test_output_unmasking_restores_server_tool_call_arguments(mock_user_api_key: UserAPIKeyAuth) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    provider_specific_fields={
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "<PERSON_1> persimmon"}'},
+                            }
+                        ]
+                    },
+                ),
+            )
+        ]
+    )
+
+    result: Final = await guardrail.async_post_call_success_hook(
+        data={"metadata": {"pii_tokens": {"<PERSON_1>": "John Smith"}}},
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+
+    assert result.choices[0].message.provider_specific_fields == {
+        "server_tool_calls": [
+            {
+                "id": "srvtoolu_01",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "John Smith persimmon"}'},
+            }
+        ]
+    }
+
+
 @pytest.mark.parametrize(
     "initial_hook",
     ["pre_call", "during_call", "pre_mcp_call"],
@@ -3780,6 +3822,24 @@ def test_unmask_sse_bytes_chunk_handles_malformed_json():
     assert result == chunk
 
 
+@pytest.mark.parametrize(
+    "undecodable_payload",
+    [b"9" * 5000, b"[" * 100_000 + b"]" * 100_000],
+    ids=["huge-number", "deep-nesting"],
+)
+def test_unmask_sse_bytes_chunk_unmasks_the_next_event_past_one_it_cannot_decode(undecodable_payload: bytes):
+    undecodable_line = b"data: " + undecodable_payload
+    masked_delta = b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi <PERSON_1>"}}'
+
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        undecodable_line + b"\n\n" + masked_delta + b"\n\n", {"<PERSON_1>": "Bobby"}
+    )
+
+    undecodable_out, delta_out = result.split(b"\n\n")[:2]
+    assert undecodable_out == undecodable_line
+    assert json.loads(delta_out.removeprefix(b"data: "))["delta"]["text"] == "Hi Bobby"
+
+
 def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
     chunk = b"\xff\xfe invalid utf-8"
     result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
@@ -5438,3 +5498,18 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_its_verdict_on_a_request_dict_that_starts_empty() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        guardrail_name="presidio-pii",
+        mock_testing=True,
+        mock_redacted_text={"text": "my name is <PERSON>"},
+    )
+    request_data: Final[dict[str, object]] = {}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["my name is Jane"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_name"] for record in recorded] == ["presidio-pii"]

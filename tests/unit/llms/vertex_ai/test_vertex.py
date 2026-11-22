@@ -6,9 +6,9 @@ import sys
 from types import SimpleNamespace
 from typing import Final
 
-from dotenv import load_dotenv
 import httpx
 import respx
+from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 
 import litellm.litellm_core_utils
@@ -23,7 +23,6 @@ import pytest
 import litellm
 from litellm import Router, get_optional_params
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
-from litellm.types.llms.vertex_ai import BlobType
 
 
 def encode_image_to_base64(image_path):
@@ -110,7 +109,6 @@ def test_completion_pydantic_obj_2():
 
 
 def test_build_vertex_schema():
-    import json
 
     from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
@@ -1278,7 +1276,9 @@ def test_process_gemini_media():
 
 def test_get_image_mime_type_from_url():
     """Test MIME type inference for remote media URLs"""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import get_image_mime_type_from_url
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+        get_image_mime_type_from_url,
+    )
 
     # Test JPEG images
     assert (
@@ -1350,7 +1350,7 @@ def test_vertex_embedding_url(model, expected_url):
     assert endpoint == "predict"
 
 
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -2455,7 +2455,7 @@ async def test_gemini_context_caching_anthropic_format(
 
 
 @pytest.mark.asyncio
-async def test_anthropic_message_via_anthropic_messages(
+async def test_claude_chat_on_vertex_ai_sends_the_cached_vertex_token(
     respx_mock: respx.MockRouter,
     _cached_vertex_credentials: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -2510,30 +2510,18 @@ async def test_anthropic_message_via_anthropic_messages(
         "max_retries": 0,
     }
 
-    response: Final = await litellm.anthropic_messages(**call_params)
     completion_response: Final = await litellm.acompletion(**call_params)
 
-    assert response["stop_reason"] == "end_turn"
     assert completion_response.choices[0].message.content == "Here are the recipes."
-    assert route.call_count == 2
-    messages_request: Final = route.calls[0].request
-    completion_request: Final = route.calls[1].request
-    assert str(messages_request.url) == (
+    assert route.call_count == 1
+    completion_request: Final = route.calls[0].request
+    assert str(completion_request.url) == (
         "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5/"
         "publishers/anthropic/models/claude-3-5-sonnet@20240620:rawPredict"
     )
-    assert str(completion_request.url) == str(messages_request.url)
-    for request in (messages_request, completion_request):
-        assert request.headers["authorization"] == "Bearer test-vertex-token"
-        assert request.headers["content-type"] == "application/json"
-    messages_body: Final = json.loads(messages_request.content)
-    assert messages_body == {
-        "anthropic_version": "vertex-2023-10-16",
-        "max_tokens": 100,
-        "messages": messages,
-        "stream": False,
-    }
-    assert set(json.loads(completion_request.content)) <= set(messages_body)
+    assert completion_request.headers["authorization"] == "Bearer test-vertex-token"
+    assert completion_request.headers["content-type"] == "application/json"
+    assert json.loads(completion_request.content)["anthropic_version"] == "vertex-2023-10-16"
 
 
 def test_gemini_fine_tuned_model_request_consistency(

@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Final, Protocol, TypeVar, cast  # noqa: TID251  # trusts the native stub at the binding boundary
 
-_Call: Final = TypeVar("_Call")
+_Call = TypeVar("_Call")
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,8 +101,10 @@ def synchronous(native: Callable[[_Call], object]) -> Callable[[_Call], object]:
     return lambda call: run(_execution(native(call)), SyncStream)
 
 
-def asynchronous(native: Callable[[_Call], object]) -> Callable[[_Call], Awaitable[object]]:
-    return lambda call: drive(_execution(native(call)), AsyncStream)
+def asynchronous(
+    native: Callable[[_Call], object], open_stream: Callable[[Execution, object], object] | None = None
+) -> Callable[[_Call], Awaitable[object]]:
+    return lambda call: drive(_execution(native(call)), open_stream or AsyncStream)
 
 
 def _execution(value: object) -> Execution:

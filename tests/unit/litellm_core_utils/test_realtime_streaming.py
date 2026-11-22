@@ -1057,6 +1057,147 @@ async def test_transcription_captured_in_backend_to_client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transcript", [None, 123, ["a"], {"text": "a"}])
+async def test_a_non_string_transcript_does_not_end_the_session(transcript: object) -> None:
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": transcript, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed", "response.done"]
+    backend_ws.send.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transcript", [None, 123, ["a"]])
+async def test_a_non_string_transcript_fails_the_session_when_a_transcript_guardrail_would_screen_it(
+    transcript: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": transcript, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    close: Final = await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    assert close.code == 1011
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed"]
+    backend_ws.send.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("listens_only", "sent_into_the_call"), [(True, []), (False, ["session.update", "response.create"])]
+)
+async def test_a_session_that_only_listens_to_a_call_sends_nothing_into_it_when_a_transcript_guardrail_applies(
+    listens_only: bool, sent_into_the_call: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    events: Final = (
+        {"type": "session.created", "session": {"id": "sess_1"}},
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": "hello", "item_id": "i"},
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[*(json.dumps(event).encode() for event in events), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, listens_only=listens_only
+    ).backend_to_client_send_messages()
+
+    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.call_args_list] == sent_into_the_call
+
+
+def _native_lifecycle_transcription_guardrail() -> CustomGuardrail:
+    class _NativeLifecycleGuardrail(CustomGuardrail):
+        use_native_lifecycle_hooks = True
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    return _NativeLifecycleGuardrail(
+        guardrail_name="test_native_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+
+
+def _tool_results_only_transcription_guardrail() -> CustomGuardrail:
+    class _ToolResultsOnlyGuardrail(CustomGuardrail):
+        scan_only_tool_results = True
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    return _ToolResultsOnlyGuardrail(
+        guardrail_name="test_tool_results_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_factory", [_native_lifecycle_transcription_guardrail, _tool_results_only_transcription_guardrail]
+)
+async def test_a_non_string_transcript_keeps_the_session_when_no_guardrail_would_screen_the_users_turn(
+    guardrail_factory: Callable[[], CustomGuardrail], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [guardrail_factory()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": None, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed", "response.done"]
+
+
+@pytest.mark.asyncio
 async def test_transcription_session_captures_usage_and_skips_response_create():
     """
     For a transcription-only session (session.type == "transcription", e.g.
@@ -1956,6 +2097,116 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_response_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    class SecretBlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict,
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            if any("hunter2" in text for text in inputs.get("texts", [])):
+                raise HTTPException(status_code=400, detail={"error": "hunter2 is not allowed"})
+            return inputs
+
+    def item_create(role: str, text: str) -> str:
+        return json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": role, "content": [{"type": "input_text", "text": text}]},
+            }
+        )
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            SecretBlockingGuardrail(
+                guardrail_name="no-secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+            )
+        ],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            item_create("system", "never mention hunter2"),
+            item_create("user", "what is the weather"),
+            json.dumps({"type": "response.create"}),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, _mock_logging())
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend: Final = [json.loads(call.args[0]) for call in backend_ws.send.call_args_list]
+    clean_index: Final = next(
+        index
+        for index, event in enumerate(sent_to_backend)
+        if event.get("item", {}).get("content", [{}])[0].get("text") == "what is the weather"
+    )
+    assert [event["type"] for event in sent_to_backend[clean_index + 1 :]] == ["response.create"], sent_to_backend
+
+
+@pytest.mark.asyncio
+async def test_realtime_text_input_masking_guardrail_forwards_only_the_masked_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MaskingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict,
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            texts: Final = inputs.get("texts", [])
+            return {**inputs, "texts": [text.replace("test@example.com", "[EMAIL]") for text in texts]}
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [MaskingGuardrail(guardrail_name="email-masker", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "My email is test@example.com"}],
+                    },
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+    logging_obj: Final = _mock_logging()
+    logging_obj.pre_call = MagicMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).client_ack_messages()
+
+    sent_to_backend: Final = json.dumps([c.args[0] for c in backend_ws.send.call_args_list if c.args])
+    assert "test@example.com" not in sent_to_backend
+    assert "My email is [EMAIL]" in sent_to_backend
+    assert client_ws.send_text.call_args_list == []
+
+
+@pytest.mark.asyncio
 async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a client-supplied function_call_output whose content triggers a
@@ -2386,6 +2637,7 @@ async def test_provider_path_suppresses_duplicate_session_created_after_syntheti
     backend_ws.send = AsyncMock()
 
     provider_config = MagicMock()
+    provider_config.unbilled_response_on_session_close.return_value = None
     provider_config.transform_realtime_response = MagicMock(
         return_value={
             "response": [
@@ -2438,6 +2690,7 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
     backend_ws.send = AsyncMock()
 
     provider_config = MagicMock()
+    provider_config.unbilled_response_on_session_close.return_value = None
     provider_config.transform_realtime_response = MagicMock(
         return_value={
             "response": [
@@ -2841,7 +3094,9 @@ async def test_default_mode_merges_every_session_update_sent_before_the_first_co
     instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
     modalities_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [instructions_update, modalities_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [instructions_update, modalities_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -2944,9 +3199,7 @@ async def test_default_mode_drops_a_late_session_update_quietly_under_drop_param
     ],
 )
 async def test_default_mode_rejects_an_output_modality_the_model_cannot_produce(monkeypatch, model, requested_output):
-    update: Final = json.dumps(
-        {"type": "session.update", "session": {**requested_output, "instructions": "Be brief."}}
-    )
+    update: Final = json.dumps({"type": "session.update", "session": {**requested_output, "instructions": "Be brief."}})
     streaming, backend_ws = _gemini_default_mode_streaming(monkeypatch, [update, _TEXT_ITEM_CREATE], model=model)
 
     await streaming.client_ack_messages()
@@ -3021,7 +3274,9 @@ async def test_default_mode_folds_transcription_guardrail_vad_disable_into_the_m
         {"type": "session.update", "session": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 900}}}
     )
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [instructions_update, vad_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [instructions_update, vad_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -3120,7 +3375,9 @@ async def test_default_mode_sends_the_held_setup_when_no_content_arrives_before_
     backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock(side_effect=lambda frame: setup_sent.set())
     streaming: Final = RealTimeStreaming(
-        _client_ws_receiving(instructions_update_then_the_deadline_passes, late_update_once_the_setup_is_out, disconnect),
+        _client_ws_receiving(
+            instructions_update_then_the_deadline_passes, late_update_once_the_setup_is_out, disconnect
+        ),
         backend_ws,
         MagicMock(),
         provider_config=GeminiRealtimeConfig(),
@@ -3148,7 +3405,12 @@ async def test_default_mode_refuses_held_session_updates_past_the_size_cap(monke
     half_the_cap: Final = RealTimeStreaming._MAX_BUFFERED_BYTES // 2
     streaming, backend_ws = _gemini_default_mode_streaming(
         monkeypatch,
-        [instructions_update("a" * half_the_cap), instructions_update("b" * half_the_cap), _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        [
+            instructions_update("a" * half_the_cap),
+            instructions_update("b" * half_the_cap),
+            _TEXT_ITEM_CREATE,
+            _RESPONSE_CREATE,
+        ],
         model="gemini-live-2.5-flash",
     )
 
@@ -3251,7 +3513,9 @@ async def test_default_mode_acknowledges_an_unchanged_session_update_after_conte
         {"type": "session.update", "session": {"modalities": ["text"], "instructions": "Be brief."}}
     )
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [session_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, session_update], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [session_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, session_update],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -3898,6 +4162,56 @@ async def test_translation_disconnect_bills_sent_input_audio(
     ]
 
 
+@pytest.mark.parametrize(
+    ("closed_event_at", "billed_seconds"),
+    [(None, 30.0), (12.0, 12.0)],
+    ids=["until-the-sideband-ends", "until-the-provider-closes-the-session"],
+)
+def test_translation_call_the_proxy_listens_to_bills_the_time_it_ran(
+    closed_event_at: float | None, billed_seconds: float
+) -> None:
+    clock: Final = _SteppedClock(1000.0)
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=MagicMock(),
+        logging_obj=_mock_logging(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+        listens_only=True,
+        clock=clock,
+    )
+    if closed_event_at is not None:
+        clock.now = 1000.0 + closed_event_at
+        streaming._capture_translation_output_audio({"type": "session.closed"})
+    clock.now = 1030.0
+    streaming._finalize_translation_usage()
+    clock.now = 1090.0
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": billed_seconds, "output_seconds": 0.0},
+        }
+    ]
+
+
+def test_translation_session_the_proxy_relays_is_not_billed_by_the_clock() -> None:
+    clock: Final = _SteppedClock(1000.0)
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=MagicMock(),
+        logging_obj=_mock_logging(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+        clock=clock,
+    )
+    clock.now = 1030.0
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rate", (24000, 1, 0, -1, float("nan"), float("inf")))
 async def test_translation_client_format_updates_do_not_change_billed_duration(rate: int | float) -> None:
@@ -4525,6 +4839,7 @@ async def test_session_close_flushes_unbilled_transcription_usage():
     provider_config: Final = MagicMock()
     provider_config.transform_realtime_response = MagicMock(return_value=transcript_frame)
     provider_config.unbilled_usage_on_session_close = MagicMock(return_value=usage)
+    provider_config.unbilled_response_on_session_close = MagicMock(return_value=None)
     provider_config.session_refusal = MagicMock(return_value=None)
 
     streaming: Final = RealTimeStreaming(
@@ -4562,6 +4877,53 @@ async def test_session_close_flushes_unbilled_transcription_usage():
 
 
 @pytest.mark.asyncio
+async def test_session_closed_after_gemini_barge_in_still_bills_the_interrupted_response():
+    from typing import Final
+
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    audio_turn: Final = {
+        "serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}
+    }
+    interrupted_with_usage: Final = {
+        "serverContent": {"interrupted": True},
+        "usageMetadata": {"promptTokenCount": 30, "responseTokenCount": 12, "totalTokenCount": 42},
+    }
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps(audio_turn), json.dumps(interrupted_with_usage), ConnectionClosed(None, None)]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-2.5-flash-native-audio",
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    forwarded: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    created_id: Final = next(event["response"]["id"] for event in forwarded if event["type"] == "response.created")
+    assert [event["type"] for event in forwarded if event["type"] == "response.done"] == [], forwarded
+    logging_obj.dispatch_success_handlers.assert_called_once()
+    logged_messages: Final = logging_obj.dispatch_success_handlers.call_args.args[0]
+    logged_done: Final = [
+        message for message in logged_messages if isinstance(message, dict) and message.get("type") == "response.done"
+    ]
+    assert [
+        (done["response"]["id"], done["response"]["status"], done["response"]["usage"]["total_tokens"])
+        for done in logged_done
+    ] == [(created_id, "cancelled", 42)], logged_done
+
+
+@pytest.mark.asyncio
 async def test_session_close_flush_noop_without_unbilled_usage():
     """Everything already billed mid-stream: the session-close flush must not append
     a duplicate transcription event."""
@@ -4578,6 +4940,7 @@ async def test_session_close_flush_noop_without_unbilled_usage():
 
     provider_config: Final = MagicMock()
     provider_config.unbilled_usage_on_session_close = MagicMock(return_value=None)
+    provider_config.unbilled_response_on_session_close = MagicMock(return_value=None)
 
     streaming: Final = RealTimeStreaming(
         client_ws,
@@ -4749,6 +5112,52 @@ async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
 
     assert session.logging.logged_failures == (upstream_close,)
     assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_close", "billed"),
+    [
+        (ConnectionClosed(None, None), True),
+        (ConnectionClosed(Close(1000, "observer_writer_exit"), None), True),
+        (ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None), False),
+    ],
+    ids=["dropped", "closed-normally", "refused"],
+)
+async def test_translation_call_nobody_spoke_on_is_billed_for_the_time_the_proxy_listened(
+    upstream_close: ConnectionClosed, billed: bool
+) -> None:
+    clock: Final = _SteppedClock(1000.0)
+    logging: Final = _RecordingLogging()
+    worker: Final = _InlineLoggingWorker()
+
+    async def recv(**_kwargs: object) -> str:
+        clock.now = 1040.0
+        raise upstream_close
+
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = recv
+    streaming: Final = RealTimeStreaming(
+        _client_ws_that_never_sends(),
+        backend_ws,
+        logging,
+        model="gpt-realtime-translate",
+        logging_worker=worker,
+        translation_session=True,
+        listens_only=True,
+        clock=clock,
+    )
+
+    await streaming.backend_to_client_send_messages()
+    await worker.drain()
+
+    expected_sessions: Final = (
+        (({"type": "session.closed", "usage": {"type": "duration", "input_seconds": 40.0, "output_seconds": 0.0}},),)
+        if billed
+        else ()
+    )
+    assert logging.logged_sessions == expected_sessions
+    assert logging.logged_failures == (() if billed else (upstream_close,))
 
 
 class _RefusingRealtimeConfig(_PassthroughRealtimeConfig):
@@ -5258,6 +5667,7 @@ async def test_transcription_guardrail_sends_no_session_update_after_transcripti
     provider_config: Final = MagicMock() if uses_provider_config else None
     if provider_config is not None:
         provider_config.requires_session_configuration.return_value = True
+        provider_config.unbilled_response_on_session_close.return_value = None
         provider_config.transform_realtime_response.return_value = {
             "response": session_created,
             "current_output_item_id": None,
@@ -5296,6 +5706,7 @@ async def test_provider_transcription_session_created_flags_session_without_inte
     monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
     session_created: Final = {"type": "session.created", "session": {"id": "sess_1", "type": "transcription"}}
     provider_config: Final = MagicMock()
+    provider_config.unbilled_response_on_session_close.return_value = None
     provider_config.requires_session_configuration.return_value = False
     provider_config.transform_realtime_response.return_value = {
         "response": session_created,
@@ -5321,6 +5732,48 @@ async def test_provider_transcription_session_created_flags_session_without_inte
     sent_to_client: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
     assert [event["type"] for event in sent_to_client] == ["session.created"], sent_to_client
     backend_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("synthetic_session_type", "forwarded_turn_detection"),
+    [
+        pytest.param("transcription", None, id="transcription-session-keeps-push-to-talk"),
+        pytest.param(
+            "realtime", {"type": "server_vad", "create_response": False}, id="voice-session-still-gets-the-gate"
+        ),
+    ],
+)
+async def test_synthetic_session_created_decides_whether_guardrail_gates_push_to_talk(
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_session_type: str,
+    forwarded_turn_detection: dict[str, object] | None,
+):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"turn_detection": None}}},
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, _mock_logging())
+
+    await streaming.send_synthetic_session_created(
+        {"type": "session.created", "session": {"id": "sess_1", "type": synthetic_session_type}}
+    )
+    await streaming.client_ack_messages()
+
+    assert json.loads(client_ws.send_text.await_args_list[0].args[0])["session"]["type"] == synthetic_session_type
+    forwarded: Final = json.loads(backend_ws.send.await_args.args[0])
+    assert forwarded["session"]["audio"]["input"]["turn_detection"] == forwarded_turn_detection, forwarded
 
 
 @pytest.mark.asyncio
@@ -5375,6 +5828,7 @@ def _passthrough_transcription_config() -> MagicMock:
     provider_config.requires_session_configuration.return_value = False
     provider_config.transform_realtime_response.side_effect = transform_response
     provider_config.transform_realtime_request.side_effect = transform_request
+    provider_config.unbilled_response_on_session_close.return_value = None
     return provider_config
 
 
@@ -6027,3 +6481,121 @@ async def test_unbridged_backend_receives_session_update_and_response_create_as_
     await streaming.client_ack_messages()
 
     assert tuple(json.loads(call.args[0]) for call in backend_ws.send.call_args_list) == client_events
+
+
+_AVATAR_UPDATE: Final = json.dumps(
+    {"type": "session.update", "session": {"output_modalities": ["video"], "avatar": "Ben", "turn_detection": None}}
+)
+
+
+def _avatar_streaming(client_messages: Sequence[str]) -> tuple[RealTimeStreaming, MagicMock]:
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    client_ws: Final = MagicMock()
+    client_ws.receive_text = AsyncMock(side_effect=[*client_messages, ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=[json.dumps({"setupComplete": {}}).encode(), ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1"),
+        model="gemini-3.8-live",
+    )
+    return streaming, backend_ws
+
+
+def _backend_frame_kinds(backend_ws: MagicMock) -> list[str]:
+    return [next(iter(json.loads(call.args[0]))) for call in backend_ws.send.await_args_list]
+
+
+def _audio_append(audio: str) -> str:
+    return json.dumps({"type": "input_audio_buffer.append", "audio": audio})
+
+
+@pytest.mark.asyncio
+async def test_avatar_setup_holds_client_content_until_setup_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Vertex answers content sent before an avatar setupComplete with
+    "Session is not set up yet" and never replies to it."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    streaming, backend_ws = _avatar_streaming([_AVATAR_UPDATE, _TEXT_ITEM_CREATE, _RESPONSE_CREATE])
+
+    await streaming.client_ack_messages()
+    sent_before_setup_complete: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    await streaming.backend_to_client_send_messages()
+
+    assert [next(iter(frame)) for frame in sent_before_setup_complete] == ["setup"]
+    assert sent_before_setup_complete[0]["setup"]["avatarConfig"] == {"avatarName": "Ben"}
+    assert _backend_frame_kinds(backend_ws) == ["setup", "clientContent"]
+
+
+@pytest.mark.asyncio
+async def test_avatar_setup_holds_the_commit_that_triggered_it_behind_its_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    commit: Final = json.dumps({"type": "input_audio_buffer.commit"})
+    streaming, backend_ws = _avatar_streaming([_AVATAR_UPDATE, _audio_append("AAAA"), commit])
+
+    await streaming.client_ack_messages()
+    kinds_before_setup_complete: Final = _backend_frame_kinds(backend_ws)
+    await streaming.backend_to_client_send_messages()
+
+    assert kinds_before_setup_complete == ["setup"]
+    frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    audio_position: Final = next(
+        index for index, frame in enumerate(frames) if "audio" in frame.get("realtimeInput", {})
+    )
+    end_position: Final = next(
+        index for index, frame in enumerate(frames) if "activityEnd" in frame.get("realtimeInput", {})
+    )
+    assert 0 < audio_position < end_position
+
+
+@pytest.mark.asyncio
+async def test_avatar_setup_drops_audio_the_client_cleared_while_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    clear: Final = json.dumps({"type": "input_audio_buffer.clear"})
+    streaming, backend_ws = _avatar_streaming(
+        [_AVATAR_UPDATE, _TEXT_ITEM_CREATE, _audio_append("DISCARDED"), clear, _audio_append("KEPT")]
+    )
+
+    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
+
+    sent_audio: Final = [
+        frame["realtimeInput"]["audio"]["data"]
+        for frame in (json.loads(call.args[0]) for call in backend_ws.send.await_args_list)
+        if "audio" in frame.get("realtimeInput", {})
+    ]
+    assert sent_audio == ["KEPT"]
+
+
+@pytest.mark.asyncio
+async def test_frame_arriving_while_held_content_is_released_stays_behind_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    streaming, backend_ws = _avatar_streaming(
+        [_AVATAR_UPDATE, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, _audio_append("FIRST"), _audio_append("SECOND")]
+    )
+    await streaming.client_ack_messages()
+    arrived: Final = asyncio.Event()
+
+    async def client_frame_arrives_mid_release(frame: str) -> None:
+        if "FIRST" in frame and not arrived.is_set():
+            arrived.set()
+            await streaming._send_to_backend(_audio_append("LATE"))
+
+    backend_ws.send = AsyncMock(side_effect=client_frame_arrives_mid_release)
+
+    await streaming.backend_to_client_send_messages()
+
+    sent_audio: Final = [
+        frame["realtimeInput"]["audio"]["data"]
+        for frame in (json.loads(call.args[0]) for call in backend_ws.send.await_args_list)
+        if "audio" in frame.get("realtimeInput", {})
+    ]
+    assert sent_audio == ["FIRST", "SECOND", "LATE"]

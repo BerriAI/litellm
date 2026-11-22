@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
 import orjson
 from fastapi import HTTPException, Request, UploadFile, status
@@ -16,11 +16,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+    OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX,
 )
 from litellm.integrations.otel.runtime import phase_event
+from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -35,6 +38,24 @@ _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobu
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_PATH_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def read_request_path_params(request: Request | None) -> Mapping[str, object] | None:
+    path_params: Final = _DECODED_JSON.validate_python(getattr(request, "path_params", None))
+    return _REQUEST_PATH_PARAMS.validate_python(path_params) if isinstance(path_params, Mapping) else None
+
+
+class _ReadableUpload(Protocol):
+    async def read(self) -> bytes: ...
+
+
+class _UploadedFileInfo(Protocol):
+    @property
+    def filename(self) -> str | None: ...
+
+    @property
+    def content_type(self) -> str | None: ...
 
 
 def resolve_realtime_route_model(model: str | None, intent: str | None, is_translation: bool) -> str | None:
@@ -75,7 +96,7 @@ def resolve_inference_model(
         case "body":
             return body_model
         case "path":
-            return endpoint_model
+            return endpoint_model or body_model
         case "completion":
             return settings.get("completion_model") or cli_model or endpoint_model or body_model
     return assert_never(kind)
@@ -184,9 +205,29 @@ def _parse_binary_body(body: bytes) -> dict[str, object]:
     return {}
 
 
+_BODY_SENT_SCOPE_KEY: Final = "litellm_request_sent_body"
+
+
 def _declared_content_length(headers: Mapping[str, str]) -> int | None:
     declared: Final = headers.get("content-length")
     return int(declared) if isinstance(declared, str) and declared.isdigit() else None
+
+
+def _request_declares_body(headers: Mapping[str, str]) -> bool:
+    content_length: Final = _declared_content_length(headers)
+    return "transfer-encoding" in headers or (content_length is not None and content_length > 0)
+
+
+def request_sent_body(request: Request) -> bool:
+    recorded: Final[object] = request.scope.get(_BODY_SENT_SCOPE_KEY) if hasattr(request, "scope") else None
+    if isinstance(recorded, bool):
+        return recorded
+    return _request_declares_body(request.headers)
+
+
+def _record_body_sent(request: Request, sent: bool) -> None:
+    if hasattr(request, "scope"):
+        request.scope[_BODY_SENT_SCOPE_KEY] = sent  # rebind-ok: the ASGI scope is per-request shared state
 
 
 def _mark_body_received(byte_count: int | None) -> None:
@@ -195,6 +236,13 @@ def _mark_body_received(byte_count: int | None) -> None:
         "litellm.request.body_received",
         None if byte_count is None else {"litellm.request.body_bytes": byte_count},
     )
+
+
+async def _receive_body(request: Request) -> bytes:
+    body: Final = await request.body()
+    _record_body_sent(request, len(body) > 0)
+    _mark_body_received(len(body))
+    return body
 
 
 def is_otlp_trace_request(request: HTTPConnection) -> bool:
@@ -208,7 +256,7 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     400 because no provider or database can encode it. ``json.loads`` accepts
     the escape, so the multipart ``metadata`` field gets the same check."""
     try:
-        parsed: Final[object] = json.loads(raw_metadata)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_metadata))
         json.dumps(parsed, ensure_ascii=False).encode("utf-8")
     except (json.JSONDecodeError, UnicodeEncodeError) as e:
         raise ProxyException(
@@ -228,6 +276,7 @@ def _reraise_request_size_error(error: Exception) -> None:
 async def _read_form_data(request: Request) -> FormData:
     try:
         form_data: Final = await request.form()
+        _record_body_sent(request, len(form_data) > 0)
         _mark_body_received(_declared_content_length(request.headers))
     except ClientDisconnect:
         raise
@@ -274,8 +323,7 @@ async def read_request_body(request: Request | None) -> dict:
         content_type: Final = _request_headers.get("content-type", "")
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
-            binary_body: Final = await request.body()
-            _mark_body_received(len(binary_body))
+            binary_body: Final = await _receive_body(request)
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
             form_body: Final = dict(await _read_form_data(request))
@@ -287,8 +335,7 @@ async def read_request_body(request: Request | None) -> dict:
             )
         else:
             # Read the request body
-            body: Final = await request.body()
-            _mark_body_received(len(body))
+            body: Final = await _receive_body(request)
 
             # Return empty dict if body is empty or None
             if not body:
@@ -341,11 +388,11 @@ async def read_request_body(request: Request | None) -> dict:
     except ValidationError as e:
         from fastapi.routing import APIRoute
 
+        from litellm.integrations.lens.proxy.buffering import LensRoute
         from litellm.proxy.auth.auth_utils import (
             request_dispatched_to_pass_through_endpoint,
             request_dispatched_to_provider_pass_through,
         )
-        from litellm.proxy.lens.buffering import LensRoute
 
         route: Final[object] = request.scope.get("route")
         if (
@@ -391,8 +438,10 @@ async def read_request_body(request: Request | None) -> dict:
 _read_request_body: Final = read_request_body
 
 
-def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
-    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+def is_opaque_pass_through_request(route: str, content_type: str) -> bool:
+    """Identify bodies auth must preserve byte for byte for the upstream service."""
+    if route.startswith((f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/", f"{CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX}/")):
+        return True
     media_type: Final = _normalize_media_type(content_type)
     return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
         media_type.startswith("audio/") or media_type == "multipart/form-data"
@@ -411,13 +460,16 @@ async def read_raw_json_body(request: Request | None) -> bytes | None:
         return None
 
 
-def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
+def _safe_get_request_parsed_body(request: Request | None) -> dict[str, object] | None:
     if request is None:
         return None
     if hasattr(request, "scope") and "parsed_body" in request.scope and isinstance(request.scope["parsed_body"], tuple):
         accepted_keys, parsed_body = request.scope["parsed_body"]
         return {key: parsed_body[key] for key in accepted_keys}
     return None
+
+
+safe_get_request_parsed_body: Final = _safe_get_request_parsed_body
 
 
 def get_client_requested_model(request: Request | None) -> str | None:
@@ -602,7 +654,7 @@ async def get_form_data(request: Request) -> dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: dict[str, Any],
+    form_data: Mapping[str, object],
 ) -> dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
@@ -625,21 +677,24 @@ async def convert_upload_files_to_file_data(
     """
     data: Final = {}
     for key, value in form_data.items():
-        if isinstance(value, list):
+        values = as_object_list(value)
+        if values is not None:
             # Check if it's a list of UploadFile objects
-            if value and hasattr(value[0], "read"):
+            if values and has_attributes(values[0], _ReadableUpload, "read"):
                 files = []
-                for f in value:
-                    file_content = await f.read()
+                for f in values:
+                    file_content = await require_attributes(f, _ReadableUpload, "read").read()
+                    file_info = require_attributes(f, _UploadedFileInfo, "filename", "content_type")
                     # Create tuple: (filename, content, content_type)
-                    files.append((f.filename, file_content, f.content_type))
+                    files.append((file_info.filename, file_content, file_info.content_type))
                 data[key] = files
             else:
                 data[key] = value
-        elif hasattr(value, "read"):
+        elif has_attributes(value, _ReadableUpload, "read"):
             # Single UploadFile object - read and convert to list for consistency
             file_content = await value.read()
-            data[key] = [(value.filename, file_content, value.content_type)]
+            upload_info = require_attributes(value, _UploadedFileInfo, "filename", "content_type")
+            data[key] = [(upload_info.filename, file_content, upload_info.content_type)]
         else:
             # Regular form field
             data[key] = value

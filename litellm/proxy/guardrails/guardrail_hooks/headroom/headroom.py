@@ -22,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
     get_tool_calls_from_response,
@@ -76,10 +77,15 @@ _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 # untranslated messages can be read with concrete types (values pass through by
 # reference, so this is a shallow top-level reconstruction).
 _REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _JsonResponse(Protocol):
     def json(self) -> object: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
 
 
 def _json_body(response: _JsonResponse) -> object:
@@ -197,6 +203,14 @@ def _anthropic_retrieve_ids_in_message(message: Mapping[str, object]) -> frozens
     return frozenset(call_id for block in content if (call_id := _anthropic_tool_use_retrieve_id(block)) is not None)
 
 
+def _responses_retrieve_call_ids(item: Mapping[str, object]) -> frozenset[str]:
+    name: Final = item.get("name")
+    call_id: Final = item.get("call_id")
+    if item.get("type") != "function_call" or not isinstance(name, str) or call_id is None:
+        return frozenset()
+    return frozenset({str(call_id)}) if _is_retrieve_tool_name(name) else frozenset()
+
+
 def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
     """Retrieve-tool call ids read from the request's own, untranslated messages.
 
@@ -204,8 +218,9 @@ def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
     over 64 chars is truncated to ``{prefix}_{hash}``, which drops the
     ``__headroom_retrieve`` suffix a long ``mcp__<server>__`` prefix pushes past
     the limit. Tool-call ids are never truncated, so pairing the tool result to
-    an id read from the original request keeps the match intact. Both wire
-    shapes are handled: OpenAI ``tool_calls`` and Anthropic ``tool_use`` blocks.
+    an id read from the original request keeps the match intact. OpenAI
+    ``tool_calls``, Anthropic ``tool_use`` blocks and Responses ``function_call``
+    items are handled.
     """
     if not _is_object_list(messages):
         return frozenset()
@@ -213,7 +228,9 @@ def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
         call_id
         for message in messages
         if _is_str_object_dict(message)
-        for call_id in _retrieve_call_ids_in_message(message) | _anthropic_retrieve_ids_in_message(message)
+        for call_id in _retrieve_call_ids_in_message(message)
+        | _anthropic_retrieve_ids_in_message(message)
+        | _responses_retrieve_call_ids(message)
     )
 
 
@@ -816,8 +833,9 @@ class HeadroomGuardrail(CustomGuardrail):
         # /v1/compress grows a field for sending the live turn as the retrieval
         # query without compressing it: query-aware compression reads the newest
         # user message, so it is withheld here at some cost to history ranking.
-        raw_messages: Final = request_data.get("messages")
-        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
+        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(request_data.get("messages")) | _raw_retrieve_call_ids(
+            request_data.get("input")
+        )
         protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
@@ -985,7 +1003,12 @@ class HeadroomGuardrail(CustomGuardrail):
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params: Final = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
+            model_call_details: Final = require_attributes(
+                _DECODED_JSON.validate_python(getattr(logging_obj, "model_call_details", {})), _SupportsGet, "get"
+            )
+            agentic_params: Final = require_attributes(
+                model_call_details.get("agentic_loop_params", {}), _SupportsGet, "get"
+            )
             candidate: Final = agentic_params.get("model", model)
             if isinstance(candidate, str) and candidate:
                 full_model_name = candidate

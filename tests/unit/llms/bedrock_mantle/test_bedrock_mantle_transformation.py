@@ -6,6 +6,7 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
+import re
 import asyncio
 from collections.abc import Mapping
 from typing import Final
@@ -1273,3 +1274,48 @@ def test_mantle_signing_reports_only_missing_aws_dependency(missing):
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+def _replayed_tool_history(tool_call_ids: tuple[str, ...]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Weather and time in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": tool_call_id, "type": "function", "function": {"name": f"tool_{n}", "arguments": "{}"}}
+                for n, tool_call_id in enumerate(tool_call_ids)
+            ],
+        },
+        *({"role": "tool", "tool_call_id": tool_call_id, "content": "ok"} for tool_call_id in tool_call_ids),
+    ]
+
+
+def _sent_tool_ids(model: str, tool_call_ids: tuple[str, ...], monkeypatch: pytest.MonkeyPatch) -> tuple[list, list]:
+    _use_mantle_bearer(monkeypatch)
+    handler: Final = Mock(side_effect=_reply_by_route)
+    litellm.completion(model=model, messages=_replayed_tool_history(tool_call_ids), client=_recording_client(handler))
+    sent_messages: Final = json.loads(handler.call_args.args[0].content)["messages"]
+    return [tool_call["id"] for tool_call in sent_messages[1]["tool_calls"]], [
+        message["tool_call_id"] for message in sent_messages[2:]
+    ]
+
+
+def test_mantle_mistral_sends_replayed_tool_call_ids_as_nine_alphanumeric_characters(monkeypatch):
+    replayed_ids: Final = ("call_abc123", "toolu_01ABCdef", "call_u0U86kcRTK484QKTyPKASCeg", "D681PevKs")
+
+    call_ids, reply_ids = _sent_tool_ids("bedrock_mantle/mistral.mistral-large-3-675b-instruct", replayed_ids, monkeypatch)
+
+    assert reply_ids == call_ids
+    assert all(re.fullmatch(r"[a-zA-Z0-9]{9}", tool_call_id) for tool_call_id in call_ids)
+    assert len(set(call_ids)) == len(replayed_ids)
+    assert call_ids[3] == "D681PevKs"
+
+
+def test_mantle_non_mistral_models_send_tool_call_ids_as_is(monkeypatch):
+    replayed_ids: Final = ("call_abc123", "toolu_01ABCdef")
+
+    call_ids, reply_ids = _sent_tool_ids("bedrock_mantle/openai.gpt-oss-120b", replayed_ids, monkeypatch)
+
+    assert call_ids == reply_ids == list(replayed_ids)
+

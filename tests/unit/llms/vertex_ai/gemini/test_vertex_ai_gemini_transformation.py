@@ -66,7 +66,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
         messages, model="gemini-3.8-flash", custom_llm_provider="gemini"
     )
     media: Final = [
-        {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}},
+        {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
         {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}},
         {"inline_data": {"data": "cGRm", "mime_type": "application/pdf"}},
     ]
@@ -85,14 +85,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
             ],
         }
         if role == "tool"
-        else {
-            "role": "model" if role == "assistant" else "user",
-            "parts": [
-                {"text": '{"ok":true}'},
-                {**media[0], "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
-                *media[1:],
-            ],
-        }
+        else {"role": "model" if role == "assistant" else "user", "parts": [{"text": '{"ok":true}'}, *media]}
     )
 
 
@@ -1980,7 +1973,6 @@ def test_file_data_field_order():
 
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
-    import json
 
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
@@ -2066,7 +2058,7 @@ def test_extract_file_data_with_path_object():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2105,7 +2097,7 @@ def test_extract_file_data_with_pathlib_path():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2129,7 +2121,7 @@ def test_extract_file_data_with_pathlib_path():
 
 def test_extract_file_data_with_tuple_format():
     """Test that tuple format (with explicit content_type) still works correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2152,7 +2144,7 @@ def test_extract_file_data_fallback_to_octet_stream():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2963,6 +2955,30 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
     )
 
 
+def _assistant_with_image(url: str) -> Message:
+    return Message(
+        role="assistant",
+        content="Here is the picture",
+        images=[{"type": "image_url", "image_url": {"url": url}, "index": 0}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "needs_fetch"),
+    [
+        (_assistant_with_image("gs://litellm-test-bucket/cat"), True),
+        (_assistant_with_image("gs://litellm-test-bucket/cat.png"), False),
+        ("gs://litellm-test-bucket/cat", False),
+    ],
+)
+def test_sync_media_fetch_check_reads_pydantic_messages_and_skips_other_objects(
+    message: object, needs_fetch: bool
+) -> None:
+    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+
+    assert _openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
+
+
 CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"
 
 
@@ -3016,3 +3032,253 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     assert signatures == [get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
     assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == get_dummy_thought_signature()
+
+
+def _get_time_call(tool_call_id: str | None, name: str = "get_time") -> Mapping[str, object]:
+    return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+def _assistant_calling(*tool_calls: Mapping[str, object]) -> Mapping[str, object]:
+    return {"role": "assistant", "content": None, "tool_calls": list(tool_calls)}
+
+
+def _function_call_parts(parts: Sequence[PartType]) -> Sequence[PartType]:
+    return [part for part in parts if "function_call" in part]
+
+
+def _function_response_parts(parts: Sequence[PartType]) -> Sequence[PartType]:
+    return [part for part in parts if "function_response" in part]
+
+
+@pytest.mark.parametrize(
+    "assistant_messages",
+    [
+        pytest.param(
+            [_assistant_calling(_get_time_call("call_1"), _get_time_call("call_2"))],
+            id="parallel calls in one assistant message",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_2")),
+            ],
+            id="calls split across consecutive assistant messages",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(
+                    {"id": "call_custom", "type": "custom", "custom": {"name": "notes", "input": "remember"}},
+                    _get_time_call("call_1"),
+                    _get_time_call("call_2"),
+                )
+            ],
+            id="non-function tool call before the parallel calls",
+        ),
+    ],
+)
+def test_gemini_2_keeps_identical_calls_with_distinct_ids(assistant_messages: Sequence[Mapping[str, object]]) -> None:
+    messages: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        *assistant_messages,
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "12:01"},
+    ]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
+
+    get_time: Final = {"function_call": {"name": "get_time", "args": {}}}
+    assert contents == [
+        {"role": "user", "parts": [{"text": "What time is it? Ask twice."}]},
+        {"role": "model", "parts": [get_time, get_time]},
+        {
+            "role": "user",
+            "parts": [
+                {"function_response": {"name": "get_time", "response": {"content": "12:00"}}},
+                {"function_response": {"name": "get_time", "response": {"content": "12:01"}}},
+            ],
+        },
+    ], f"each tool call id must keep its own functionCall, got {contents}"
+
+
+def test_responses_api_parallel_identical_calls_reach_gemini_2_as_separate_function_calls() -> None:
+    input_items: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        {"type": "function_call", "call_id": "call_time_first", "name": "get_time", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call_time_second", "name": "get_time", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_time_first", "output": "12:00"},
+        {"type": "function_call_output", "call_id": "call_time_second", "output": "12:01"},
+    ]
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(input_items, {})
+
+    parts: Final = _parts_of(
+        gemini_convert_messages_with_history(messages, model="gemini-2.5-flash", custom_llm_provider="gemini")
+    )
+
+    assert _function_call_parts(parts) == [
+        {"function_call": {"name": "get_time", "args": {}}},
+        {"function_call": {"name": "get_time", "args": {}}},
+    ], f"expected one functionCall per Responses function_call item, got {parts}"
+    assert _function_response_parts(parts) == [
+        {"function_response": {"name": "get_time", "response": {"content": "12:00"}}},
+        {"function_response": {"name": "get_time", "response": {"content": "12:01"}}},
+    ], f"expected the two outputs in order, got {parts}"
+
+
+def test_gemini_3_keeps_identical_parallel_calls_with_their_ids_and_signature() -> None:
+    signed_call: Final = {**_get_time_call("call_1"), "provider_specific_fields": {"thought_signature": "c2lnX2E="}}
+    messages: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        _assistant_calling(signed_call, _get_time_call("call_2")),
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "12:01"},
+    ]
+
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash"))
+
+    assert _function_call_parts(parts) == [
+        {"function_call": {"name": "get_time", "args": {}, "id": "call_1"}, "thoughtSignature": "c2lnX2E="},
+        {"function_call": {"name": "get_time", "args": {}, "id": "call_2"}},
+    ], f"the signature must stay on the first call only, got {parts}"
+    assert _function_response_parts(parts) == [
+        {"function_response": {"name": "get_time", "response": {"content": "12:00"}, "id": "call_1"}},
+        {"function_response": {"name": "get_time", "response": {"content": "12:01"}, "id": "call_2"}},
+    ], f"expected both responses with their ids, got {parts}"
+
+
+@pytest.mark.parametrize(
+    ("assistant_messages", "expected_call_names"),
+    [
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_1")),
+            ],
+            ["get_time"],
+            id="same id replayed in consecutive assistant messages",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call("call_1"), _get_time_call("call_1"))],
+            ["get_time"],
+            id="same id repeated in one assistant message",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call(""), _get_time_call(""))],
+            ["get_time"],
+            id="empty ids",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call(None), _get_time_call(None))],
+            ["get_time"],
+            id="missing ids",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call(None)),
+            ],
+            ["get_time"],
+            id="call without id after an identical call with id",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "function_call": {"name": "get_time", "arguments": "{}"}},
+                {"role": "assistant", "content": None, "function_call": {"name": "get_time", "arguments": "{}"}},
+            ],
+            ["get_time"],
+            id="legacy function_call replayed",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_1", name="get_date")),
+            ],
+            ["get_time", "get_date"],
+            id="same id with different content",
+        ),
+    ],
+)
+def test_gemini_2_dedup_of_calls_without_a_new_id_is_unchanged(
+    assistant_messages: Sequence[Mapping[str, object]], expected_call_names: Sequence[str]
+) -> None:
+    messages: Final = [{"role": "user", "content": "What time is it?"}, *assistant_messages]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "What time is it?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": name, "args": {}}} for name in expected_call_names]},
+    ], f"calls that repeat a seen id or carry no id keep the existing dedup, got {contents}"
+
+
+
+def _placeholder_signature() -> str:
+    from litellm.litellm_core_utils.prompt_templates.factory import get_dummy_thought_signature
+
+    return get_dummy_thought_signature()
+
+
+@pytest.mark.parametrize(
+    ("model", "tool_call_ids", "expected_call_parts"),
+    [
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_x__thought__c2lnMQ==", "call_x__thought__c2lnMg=="),
+            [{"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMQ=="}],
+            id="gemini-2.5 same id with two embedded signatures",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_x__thought__c2lnMQ==", "call_x__thought__c2lnMg=="),
+            [{"function_call": {"name": "get_time", "args": {}, "id": "call_x"}, "thoughtSignature": "c2lnMQ=="}],
+            id="gemini-3 same id with two embedded signatures",
+        ),
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_x", "call_x__thought__c2lnMQ=="),
+            [{"function_call": {"name": "get_time", "args": {}}}],
+            id="gemini-2.5 plain id then its signed form",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_x", "call_x__thought__c2lnMQ=="),
+            [
+                {
+                    "function_call": {"name": "get_time", "args": {}, "id": "call_x"},
+                    "thoughtSignature": _placeholder_signature(),
+                }
+            ],
+            id="gemini-3 plain id then its signed form",
+        ),
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_a__thought__c2lnMQ==", "call_b__thought__c2lnMg=="),
+            [
+                {"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMQ=="},
+                {"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMg=="},
+            ],
+            id="gemini-2.5 distinct ids with embedded signatures",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_a__thought__c2lnMQ==", "call_b__thought__c2lnMg=="),
+            [
+                {"function_call": {"name": "get_time", "args": {}, "id": "call_a"}, "thoughtSignature": "c2lnMQ=="},
+                {"function_call": {"name": "get_time", "args": {}, "id": "call_b"}, "thoughtSignature": "c2lnMg=="},
+            ],
+            id="gemini-3 distinct ids with embedded signatures",
+        ),
+    ],
+)
+def test_calls_whose_ids_embed_thought_signatures_dedup_by_their_call_id(
+    model: str, tool_call_ids: Sequence[str], expected_call_parts: Sequence[Mapping[str, object]]
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "What time is it?"},
+        *(_assistant_calling(_get_time_call(tool_call_id)) for tool_call_id in tool_call_ids),
+    ]
+
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=messages, model=model))
+
+    assert _function_call_parts(parts) == expected_call_parts, (
+        f"a call id replayed with a different embedded signature must be sent once, got {parts}"
+    )

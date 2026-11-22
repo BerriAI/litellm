@@ -1,11 +1,12 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from openai.types.responses.response_input_param import ResponseInputItemParam
+from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import process_response_headers, require_get
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -43,6 +44,22 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+CODEX_RESPONSES_LITE_HEADER: Final = "x-openai-internal-codex-responses-lite"
+_FALSY_HEADER_VALUES: Final = frozenset({"", "0", "false", "no"})
+_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _responses_lite_reasoning(reasoning: object) -> Mapping[str, object]:
+    # The Codex backend 400s a Responses-Lite request unless reasoning.context is "all_turns",
+    # and Codex 0.144.x can omit the reasoning object entirely.
+    return {**(_OBJECT_DICT.validate_python(reasoning) if isinstance(reasoning, dict) else {}), "context": "all_turns"}
+
+
+def is_codex_responses_lite_request(headers: Mapping[str, object] | None) -> bool:
+    return any(
+        key.lower() == CODEX_RESPONSES_LITE_HEADER and str(value).strip().lower() not in _FALSY_HEADER_VALUES
+        for key, value in (headers or {}).items()
+    )
 
 
 def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItemParam:
@@ -140,16 +157,28 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "include",
             "tools",
             "tool_choice",
+            "parallel_tool_calls",
             "reasoning",
             "previous_response_id",
             "truncation",
+            "text",
+            "max_output_tokens",
         }
 
-        filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
         service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
-        if service_tier is not None:
-            filtered["service_tier"] = service_tier
-        return filtered
+        lite_overrides: Final = (
+            {
+                "parallel_tool_calls": False,
+                "reasoning": _responses_lite_reasoning(_OBJECT_DICT.validate_python(request).get("reasoning")),
+            }
+            if is_codex_responses_lite_request(_OBJECT_DICT.validate_python(headers or {}))
+            else {}
+        )
+        return {
+            **{k: v for k, v in request.items() if k in allowed_keys},
+            **({"service_tier": service_tier} if service_tier is not None else {}),
+            **lite_overrides,
+        }
 
     def transform_response_api_response(
         self,
@@ -218,7 +247,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
                 continue
 
-            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            if event_type in (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ):
                 # Real OUTPUT_ITEM_DONE events take precedence at any given
                 # output_index, but text-only items at indices without a
                 # matching OUTPUT_ITEM_DONE must still be preserved (e.g.
@@ -257,8 +289,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         except Exception:
             return ResponsesAPIResponse.model_construct(**response_payload)
 
-    def _extract_error_message(self, parsed_chunk: dict[str, Any]) -> str | None:
-        error_obj: Final = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")
+    def _extract_error_message(self, parsed_chunk: Mapping[str, object]) -> str | None:
+        error_obj: Final = parsed_chunk.get("error") or require_get(parsed_chunk.get("response") or {}).get("error")
         if error_obj is None:
             top_level_message: Final = parsed_chunk.get("message")
             return top_level_message if isinstance(top_level_message, str) else None

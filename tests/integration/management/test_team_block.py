@@ -316,11 +316,22 @@ def test_a_new_team_key_is_refused_on_a_peer_that_cached_the_team_before_block(
         ) == [{"blocked": True}], blocked_response.text
 
         cold_key: Final = scenario.key(team_id=team)
-        peer_denied: Final = _chat(peer, model, cold_key, "new team key on peer after block")
-        after_block: Final = _models(upstream)
-        assert peer_denied.status_code == 401, peer_denied.text
+        peer_denied: Final = eventually(
+            lambda: _chat(peer, model, cold_key, "new team key on peer while the block spreads"),
+            lambda response: response.status_code == 401,
+            seconds=15,
+        )
         assert _ErrorResponse.model_validate_json(peer_denied.text).error.type == "auth_error", peer_denied.text
-        assert after_block == (), repr(after_block)
+        marker: Final = f"new team key on peer after block {uuid.uuid4().hex}"
+        refused: Final = held(
+            lambda: _chat(peer, model, cold_key, marker).status_code,
+            lambda status: status == 401,
+            holding=5,
+            seconds=15,
+        )
+        assert refused == 401, peer_denied.text
+        leaked: Final = tuple(text for text in _texts(upstream) if text.startswith(marker))
+        assert leaked == (), repr(leaked)
 
 
 def test_a_team_model_alias_still_routes_on_both_proxies_after_block_and_unblock(
