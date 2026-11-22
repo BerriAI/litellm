@@ -6,6 +6,7 @@ from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -54,7 +55,17 @@ def _text_document_content(content: object, drop_citations: bool) -> object:
     items: Final = as_object_list(content)
     if items is None:
         return content
-    return list(chain.from_iterable(_content_blocks(item, drop_citations) for item in items))
+    blocks: Final = list(chain.from_iterable(_content_blocks(item, drop_citations) for item in items))
+    return blocks if blocks or not items else [_empty_turn_placeholder(items)]
+
+
+def _empty_turn_placeholder(items: Sequence[object]) -> Mapping[str, object]:
+    cache_controls: Final = tuple(block["cache_control"] for block in _blocks(items) if "cache_control" in block)
+    return {
+        "type": "text",
+        "text": EMPTY_TEXT_PLACEHOLDER,
+        **({"cache_control": cache_controls[-1]} if cache_controls else {}),
+    }
 
 
 def _content_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
