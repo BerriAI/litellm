@@ -1884,3 +1884,66 @@ async def test_screen_scope_screens_server_tool_calls_in_new_assistant_turn():
     assert exc_info.value.status_code == 400
     sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
     assert f'bash({{"command": "{marker}"}})' in sent
+
+
+@pytest.mark.asyncio
+async def test_screen_scope_incomplete_verdict_fail_open_not_cached_as_approval():
+    from litellm import Router
+
+    marker: Final = "RECOVERED-INJECTION"
+    mode: Final = {"refusal": True}  # mutable-ok: toggles decisions behavior between turns
+
+    async def _adecisions(**kwargs: object) -> OpenAIDecisionResponse:
+        if mode["refusal"]:
+            return OpenAIDecisionResponse(
+                model="jev-latest",
+                answers=(OpenAIRefusalAnswer(name="prompt_injection"),),
+                usage=OpenAIDecisionUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+        raw_input: Final = kwargs.get("input")
+        hit: Final = marker in raw_input if isinstance(raw_input, str) else False
+        return OpenAIDecisionResponse(
+            model="jev-latest",
+            answers=(OpenAIPredicateAnswer(name="prompt_injection", probability=0.99 if hit else 0.01),),
+            usage=OpenAIDecisionUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        )
+
+    router: Final = route_entry_points_to_stubs(MagicMock(spec=Router))
+    router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
+    router.adecisions = AsyncMock(side_effect=_adecisions)
+
+    guardrail: Final = _make_guardrail(
+        screen_scope="new_messages",
+        unreachable_fallback="fail_open",
+        router_provider=lambda: router,
+    )
+
+    turn1_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": f"prior turn with {marker}"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": [f"prior turn with {marker}"],
+        "structured_messages": cast(list[AllMessageValues], turn1_messages),
+    }
+
+    result1: Final = await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    assert result1 is turn1_inputs
+
+    mode["refusal"] = False
+
+    turn2_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": f"prior turn with {marker}"},
+        {"role": "assistant", "content": "prior response"},
+        {"role": "user", "content": "benign next question"},
+    ]
+    turn2_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": [f"prior turn with {marker}", "benign next question"],
+        "structured_messages": cast(list[AllMessageValues], turn2_messages),
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(turn2_inputs, {"messages": turn2_messages}, "request")
+
+    assert exc_info.value.status_code == 400
+    sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
+    assert f"prior turn with {marker}" in sent

@@ -617,7 +617,11 @@ class DecisionModelGuardrail(CustomGuardrail):
             )
         if input_type == "request":
             raw_messages: Final = inputs.get("structured_messages")
-            if isinstance(raw_messages, Sequence) and raw_messages:
+            if (
+                isinstance(raw_messages, Sequence)
+                and raw_messages
+                and not any(v["reason"] == "no_answer" for v in final_verdicts)
+            ):
                 await self._record_screened_prefix(_non_assistant_messages(raw_messages))
         return inputs
 
