@@ -610,13 +610,13 @@ if MCP_AVAILABLE:
     from litellm.proxy.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
-    from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
     from litellm.proxy.mcp_server.capabilities import (
         GatewayVersionPolicy,
         configured_versions,
         disabled_capabilities,
         disabled_operations,
     )
+    from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
     from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
