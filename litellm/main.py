@@ -1578,6 +1578,13 @@ def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | Async
     return ctx.client
 
 
+def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
+    return (
+        supports_httpx_timeout(custom_llm_provider)
+        or ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is None
+    )
+
+
 def _dispatch_client_azure(
     ctx: CompletionDispatchContext,
 ) -> openai.AzureOpenAI | openai.AsyncAzureOpenAI | HTTPHandler | AsyncHTTPHandler | None:
@@ -6355,7 +6362,9 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
+            supports_httpx_timeout=supports_httpx_timeout
+            if mock_response is not None or mock_tool_calls or mock_timeout
+            else _completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 
@@ -9531,6 +9540,27 @@ def speech(
             timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
+            _is_async=aspeech or False,
+            stream=stream_audio,
+        )
+    elif custom_llm_provider == "gradium" and text_to_speech_provider_config is not None:
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=http_timeout,
+            extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+            client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
             _is_async=aspeech or False,
             stream=stream_audio,
         )

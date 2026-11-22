@@ -1,6 +1,7 @@
 SELECT budget_id,
        name,
        max_budget,
+       rollover_max_budget,
        soft_budget,
        max_parallel_requests,
        tpm_limit,

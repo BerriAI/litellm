@@ -1,5 +1,6 @@
 mod admit;
 mod boot;
+mod callbacks;
 mod db;
 mod error;
 mod health;
@@ -10,6 +11,7 @@ mod redis;
 mod resources;
 mod state;
 pub use admit::{Admit, Reason, Refused};
+pub use callbacks::{Callbacks, Unregistrable};
 pub use error::Error;
 pub use redis::RedisClients;
 pub use resources::Resources;
@@ -24,6 +26,7 @@ use axum::Router;
 
 use litellm_config::Config;
 use litellm_env::{Lookup, ProcessEnvironment};
+use litellm_gateway_inference::RoutingCache;
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution,
     media::PublicDnsResolver,
@@ -55,6 +58,7 @@ pub(crate) fn environment_secrets(
 pub async fn build_inference(
     config: &Config,
     resources: &Resources,
+    routing: RoutingCache,
 ) -> Result<Arc<Gateway>, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
@@ -64,7 +68,8 @@ pub async fn build_inference(
         resources.secrets.clone(),
         router,
         shaping,
-        host::NativeHost,
+        routing,
+        host::NativeHost::default(),
     )?))
 }
 
