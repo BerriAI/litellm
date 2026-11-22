@@ -36,13 +36,7 @@ export function EmbeddedLens() {
       </p>
     );
   if (workspace === "served")
-    return (
-      <iframe
-        title={t("lensWorkspace.frameTitle")}
-        src={source}
-        className="h-full w-full flex-1 border-0"
-      />
-    );
+    return <iframe title={t("lensWorkspace.frameTitle")} src={source} className="h-full w-full flex-1 border-0" />;
   return (
     <div className="flex max-w-xl flex-col items-start gap-3 p-8">
       <h1 className="text-lg font-semibold">{t(`lensWorkspace.${workspace}.title`)}</h1>
