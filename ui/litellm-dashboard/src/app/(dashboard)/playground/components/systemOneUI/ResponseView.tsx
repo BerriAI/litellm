@@ -71,7 +71,7 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">Selected choice</span>
           <Badge>{answer.choice}</Badge>
-          {answer.confidence !== undefined && (
+          {typeof answer.confidence === "number" && (
             <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
           )}
         </div>
@@ -90,7 +90,7 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Score</span>
         <Badge>{SCORE_FORMAT.format(answer.score)}</Badge>
-        {answer.confidence !== undefined && (
+        {typeof answer.confidence === "number" && (
           <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
         )}
       </div>

@@ -1180,6 +1180,88 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     assert result.get("anthropic_beta") == expected_betas
 
 
+_WEATHER_CALL: Final = {
+    "id": "toolu_01Weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+_PLAIN_WEATHER_CALL: Final = {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]}
+_REPLAYED_WEATHER_SEARCH: Final = {
+    **_PLAIN_WEATHER_CALL,
+    "tool_calls": [
+        {
+            "id": "srvtoolu_01Search",
+            "type": "function",
+            "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+        },
+        _WEATHER_CALL,
+    ],
+    "provider_specific_fields": {
+        "tool_results": [
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_01Search",
+                "content": {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                },
+            }
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "assistant_turn", "expected_betas"),
+    [
+        pytest.param(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            _REPLAYED_WEATHER_SEARCH,
+            ["tool-search-tool-2025-10-19"],
+            id="replayed_search",
+        ),
+        pytest.param("us.anthropic.claude-sonnet-4-5-20250929-v1:0", _PLAIN_WEATHER_CALL, None, id="no_search"),
+        pytest.param(
+            "us.anthropic.claude-opus-4-1-20250805-v1:0", _REPLAYED_WEATHER_SEARCH, None, id="opus_4_1_unsupported"
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_sends_the_tool_search_beta_for_a_search_replayed_without_the_search_tool(
+    local_model_cost_map, local_beta_headers_config, model, assistant_turn, expected_betas
+):
+    config: Final = AmazonAnthropicClaudeConfig()
+    result: Final = config.transform_request(
+        model=model,
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            assistant_turn,
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "max_tokens": 64,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                        },
+                    }
+                ],
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas
+
+
 def test_bedrock_chat_invoke_adds_thinking_display_updates_beta(
     local_model_cost_map, local_beta_headers_config
 ) -> None:

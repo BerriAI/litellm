@@ -163,6 +163,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    replay_tool_search=True,
                 )
             )
 
