@@ -3,16 +3,20 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Final
+from typing import Annotated, Final
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_API_KEY_ENV_ADAPTER: Final[TypeAdapter[str | tuple[str, ...]]] = TypeAdapter(
+    str | Annotated[tuple[str, ...], Field(min_length=1)]
+)
 
 
 class SimpleProviderConfig:
@@ -21,7 +25,9 @@ class SimpleProviderConfig:
     def __init__(self, slug: str, data: dict):
         self.slug = slug
         self.base_url = data["base_url"]
-        self.api_key_env = data["api_key_env"]
+        api_key_env: Final = _API_KEY_ENV_ADAPTER.validate_python(data["api_key_env"])
+        self.api_key_envs: Final[tuple[str, ...]] = (api_key_env,) if isinstance(api_key_env, str) else api_key_env
+        self.api_key_env: str = self.api_key_envs[0]
         self.api_base_env = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
         self.param_mappings = data.get("param_mappings", {})
@@ -34,6 +40,9 @@ class SimpleProviderConfig:
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+
+    def api_key_from(self, lookup: Callable[[str], str | None]) -> str | None:
+        return next(filter(None, map(lookup, self.api_key_envs)), None)
 
 
 class JSONProviderRegistry:

@@ -74,7 +74,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 resolved_base = provider.base_url
 
             # Resolve API key
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            resolved_key: Final = api_key or provider.api_key_from(get_secret_str)
 
             return resolved_base, resolved_key
 
@@ -220,7 +220,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key: Final = litellm_params.api_key or get_secret_str(provider.api_key_env)
+            api_key: Final = litellm_params.api_key or provider.api_key_from(get_secret_str)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers

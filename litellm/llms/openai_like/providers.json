@@ -241,7 +241,7 @@
   },
   "perplexity_orchestrator": {
     "base_url": "https://api.perplexity.ai/orchestrator/v1",
-    "api_key_env": "PERPLEXITY_API_KEY",
+    "api_key_env": ["PERPLEXITYAI_API_KEY", "PERPLEXITY_API_KEY"],
     "constraints": {
       "cache_control_ttl": true
     },
