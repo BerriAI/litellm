@@ -517,7 +517,7 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-opus-5-5",
-        "id": "msg_011CfjayXnc5jLujSNNoJpS2",
+        "id": "msg_011ChJAiXrhWrZCZXKkL72G9",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -533,7 +533,8 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
             "service_tier": "standard",
-            "inference_geo": "not_available",
+            "inference_geo": "global",
+            "speed": "standard",
         },
         "diagnostics": None,
     },
