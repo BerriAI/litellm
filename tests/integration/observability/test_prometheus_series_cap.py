@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator, Sequence
+from itertools import count
 from typing import Final
 
 import anthropic
@@ -221,19 +222,21 @@ class TestCapped:
         """H9: fresh connections reach both workers, and each worker's own sample file names only the warm aliases
         while counting the fourth key on `other`, since the admitted sets live in the shared directory."""
         extra: Final = capped.key("h9")
+        before: Final = scrape(capped.gateway)
+        sent: Final = count(1)
 
-        def send_on_a_fresh_connection() -> tuple[WorkerSamples, ...]:
+        def send_on_a_fresh_connection() -> tuple[int, tuple[WorkerSamples, ...]]:
             assert capped.chat(extra, Call.new()).status_code == 200
-            return worker_samples(capped.prom_dir, REQUESTS)
+            return next(sent), worker_samples(capped.prom_dir, REQUESTS)
 
-        workers: Final = eventually(
-            send_on_a_fresh_connection,
-            lambda found: (
-                sum(1 for worker in found if worker.overflow > 0) >= 2
-                or any(extra.alias in worker.aliases for worker in found)
-            ),
-            seconds=90,
-        )
+        def reached_both_workers(attempt: tuple[int, tuple[WorkerSamples, ...]]) -> bool:
+            _, found = attempt
+            return sum(1 for worker in found if worker.overflow > 0) >= 2 or any(
+                extra.alias in worker.aliases for worker in found
+            )
+
+        chats, workers = eventually(send_on_a_fresh_connection, reached_both_workers, seconds=90)
+        _overflowed(capped, extra, before, chats)
         assert all(extra.alias not in worker.aliases for worker in workers), workers
         assert sum(1 for worker in workers if worker.overflow > 0) >= 2, workers
         assert frozenset().union(*(worker.aliases for worker in workers)) == capped.warm_aliases, workers

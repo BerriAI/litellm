@@ -101,8 +101,10 @@ def synchronous(native: Callable[[_Call], object]) -> Callable[[_Call], object]:
     return lambda call: run(_execution(native(call)), SyncStream)
 
 
-def asynchronous(native: Callable[[_Call], object]) -> Callable[[_Call], Awaitable[object]]:
-    return lambda call: drive(_execution(native(call)), AsyncStream)
+def asynchronous(
+    native: Callable[[_Call], object], open_stream: Callable[[Execution, object], object] | None = None
+) -> Callable[[_Call], Awaitable[object]]:
+    return lambda call: drive(_execution(native(call)), open_stream or AsyncStream)
 
 
 def _execution(value: object) -> Execution:

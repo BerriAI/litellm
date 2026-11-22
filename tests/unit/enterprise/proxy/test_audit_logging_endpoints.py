@@ -1,10 +1,12 @@
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 from litellm_enterprise.proxy.audit_logging_endpoints import router as audit_router
 from litellm_enterprise.types.proxy.audit_logging_endpoints import AuditLogResponse
 
@@ -175,3 +177,49 @@ def test_an_empty_search_leaves_the_where_clause_unchanged(mock_prisma_client):
     where: Final = _list_audit_logs_where(mock_prisma_client, "action=create&search=")
 
     assert where == {"action": "create"}
+
+
+class _StoredAuditRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str = "old-row-1"
+    updated_at: datetime = datetime(2026, 1, 1)
+    changed_by: str = "admin"
+    changed_by_api_key: str = "hash"
+    action: str = "updated"
+    table_name: str = "LiteLLM_TeamTable"
+    object_id: str = "team-1"
+    before_value: object = None
+    updated_values: object = None
+
+
+OLD_TEAM_STATE: Final = {"team_id": "team-1", "max_budget": 5.0, "metadata": {"api_key": "sk-abcdef1234567890"}}
+
+
+@pytest.mark.parametrize("field", ["before_value", "updated_values"])
+def test_a_row_stored_as_json_text_is_listed_as_an_object_with_keys_masked(
+    mock_prisma_client: MagicMock, field: str
+) -> None:
+    mock_prisma_client.db.litellm_auditlog.find_many.return_value = [
+        _StoredAuditRow.model_validate({field: json.dumps(OLD_TEAM_STATE)})
+    ]
+    mock_prisma_client.db.litellm_auditlog.count.return_value = 1
+
+    response: Final = client.get("/audit?object_id=team-1")
+
+    assert response.status_code == 200, response.text
+    listed: Final = response.json()["audit_logs"][0][field]
+    assert {name: listed[name] for name in ("team_id", "max_budget")} == {"team_id": "team-1", "max_budget": 5.0}
+    assert "sk-abcdef1234567890" not in response.text
+
+
+def test_a_row_stored_as_json_text_is_fetched_by_id_as_an_object(mock_prisma_client: MagicMock) -> None:
+    mock_prisma_client.db.litellm_auditlog.find_unique.return_value = _StoredAuditRow(
+        before_value=json.dumps(OLD_TEAM_STATE)
+    )
+
+    response: Final = client.get("/audit/old-row-1")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["before_value"]["team_id"] == "team-1"
+    assert "sk-abcdef1234567890" not in response.text

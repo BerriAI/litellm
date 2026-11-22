@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.llms.anthropic.common_utils import AnthropicError
@@ -318,6 +320,33 @@ def test_json_provider_messages_config_probes_capabilities_under_provider_slug()
     assert OpenAILikeAnthropicMessagesConfig().custom_llm_provider == "anthropic"
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("legacy-model", "https://legacy.example.com/v1/messages"),
+        ("new-model", "https://api.example.com/v1/messages"),
+    ],
+)
+def test_json_provider_messages_url_uses_the_model_base_url(model: str, expected: str) -> None:
+    from litellm.llms.openai_like.json_loader import SimpleProviderConfig
+    from litellm.llms.openai_like.messages.transformation import (
+        JSONProviderAnthropicMessagesConfig,
+    )
+
+    provider: Final = SimpleProviderConfig(
+        slug="exampleprovider",
+        data={
+            "base_url": "https://api.example.com/v1",
+            "api_key_env": "EXAMPLE_API_KEY",
+            "model_base_urls": {"legacy-model": "https://legacy.example.com/v1"},
+        },
+    )
+    url: Final = JSONProviderAnthropicMessagesConfig(provider).get_complete_url(
+        api_base=None, api_key="sk-test", model=model, optional_params={}, litellm_params={}
+    )
+    assert url == expected
+
+
 def _cache_control_request_params() -> tuple[list, dict]:
     messages = [
         {
@@ -396,7 +425,7 @@ def test_request_defaults_missing_cache_control_type_and_drops_non_dict(config):
 def test_native_anthropic_config_keeps_cache_control_ttl():
     """Anthropic itself accepts ttl, so the normalization must stay scoped to
     the OpenAI-like passthrough and never reach the native Anthropic path."""
-    from litellm.llms.anthropic.pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 

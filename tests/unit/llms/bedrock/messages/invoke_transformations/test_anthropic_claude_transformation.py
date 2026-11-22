@@ -1,22 +1,16 @@
-import asyncio
-import base64
 import copy
 import json
 import os
-import struct
-import zlib
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import Mock
 
 import httpx
 import pytest
 import requests_mock as requests_mock_lib
 import respx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -28,8 +22,7 @@ from litellm.constants import (
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import (
+from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     as_system_content_blocks,
 )
 from litellm.llms.bedrock.common_utils import (
@@ -39,383 +32,17 @@ from litellm.llms.bedrock.common_utils import (
 )
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
-    AmazonAnthropicClaudeMessagesStreamDecoder,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-@pytest.mark.asyncio
-async def test_bedrock_sse_wrapper_encodes_dict_chunks():
-    """Verify that `bedrock_sse_wrapper` converts dictionary chunks to properly formatted Server-Sent Events and forwards non-dict chunks unchanged."""
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
 
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _dummy_stream():  # type: ignore[return-type]
-        yield {"type": "message_delta", "text": "hello"}
-        yield b"raw-bytes"
-
-    # Collect all chunks returned by the wrapper
-    collected: list[bytes] = []
-    async for chunk in cfg.bedrock_sse_wrapper(
-        _dummy_stream(),
-        litellm_logging_obj=LiteLLMLoggingObj(
-            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
-            stream=True,
-            call_type="chat",
-            start_time=datetime.now(),
-            litellm_call_id="test_bedrock_sse_wrapper_encodes_dict_chunks",
-            function_id="test_bedrock_sse_wrapper_encodes_dict_chunks",
-        ),
-        request_body={},
-    ):
-        collected.append(chunk)
-
-    assert collected, "No chunks returned from wrapper"
-
-    # First chunk should be SSE encoded
-    first_chunk = collected[0]
-    assert first_chunk.startswith(b"event: message_delta\n"), first_chunk
-    assert first_chunk.endswith(b"\n\n"), first_chunk
-    # Ensure the JSON payload is present in the SSE data line
-    assert b'"hello"' in first_chunk  # payload contains the text
-
-    # Second chunk should be forwarded unchanged
-    assert collected[1] == b"raw-bytes"
-
-
-@pytest.mark.asyncio
-async def test_bedrock_sse_wrapper_appends_error_event_when_stream_truncates_mid_tool_use():
-    """
-    Regression test for LIT-3724: Bedrock invoke streams that go silent
-    mid tool_use (no content_block_stop / message_delta / message_stop)
-    used to be closed as a successful SSE stream, handing clients
-    unterminated tool-call JSON with HTTP 200. The stream must now end
-    with an Anthropic-protocol `error` SSE event.
-    """
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _truncated_stream():
-        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 3, "output_tokens": 1}}}
-        yield {
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "tool_use", "id": "tooluse_1", "name": "write", "input": {}},
-        }
-        yield {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": '{"path": "/builder/docs/QUAL'},
-        }
-
-    collected: list[bytes] = []
-    async for chunk in cfg.bedrock_sse_wrapper(
-        _truncated_stream(),
-        litellm_logging_obj=LiteLLMLoggingObj(
-            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "write the file"}],
-            stream=True,
-            call_type="chat",
-            start_time=datetime.now(),
-            litellm_call_id="test_bedrock_sse_wrapper_truncated_tool_use",
-            function_id="test_bedrock_sse_wrapper_truncated_tool_use",
-        ),
-        request_body={},
-    ):
-        collected.append(chunk)
-
-    assert len(collected) == 4
-    error_event = collected[-1].decode()
-    assert error_event.startswith("event: error\n")
-    error_payload = json.loads(error_event.split("data: ", 1)[1])
-    assert error_payload["type"] == "error"
-    assert error_payload["error"]["type"] == "api_error"
-
-
-@pytest.mark.asyncio
-async def test_bedrock_sse_wrapper_no_error_event_when_stream_ends_with_message_stop():
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _complete_stream():
-        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 3, "output_tokens": 1}}}
-        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
-        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}
-        yield {"type": "content_block_stop", "index": 0}
-        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}
-        yield {"type": "message_stop"}
-
-    collected: list[bytes] = []
-    async for chunk in cfg.bedrock_sse_wrapper(
-        _complete_stream(),
-        litellm_logging_obj=LiteLLMLoggingObj(
-            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            call_type="chat",
-            start_time=datetime.now(),
-            litellm_call_id="test_bedrock_sse_wrapper_complete_stream",
-            function_id="test_bedrock_sse_wrapper_complete_stream",
-        ),
-        request_body={},
-    ):
-        collected.append(chunk)
-
-    assert len(collected) == 6
-    assert collected[-1].startswith(b"event: message_stop\n")
-    assert not any(chunk.startswith(b"event: error\n") for chunk in collected)
-
-
-@pytest.mark.asyncio
-async def test_bedrock_sse_wrapper_keeps_usage_in_message_start_and_message_delta():
-    """Regression test: usage should be available on both message_start and message_delta SSE events."""
-
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _dummy_stream():  # type: ignore[return-type]
-        yield {
-            "type": "message_start",
-            "message": {
-                "id": "msg_123",
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "usage": {
-                    "input_tokens": 3,
-                    "output_tokens": 1,
-                },
-            },
-        }
-        yield {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {
-                "input_tokens": 3,
-                "output_tokens": 8,
-            },
-        }
-        yield {
-            "type": "message_stop",
-            "usage": {
-                "input_tokens": 3,
-                "cache_creation_input_tokens": 1562,
-                "cache_read_input_tokens": 32392,
-            },
-        }
-
-    collected: list[bytes] = []
-    async for chunk in cfg.bedrock_sse_wrapper(
-        _dummy_stream(),
-        litellm_logging_obj=LiteLLMLoggingObj(
-            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "Hello"}],
-            stream=True,
-            call_type="chat",
-            start_time=datetime.now(),
-            litellm_call_id="test_bedrock_sse_wrapper_keeps_usage_in_both_events",
-            function_id="test_bedrock_sse_wrapper_keeps_usage_in_both_events",
-        ),
-        request_body={},
-    ):
-        collected.append(chunk)
-
-    start_chunk = next(c for c in collected if b"event: message_start\n" in c)
-    delta_chunk = next(c for c in collected if b"event: message_delta\n" in c)
-
-    start_json = json.loads(start_chunk.decode("utf-8").split("data: ", 1)[1].strip())
-    delta_json = json.loads(delta_chunk.decode("utf-8").split("data: ", 1)[1].strip())
-
-    assert "usage" in start_json["message"]
-    assert start_json["message"]["usage"]["input_tokens"] == 3
-
-    assert "usage" in delta_json
-    assert delta_json["usage"]["cache_creation_input_tokens"] == 1562
-    assert delta_json["usage"]["cache_read_input_tokens"] == 32392
-    assert delta_json["usage"]["input_tokens"] == 3
-    assert delta_json["usage"]["output_tokens"] == 8
-
-
-def test_chunk_parser_usage_transformation():
-    """Ensure Bedrock invocation metrics are transformed to Anthropic usage keys."""
-
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0")
-
-    chunk = {
-        "type": "message_delta",
-        "amazon-bedrock-invocationMetrics": {
-            "inputTokenCount": 10,
-            "outputTokenCount": 5,
-        },
-    }
-
-    parsed = decoder.chunk_parser(chunk.copy())  # use copy to avoid side-effects
-
-    # The invocation metrics key should be removed and replaced by `usage`
-    assert "amazon-bedrock-invocationMetrics" not in parsed
-    assert "usage" in parsed
-    assert parsed["usage"]["input_tokens"] == 10
-    assert parsed["usage"]["output_tokens"] == 5
-
-
-def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
-    """Cache usage fields on the chunk must survive invocationMetrics conversion.
-
-    Bedrock reports cache_read_input_tokens / cache_creation_input_tokens on
-    message_stop.usage and attaches amazon-bedrock-invocationMetrics to the same
-    chunk. invocationMetrics.inputTokenCount excludes cache reads and writes, so
-    replacing the whole usage block with a metrics-only one drops the cache
-    fields and cache tokens end up billed at $0.
-    """
-
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-sonnet-4-6")
-
-    chunk = {
-        "type": "message_stop",
-        "usage": {
-            "cache_read_input_tokens": 9821,
-            "cache_creation_input_tokens": 0,
-        },
-        "amazon-bedrock-invocationMetrics": {
-            "inputTokenCount": 10174,
-            "outputTokenCount": 500,
-        },
-    }
-
-    parsed = decoder.chunk_parser(chunk.copy())
-
-    assert "amazon-bedrock-invocationMetrics" not in parsed
-    assert parsed["usage"]["cache_read_input_tokens"] == 9821
-    assert parsed["usage"]["cache_creation_input_tokens"] == 0
-    assert parsed["usage"]["input_tokens"] == 10174
-    assert parsed["usage"]["output_tokens"] == 500
-
-
-def test_chunk_parser_maps_cache_token_counts_from_invocation_metrics():
-    """Cache itemization inside invocationMetrics maps to Anthropic usage keys."""
-
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-sonnet-4-6")
-
-    chunk = {
-        "type": "message_stop",
-        "amazon-bedrock-invocationMetrics": {
-            "inputTokenCount": 10174,
-            "outputTokenCount": 500,
-            "cacheReadInputTokenCount": 9821,
-            "cacheWriteInputTokenCount": 42,
-        },
-    }
-
-    parsed = decoder.chunk_parser(chunk.copy())
-
-    assert parsed["usage"]["input_tokens"] == 10174
-    assert parsed["usage"]["output_tokens"] == 500
-    assert parsed["usage"]["cache_read_input_tokens"] == 9821
-    assert parsed["usage"]["cache_creation_input_tokens"] == 42
-
-
-def test_chunk_parser_keeps_existing_token_counts_over_invocation_metrics():
-    """Token counts reported in the chunk's own usage block win over invocationMetrics."""
-
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-sonnet-4-6")
-
-    chunk = {
-        "type": "message_stop",
-        "usage": {
-            "input_tokens": 7,
-            "output_tokens": 11,
-            "cache_read_input_tokens": 3,
-        },
-        "amazon-bedrock-invocationMetrics": {
-            "inputTokenCount": 999,
-            "outputTokenCount": 999,
-        },
-    }
-
-    parsed = decoder.chunk_parser(chunk.copy())
-
-    assert parsed["usage"]["input_tokens"] == 7
-    assert parsed["usage"]["output_tokens"] == 11
-    assert parsed["usage"]["cache_read_input_tokens"] == 3
-
-
-@pytest.mark.asyncio
-async def test_bedrock_sse_wrapper_preserves_cache_usage_with_invocation_metrics():
-    """Regression test: cache usage on message_stop must survive when the same
-    chunk also carries amazon-bedrock-invocationMetrics.
-
-    Mirrors the commercial Bedrock stream shape: message_start and message_delta
-    repeat uncached input_tokens only, while message_stop carries the cache
-    breakdown plus invocationMetrics. The decoder previously replaced
-    message_stop's usage with a metrics-only block, so
-    _promote_message_stop_usage had no cache fields left to promote and the
-    final usage billed cache reads and writes at $0.
-    """
-
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-sonnet-4-6")
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    raw_chunks = [
-        {
-            "type": "message_start",
-            "message": {
-                "id": "msg_123",
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "usage": {
-                    "input_tokens": 10174,
-                    "output_tokens": 1,
-                },
-            },
-        },
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {"output_tokens": 500},
-        },
-        {
-            "type": "message_stop",
-            "usage": {
-                "cache_read_input_tokens": 9821,
-                "cache_creation_input_tokens": 0,
-            },
-            "amazon-bedrock-invocationMetrics": {
-                "inputTokenCount": 10174,
-                "outputTokenCount": 500,
-                "invocationLatency": 1000,
-                "firstByteLatency": 100,
-            },
-        },
-    ]
-
-    async def _decoded_stream():  # type: ignore[return-type]
-        for chunk in raw_chunks:
-            yield decoder.chunk_parser(copy.deepcopy(chunk))
-
-    collected: list[bytes] = []
-    async for chunk in cfg.bedrock_sse_wrapper(
-        _decoded_stream(),
-        litellm_logging_obj=LiteLLMLoggingObj(
-            model="bedrock/invoke/anthropic.claude-sonnet-4-6",
-            messages=[{"role": "user", "content": "Hello"}],
-            stream=True,
-            call_type="chat",
-            start_time=datetime.now(),
-            litellm_call_id="test_bedrock_sse_wrapper_preserves_cache_usage",
-            function_id="test_bedrock_sse_wrapper_preserves_cache_usage",
-        ),
-        request_body={},
-    ):
-        collected.append(chunk)
-
-    delta_chunk = next(c for c in collected if b"event: message_delta\n" in c)
-    delta_json = json.loads(delta_chunk.decode("utf-8").split("data: ", 1)[1].strip())
-
-    assert delta_json["usage"]["cache_read_input_tokens"] == 9821
-    assert delta_json["usage"]["cache_creation_input_tokens"] == 0
-    assert delta_json["usage"]["input_tokens"] == 10174
-    assert delta_json["usage"]["output_tokens"] == 500
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
 
 
 def test_remove_ttl_from_cache_control():
@@ -1547,6 +1174,112 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
     assert result["max_tokens"] == 4096
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_bedrock_messages_keeps_compaction_param_and_adds_beta():
+    """
+    The ``compact-2026-09-04`` beta uses a top-level ``compaction`` parameter, not a
+    ``context_management`` edit. Bedrock InvokeModel accepts it with that beta and
+    returns one signed compaction block. Before this fix the top-level allowlist
+    dropped ``compaction``, so the request reached Bedrock as an ordinary turn.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Is CHG-TR-0042 Type IB in TR-TITCK?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Type IB."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Now KR-MFDS."}]},
+    ]
+    optional_params = {"max_tokens": 1024, "compaction": {"type": "summarize", "instructions": "Keep rule ids."}}
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["compaction"] == {"type": "summarize", "instructions": "Keep rule ids."}
+    assert "compact-2026-09-04" in result["anthropic_beta"]
+    assert "context_management" not in result
+    assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_bedrock_messages_keeps_compact_2026_09_04_beta_for_adopting_request():
+    """
+    A request that adopts the signed block sends it first in ``messages`` and must
+    carry the ``compact-2026-09-04`` beta again. The bedrock beta map has to keep it.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    block = {"type": "compaction", "content": "<summary>TR-TITCK: Type IB.</summary>", "signature": "sig"}
+    messages = [{"role": "user", "content": [block, {"type": "text", "text": "Now KR-MFDS."}]}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "compact-2026-09-04"},
+    )
+
+    assert "compact-2026-09-04" in result["anthropic_beta"]
+    assert result["messages"][0]["content"][0] == block
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_bedrock_messages_adds_compact_2026_09_04_beta_for_signed_block_without_client_header():
+    """
+    A client that adopts the signed block but sends no anthropic-beta header still
+    needs ``compact-2026-09-04``; the Anthropic route adds it for the block, and so
+    does Bedrock Invoke.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    block = {"type": "compaction", "content": "<summary>TR-TITCK: Type IB.</summary>", "signature": "sig"}
+    messages = [{"role": "user", "content": [block, {"type": "text", "text": "Now KR-MFDS."}]}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["anthropic_beta"] == ["compact-2026-09-04"]
+    assert result["messages"][0]["content"][0] == block
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize("compaction", [None, "summarize", []])
+def test_bedrock_messages_drops_compaction_that_is_not_an_object(compaction: object):
+    """
+    Only an object ``compaction`` gets the beta. Any other value is dropped, as it
+    was before the field was allowed, instead of reaching Bedrock without its beta.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "compaction": compaction},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "compaction" not in result
+    assert "compact-2026-09-04" not in result.get("anthropic_beta", [])
+
+
 def test_bedrock_messages_filters_unsupported_context_management_edits():
     """
     Mixed edit lists must drop the LiteLLM-internal ``clear_thinking_20251015``
@@ -1738,44 +1471,6 @@ def test_bedrock_messages_keeps_client_dangerous_tool_use_beta_with_safeguards_a
     assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
 
 
-def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
-    """Bedrock streams the classifier verdicts on message_start and on the final message_delta, exactly as api.anthropic.com does."""
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
-    tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
-    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
-
-    message_start = decoder.chunk_parser(
-        {
-            "type": "message_start",
-            "message": {
-                "id": "msg_01",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-5",
-                "content": [],
-                "stop_reason": None,
-                "usage": {"input_tokens": 3, "output_tokens": 0},
-                "safeguard_results": safeguard_results,
-            },
-        }
-    )
-
-    assert isinstance(message_start, dict)
-    assert message_start["message"]["safeguard_results"] == safeguard_results
-
-    message_delta = decoder.chunk_parser(
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
-            "usage": {"output_tokens": 1},
-            "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "outputTokenCount": 1},
-        }
-    )
-
-    assert isinstance(message_delta, dict)
-    assert message_delta["delta"]["safeguard_results"] == safeguard_results
-
-
 def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
     """
     In proxy deployments the client (e.g. Claude Code) doesn't know the backend
@@ -1833,256 +1528,6 @@ def test_bedrock_messages_renames_user_provided_aliased_beta_header():
         "Anthropic-direct spelling should be rewritten, not forwarded verbatim"
     )
     assert "tool-search-tool-2025-10-19" in betas, "user-provided beta should be renamed to the Bedrock-side spelling"
-
-
-@pytest.mark.asyncio
-async def test_promote_message_stop_usage_preserves_message_delta_output_tokens():
-    """
-    Bedrock unified /messages streaming can send full usage on message_delta and a
-    conflicting smaller usage on message_stop (e.g. output_tokens 9 vs 12).
-    _promote_message_stop_usage must not replace message_delta output_tokens.
-    """
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _stream():  # type: ignore[return-type]
-        yield {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {
-                "input_tokens": 3,
-                "cache_creation_input_tokens": 10553,
-                "cache_read_input_tokens": 25490,
-                "output_tokens": 12,
-            },
-        }
-        yield {
-            "type": "message_stop",
-            "usage": {"input_tokens": 3, "output_tokens": 9},
-        }
-
-    merged: list[dict] = []
-    async for chunk in cfg._promote_message_stop_usage(_stream()):
-        if isinstance(chunk, dict):
-            merged.append(chunk)
-
-    assert len(merged) >= 1
-    delta_out = merged[0]
-    assert delta_out["type"] == "message_delta"
-    assert delta_out["usage"]["output_tokens"] == 12
-    assert delta_out["usage"]["cache_creation_input_tokens"] == 10553
-    assert delta_out["usage"]["cache_read_input_tokens"] == 25490
-    assert delta_out["usage"]["input_tokens"] == 3
-
-
-@pytest.mark.asyncio
-async def test_promote_message_start_cache_when_message_stop_omits_cache_fields():
-    """
-    GovCloud / some Bedrock streams put cache_read only on message_start; delta and
-    stop repeat uncached input_tokens only. Merging start cache onto message_delta
-    avoids inconsistent usage and negative input costs (LIT-2411).
-    """
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _stream():  # type: ignore[return-type]
-        yield {
-            "type": "message_start",
-            "message": {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": "claude-sonnet-4-5-20250929",
-                "usage": {
-                    "input_tokens": 10,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 22167,
-                    "cache_creation": {
-                        "ephemeral_5m_input_tokens": 0,
-                        "ephemeral_1h_input_tokens": 0,
-                    },
-                    "output_tokens": 4,
-                },
-            },
-        }
-        yield {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {"input_tokens": 10, "output_tokens": 181},
-        }
-        yield {
-            "type": "message_stop",
-            "usage": {"input_tokens": 10, "output_tokens": 181},
-        }
-
-    merged: list[dict] = []
-    async for chunk in cfg._promote_message_stop_usage(_stream()):
-        if isinstance(chunk, dict):
-            merged.append(chunk)
-
-    delta_chunks = [c for c in merged if c.get("type") == "message_delta"]
-    assert len(delta_chunks) == 1
-    u = delta_chunks[0]["usage"]
-    assert u["input_tokens"] == 10
-    assert u["output_tokens"] == 181
-    assert u["cache_read_input_tokens"] == 22167
-    assert u["cache_creation_input_tokens"] == 0
-
-
-@pytest.mark.asyncio
-async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost():
-    """
-    Regression guard for LIT-2411:
-    If cache usage is present only on message_start (and omitted from
-    message_delta/message_stop), final reconstructed usage + cost must still
-    be consistent and non-negative.
-    """
-    from litellm import completion_cost
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-        AnthropicPassthroughLoggingHandler,
-    )
-
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _stream():  # type: ignore[return-type]
-        yield {
-            "type": "message_start",
-            "message": {
-                "id": "msg_bdrk_01WuFzkDbE9KWgiWakMRNKcA",
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": "claude-sonnet-4-5-20250929",
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {
-                    "input_tokens": 10,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 22167,
-                    "cache_creation": {
-                        "ephemeral_5m_input_tokens": 0,
-                        "ephemeral_1h_input_tokens": 0,
-                    },
-                    "output_tokens": 4,
-                },
-            },
-        }
-        yield {
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""},
-        }
-        yield {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": "Hello from regression test"},
-        }
-        yield {"type": "content_block_stop", "index": 0}
-        yield {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {"output_tokens": 181, "input_tokens": 10},
-        }
-        yield {
-            "type": "message_stop",
-            "usage": {"input_tokens": 10, "output_tokens": 181},
-        }
-
-    logging_obj = LiteLLMLoggingObj(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        messages=[{"role": "user", "content": "Hi"}],
-        stream=True,
-        call_type="chat",
-        start_time=datetime.now(),
-        litellm_call_id="test_cache_on_start_only_never_negative_cost",
-        function_id="test_cache_on_start_only_never_negative_cost",
-    )
-
-    collected: list[bytes] = []
-    async for sse in cfg.bedrock_sse_wrapper(
-        completion_stream=_stream(),
-        litellm_logging_obj=logging_obj,
-        request_body={"model": "anthropic.claude-3-5-sonnet-20240620-v1:0"},
-    ):
-        collected.append(sse)
-
-    built = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-        all_chunks=collected,
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-        litellm_logging_obj=Mock(),
-    )
-    assert built.usage is not None
-    assert built.usage.prompt_tokens == 22177
-    assert built.usage.completion_tokens == 181
-    assert built.usage.cache_creation_input_tokens == 0
-    assert built.usage.cache_read_input_tokens == 22167
-
-    cost = completion_cost(
-        completion_response=built,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        custom_llm_provider="bedrock",
-    )
-    assert cost > 0
-
-
-@pytest.mark.asyncio
-async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
-    """
-    End-to-end for Bedrock Invoke Anthropic Messages (unified) streaming path:
-    dict chunks -> _promote_message_stop_usage -> bedrock_sse_wrapper SSE bytes ->
-    same logging reconstruction as Anthropic /messages. Ensures token counts and
-    completion_cost match model_prices for us.anthropic.claude-sonnet-4-6.
-    """
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-        AnthropicPassthroughLoggingHandler,
-    )
-
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    async def _stream():  # type: ignore[return-type]
-        yield {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {
-                "input_tokens": 3,
-                "cache_creation_input_tokens": 10553,
-                "cache_read_input_tokens": 25490,
-                "output_tokens": 12,
-            },
-        }
-        yield {
-            "type": "message_stop",
-            "usage": {"input_tokens": 3, "output_tokens": 9},
-        }
-
-    logging_obj = LiteLLMLoggingObj(
-        model="bedrock/us.anthropic.claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "Hello"}],
-        stream=True,
-        call_type="chat",
-        start_time=datetime.now(),
-        litellm_call_id="test_unified_bedrock_messages_sse_cost",
-        function_id="test_unified_bedrock_messages_sse_cost",
-    )
-
-    collected: list[bytes] = []
-    async for sse in cfg.bedrock_sse_wrapper(
-        completion_stream=_stream(),
-        litellm_logging_obj=logging_obj,
-        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
-    ):
-        collected.append(sse)
-
-    built = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-        all_chunks=collected,
-        model="us.anthropic.claude-sonnet-4-6",
-        litellm_logging_obj=Mock(),
-    )
-    assert built.usage is not None
-    assert built.usage.completion_tokens == 12
-    assert built.usage.prompt_tokens == 36046
-    assert built.usage.total_tokens == 36058
-    assert built.usage.cache_creation_input_tokens == 10553
-    assert built.usage.cache_read_input_tokens == 25490
 
 
 @pytest.mark.parametrize(
@@ -2368,6 +1813,32 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
         {"type": "text", "text": "You are terse."},
         {"type": "text", "text": "Cite sources."},
     ]
+
+
+def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_output_config(
+    local_model_cost_map: None, local_beta_headers_config: None
+) -> None:
+    """A live InvokeModel call on 2026-11-05 answered 200 with per-turn-control-2026-07-01 next to a message
+    ``output_config`` on Opus 5.5, so the client's beta and that message must both reach Bedrock."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "system", "content": [], "output_config": {"effort": "low"}},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-5-5",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "per-turn-control-2026-07-01"},
+    )
+
+    assert result["messages"] == messages
+    assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
 
 
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
@@ -3144,50 +2615,6 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
     assert result["tools"][0]["name"] == "litellm_web_search"
 
 
-@pytest.mark.asyncio
-async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
-    """
-    Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
-    mid-stream (what the proxy does on a client disconnect) must not lose the
-    stream's spend logging. Since the detached-pump relay, the upstream read
-    survives the disconnect and billing fires once the provider stream ends,
-    so the dispatch is awaited after releasing the upstream instead of being
-    observed synchronously at aclose(). `completion_start_time` is only
-    stamped on the logging object by that dispatch, so it observing a value
-    proves the whole chain ran.
-    """
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-    release_upstream = asyncio.Event()
-
-    async def _gated_stream():
-        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
-        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
-        await release_upstream.wait()
-
-    logging_obj = LiteLLMLoggingObj(
-        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        call_type="chat",
-        start_time=datetime.now(),
-        litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
-        function_id="test_bedrock_sse_wrapper_disconnect_logging",
-    )
-    wrapped = cfg.bedrock_sse_wrapper(_gated_stream(), litellm_logging_obj=logging_obj, request_body={})
-    await wrapped.__anext__()
-    await wrapped.__anext__()
-    assert logging_obj.completion_start_time is None
-
-    await wrapped.aclose()
-    release_upstream.set()
-
-    for _ in range(500):
-        if logging_obj.completion_start_time is not None:
-            break
-        await asyncio.sleep(0.01)
-    assert logging_obj.completion_start_time is not None
-
-
 def test_bedrock_messages_forwards_output_config_format_natively(local_model_cost_map):
     """Regression: on a model Bedrock enforces structured outputs for (Claude
     Sonnet 4.5), ``output_config.format`` must be forwarded verbatim, not
@@ -3512,92 +2939,6 @@ def test_bedrock_invoke_eager_input_streaming_beta_not_duplicated_with_client_he
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
 
 
-def _bedrock_event_frame(payload: Mapping[str, object]) -> bytes:
-    def _header(name: str, value: str) -> bytes:
-        return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
-
-    headers: Final = (
-        _header(":message-type", "event")
-        + _header(":event-type", "chunk")
-        + _header(":content-type", "application/json")
-    )
-    body: Final = json.dumps({"bytes": base64.b64encode(json.dumps(payload).encode()).decode()}).encode()
-    prelude: Final = struct.pack(">II", 12 + len(headers) + len(body) + 4, len(headers))
-    prelude_crc: Final = struct.pack(">I", zlib.crc32(prelude))
-    message_crc: Final = struct.pack(">I", zlib.crc32(prelude + prelude_crc + headers + body))
-    return prelude + prelude_crc + headers + body + message_crc
-
-
-class _GatedAsyncByteStream(httpx.AsyncByteStream):
-    def __init__(self, chunks: Sequence[bytes], gate: asyncio.Event) -> None:
-        self._chunks = chunks
-        self._gate = gate
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        yield self._chunks[0]
-        await self._gate.wait()
-        for chunk in self._chunks[1:]:
-            yield chunk
-
-    async def aclose(self) -> None:
-        return None
-
-
-@pytest.mark.asyncio
-async def test_get_async_streaming_response_iterator_yields_small_frame_before_upstream_pauses():
-    gate: Final = asyncio.Event()
-    response: Final = httpx.Response(
-        200,
-        stream=_GatedAsyncByteStream(
-            chunks=(
-                _bedrock_event_frame(
-                    {
-                        "type": "message_start",
-                        "message": {
-                            "id": "msg_test",
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [],
-                            "model": "us.anthropic.claude-sonnet-4-6",
-                            "usage": {"input_tokens": 3, "output_tokens": 1},
-                        },
-                    }
-                ),
-                _bedrock_event_frame(
-                    {
-                        "type": "message_stop",
-                        "usage": {"input_tokens": 3, "output_tokens": 9},
-                    }
-                ),
-            ),
-            gate=gate,
-        ),
-    )
-
-    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
-        model="us.anthropic.claude-sonnet-4-6",
-        httpx_response=response,
-        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
-        litellm_logging_obj=LiteLLMLoggingObj(
-            model="bedrock/us.anthropic.claude-sonnet-4-6",
-            messages=[{"role": "user", "content": "Hello"}],
-            stream=True,
-            call_type="chat",
-            start_time=datetime.now(),
-            litellm_call_id="test_small_frame_before_upstream_pauses",
-            function_id="test_small_frame_before_upstream_pauses",
-        ),
-    )
-
-    first: Final = await asyncio.wait_for(anext(iterator), timeout=10)
-    assert first.startswith(b"event: message_start\n"), first
-
-    gate.set()
-    remaining: Final = tuple([chunk async for chunk in iterator])
-    assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
-    await iterator.aclose()
-
-
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("nested_output_config", [False, True])
 @pytest.mark.parametrize("explicit_beta", [False, True])
@@ -3668,11 +3009,6 @@ def test_bedrock_messages_removed_output_config_does_not_add_beta(explicit_beta:
             "bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
             id="bedrock-invoke-chat",
         ),
-        pytest.param(
-            "bedrock_invoke_messages",
-            "anthropic.claude-opus-4-6-v1",
-            id="bedrock-invoke-messages",
-        ),
     ),
 )
 @pytest.mark.parametrize(
@@ -3712,27 +3048,6 @@ async def test_reasoning_effort_grid_wire_shapes(
         }
     )
     messages: Final = [{"role": "user", "content": "Calculate 47 times 53."}]
-
-    if route_name == "bedrock_invoke_messages":
-
-        def respond(request: httpx.Request) -> httpx.Response:
-            request_body: Final[dict[str, object]] = REASONING_BODY_ADAPTER.validate_python(json.loads(request.content))
-            assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
-            assert request_body["output_config"] == {"effort": expected_effort}
-            assert "reasoning_effort" not in request_body
-            return httpx.Response(200, json=response_body)
-
-        await litellm.anthropic_messages(
-            model=f"bedrock/invoke/{model}",
-            messages=messages,
-            max_tokens=4096,
-            reasoning_effort=effort,
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
-            aws_region_name="us-east-1",
-            client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
-        )
-        return
 
     route: Final = respx_mock.post(url__regex=r"https://.*").mock(return_value=httpx.Response(200, json=response_body))
 
@@ -4012,20 +3327,6 @@ def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> N
     assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)
 
 
-_NATIVE_OUTPUT_REJECTION: Final = {
-    "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
-}
-_STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
-_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
-_CONSTRAINED_SCHEMA: Final = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string", "maxLength": 50},
-        "kind": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
-    },
-    "required": ["summary", "kind"],
-    "additionalProperties": False,
-}
 _ANTHROPIC_MESSAGE: Final = {
     "id": "msg_scripted",
     "type": "message",
@@ -4036,136 +3337,155 @@ _ANTHROPIC_MESSAGE: Final = {
     "stop_sequence": None,
     "usage": {"input_tokens": 1, "output_tokens": 1},
 }
-_THINKING_HISTORY: Final = (
-    {"role": "user", "content": "Describe the weather."},
-    {
-        "role": "assistant",
-        "content": [
-            {"type": "thinking", "thinking": "checking", "signature": "stale"},
-            {"type": "text", "text": "Sunny."},
-        ],
-    },
-    {"role": "user", "content": "Summarise it as JSON."},
-)
+
+
+# Bedrock's 400 bodies for requests past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-29
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+def test_bedrock_messages_keeps_mid_conversation_output_config_its_auto_added_beta_gates() -> None:
+    """Invoke learns its body betas after the shared transform, so the gated field it supports must survive."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+        {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}},
+        {"role": "user", "content": [{"type": "text", "text": "Go on"}]},
+    ]
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-8-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 4096},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert "mid-conversation-output-config-2026-07-01" in result["anthropic_beta"]
+    assert {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}} in result["messages"]
+
+
+class _SentMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    role: str
+    content: list[dict[str, object]]
+
+
+_SENT_MESSAGES: Final = TypeAdapter(list[_SentMessage])
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_messages_drops_tool_changes_from_a_system_turn_an_older_model_gets_as_a_user_turn(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model without mid-conversation system support sends no tool-changes beta, so under drop_params the
+    converted turn must not carry the blocks that beta gates, and without it they go out as sent."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "A weather tool is now available"},
+                {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "get_weather"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Go on"}]},
+    ]
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 4096},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    sent: Final = _SENT_MESSAGES.validate_python(result["messages"])
+    blocks: Final = [
+        block for message in sent for block in message.content
+    ]  # comprehension-ok: flattening the sent content blocks
+    assert "mid-conversation-tool-changes-2026-07-01" not in result.get("anthropic_beta", [])
+    assert any(block["type"] == "tool_addition" for block in blocks) is not drop_params
+    assert {"type": "text", "text": "A weather tool is now available"} in blocks
+    assert all(message.role != "system" for message in sent)
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", (True, False))
+def test_bedrock_messages_sends_the_binding_beta_with_block_binding_whatever_drop_params(drop_params: bool) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024, "block_binding": BLOCK_BINDING},
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert result["thinking"]["block_binding"] == BLOCK_BINDING
+    assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
 
 
 @dataclass(slots=True)
-class ScriptedBedrockInvoke:
-    replies: tuple[tuple[int, Mapping[str, object]], ...]
-    bodies: tuple[dict[str, object], ...] = ()
+class BedrockDownAnthropicUp:
+    anthropic_bodies: tuple[dict[str, object], ...] = ()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.bodies = (*self.bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
-        status_code, body = self.replies[len(self.bodies) - 1]
-        return httpx.Response(status_code, json=body)
-
-
-async def _send_bedrock_messages(
-    model: str,
-    model_info: Mapping[str, object] | None,
-    replies: Sequence[tuple[int, Mapping[str, object]]],
-    messages: Sequence[Mapping[str, object]] = ({"role": "user", "content": "Summarise the weather as JSON."},),
-) -> tuple[ScriptedBedrockInvoke, Exception | None]:
-    bedrock: Final = ScriptedBedrockInvoke(replies=tuple(replies))
-    try:
-        await litellm.anthropic_messages(
-            model=f"bedrock/invoke/{model}",
-            messages=[dict(message) for message in messages],
-            max_tokens=4000,
-            system="Answer in French.",
-            thinking={"type": "adaptive"},
-            output_config={"format": {"type": "json_schema", "schema": _CONSTRAINED_SCHEMA}},
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
-            aws_region_name="us-east-1",
-            client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
-            **({} if model_info is None else {"model_info": model_info}),
-        )
-    except Exception as error:
-        return bedrock, error
-    return bedrock, None
-
-
-_OPT_IN_DEPLOYMENTS: Final = pytest.mark.parametrize(
-    ("model", "model_info"),
-    [
-        ("us.anthropic.claude-opus-4-8", None),
-        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}),
-    ],
-    ids=["mapped_opt_in", "deployment_opt_in"],
-)
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-@_OPT_IN_DEPLOYMENTS
-async def test_bedrock_messages_native_output_rejection_resends_the_body_an_opted_out_deployment_sends(
-    model: str, model_info: Mapping[str, object] | None
-) -> None:
-    opt_in, opt_in_error = await _send_bedrock_messages(
-        model, model_info, [(400, _NATIVE_OUTPUT_REJECTION), (200, _ANTHROPIC_MESSAGE)]
-    )
-    opted_out, opted_out_error = await _send_bedrock_messages(model, _OPTED_OUT, [(200, _ANTHROPIC_MESSAGE)])
-
-    assert opt_in_error is None and opted_out_error is None
-    native, retried = opt_in.bodies
-    assert "format" in REASONING_BODY_ADAPTER.validate_python(native["output_config"])
-    assert opted_out.bodies == (retried,)
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("model_info", [None, _OPTED_OUT], ids=["native_output", "opted_out"])
-async def test_bedrock_messages_thinking_signature_400_that_persists_reaches_bedrock_twice_as_before(
-    model_info: Mapping[str, object] | None,
-) -> None:
-    bedrock, error = await _send_bedrock_messages(
-        "us.anthropic.claude-opus-4-8", model_info, [(400, _STALE_SIGNATURE_ERROR)] * 3, _THINKING_HISTORY
-    )
-
-    assert isinstance(error, litellm.BadRequestError)
-    assert len(bedrock.bodies) == 2
+        if request.url.host != "api.anthropic.com":
+            return httpx.Response(500, json={"message": "Bedrock is unavailable"})
+        self.anthropic_bodies = (*self.anthropic_bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
+        return httpx.Response(200, json=_ANTHROPIC_MESSAGE)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    "first_error, second_error",
-    [(_NATIVE_OUTPUT_REJECTION, _STALE_SIGNATURE_ERROR), (_STALE_SIGNATURE_ERROR, _NATIVE_OUTPUT_REJECTION)],
-    ids=["rejection_first", "signature_first"],
+    ("custom", "sent_extras"),
+    [({"eager_input_streaming": True}, {}), ({"defer_loading": False}, {"defer_loading": False})],
 )
-async def test_bedrock_messages_native_output_rejection_and_signature_400_each_get_one_retry_like_an_opted_out_deployment(
-    first_error: Mapping[str, object], second_error: Mapping[str, object]
+async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    custom: dict[str, object],
+    sent_extras: dict[str, object],
 ) -> None:
-    opt_in, opt_in_error = await _send_bedrock_messages(
-        "us.anthropic.claude-opus-4-8",
-        None,
-        [(400, first_error), (400, second_error), (200, _ANTHROPIC_MESSAGE)],
-        _THINKING_HISTORY,
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = BedrockDownAnthropicUp()
+    respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/invoke/us.anthropic.claude-opus-4-8",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test", "drop_params": True},
+            },
+        ],
+        fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
+        num_retries=0,
     )
-    opted_out, opted_out_error = await _send_bedrock_messages(
-        "us.anthropic.claude-opus-4-8",
-        _OPTED_OUT,
-        [(400, _STALE_SIGNATURE_ERROR), (200, _ANTHROPIC_MESSAGE)],
-        _THINKING_HISTORY,
+    schema: Final[Mapping[str, object]] = {"type": "object", "properties": {}}
+
+    await router.acompletion(
+        model="bedrock-claude",
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        max_tokens=100,
+        tools=[{"name": "get_weather", "input_schema": schema, "custom": custom}],
     )
 
-    assert opt_in_error is None and opted_out_error is None
-    assert len(opt_in.bodies) == 3
-    assert opt_in.bodies[-1] == opted_out.bodies[-1]
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize(
-    ("model", "model_info", "error"),
-    [
-        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}),
-        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
-        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION),
-    ],
-    ids=["other_400", "native_model", "deployment_opt_out"],
-)
-async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
-    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object]
-) -> None:
-    bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
-
-    assert isinstance(raised, litellm.BadRequestError)
-    assert len(bedrock.bodies) == 1
+    (body,) = upstream.anthropic_bodies
+    assert body["tools"] == [{"name": "get_weather", "input_schema": schema, **sent_extras}]

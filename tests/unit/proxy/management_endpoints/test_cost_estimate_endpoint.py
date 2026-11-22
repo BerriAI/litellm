@@ -94,7 +94,7 @@ class TestCostEstimateEndpoint:
 
         # Mock the router to return deployment info
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "my-gpt4-alias",
                 "litellm_params": {
@@ -126,7 +126,7 @@ class TestCostEstimateEndpoint:
                     )
 
         # Verify router was queried for the alias
-        mock_router.get_model_list.assert_called_with(model_name="my-gpt4-alias")
+        mock_router.registry.return_value.deployments.assert_called_with("my-gpt4-alias")
 
         # Verify completion_cost was called with RESOLVED model, not the alias
         call_args = mock_completion_cost.call_args
