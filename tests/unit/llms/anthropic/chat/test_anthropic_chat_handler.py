@@ -965,8 +965,13 @@ def _streamed_text(chunks: list[object]) -> str:
     ],
     ids=["number", "null", "array", "deep-object", "huge-number-in-object"],
 )
+@pytest.mark.parametrize("split_block_start", [False, True], ids=["whole-frames", "after-a-split-frame"])
 async def test_anthropic_chat_stream_skips_a_data_line_it_cannot_read_as_an_object(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, non_object_frame: str
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+    non_object_frame: str,
+    split_block_start: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     events: Final = (
@@ -992,10 +997,16 @@ async def test_anthropic_chat_stream_skips_a_data_line_it_cannot_read_as_an_obje
         {"type": "message_stop"},
     )
     frames: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    block_start: Final = (
+        'event: content_block_start\ndata: {"type": "content_block_start", "index": 0,\n'
+        'data: "content_block": {"type": "text", "text": ""}}\n\n'
+        if split_block_start
+        else frames[1]
+    )
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(
             200,
-            text="".join((*frames[:2], non_object_frame, *frames[2:])),
+            text="".join((frames[0], block_start, non_object_frame, *frames[2:])),
             headers={"content-type": "text/event-stream"},
         )
     )
