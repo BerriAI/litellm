@@ -1492,11 +1492,15 @@ export const dailyActivityExportCall = (
   entity: DailyActivityEntity,
   req: DailyActivityRequest,
   exportType: ExportType,
-  format: ExportFormat,
+  { format, includeMetadata = false }: { format: ExportFormat; includeMetadata?: boolean },
 ): Promise<Blob> =>
   apiClient.getBlob(`/${entity}/daily/activity/export`, {
     accessToken: req.accessToken,
-    query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+    query: dailyActivityQuery(entity, req, {
+      export_type: exportType,
+      format,
+      ...(includeMetadata ? { include_metadata: "true" } : {}),
+    }),
   });
 
 export const userDailyActivityUserPageCall = (
@@ -1897,7 +1901,7 @@ export const modelAvailableCall = async (
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    return await apiClient.get(`/user/filter/ui`, {
+    return await apiClient.get<components["schemas"]["LiteLLM_UserTableFiltered"][]>(`/user/filter/ui`, {
       accessToken,
       query: {
         user_email: params.get("user_email") || undefined,
@@ -1928,6 +1932,7 @@ interface UiSpendLogsParams {
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
+  model_group?: string;
   /** Filter by model ID (litellm model deployment id) */
   model_id?: string;
   key_alias?: string;

@@ -2367,6 +2367,24 @@ class TestVertexClaudeBatch:
         assert "stream" not in row["request"]
         assert "stream_options" not in row["request"]
 
+    def test_claude_row_extra_body_keys_litellm_builds_follow_drop_params(
+        self, config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        entry: Final = _claude_chat_entry(
+            "r1", "hi", max_tokens=10, extra_body={"messages": [{"role": "user", "content": "unchecked"}], "top_k": 3}
+        )
+
+        with pytest.raises(VertexAIError, match=r"line 1 .*extra_body can't set messages") as exc_info:
+            _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+        (row,) = _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "drop_params": True}, [entry])
+
+        assert exc_info.value.status_code == 400
+        assert row["request"]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        assert row["request"]["top_k"] == 3
+
     def test_claude_row_merges_extra_body_into_the_request(self, config):
         (row,) = _uploaded_rows(
             config, CLAUDE_DEPLOYMENT, [_claude_chat_entry("r1", "hi", max_tokens=10, extra_body={"top_k": 3})]

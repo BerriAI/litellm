@@ -313,8 +313,15 @@ class OpenAIDecisionInputImage(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class OpenAIDecisionInputJSON(LiteLLMPydanticObjectBase):
+    type: Literal["input_json"]
+    data: Mapping[str, object] | Sequence[Mapping[str, object]]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 OpenAIDecisionContentPart: TypeAlias = Annotated[
-    OpenAIDecisionInputText | OpenAIDecisionInputImage,
+    OpenAIDecisionInputText | OpenAIDecisionInputImage | OpenAIDecisionInputJSON,
     Field(discriminator="type"),
 ]
 
@@ -419,7 +426,7 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
         Field(
             description=(
                 "The text being judged, or user, developer, and system messages. "
-                "Developer and system messages are input text. User messages can mix input text and images."
+                "Developer and system messages are input text. User messages can mix input text, images, and JSON."
             )
         ),
     ]
@@ -629,6 +636,7 @@ class DecisionsIRRequest:
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+    drop_params: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -704,6 +712,7 @@ class DecisionsIRResponse:
     answers: tuple[DecisionsIRAnswer, ...]
     usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+    reported_cost: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

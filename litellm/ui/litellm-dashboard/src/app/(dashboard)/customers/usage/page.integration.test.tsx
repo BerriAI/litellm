@@ -500,9 +500,53 @@ describe("CustomerHierarchyUsagePage", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Customer organization" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Customer hierarchy" })).getByRole("link", {
+        name: "Customer organization",
+        exact: true,
+      }),
+    );
     expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
     expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: initialUrl }));
+  });
+
+  it("shows the complete breadcrumb for a member deep link and returns to each parent with the same filters", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<CustomerHierarchyUsagePage />, {
+      searchParams: `${initialUrl}&member=member-a`,
+      onUrlUpdate,
+    });
+    await screen.findByRole("heading", { name: "Member One" });
+    const path = within(screen.getByRole("navigation", { name: "Customer hierarchy" }));
+    expect(path.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "All customers",
+      "Customer organization",
+      "Product",
+      "Member One",
+    ]);
+    expect(path.getByRole("link", { name: "Member One", exact: true })).toHaveAttribute("aria-current", "page");
+    expect(path.getByRole("link", { name: "Product", exact: true })).toHaveAttribute(
+      "href",
+      "/ui/customers/usage?org=org-1&team=team-a&from=2026-11-01&to=2026-11-03",
+    );
+    await user.click(path.getByRole("link", { name: "Product", exact: true }));
+    expect(await screen.findByRole("heading", { name: "Product" })).toBeInTheDocument();
+    expect(path.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "All customers",
+      "Customer organization",
+      "Product",
+    ]);
+    expect(path.getByRole("link", { name: "Product", exact: true })).toHaveAttribute("aria-current", "page");
+    await user.click(path.getByRole("link", { name: "Customer organization", exact: true }));
+    expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
+    expect(path.getByRole("link", { name: "Customer organization", exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await waitFor(() =>
+      expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: initialUrl })),
+    );
   });
 
   it("should fall back to Models for a removed Members breakdown and offer only chart breakdowns", async () => {
@@ -530,14 +574,14 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(within(firstMember).getByText("Member standard")).toBeInTheDocument();
     expect(within(firstMember).getByText("66.7%")).toBeInTheDocument();
     expect(within(firstMember).getByRole("button", { name: "100 total tokens. View breakdown" })).toBeInTheDocument();
+    expect(within(firstMember).getByRole("cell", { name: "$20.00 No monthly limit", exact: true })).toBeInTheDocument();
     expect(
-      within(firstMember).getByRole("cell", { name: /^\$20\.00 No limit Recorded budget spend/ }),
+      within(firstMember).getByRole("cell", { name: "$10.00 total No automatic reset", exact: true }),
     ).toBeInTheDocument();
     expect(within(firstMember).getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute(
       "aria-valuetext",
       "66.7%",
     );
-    expect(firstMember).toHaveTextContent("Recorded budget spend$40.00 / $10.00");
     expect(within(firstMember).getByText("Reached limit")).toBeInTheDocument();
 
     await selectBreakdown(user, "Customer teams");

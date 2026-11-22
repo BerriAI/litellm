@@ -1,7 +1,7 @@
 import inspect
 import json
-from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -572,7 +572,13 @@ async def test_update_tag_explicit_null_clears_budget_duration():
     mock_db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
-    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_db.query_raw = AsyncMock(return_value=[{"budget_limits": None}])
+
+    @asynccontextmanager
+    async def transaction() -> AsyncIterator[Mock]:
+        yield mock_db
+
+    mock_prisma = SimpleNamespace(db=mock_db, tx=transaction)
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
@@ -674,7 +680,7 @@ def _tag_cache_doubles():
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
         patch(
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             mock_publish,
         ),
     ):

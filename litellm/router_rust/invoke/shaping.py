@@ -386,10 +386,13 @@ def update_kwargs_with_default_litellm_params(
     shaping: Shaping,
     kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
     metadata_variable_name: str,
+    caller_only_keys: frozenset[str] = frozenset(),
 ) -> None:
     """``_update_kwargs_with_default_litellm_params``: unset non-None defaults fill the request;
     the default metadata fills the keys the request leaves unset, the router's caching groups excepted."""
-    defaults: Final = dict(without_retrieve_stream_defaults(shaping.default_litellm_params, kwargs))
+    defaults: Final = without(
+        without_retrieve_stream_defaults(shaping.default_litellm_params, kwargs), *caller_only_keys
+    )
     metadata_defaults: Final = defaults.pop("metadata", {}) or {}  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     for key, value in defaults.items():
         if value is None:
@@ -463,6 +466,7 @@ def update_kwargs_with_deployment(
     function_name: str | None = None,
     splits_stream_timeout: bool = False,
     opens_responses_socket: bool = False,
+    caller_only_keys: frozenset[str] = frozenset(),
 ) -> None:
     """``_update_kwargs_with_deployment``, in place on the attempt's kwargs."""
     deployment_params: Final = as_dict(deployment.get("litellm_params"))
@@ -573,7 +577,7 @@ def update_kwargs_with_deployment(
         kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
             STREAM_USAGE_INJECTED_FIELD
         ] = True
-    update_kwargs_with_default_litellm_params(shaping, kwargs, metadata_variable_name)
+    update_kwargs_with_default_litellm_params(shaping, kwargs, metadata_variable_name, caller_only_keys)
     pinned_model_id: Final = deployment_model_id_pin(deployment_params)
     if pinned_model_id is not None:
         kwargs["model_id"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
